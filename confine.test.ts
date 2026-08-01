@@ -20,6 +20,7 @@ const ROOTS = {
 };
 
 const write = (p: string) => checkPaths("Write", { file_path: p }, ROOTS);
+const read = (p: string) => checkPaths("Read", { file_path: p }, ROOTS);
 
 test("an agent may write inside its own workspace", () => {
   for (const p of [
@@ -68,9 +69,31 @@ test("a memory bundle's generated index and log are protected", () => {
     `${ROOTS.agentDir}/memory/archive/index.md`, // nested section
   ]) {
     const v = write(p);
-    assert.equal(v.ok, false, `${p} must be denied`);
-    assert.match(v.reason ?? "", /generated from the files around them/);
+    assert.equal(v.ok, false, `${p} must not be writable`);
+    assert.match(v.reason ?? "", /generated from the files around it/);
   }
+});
+
+// Protected against editing, not against reading. A real run caught this: the
+// agent was told to start from the index, asked for knowledge/index.md, was
+// refused, and spent a turn recovering — from a generated, non-secret file
+// that the whole progressive-disclosure design exists to have it read.
+test("a generated index and log stay readable", () => {
+  for (const p of [
+    `${WORKSPACE}/memory/index.md`,
+    `${WORKSPACE}/memory/log.md`,
+    `${WORKSPACE}/knowledge/index.md`,
+    `${ROOTS.agentDir}/memory/archive/index.md`,
+  ]) {
+    assert.equal(read(p).ok, true, `${p} must be readable`);
+  }
+});
+
+// The journal is the one that stays denied both ways: a step that can read or
+// rewrite its own history makes every other guarantee unverifiable.
+test("the run journal is denied for reading as well as writing", () => {
+  assert.equal(read(`${WORKSPACE}/runs/run-1.json`).ok, false);
+  assert.equal(write(`${WORKSPACE}/runs/run-1.json`).ok, false);
 });
 
 test("knowledge/ is read-only to an agent, index or not", () => {
@@ -170,5 +193,16 @@ test("bash may still read knowledge and write everywhere it should", () => {
     "mkdir -p outputs/sub",
   ]) {
     assert.equal(checkBash(cmd).ok, true, cmd);
+  }
+});
+
+// checkPaths lets an agent read a generated index; bash has to agree, or the
+// rule differs by tool and the agent just uses the other one.
+test("bash may read a generated index but not rewrite it", () => {
+  for (const cmd of ["cat memory/index.md", "grep -n Fact knowledge/index.md", "head memory/log.md"]) {
+    assert.equal(checkBash(cmd).ok, true, cmd);
+  }
+  for (const cmd of ["echo x > memory/index.md", "rm knowledge/index.md", "sed -i s/a/b/ memory/log.md"]) {
+    assert.equal(checkBash(cmd).ok, false, cmd);
   }
 });

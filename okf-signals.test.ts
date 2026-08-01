@@ -471,7 +471,7 @@ test("stamping covers a nested section and leaves reserved files alone", () => {
     },
     (root) => {
       const dir = path.join(root, "memory");
-      assert.equal(stampBundle(dir, "writer"), true);
+      assert.deepEqual(stampBundle(dir, "writer").sort(), ["campaigns/nested.md", "flat.md"]);
 
       for (const rel of ["flat.md", "campaigns/nested.md"]) {
         const { data } = matter(fs.readFileSync(path.join(dir, rel), "utf8"));
@@ -499,7 +499,7 @@ test("a claim the author already made is never overwritten", () => {
     { "memory/mine.md": "---\ntype: Decision\ngenerated:\n  by: human:matt\n---\n\nA.\n" },
     (root) => {
       const dir = path.join(root, "memory");
-      assert.equal(stampBundle(dir, "writer"), false);
+      assert.deepEqual(stampBundle(dir, "writer"), []);
       const { data } = matter(fs.readFileSync(path.join(dir, "mine.md"), "utf8"));
       assert.equal((data.generated as { by: string }).by, "human:matt");
       assert.equal(data.type, "Decision");
@@ -519,4 +519,32 @@ test("an unattributable write records the producer and no agent", () => {
     // Still machine-written for every reader.
     assert.deepEqual(provenanceMarks(readBundle(dir)[0]), ["machine-written", "unverified"]);
   });
+});
+
+// Models write `name:` whether or not you ask them to — a real run did it one
+// line after being told to add no frontmatter at all. It reads fine here,
+// because readDoc falls back to it, and reads as a slug to anyone else,
+// because OKF defines no such field.
+test("an agent's `name:` is moved to OKF's `title:` when stamped", () => {
+  withBundle({ "memory/a.md": "---\nname: Rain gauge resolution\n---\n\nA.\n" }, (root) => {
+    const dir = path.join(root, "memory");
+    stampBundle(dir, "writer");
+
+    const { data } = matter(fs.readFileSync(path.join(dir, "a.md"), "utf8"));
+    assert.equal(data.title, "Rain gauge resolution");
+    assert.ok(!("name" in data), "`name` is not a key the format defines");
+    assert.equal(readBundle(dir)[0].title, "Rain gauge resolution");
+  });
+});
+
+test("a title the author chose is never replaced by their name", () => {
+  withBundle(
+    { "memory/a.md": "---\nname: slug-ish\ntitle: The real one\n---\n\nA.\n" },
+    (root) => {
+      const dir = path.join(root, "memory");
+      stampBundle(dir, "writer");
+      const { data } = matter(fs.readFileSync(path.join(dir, "a.md"), "utf8"));
+      assert.equal(data.title, "The real one");
+    },
+  );
 });
