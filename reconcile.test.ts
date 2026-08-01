@@ -280,3 +280,96 @@ test("the scheduler closes abandoned runs without a restart", async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Approved, then abandoned — the state with no way out.
+//
+// Approval only writes to the run record; the loop that acts on it polls in
+// memory, inside the process that started the run. Lose that process between
+// the click and the next poll and the decision sits on disk with nobody to
+// read it. The run then holds `awaiting-approval` with no step awaiting
+// approval, so the dashboard cannot offer the button again — and this status
+// is deliberately exempt from being closed, so nothing rescued it either.
+// Observed live: a run stuck four minutes after a person clicked Approve.
+test("a run whose approval was granted, then abandoned, is picked back up", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-resume-"));
+  const previous = process.env.MDAGENT_DATA;
+  process.env.MDAGENT_DATA = root;
+  const started = Date.now() - 3 * HOUR;
+  try {
+    const ws = path.join(root, "acme/workspaces/desk");
+    fs.mkdirSync(path.join(ws, "runs"), { recursive: true });
+    const approved = step("publisher", "pending", started);
+    // The shape the approval API leaves behind: no longer asking, and a record
+    // that someone answered.
+    (approved as Record<string, unknown>).approve = true;
+    (approved as Record<string, unknown>).approvedAt = new Date(started).toISOString();
+    fs.writeFileSync(
+      path.join(ws, "runs", "r1.json"),
+      JSON.stringify({
+        id: "r1",
+        flow: "publish",
+        status: "awaiting-approval",
+        startedAt: new Date(started).toISOString(),
+        finishedAt: null,
+        steps: [step("writer", "completed", started), approved],
+      }),
+    );
+
+    const out = reconcileAllRuns(Date.now());
+    assert.deepEqual(
+      out.map((c) => c.action),
+      ["resumed"],
+      "an answered run was not resumed",
+    );
+
+    // Resuming means the loop was re-entered, and the loop reaches a verdict:
+    // this workspace has no `publisher` agent on disk, so it must say so and
+    // finish rather than sit in a status nobody can act on.
+    const read1 = () => JSON.parse(fs.readFileSync(path.join(ws, "runs/r1.json"), "utf8"));
+    for (let i = 0; i < 100 && read1().status === "running"; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const run = read1();
+    assert.notEqual(run.status, "awaiting-approval", "the run went back to being stuck");
+    assert.equal(run.status, "failed");
+    assert.match(
+      run.steps[1].events.at(-1).text,
+      /not found in workspace/,
+      "the resumed run should reach a real verdict, not another dead end",
+    );
+    assert.equal(run.steps[0].status, "completed", "finished work must survive a resume");
+  } finally {
+    if (previous === undefined) delete process.env.MDAGENT_DATA;
+    else process.env.MDAGENT_DATA = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The half of it that a behaviour test cannot reach: on resume, an already
+// approved step must not be asked about again. `pending` is also what a step
+// looks like before anyone was asked, so the gate has to read the decision
+// itself — otherwise resuming a run means re-interrupting the same person.
+test("the approval gate skips a step a person already approved", () => {
+  const src = fs.readFileSync(
+    path.join(import.meta.dirname, "..", "packages/core/src/runner.ts"),
+    "utf8",
+  );
+  const gate = src.match(/const needsApproval = group\.filter\(([\s\S]*?)\);/);
+  assert.ok(gate, "the approval gate should still be a filter over the group");
+  assert.match(gate[1], /!s\.approvedAt/, "the gate must exclude steps already approved");
+});
+
+// And the route that writes it. Status alone cannot carry the decision:
+// approving flips the step to `pending`, which is indistinguishable from
+// never having been asked.
+test("approving records that it happened, not just its effect", () => {
+  const src = fs.readFileSync(
+    path.join(
+      import.meta.dirname,
+      "..",
+      "web/app/api/workspaces/[workspace]/runs/[runId]/approve/route.ts",
+    ),
+    "utf8",
+  );
+  assert.match(src, /s\.approvedAt = /, "approving must stamp approvedAt");
+});
