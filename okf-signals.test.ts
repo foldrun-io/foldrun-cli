@@ -22,6 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   buildIndex, readBundle, provenanceMarks, stampGenerated, PRODUCER, UNKNOWN_ACTOR,
+  dateIssues, conformanceIssues,
 } from "../packages/core/src/okf.ts";
 import { buildMemoryIndex } from "../packages/core/src/store.ts";
 
@@ -368,5 +369,86 @@ test("what stampGenerated writes is what provenanceMarks recognises", () => {
     const [doc] = readBundle(dir);
     assert.equal(doc.generatedBy, PRODUCER);
     assert.deepEqual(provenanceMarks(doc), ["machine-written", "unverified"]);
+  });
+});
+
+// `at:` accepted anything. That matters because every use of these values is a
+// comparison — `stale` is `today >= stale_after`, `latestAt` picks the newest
+// verification with `>` — and both are string comparisons only meaningful on
+// ISO. "yesterday" sorted above every real timestamp, since lowercase letters
+// beat digits, so one sloppy value silently made "most recently verified"
+// return the wrong entry and the index rendered "human-reviewed yesterday".
+const AT = (at: string) => `---
+type: Fact
+title: Dated
+verified:
+  - { by: human:x, at: ${at} }
+---
+
+x
+`;
+
+test("an ISO instant and a bare day are both accepted, and normalised", () => {
+  withBundle({ "memory/a.md": AT("2026-07-01T09:00:00Z") }, (root) => {
+    assert.equal(readBundle(path.join(root, "memory"))[0].verifiedAt, "2026-07-01T09:00:00.000Z");
+  });
+  withBundle({ "memory/a.md": AT("2026-07-01") }, (root) => {
+    assert.equal(readBundle(path.join(root, "memory"))[0].verifiedAt, "2026-07-01T00:00:00.000Z");
+  });
+});
+
+test("a value that is not a date is dropped rather than compared", () => {
+  for (const bad of ["yesterday", "01/07/2026", "July 1 2026"]) {
+    withBundle({ "memory/a.md": AT(bad) }, (root) => {
+      const [doc] = readBundle(path.join(root, "memory"));
+      assert.equal(doc.verifiedAt, null, `${bad} must not become a comparable value`);
+      // The tier still holds — who checked it is known even when the when is not.
+      assert.equal(doc.trust, "human-reviewed");
+    });
+  }
+});
+
+test("a dropped date is reported, never swallowed", () => {
+  withBundle({ "memory/a.md": AT("yesterday") }, (root) => {
+    const issues = dateIssues(path.join(root, "memory"));
+    assert.deepEqual(issues, [{ file: "a.md", field: "verified[0].at", value: "yesterday" }]);
+  });
+});
+
+test("every date-bearing field is checked, at any depth", () => {
+  withBundle(
+    {
+      "memory/deep/a.md": `---
+type: Fact
+title: Deep
+stale_after: soon
+generated: { by: human:x, at: whenever }
+usage_window: { from: never, to: 2026-01-01 }
+sources:
+  - resource: https://x.example/a
+    last_modified: recently
+---
+
+x
+`,
+    },
+    (root) => {
+      const fields = dateIssues(path.join(root, "memory")).map((i) => i.field).sort();
+      assert.deepEqual(fields, [
+        "generated.at",
+        "sources[0].last_modified",
+        "stale_after",
+        "usage_window.from",
+      ]);
+    },
+  );
+});
+
+// Conformance is the spec's three rules and nothing more. A bad date is still
+// a conformant bundle — the spec says nothing about a date's shape — so the
+// two questions stay in two functions.
+test("an unusable date is not a conformance failure", () => {
+  withBundle({ "memory/a.md": AT("yesterday") }, (root) => {
+    assert.deepEqual(conformanceIssues(path.join(root, "memory")), []);
   });
 });
