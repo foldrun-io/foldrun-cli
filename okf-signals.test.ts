@@ -20,9 +20,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import matter from "gray-matter";
 import {
   buildIndex, readBundle, provenanceMarks, stampGenerated, PRODUCER, UNKNOWN_ACTOR,
-  dateIssues, conformanceIssues,
+  dateIssues, conformanceIssues, stampBundle,
 } from "../packages/core/src/okf.ts";
 import { buildMemoryIndex } from "../packages/core/src/store.ts";
 
@@ -450,5 +451,72 @@ x
 test("an unusable date is not a conformance failure", () => {
   withBundle({ "memory/a.md": AT("yesterday") }, (root) => {
     assert.deepEqual(conformanceIssues(path.join(root, "memory")), []);
+  });
+});
+
+// What an agent writes has to come out conformant without the agent knowing
+// the format. The hook that does that walked one flat directory and excluded
+// index.md by name — so it missed every concept in a nested section, skipped
+// the workspace bundle entirely, and stamped log.md, writing a concept's
+// frontmatter onto a reserved file §9 gives its own structure. Nothing
+// reported the last one: a conformance check skips reserved names by
+// definition, so the file is malformed only to the readers that parse it.
+test("stamping covers a nested section and leaves reserved files alone", () => {
+  withBundle(
+    {
+      "memory/flat.md": "# Learned\n\nA.\n",
+      "memory/campaigns/nested.md": "# Learned\n\nB.\n",
+      "memory/index.md": '---\nokf_version: "0.2"\n---\n\n# Memory\n',
+      "memory/log.md": "# Log\n\n## 2026-08-01\n\n- **Creation** [flat](flat.md)\n",
+    },
+    (root) => {
+      const dir = path.join(root, "memory");
+      assert.equal(stampBundle(dir, "writer"), true);
+
+      for (const rel of ["flat.md", "campaigns/nested.md"]) {
+        const { data } = matter(fs.readFileSync(path.join(dir, rel), "utf8"));
+        assert.equal(data.type, "Memory", `${rel} should be typed`);
+        assert.equal((data.generated as { by: string }).by, PRODUCER);
+        assert.equal((data.generated as { agent: string }).agent, "writer");
+      }
+
+      // The spec's two keep their own structure.
+      assert.deepEqual(
+        Object.keys(matter(fs.readFileSync(path.join(dir, "index.md"), "utf8")).data),
+        ["okf_version"],
+      );
+      assert.deepEqual(
+        Object.keys(matter(fs.readFileSync(path.join(dir, "log.md"), "utf8")).data),
+        [],
+        "log.md must not be given a concept's frontmatter",
+      );
+    },
+  );
+});
+
+test("a claim the author already made is never overwritten", () => {
+  withBundle(
+    { "memory/mine.md": "---\ntype: Decision\ngenerated:\n  by: human:matt\n---\n\nA.\n" },
+    (root) => {
+      const dir = path.join(root, "memory");
+      assert.equal(stampBundle(dir, "writer"), false);
+      const { data } = matter(fs.readFileSync(path.join(dir, "mine.md"), "utf8"));
+      assert.equal((data.generated as { by: string }).by, "human:matt");
+      assert.equal(data.type, "Decision");
+    },
+  );
+});
+
+// Attribution is dropped rather than guessed when a run had several agents and
+// the file sits at workspace scope — any of them could have written it.
+test("an unattributable write records the producer and no agent", () => {
+  withBundle({ "memory/shared.md": "# Learned\n\nC.\n" }, (root) => {
+    const dir = path.join(root, "memory");
+    stampBundle(dir, null);
+    const { data } = matter(fs.readFileSync(path.join(dir, "shared.md"), "utf8"));
+    assert.equal((data.generated as { by: string }).by, PRODUCER);
+    assert.ok(!("agent" in (data.generated as object)), "no agent should be invented");
+    // Still machine-written for every reader.
+    assert.deepEqual(provenanceMarks(readBundle(dir)[0]), ["machine-written", "unverified"]);
   });
 });
