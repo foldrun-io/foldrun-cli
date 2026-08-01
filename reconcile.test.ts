@@ -13,7 +13,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { reconcileRuns } from "../packages/core/src/runner.ts";
+import { reconcileRuns, reconcileAllRuns } from "../packages/core/src/runner.ts";
+import { listTenants } from "../packages/core/src/store.ts";
 
 const HOUR = 60 * 60 * 1000;
 
@@ -165,5 +166,74 @@ test("finished runs are never touched", () => {
         assert.equal(read(`r-${status}`).status, status);
       },
     );
+  }
+});
+
+// The bug this pair of tests exists for: the server reconciled the account it
+// was named after, and every other account's interrupted runs stayed `running`
+// on disk forever — the exact false state the whole mechanism exists to
+// prevent, restored for everyone but the first customer.
+test("every account is reconciled, not just one", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-tenants-"));
+  const previous = process.env.MDAGENT_DATA;
+  process.env.MDAGENT_DATA = root;
+  const started = Date.now() - 3 * HOUR;
+  try {
+    for (const tenant of ["acme", "globex"]) {
+      const ws = path.join(root, tenant, "workspaces/desk");
+      fs.mkdirSync(path.join(ws, "runs"), { recursive: true });
+      fs.writeFileSync(
+        path.join(ws, "runs", "r1.json"),
+        JSON.stringify({
+          id: "r1",
+          flow: "publish",
+          status: "running",
+          startedAt: new Date(started).toISOString(),
+          finishedAt: null,
+          steps: [step("writer", "running", started)],
+        }),
+      );
+    }
+    // Things that live beside accounts but are not accounts.
+    fs.mkdirSync(path.join(root, ".runtimes"), { recursive: true });
+    fs.writeFileSync(path.join(root, "keys.json"), "{}\n");
+
+    const closed = reconcileAllRuns(Date.now());
+    assert.deepEqual(
+      closed.map((c) => `${c.tenant}/${c.workspace}/${c.runId}`).sort(),
+      ["acme/desk/r1", "globex/desk/r1"],
+      "a second account's interrupted run was left running",
+    );
+    for (const tenant of ["acme", "globex"]) {
+      const f = path.join(root, tenant, "workspaces/desk/runs/r1.json");
+      assert.equal(JSON.parse(fs.readFileSync(f, "utf8")).status, "failed");
+    }
+  } finally {
+    if (previous === undefined) delete process.env.MDAGENT_DATA;
+    else process.env.MDAGENT_DATA = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Enumerating accounts means reading the data root, which holds more than
+// accounts. Counting `.runtimes/` as one would send reconciliation walking a
+// cache directory, and `assertSafeName` would throw on the dot before it got
+// anywhere useful.
+test("only directories that hold workspaces count as accounts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-tenants-"));
+  const previous = process.env.MDAGENT_DATA;
+  process.env.MDAGENT_DATA = root;
+  try {
+    fs.mkdirSync(path.join(root, "acme/workspaces/desk"), { recursive: true });
+    fs.mkdirSync(path.join(root, "legacy/projects/desk"), { recursive: true }); // pre-rename
+    fs.mkdirSync(path.join(root, "half-set-up"), { recursive: true }); // no workspaces yet
+    fs.mkdirSync(path.join(root, ".runtimes"), { recursive: true });
+    fs.writeFileSync(path.join(root, "schedule.json"), "{}\n");
+
+    assert.deepEqual(listTenants(), ["acme", "legacy"]);
+  } finally {
+    if (previous === undefined) delete process.env.MDAGENT_DATA;
+    else process.env.MDAGENT_DATA = previous;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
