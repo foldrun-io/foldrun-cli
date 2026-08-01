@@ -23,7 +23,7 @@ const core = async () => import("@mdagent/core");
 async function init(workspace) {
   // The same definition the dashboard's "+ New workspace" uses — see
   // core/src/starter.ts for why it is not two lists.
-  const { starterFiles } = await core();
+  const { starterFiles, syncWorkspaceBundles } = await core();
   const files = starterFiles(path.basename(path.resolve(workspace)));
 
   if (fs.existsSync(workspace) && fs.readdirSync(workspace).length > 0) {
@@ -37,6 +37,10 @@ async function init(workspace) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content);
   }
+  // knowledge/ and memory/ are OKF bundles, and a bundle without its root
+  // index.md declares no okf_version — so `mdagent init` produced a directory
+  // of valid concepts that no consumer could tell the version of.
+  syncWorkspaceBundles(workspace);
   console.log(`\n  ${c.green("created")} ${workspace}\n`);
   for (const { path: rel } of files) console.log(`    ${c.dim(rel)}`);
   console.log(`
