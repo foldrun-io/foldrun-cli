@@ -20,11 +20,53 @@ const core = async () => import("@mdagent/core");
 
 // ---------------------------------------------------------------- init
 
-async function init(workspace) {
+/**
+ * Read a template directory as the same {path, content} list starterFiles
+ * returns, so both sources of a new workspace go through one writer.
+ *
+ * Run artifacts are skipped: a template is what someone authored, and copying
+ * a previous run's outputs or journal into a fresh workspace hands it a
+ * history it never had.
+ */
+function templateFilesFrom(dir) {
+  const skip = new Set(["runs", "outputs", ".mdagent", "node_modules", ".git"]);
+  const out = [];
+  const walk = (abs, rel) => {
+    for (const entry of fs.readdirSync(abs).sort()) {
+      if (skip.has(entry)) continue;
+      const full = path.join(abs, entry);
+      const next = rel ? `${rel}/${entry}` : entry;
+      if (fs.statSync(full).isDirectory()) walk(full, next);
+      else out.push({ path: next, content: fs.readFileSync(full, "utf8") });
+    }
+  };
+  walk(path.resolve(dir), "");
+  return out;
+}
+
+async function init(workspace, from) {
   // The same definition the dashboard's "+ New workspace" uses — see
   // core/src/starter.ts for why it is not two lists.
   const { starterFiles, syncWorkspaceBundles } = await core();
-  const files = starterFiles(path.basename(path.resolve(workspace)));
+
+  // A template is a source, a workspace is a destination. Keeping the two
+  // words apart is the whole reason `templates/` is not called `examples/`:
+  // there is one place a workspace lives, and it is wherever you make one.
+  if (from && !fs.existsSync(from)) {
+    throw new Error(`no template at ${from} — pass a directory, e.g. --from templates/hello`);
+  }
+  const files = from
+    ? templateFilesFrom(from)
+    : starterFiles(path.basename(path.resolve(workspace)));
+
+  // Whatever the source, the new workspace must ignore the key that decrypts
+  // its secrets. A template does not carry one — it is a source, not a
+  // repository — so copying a template verbatim would hand back the very hole
+  // the starter's .gitignore exists to close.
+  if (!files.some((f) => f.path === ".gitignore")) {
+    const guard = starterFiles("x").find((f) => f.path === ".gitignore");
+    if (guard) files.unshift(guard);
+  }
 
   if (fs.existsSync(workspace) && fs.readdirSync(workspace).length > 0) {
     const clashes = files.filter((f) => fs.existsSync(path.join(workspace, f.path)));
@@ -43,10 +85,13 @@ async function init(workspace) {
   syncWorkspaceBundles(workspace);
   console.log(`\n  ${c.green("created")} ${workspace}\n`);
   for (const { path: rel } of files) console.log(`    ${c.dim(rel)}`);
+  const flow = files
+    .map((f) => f.path.match(/^flows\/(.+)\.md$/)?.[1])
+    .find(Boolean);
   console.log(`
   ${c.bold("Next")}
-    mdagent check                 ${c.dim("validate it — costs nothing")}
-    mdagent run publish           ${c.dim("run the flow")}
+    mdagent check ${workspace}${" ".repeat(Math.max(1, 16 - workspace.length))}${c.dim("validate it — costs nothing")}
+    mdagent run ${flow ?? "publish"} --workspace ${workspace}   ${c.dim("run the flow")}
 `);
   return 0;
 }
@@ -344,7 +389,7 @@ async function runEvals(name) {
 export async function run(command, positional, flags, workspace) {
   switch (command) {
     case "init":
-      return init(workspace);
+      return init(workspace, flags.from);
     case "check":
       return check(workspace);
     case "run":

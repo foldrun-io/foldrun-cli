@@ -37,6 +37,7 @@ const HELP = `mdagent — agents are markdown
 
 Options
   --workspace <dir>         the workspace folder (default: .)
+  --from <template>         start from a shipped template, e.g. templates/hello
   --task "<text>"           the instruction for a manual run
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
@@ -63,7 +64,23 @@ const workspace = path.resolve(
   flags.workspace ?? (takesDir ? positional.shift() ?? "." : "."),
 );
 process.env.MDAGENT_WORKSPACE = workspace;
-process.env.MDAGENT_DATA ??= path.join(workspace, ".mdagent");
+
+// Where the secrets, keys and run store live.
+//
+// A workspace on a laptop keeps them inside itself, in `.mdagent/`. But a
+// workspace that belongs to an installation sits at
+// `<data>/<tenant>/workspaces/<name>`, and its secrets belong to the tenant,
+// two levels up — so pointing --workspace at one and defaulting to `.mdagent/`
+// opened an empty store beside it. Every declared secret came back missing,
+// and the error told you to add secrets that were already there.
+//
+// The layout says which case this is: a parent directory named `workspaces`
+// only happens in an installation.
+const parent = path.basename(path.dirname(workspace));
+const installationRoot =
+  parent === "workspaces" ? path.resolve(workspace, "..", "..", "..") : null;
+
+process.env.MDAGENT_DATA ??= installationRoot ?? path.join(workspace, ".mdagent");
 
 const { run } = await import(path.join(HERE, "../src/commands.mjs"));
 
