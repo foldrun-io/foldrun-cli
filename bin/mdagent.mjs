@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+// mdagent — the open-source CLI.
+//
+// Local-first by design: every command here works on a plain folder with no
+// account, no server and no network beyond the model call itself. That is the
+// point. A framework whose free version is a crippled demo gets no adoption,
+// and adoption is the only reason a hosted version has customers.
+//
+//   mdagent init  [dir]     scaffold a working workspace
+//   mdagent check [dir]     validate it — no model calls, no cost
+//   mdagent run   <target>  run an agent or a flow
+//   mdagent eval  [name]    run evals
+//
+// `check` is the one to run in CI: it catches the mistakes that otherwise only
+// show up as a confidently wrong answer at 3am.
+
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import process from "node:process";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+// Node warns about stripping types from a package without "type": "module".
+// True, and not the user's problem — they asked to run an agent.
+process.removeAllListeners("warning");
+process.on("warning", () => {});
+
+const [, , command, ...rest] = process.argv;
+
+const HELP = `mdagent — agents are markdown
+
+  mdagent init [dir]        create a workspace you can run immediately
+  mdagent check [dir]       validate agents, flows, tools, evals and knowledge
+  mdagent run <target>      run an agent or flow (target: name, or flow:name)
+  mdagent eval [name]       run one eval, or all of them
+  mdagent --help
+
+Options
+  --workspace <dir>         the workspace folder (default: .)
+  --task "<text>"           the instruction for a manual run
+
+Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
+work without one.`;
+
+if (!command || command === "--help" || command === "-h") {
+  console.log(HELP);
+  process.exit(0);
+}
+
+// Flags first, so the workspace is known before anything loads the core:
+// single-workspace mode is an environment decision, read at import time.
+const flags = {};
+const positional = [];
+for (let i = 0; i < rest.length; i++) {
+  if (rest[i].startsWith("--")) flags[rest[i].slice(2)] = rest[++i] ?? true;
+  else positional.push(rest[i]);
+}
+
+// `init` and `check` take a directory; `run` and `eval` take the name of a
+// thing to run, so a directory there would be ambiguous — use --workspace.
+const takesDir = command === "init" || command === "check";
+const workspace = path.resolve(
+  flags.workspace ?? (takesDir ? positional.shift() ?? "." : "."),
+);
+process.env.MDAGENT_WORKSPACE = workspace;
+process.env.MDAGENT_DATA ??= path.join(workspace, ".mdagent");
+
+const { run } = await import(path.join(HERE, "../src/commands.mjs"));
+
+try {
+  const code = await run(command, positional, flags, workspace);
+  process.exit(code ?? 0);
+} catch (err) {
+  console.error(`\n  ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(1);
+}
