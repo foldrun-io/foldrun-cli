@@ -46,6 +46,8 @@ Deploy options
   --to <workspace>          workspace to deploy into (default: the folder name)
   --tenant <name>           account to deploy into (default: default)
   --data <dir>              the installation's data directory
+  --url <url>               deploy to a running platform (or MDAGENT_URL)
+  --token <key>             API key for --url (or MDAGENT_TOKEN)
   --commit <sha>            record which commit this is
   --dry-run                 check and report, change nothing
   --force                   deploy even while runs are in flight

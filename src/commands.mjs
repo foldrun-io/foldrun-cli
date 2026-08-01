@@ -397,6 +397,58 @@ async function runEvals(name) {
  * is what surrounds the copy — the workspace is checked before any of it is
  * live, and the swap is refused while a run is reading the files.
  */
+/**
+ * The same deploy, against a running platform.
+ *
+ * Returns the same shape the local path does, so the reporting below does not
+ * have to know which one it was — a deploy that is refused over HTTP should
+ * read exactly like one refused on disk.
+ */
+async function deployOverHttp(url, workspace, files, flags) {
+  const token = flags.token ?? process.env.MDAGENT_TOKEN;
+  if (!token) {
+    throw new Error(
+      "deploying to a server needs an API key — set MDAGENT_TOKEN, or pass --token.\n" +
+        "  Create one in the dashboard under Settings → API keys.",
+    );
+  }
+  const endpoint = `${url.replace(/\/+$/, "")}/api/workspaces/${encodeURIComponent(workspace)}/deploy`;
+
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        files,
+        commit: flags.commit ?? null,
+        force: flags.force === true,
+        dryRun: flags["dry-run"] === true,
+      }),
+    });
+  } catch (err) {
+    throw new Error(`could not reach ${url} — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — check MDAGENT_TOKEN`);
+  // 422 is a refusal the caller has to read, not a transport failure: the
+  // issues are in the body and reported like any other refused deploy.
+  if (!res.ok && res.status !== 422) {
+    throw new Error(body.error ?? `${url} returned ${res.status}`);
+  }
+
+  return {
+    added: body.added ?? [],
+    updated: body.updated ?? [],
+    removed: body.removed ?? [],
+    issues: body.issues ?? [],
+    blockedBy: body.blockedBy ?? [],
+    preserved: body.preserved ?? 0,
+    commit: body.commit ?? null,
+  };
+}
+
 async function deploy(source, flags) {
   const { readTree, planDeploy, deployWorkspace, deployedCommit } = await core();
 
@@ -405,14 +457,24 @@ async function deploy(source, flags) {
   const tenant = flags.tenant ?? "default";
 
   const files = readTree(source);
-  const plan = flags["dry-run"]
-    ? planDeploy(tenant, workspace, files)
-    : deployWorkspace(tenant, workspace, files, {
-        commit: flags.commit ?? null,
-        force: flags.force === true,
-      });
 
-  console.log(`\n  ${c.bold(`${tenant}/${workspace}`)} ${c.dim(`← ${path.resolve(source)}`)}`);
+  // Two destinations, one command. Without --url the workspace is written
+  // straight to the installation on this machine; with one it is POSTed to a
+  // running platform, which is what a laptop or a CI job does.
+  const url = flags.url ?? process.env.MDAGENT_URL;
+  const plan = url
+    ? await deployOverHttp(url, workspace, files, flags)
+    : flags["dry-run"]
+      ? planDeploy(tenant, workspace, files)
+      : deployWorkspace(tenant, workspace, files, {
+          commit: flags.commit ?? null,
+          force: flags.force === true,
+        });
+
+  console.log(
+    `\n  ${c.bold(url ? `${url} ${workspace}` : `${tenant}/${workspace}`)} ` +
+      `${c.dim(`← ${path.resolve(source)}`)}`,
+  );
   console.log(
     `  ${c.dim(`${files.length} files · +${plan.added.length} ~${plan.updated.length} -${plan.removed.length}`)}\n`,
   );
@@ -445,7 +507,7 @@ async function deploy(source, flags) {
     return 0;
   }
 
-  const at = deployedCommit(tenant, workspace);
+  const at = url ? { commit: plan.commit } : deployedCommit(tenant, workspace);
   console.log(
     `\n  ${c.green("✓")} deployed${at?.commit ? ` ${c.dim(at.commit.slice(0, 8))}` : ""}` +
       `${plan.preserved ? c.dim(` · kept ${plan.preserved} file${plan.preserved === 1 ? "" : "s"} the agents own`) : ""}\n`,
