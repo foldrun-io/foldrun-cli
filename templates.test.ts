@@ -1,8 +1,8 @@
-// The workspaces that ship.
+// The templates that ship.
 //
 // Two places hold a workspace and they are not the same thing:
 //
-//   examples/<name>/                  authored, committed, shipped
+//   templates/<name>/                  authored, committed, shipped
 //   data/<tenant>/workspaces/<name>/  created at runtime, gitignored
 //
 // The second holds user content — secrets, run journals, memory an agent
@@ -14,7 +14,7 @@
 //
 // These are the checks a reader would perform, run before they can.
 //
-//   node --test tests/examples.test.ts
+//   node --test tests/templates.test.ts
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -28,11 +28,11 @@ import {
 } from "../packages/core/src/okf.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
-const EXAMPLES = path.join(ROOT, "examples");
+const TEMPLATES = path.join(ROOT, "templates");
 
-const workspaces = fs
-  .readdirSync(EXAMPLES)
-  .filter((n) => fs.statSync(path.join(EXAMPLES, n)).isDirectory());
+const templates = fs
+  .readdirSync(TEMPLATES)
+  .filter((n) => fs.statSync(path.join(TEMPLATES, n)).isDirectory());
 
 /** Every OKF bundle in a workspace, at both scopes. */
 function bundles(root: string): string[] {
@@ -50,12 +50,12 @@ function bundles(root: string): string[] {
   return out;
 }
 
-test("there is at least one example to ship", () => {
-  assert.ok(workspaces.length > 0, "examples/ is empty");
+test("there is at least one template to ship", () => {
+  assert.ok(templates.length > 0, "templates/ is empty");
 });
 
-for (const name of workspaces) {
-  const root = path.join(EXAMPLES, name);
+for (const name of templates) {
+  const root = path.join(TEMPLATES, name);
 
   test(`${name}: every bundle is conformant`, () => {
     for (const dir of bundles(root)) {
@@ -100,7 +100,7 @@ for (const name of workspaces) {
   // agent that isn't there is a broken example that still looks complete.
   test(`${name}: names only things it contains`, () => {
     const agents = path.join(root, "agents");
-    assert.ok(fs.existsSync(agents), "an example workspace needs at least one agent");
+    assert.ok(fs.existsSync(agents), "a template needs at least one agent");
     const names = new Set(fs.readdirSync(agents));
 
     const flows = path.join(root, "flows");

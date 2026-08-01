@@ -101,9 +101,13 @@ test("the secret key really does live under .mdagent/", () => {
     path.join(import.meta.dirname, "..", "packages/cli/bin/mdagent.mjs"),
     "utf8",
   );
+  // The guarantee, not the wording: when a workspace keeps its own store, that
+  // store is `.mdagent/` inside it — which is what the shipped .gitignore
+  // covers. The CLI may pick a different root for a workspace that belongs to
+  // an installation; that one lives under data/ and is ignored already.
   assert.match(
     cli,
-    /MDAGENT_DATA \?\?= path\.join\(workspace, "\.mdagent"\)/,
-    "the CLI puts the data root somewhere the shipped .gitignore does not cover",
+    /path\.join\(workspace, "\.mdagent"\)/,
+    "a self-contained workspace must keep its store where the shipped .gitignore looks",
   );
 });
