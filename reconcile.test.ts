@@ -237,3 +237,46 @@ test("only directories that hold workspaces count as accounts", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Reconciliation used to happen only when the server booted, which assumed the
+// only way to abandon a run was for the process to die. A run was found five
+// hours idle and still rendering as live in a server that had never restarted:
+// the step stopped emitting, the process carried on serving pages, and nothing
+// was ever going to close it. So the scheduler sweeps too.
+test("the scheduler closes abandoned runs without a restart", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-sweep-"));
+  const previous = process.env.MDAGENT_DATA;
+  process.env.MDAGENT_DATA = root;
+  const started = Date.now() - 3 * HOUR;
+  try {
+    const ws = path.join(root, "acme/workspaces/desk");
+    fs.mkdirSync(path.join(ws, "runs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(ws, "runs", "r1.json"),
+      JSON.stringify({
+        id: "r1",
+        flow: "publish",
+        status: "running",
+        startedAt: new Date(started).toISOString(),
+        finishedAt: null,
+        steps: [step("writer", "running", started)],
+      }),
+    );
+
+    const { tick, RECONCILE_EVERY } = await import("../packages/core/src/scheduler.ts");
+    const status = () =>
+      JSON.parse(fs.readFileSync(path.join(ws, "runs/r1.json"), "utf8")).status;
+
+    // The sweep is deliberately slower than the tick — it reads every run file
+    // — so the first ticks must leave the run alone.
+    tick(new Date());
+    assert.equal(status(), "running", "a sweep on every tick would read every run file every 30s");
+
+    for (let i = 1; i < RECONCILE_EVERY; i++) tick(new Date());
+    assert.equal(status(), "failed", "the sweep never fired");
+  } finally {
+    if (previous === undefined) delete process.env.MDAGENT_DATA;
+    else process.env.MDAGENT_DATA = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
