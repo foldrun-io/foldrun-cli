@@ -138,3 +138,42 @@ test("ordinary bash is allowed", () => {
     assert.equal(checkBash(cmd).ok, true, cmd);
   }
 });
+
+// The protections checkPaths applies to Write and Edit have to hold for Bash
+// too, or `bash` in an agent's tools: is a way around them. It was: Write to
+// knowledge/ was denied while `echo x > knowledge/prices.md` went through, and
+// the run journal — the thing every other guarantee is verified against — could
+// be rewritten by any agent granted a shell.
+test("bash cannot write where the file tools may not", () => {
+  for (const cmd of [
+    "echo free > ../../knowledge/pricing.md",
+    "echo x >> knowledge/p.md",
+    "rm ../../knowledge/pricing.md",
+    "sed -i s/400/0/ knowledge/p.md",
+    "echo x | tee knowledge/p.md",
+    "mv /tmp/x knowledge/p.md",
+    // The journal is denied outright, reads included: a rule that differs by
+    // tool is a rule an agent can shop around for.
+    "echo x > ../../runs/r.json",
+    "cat ../../runs/r.json",
+    "echo x > memory/index.md",
+  ]) {
+    assert.equal(checkBash(cmd).ok, false, `${cmd} must be denied`);
+  }
+});
+
+// The counterpart, and the reason knowledge/ is matched only alongside a
+// writing shape: reading the price list is the whole point of having one, so a
+// blanket rule would have banned `cat` to close a hole about `>`.
+test("bash may still read knowledge and write everywhere it should", () => {
+  for (const cmd of [
+    "cat ../../knowledge/pricing.md",
+    "grep -r surcharge knowledge/",
+    "cat knowledge/p.md && echo done",
+    "echo learned > memory/note.md",
+    "echo draft > outputs/draft.md",
+    "mkdir -p outputs/sub",
+  ]) {
+    assert.equal(checkBash(cmd).ok, true, cmd);
+  }
+});
