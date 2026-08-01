@@ -9,6 +9,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { checkPaths, checkBash } from "../packages/core/src/confine.ts";
 
@@ -204,5 +206,40 @@ test("bash may read a generated index but not rewrite it", () => {
   }
   for (const cmd of ["echo x > memory/index.md", "rm knowledge/index.md", "sed -i s/a/b/ memory/log.md"]) {
     assert.equal(checkBash(cmd).ok, false, cmd);
+  }
+});
+
+// Both sides of the containment check must be resolved the same way, or the
+// comparison is between two spellings of one place. On macOS `/var` is a
+// symlink to `/private/var`: a workspace under the system temp directory was
+// handed in as `/var/folders/…` while every path the agent produced came back
+// as `/private/var/folders/…`, so it was told its own workspace was outside
+// the workspace — on every write, for a whole run, while the run still
+// reported success because the agent gave up politely.
+test("a workspace reached through a symlink is still its own workspace", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-link-"));
+  try {
+    const real = fs.realpathSync.native(root);
+    const roots = {
+      // As a caller supplies it: unresolved.
+      agentDir: path.join(root, "agents/writer"),
+      workspaceRoot: root,
+      libraryRoot: path.join(root, "library"),
+    };
+    fs.mkdirSync(roots.agentDir, { recursive: true });
+
+    // As the agent produces it: resolved.
+    const target = path.join(real, "agents/writer/outputs/note.md");
+    assert.notEqual(target.startsWith(root), target.startsWith(real) && root !== real);
+    assert.equal(
+      checkPaths("Write", { file_path: target }, roots).ok,
+      true,
+      "the resolved path was treated as outside the unresolved workspace",
+    );
+
+    // And the boundary still holds for something genuinely outside it.
+    assert.equal(checkPaths("Write", { file_path: "/etc/passwd" }, roots).ok, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
