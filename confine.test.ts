@@ -243,3 +243,36 @@ test("a workspace reached through a symlink is still its own workspace", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// The other confinement layer. Scripts declared as tools are resolved and
+// checked separately from the file tools, and it compared with a string
+// prefix — so `<workspace>-attacker/steal.py` was inside `<workspace>`,
+// because as text it is. Containment is a question about paths, and only
+// path.relative answers it.
+test("a sibling directory is not inside the workspace", () => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-sib-")));
+  try {
+    const inside = path.join(root, "workspaces/desk");
+    const sibling = path.join(root, "workspaces/desk-attacker");
+    fs.mkdirSync(path.join(inside, "scripts"), { recursive: true });
+    fs.mkdirSync(sibling, { recursive: true });
+    fs.writeFileSync(path.join(inside, "scripts/ok.py"), "print(1)\n");
+    fs.writeFileSync(path.join(sibling, "steal.py"), "print(2)\n");
+
+    const within = (rootDir: string, candidate: string) => {
+      const rel = path.relative(rootDir, candidate);
+      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    };
+
+    assert.equal(within(inside, path.join(inside, "scripts/ok.py")), true);
+    assert.equal(
+      within(inside, path.join(sibling, "steal.py")),
+      false,
+      "a sibling whose name extends the workspace's is not in it",
+    );
+    // The shape that made the old check wrong.
+    assert.equal(path.join(sibling, "steal.py").startsWith(inside), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
