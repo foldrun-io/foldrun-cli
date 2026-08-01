@@ -20,7 +20,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildIndex, readBundle, provenanceMarks } from "../packages/core/src/okf.ts";
+import {
+  buildIndex, readBundle, provenanceMarks, stampGenerated, PRODUCER, UNKNOWN_ACTOR,
+} from "../packages/core/src/okf.ts";
 import { buildMemoryIndex } from "../packages/core/src/store.ts";
 
 function withBundle(files: Record<string, string>, run: (dir: string) => void) {
@@ -42,7 +44,7 @@ const AGENT_WRITTEN = `---
 type: Fact
 title: Q3 revenue
 generated:
-  by: producer/mdagent:analyst
+  by: mdagent/0.1.0
 ---
 
 Revenue was 4.2M.
@@ -66,9 +68,9 @@ const MACHINE_CONFIRMED = `---
 type: Fact
 title: Row count
 generated:
-  by: producer/mdagent:analyst
+  by: mdagent/0.1.0
 verified:
-  - by: producer/checker
+  - by: process:checker
 ---
 
 11,402 rows.
@@ -87,9 +89,9 @@ test("an agent's invention and a person's reviewed note are distinguishable in t
     const agent = line(index, "Q3 revenue");
     const human = line(index, "Pricing");
 
-    assert.match(agent, /agent-written/);
+    assert.match(agent, /machine-written/);
     assert.match(agent, /unverified/);
-    assert.doesNotMatch(human, /agent-written/);
+    assert.doesNotMatch(human, /machine-written/);
     assert.match(human, /human-reviewed/);
     assert.notEqual(agent.replace("Q3 revenue", ""), human.replace("Pricing", ""));
   });
@@ -98,7 +100,7 @@ test("an agent's invention and a person's reviewed note are distinguishable in t
 test("the same is true of the index a model reads mid-run", () => {
   withBundle({ "memory/q3.md": AGENT_WRITTEN, "memory/pricing.md": HUMAN_REVIEWED }, (root) => {
     const index = buildMemoryIndex(path.join(root, "memory")) ?? "";
-    assert.match(line(index, "Q3 revenue"), /agent-written/);
+    assert.match(line(index, "Q3 revenue"), /machine-written/);
     assert.match(line(index, "Pricing"), /human-reviewed/);
   });
 });
@@ -171,9 +173,9 @@ test("the newest verification wins when several are recorded", () => {
 type: Fact
 title: Margin
 verified:
-  - { by: producer/checker, at: 2024-01-01T00:00:00Z }
+  - { by: process:checker, at: 2024-01-01T00:00:00Z }
   - { by: human:kliu@acme, at: 2026-07-01T16:00:00Z }
-  - { by: producer/checker, at: 2025-05-05T00:00:00Z }
+  - { by: process:checker, at: 2025-05-05T00:00:00Z }
 ---
 
 0.42
@@ -205,7 +207,7 @@ test("an undated verification still states the tier, without inventing a date", 
 test("`generated.at` is captured, and a v0.1 timestamp stands in for it", () => {
   withBundle(
     {
-      "memory/new.md": "---\ntype: Fact\ntitle: New\ngenerated: { by: producer/mdagent:a, at: 2026-06-30T14:00:00Z }\n---\n\nx\n",
+      "memory/new.md": "---\ntype: Fact\ntitle: New\ngenerated: { by: mdagent/0.1.0, at: 2026-06-30T14:00:00Z }\n---\n\nx\n",
       "memory/old.md": "---\ntype: Fact\ntitle: Old\ntimestamp: 2026-01-02\n---\n\nx\n",
     },
     (root) => {
@@ -217,11 +219,11 @@ test("`generated.at` is captured, and a v0.1 timestamp stands in for it", () => 
   );
 });
 
-test("a v0.1 document with no `generated` is not claimed to be agent-written", () => {
+test("a v0.1 document with no `generated` is not claimed to be machine-written", () => {
   withBundle({ "memory/old.md": "---\ntype: Fact\ntitle: Old\ntimestamp: 2026-01-02\n---\n\nA.\n" }, (root) => {
     const dir = path.join(root, "memory");
     const index = buildIndex(readBundle(dir), "Memory", true);
-    assert.doesNotMatch(line(index, "Old"), /agent-written/);
+    assert.doesNotMatch(line(index, "Old"), /machine-written/);
   });
 });
 
@@ -331,4 +333,40 @@ test("a bare verified mapping is treated as a one-element list", () => {
       assert.equal(doc.trust, "human-reviewed");
     },
   );
+});
+
+// §7 defines three actor forms and only `human:` is a person. The mark used to
+// test for a literal "producer/" prefix — but the producer's *name* is the
+// first segment, so the spec's own reference_agent/gemini-2.5-pro missed,
+// process: missed, and so did this platform's own PRODUCER. The feature fired
+// for nothing that any producer actually writes.
+test("every non-human actor form is recognised as machine-written", () => {
+  for (const by of [
+    "mdagent/0.1.0", // what stampGenerated writes
+    "reference_agent/gemini-2.5-pro", // the spec's own example
+    "process:finance-nightly", // §7's automated process
+  ]) {
+    assert.deepEqual(
+      provenanceMarks({ generatedBy: by, trust: "unverified" }),
+      ["machine-written", "unverified"],
+      `${by} should read as machine-written`,
+    );
+  }
+});
+
+test("a person, and an unknown author, are not called machine-written", () => {
+  assert.deepEqual(provenanceMarks({ generatedBy: "human:matt", trust: "unverified" }), ["unverified"]);
+  // A v0.1 timestamp says when, never who — which is not the same as knowing
+  // a machine did it.
+  assert.deepEqual(provenanceMarks({ generatedBy: UNKNOWN_ACTOR, trust: "unverified" }), ["unverified"]);
+});
+
+test("what stampGenerated writes is what provenanceMarks recognises", () => {
+  withBundle({ "memory/m.md": "---\ntype: Fact\ntitle: Learned\n---\n\nx\n" }, (root) => {
+    const dir = path.join(root, "memory");
+    assert.equal(stampGenerated(path.join(dir, "m.md"), "analyst"), true);
+    const [doc] = readBundle(dir);
+    assert.equal(doc.generatedBy, PRODUCER);
+    assert.deepEqual(provenanceMarks(doc), ["machine-written", "unverified"]);
+  });
 });
