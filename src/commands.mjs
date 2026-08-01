@@ -386,12 +386,81 @@ async function runEvals(name) {
 
 // ----------------------------------------------------------------
 
+
+// ---------------------------------------------------------------- deploy
+
+/**
+ * Push a directory of markdown into an installation's workspace.
+ *
+ * The whole point of a markdown platform: there is no build, so deploying is
+ * making the files match the source. What earns a command rather than a `cp`
+ * is what surrounds the copy — the workspace is checked before any of it is
+ * live, and the swap is refused while a run is reading the files.
+ */
+async function deploy(source, flags) {
+  const { readTree, planDeploy, deployWorkspace, deployedCommit } = await core();
+
+  if (!fs.existsSync(source)) throw new Error(`no such directory: ${source}`);
+  const workspace = flags.to ?? path.basename(path.resolve(source));
+  const tenant = flags.tenant ?? "default";
+
+  const files = readTree(source);
+  const plan = flags["dry-run"]
+    ? planDeploy(tenant, workspace, files)
+    : deployWorkspace(tenant, workspace, files, {
+        commit: flags.commit ?? null,
+        force: flags.force === true,
+      });
+
+  console.log(`\n  ${c.bold(`${tenant}/${workspace}`)} ${c.dim(`← ${path.resolve(source)}`)}`);
+  console.log(
+    `  ${c.dim(`${files.length} files · +${plan.added.length} ~${plan.updated.length} -${plan.removed.length}`)}\n`,
+  );
+
+  const show = (label, list, colour) => {
+    for (const f of list.slice(0, 20)) console.log(`    ${colour(label)} ${f}`);
+    if (list.length > 20) console.log(`    ${c.dim(`… and ${list.length - 20} more`)}`);
+  };
+  show("+", plan.added, c.green);
+  show("~", plan.updated, c.dim);
+  show("-", plan.removed, c.red);
+
+  if (plan.issues.length) {
+    console.log(`\n  ${c.red(`${plan.issues.length} problem${plan.issues.length === 1 ? "" : "s"}`)} — nothing was deployed\n`);
+    for (const i of plan.issues) console.log(`    ${c.red("✗")} ${c.bold(i.where)}  ${i.message}`);
+    console.log();
+    return 1;
+  }
+
+  if (plan.blockedBy.length && !flags.force) {
+    console.log(
+      `\n  ${c.amber("⏸")} ${plan.blockedBy.length} run${plan.blockedBy.length === 1 ? " is" : "s are"} still using these files: ` +
+        `${plan.blockedBy.join(", ")}\n    ${c.dim("wait for them to finish, or --force to deploy anyway")}\n`,
+    );
+    return 1;
+  }
+
+  if (flags["dry-run"]) {
+    console.log(`\n  ${c.dim("checks out — run without --dry-run to deploy")}\n`);
+    return 0;
+  }
+
+  const at = deployedCommit(tenant, workspace);
+  console.log(
+    `\n  ${c.green("✓")} deployed${at?.commit ? ` ${c.dim(at.commit.slice(0, 8))}` : ""}` +
+      `${plan.preserved ? c.dim(` · kept ${plan.preserved} file${plan.preserved === 1 ? "" : "s"} the agents own`) : ""}\n`,
+  );
+  return 0;
+}
+
 export async function run(command, positional, flags, workspace) {
   switch (command) {
     case "init":
       return init(workspace, flags.from);
     case "check":
       return check(workspace);
+    case "deploy":
+      return deploy(positional[0] ?? ".", flags);
     case "run":
       return runTarget(positional[0], flags);
     case "eval":
