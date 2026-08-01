@@ -1,0 +1,305 @@
+// Guards against the one bug this codebase keeps producing.
+//
+// Four times in one day: a list of names existed in two places, one was
+// updated, the other wasn't, and nothing errored — the UI just quietly lied.
+//
+//   WORKSPACE_DIRS      the file tree stopped showing knowledge/, evals/, state/
+//   LIBRARY_KINDS       scripts sorted second in one list and last in every other
+//   ACCOUNT_SEGMENTS    said "shared" after the route became "library", so
+//                       /dashboard/library rendered a workspace that didn't exist
+//
+// A typecheck can't catch any of them: every version compiles. These tests read
+// the actual source and assert the lists agree, so the next rename fails loudly
+// in CI instead of silently in the interface.
+//
+//   node --test tests/consistency.test.ts
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { ALL_KINDS, kindsAt, docKeyOf, docTypeOf, type Kind } from "../packages/core/src/kinds.ts";
+
+import { WORKSPACE_DIRS, templateFiles } from "../packages/core/src/store.ts";
+import { starterFiles } from "../packages/core/src/starter.ts";
+import { LIBRARY_KINDS } from "../packages/core/src/library.ts";
+
+const root = path.join(import.meta.dirname, "..");
+
+/** Every file under `dir` matching `keep`. */
+function walk(dir: string, keep: (f: string) => boolean): string[] {
+  const out: string[] = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (e.name === "node_modules" || e.name === ".next") continue;
+      out.push(...walk(full, keep));
+    } else if (keep(full)) out.push(full);
+  }
+  return out;
+}
+
+const read = (rel: string) => fs.readFileSync(path.join(import.meta.dirname, "..", rel), "utf8");
+
+/** Pull a quoted string list out of source, e.g. `["a", "b"]`. */
+function listIn(source: string, marker: string): string[] {
+  const at = source.indexOf(marker);
+  assert.notEqual(at, -1, `could not find ${marker} — this test needs updating`);
+  const open = source.indexOf("[", at);
+  const close = source.indexOf("]", open);
+  return [...source.slice(open, close).matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+}
+
+test("every account-level directory is a known account segment", () => {
+  const dir = path.join(import.meta.dirname, "..", "web/app/dashboard");
+  const routes = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && !e.name.startsWith("["))
+    .map((e) => e.name);
+
+  const declared = new Set(listIn(read("web/components/sidebar.tsx"), "ACCOUNT_SEGMENTS"));
+
+  for (const route of routes) {
+    assert.ok(
+      declared.has(route),
+      `/dashboard/${route} exists but isn't in ACCOUNT_SEGMENTS — the sidebar will treat it ` +
+        `as a workspace named "${route}" and render a nav that goes nowhere`,
+    );
+  }
+});
+
+test("the account library holds only nouns a workspace also has", () => {
+  for (const kind of LIBRARY_KINDS) {
+    assert.ok(
+      (WORKSPACE_DIRS as readonly string[]).includes(kind),
+      `library has "${kind}/" but a workspace doesn't — a shared thing with nowhere to be overridden`,
+    );
+  }
+});
+
+test("the library cannot hold anything that executes", () => {
+  for (const executable of ["agents", "flows", "evals", "state"]) {
+    assert.ok(
+      !(LIBRARY_KINDS as readonly string[]).includes(executable),
+      `"${executable}" is in LIBRARY_KINDS — nothing executes at account level, so it has no ` +
+        `secrets scope, no confinement root and nowhere to write runs`,
+    );
+  }
+});
+
+test("noun order is the same in the library, the asset pages and the sidebar", () => {
+  // The assets page derives its list from KINDS rather than restating it, so
+  // the order under test is the table's own.
+  const page = read("web/app/dashboard/[workspace]/assets/page.tsx");
+  assert.match(page, /const KINDS = kindsAt\("workspace"\)/,
+    "the assets page has gone back to hand-listing its nouns");
+  const assetKinds = kindsAt("workspace").filter(
+    (k) => k !== "agents" && k !== "flows" && k !== "evals",
+  );
+
+  // Order, not just membership. Sorting both sides before comparing is what
+  // let the real drift through: scripts sat second in LIBRARY_KINDS and last
+  // everywhere else, and a set comparison called that identical.
+  assert.deepEqual(
+    [...LIBRARY_KINDS],
+    assetKinds,
+    "the account library lists the nouns in a different order than the asset pages",
+  );
+
+  // The sidebar links each noun by ?kind=, so its order is readable from source.
+  const sidebar = read("web/components/sidebar.tsx");
+  const navOrder = [...sidebar.matchAll(/kind=([a-z]+)\$\{accountQuery\}/g)].map((m) => m[1]);
+  const workspaceNav = navOrder.slice(0, assetKinds.length);
+  assert.deepEqual(
+    workspaceNav,
+    assetKinds,
+    "the sidebar lists the nouns in a different order than the asset pages",
+  );
+});
+
+test("the file tree lists every workspace directory", () => {
+  // The tree filters by WORKSPACE_DIRS rather than its own copy — this asserts
+  // it still does, since the copy is exactly what went stale before.
+  const store = read("packages/core/src/store.ts");
+  assert.match(
+    store,
+    /new RegExp\(`\^\(\$\{WORKSPACE_DIRS\.join\("\|"\)\}\)\//,
+    "listWorkspaceFiles has stopped deriving its allowlist from WORKSPACE_DIRS",
+  );
+});
+
+test("reserved OKF filenames are never treated as concepts", () => {
+  const okf = read("packages/core/src/okf.ts");
+  for (const reserved of ["index.md", "log.md"]) {
+    assert.match(
+      okf,
+      new RegExp(`RESERVED[\\s\\S]{0,120}${reserved.replace(".", "\\.")}`),
+      `${reserved} must be reserved — the spec forbids using it for a concept document`,
+    );
+  }
+});
+
+test("KINDS is the only place a kind is declared", () => {
+  // Every noun the product has must come from packages/core/src/kinds.ts. A
+  // hand-kept second list is how a kind gets a menu entry with no page, or a
+  // creation button that writes a file nothing reads. This test fails the
+  // moment someone types the list out again.
+  const offenders: string[] = [];
+  const files = walk(path.join(root, "web"), (f) => /\.tsx?$/.test(f) && !f.includes("node_modules"));
+
+  for (const file of files) {
+    if (file.endsWith("kinds.ts")) continue;
+    const src = fs.readFileSync(file, "utf8");
+    // A literal array naming three or more kinds is a copy of the table.
+    for (const m of src.matchAll(/\[((?:\s*"[a-z]+"\s*,){2,}\s*"[a-z]+"\s*)\]/g)) {
+      const items = m[1].split(",").map((s) => s.trim().replace(/"/g, ""));
+      const known = items.filter((i) => (ALL_KINDS as readonly string[]).includes(i));
+      if (known.length >= 3 && known.length === items.length) {
+        offenders.push(`${path.relative(root, file)}: [${items.join(", ")}]`);
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, [], `derive these from KINDS instead:\n${offenders.join("\n")}`);
+});
+
+test("a structural document never declares what it is", () => {
+  // Its path already says it, and every reader resolves by path. A field
+  // restating that is derived data next to its source, free to disagree with
+  // it — and `type:` in particular is OKF's, where one of our nouns would be
+  // read as a knowledge concept by anything else consuming this repo.
+  const bad: string[] = [];
+  const data = path.join(root, "data/default");
+  const nouns = new Set(["Agent", "Flow", "Eval", "Skill", "Tool"]);
+
+  for (const file of walk(data, (f) => f.endsWith(".md"))) {
+    const base = path.basename(file);
+    if (base === "index.md" || base === "log.md") continue; // OKF-reserved
+
+    const rel = path.relative(data, file);
+    const structural =
+      base === "agent.md" ||
+      base === "SKILL.md" ||
+      /(^|\/)(flows|evals|tools)\//.test(rel);
+    if (!structural) continue;
+
+    const front = fs.readFileSync(file, "utf8").split("---")[1] ?? "";
+    const declaredKind = /^kind:\s*(.+)$/m.exec(front)?.[1].trim();
+    const declaredType = /^type:\s*(.+)$/m.exec(front)?.[1].trim();
+    if (declaredKind) bad.push(`${rel}: kind: ${declaredKind} — the path says this`);
+    if (declaredType && nouns.has(declaredType)) {
+      bad.push(`${rel}: type: ${declaredType} — that is OKF's field`);
+    }
+  }
+
+  assert.deepEqual(bad, []);
+});
+
+test("KINDS only claims a noun where OKF asks for one", () => {
+  for (const kind of ALL_KINDS) {
+    const key = docKeyOf(kind);
+    const noun = docTypeOf(kind);
+    assert.ok(key === null || key === "type", `${kind} declares in "${key}" — only OKF's type remains`);
+    assert.equal(
+      noun === null,
+      key === null,
+      `${kind} must have a noun exactly when it has a field to put it in`,
+    );
+    if (key === "type") {
+      assert.ok(kind === "memory" || kind === "knowledge", `${kind} is not an OKF bundle`);
+    }
+  }
+});
+
+test("there is exactly one way to create something", () => {
+  // Creation drifted into four components — and the workspace one built the
+  // file's *content* in the browser, so a skill made by the dashboard and a
+  // skill made by `mdagent init` were different files. Everything that makes
+  // a thing must go through CreateForm.
+  const offenders: string[] = [];
+
+  for (const file of walk(path.join(root, "web"), (f) => /\.tsx$/.test(f))) {
+    if (file.endsWith("create.tsx")) continue;
+    const src = fs.readFileSync(file, "utf8");
+    // A POST that carries a name is a creation form.
+    if (/method:\s*"POST"/.test(src) && /JSON\.stringify\(\{\s*name/.test(src)) {
+      offenders.push(path.relative(root, file));
+    }
+  }
+
+  assert.deepEqual(offenders, [], `these create things outside CreateForm:\n${offenders.join("\n")}`);
+});
+
+test("no server component passes a function as a prop", () => {
+  // Twice now: a prop typed `(x) => Y` compiles, renders on the server, and
+  // throws "Functions cannot be passed directly to Client Components" at the
+  // user. The typechecker cannot see it, so this reads the source instead.
+  //
+  // Catches literal arrows and function expressions only — `prop={someFn}` is
+  // indistinguishable from `prop={someValue}` without type information, so a
+  // named function passed this way still gets through.
+  const offenders: string[] = [];
+
+  for (const file of walk(path.join(root, "web"), (f) => /\.tsx$/.test(f))) {
+    const src = fs.readFileSync(file, "utf8");
+    if (/^\s*["']use client["']/m.test(src.slice(0, 200))) continue; // client: fine
+
+    for (const re of [/=\{\s*(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g, /=\{\s*function\b/g]) {
+      for (const m of src.matchAll(re)) {
+        const line = src.slice(0, m.index).split("\n").length;
+        offenders.push(`${path.relative(root, file)}:${line}  ${m[0].trim()}`);
+      }
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `server components can't hand functions to client components:\n${offenders.join("\n")}`,
+  );
+});
+
+test("the starter workspace is defined once", () => {
+  // `mdagent init` and the dashboard's "+ New workspace" each had their own
+  // copy. They drifted to different flow names and different file sets, and
+  // when structural documents moved to `kind:` only one copy was migrated —
+  // so every workspace made from the dashboard was born in the old format.
+  const marker = "agents/researcher/agent.md";
+  const owners: string[] = [];
+
+  for (const dir of ["packages", "web"]) {
+    for (const file of walk(path.join(root, dir), (f) => /\.(ts|tsx|mjs|js)$/.test(f))) {
+      const rel = path.relative(root, file);
+      if (rel.includes("/dist/") || rel.endsWith(".test.ts")) continue;
+      if (fs.readFileSync(file, "utf8").includes(marker)) owners.push(rel);
+    }
+  }
+
+  assert.deepEqual(
+    owners,
+    ["packages/core/src/starter.ts"],
+    `the starter workspace must live in starter.ts alone, found in:\n${owners.join("\n")}`,
+  );
+});
+
+test("both callers scaffold the same workspace", () => {
+  assert.deepEqual(templateFiles("demo"), starterFiles("demo"));
+});
+
+test("the starter workspace obeys the rules it ships", () => {
+  // A scaffold that writes fields its own checker warns about is the bug this
+  // guards: it happened once already, when the dashboard kept emitting the old
+  // spelling after the CLI had moved on.
+  const bad: string[] = [];
+
+  for (const { path: rel, content } of starterFiles("demo")) {
+    const front = content.split("---")[1] ?? "";
+    const isOkf = rel.startsWith("knowledge/") || rel.startsWith("memory/");
+
+    if (/^kind:/m.test(front)) bad.push(`${rel}: declares kind: — the path says it`);
+    if (!isOkf && /^type:/m.test(front)) bad.push(`${rel}: declares type: — that is OKF's field`);
+    if (isOkf && !/^type:/m.test(front)) bad.push(`${rel}: an OKF concept with no type:`);
+  }
+
+  assert.deepEqual(bad, []);
+});
