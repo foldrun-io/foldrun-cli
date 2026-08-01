@@ -186,3 +186,40 @@ test("unparseable frontmatter is reported, not thrown", () => {
     assert.match(issues[0].issue, /parse/);
   });
 });
+
+// A concept with a `type` is conformant on its own, but a *bundle* is only
+// self-describing once its root index.md carries okf_version — the first thing
+// a consumer reads. Both scaffold paths wrote their starter files straight to
+// disk, so a brand-new workspace shipped valid concepts inside something no
+// reader could identify the version of. The demo is the first OKF anyone sees.
+test("a freshly scaffolded workspace is a valid bundle, not just valid files", async () => {
+  const { starterFiles, syncWorkspaceBundles } = await import("../packages/core/src/okf.ts").then(
+    async (okf) => ({ ...okf, ...(await import("../packages/core/src/starter.ts")) }),
+  );
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-scaffold-"));
+  try {
+    for (const { path: rel, content } of starterFiles("demo")) {
+      const file = path.join(root, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    }
+    syncWorkspaceBundles(root);
+
+    for (const kind of ["knowledge", "memory"]) {
+      const dir = path.join(root, kind);
+      assert.ok(fs.existsSync(dir), `the starter ships no ${kind}/ — half of OKF goes undemonstrated`);
+      assert.deepEqual(validate(dir), [], `${kind}/ fails an outside validator`);
+
+      const index = path.join(dir, "index.md");
+      assert.ok(fs.existsSync(index), `${kind}/index.md was never generated`);
+      assert.match(
+        fs.readFileSync(index, "utf8"),
+        /okf_version: "0\.2"/,
+        `${kind}/ declares no okf_version, so nothing says which format it targets`,
+      );
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
