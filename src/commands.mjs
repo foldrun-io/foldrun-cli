@@ -55,7 +55,7 @@ async function init(workspace) {
 
 async function check(workspace) {
   const {
-    listAgents, listFlows, readBundle, conformanceIssues, listEvals, lintFlow,
+    listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
     workspaceTools, libraryTools, checkFormatVersion,
   } = await core();
   const T = "default";
@@ -152,6 +152,17 @@ async function check(workspace) {
       const where = path.relative(workspace, dir);
       for (const { file, issue } of conformanceIssues(dir)) {
         note("error", `${where}/${file}`, issue);
+      }
+      // A warning, not an error: the bundle is still conformant — the spec says
+      // nothing about a date's shape — but the value cannot be compared, so
+      // staleness and "most recently verified" would quietly use it wrong.
+      for (const { file, field, value } of dateIssues(dir)) {
+        note(
+          "warn",
+          `${where}/${file}`,
+          `${field}: "${value}" is not a date — use YYYY-MM-DD or an ISO 8601 datetime. ` +
+            `It has been ignored rather than compared.`,
+        );
       }
       for (const doc of readBundle(dir)) {
         if (doc.stale) {
