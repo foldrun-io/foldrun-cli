@@ -19,6 +19,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listWorkspaceFiles, writeWorkspaceFile } from "../packages/core/src/store.ts";
+import { starterFiles } from "../packages/core/src/starter.ts";
 
 function withWorkspace(run: (root: string) => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-state-"));
@@ -70,4 +71,39 @@ test("the runtime names state/ to the agent, with a reachable path", () => {
   // The distinction that earns the directory its existence: if state and memory
   // are described the same way, one of them is redundant.
   assert.match(src, /This is not memory/, "the prompt should separate state from memory");
+});
+
+// A workspace is meant to be a git repository — that is the pitch. So the one
+// file in it that must never be committed has to be ignored from the moment it
+// is created: `mdagent init` writes the workspace, and the CLI later writes the
+// key that decrypts every secret in it to `.mdagent/.secret-key`, inside that
+// same directory. Without a shipped .gitignore the first `git add -A` after
+// setting a secret commits the key.
+test("a new workspace ignores its own secret key and run store", () => {
+  const ignore = starterFiles("desk").find((f) => f.path === ".gitignore");
+  assert.ok(ignore, "mdagent init must write a .gitignore");
+
+  const rules = ignore.content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+
+  for (const required of [".mdagent/", "runs/", "outputs/"]) {
+    assert.ok(rules.includes(required), `.gitignore must cover ${required}`);
+  }
+});
+
+// The path the rule has to match, asserted against the code that builds it
+// rather than against a copy of it — the ignore rule and the key's location
+// are two statements about one path, and only one of them is enforceable.
+test("the secret key really does live under .mdagent/", () => {
+  const cli = fs.readFileSync(
+    path.join(import.meta.dirname, "..", "packages/cli/bin/mdagent.mjs"),
+    "utf8",
+  );
+  assert.match(
+    cli,
+    /MDAGENT_DATA \?\?= path\.join\(workspace, "\.mdagent"\)/,
+    "the CLI puts the data root somewhere the shipped .gitignore does not cover",
+  );
 });
