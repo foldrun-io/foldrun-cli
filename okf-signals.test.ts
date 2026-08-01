@@ -136,6 +136,87 @@ test("human authorship is not marked — silence means a person", () => {
   assert.deepEqual(provenanceMarks({ generatedBy: null, trust: "unverified" }), ["unverified"]);
 });
 
+// "Reviewed" answers a weaker question than it appears to. Undated, a fact
+// checked in 2019 and one checked last week render identically, so the tier
+// says "did anyone ever look" while reading as "can I rely on this".
+const VERIFIED_AT = (at: string) => `---
+type: Fact
+title: Margin
+verified:
+  - { by: human:kliu@acme, at: ${at} }
+---
+
+0.42
+`;
+
+test("a verification carries the date it happened", () => {
+  withBundle({ "memory/m.md": VERIFIED_AT("2026-07-01T16:00:00Z") }, (root) => {
+    const [doc] = readBundle(path.join(root, "memory"));
+    assert.equal(doc.verifiedAt, "2026-07-01T16:00:00.000Z");
+    assert.deepEqual(doc.verified, [{ by: "human:kliu@acme", at: "2026-07-01T16:00:00.000Z" }]);
+  });
+});
+
+test("the date reaches the index, so recency is filterable", () => {
+  withBundle({ "memory/recent.md": VERIFIED_AT("2026-07-01T16:00:00Z") }, (root) => {
+    const dir = path.join(root, "memory");
+    assert.match(line(buildIndex(readBundle(dir), "Memory", true), "Margin"), /human-reviewed 2026-07-01/);
+  });
+});
+
+test("the newest verification wins when several are recorded", () => {
+  withBundle(
+    {
+      "memory/m.md": `---
+type: Fact
+title: Margin
+verified:
+  - { by: producer/checker, at: 2024-01-01T00:00:00Z }
+  - { by: human:kliu@acme, at: 2026-07-01T16:00:00Z }
+  - { by: producer/checker, at: 2025-05-05T00:00:00Z }
+---
+
+0.42
+`,
+    },
+    (root) => {
+      const [doc] = readBundle(path.join(root, "memory"));
+      assert.equal(doc.verifiedAt, "2026-07-01T16:00:00.000Z");
+      assert.equal(doc.trust, "human-reviewed");
+    },
+  );
+});
+
+test("an undated verification still states the tier, without inventing a date", () => {
+  withBundle(
+    { "memory/u.md": "---\ntype: Fact\ntitle: Undated\nverified:\n  - by: human:matt\n---\n\nx\n" },
+    (root) => {
+      const dir = path.join(root, "memory");
+      const [doc] = readBundle(dir);
+      assert.equal(doc.verifiedAt, null);
+
+      const l = line(buildIndex(readBundle(dir), "Memory", true), "Undated");
+      assert.match(l, /human-reviewed/);
+      assert.doesNotMatch(l, /\d{4}-\d{2}-\d{2}/);
+    },
+  );
+});
+
+test("`generated.at` is captured, and a v0.1 timestamp stands in for it", () => {
+  withBundle(
+    {
+      "memory/new.md": "---\ntype: Fact\ntitle: New\ngenerated: { by: producer/mdagent:a, at: 2026-06-30T14:00:00Z }\n---\n\nx\n",
+      "memory/old.md": "---\ntype: Fact\ntitle: Old\ntimestamp: 2026-01-02\n---\n\nx\n",
+    },
+    (root) => {
+      const docs = readBundle(path.join(root, "memory"));
+      const byTitle = Object.fromEntries(docs.map((d) => [d.title, d]));
+      assert.equal(byTitle.New.generatedAt, "2026-06-30T14:00:00.000Z");
+      assert.equal(byTitle.Old.generatedAt, "2026-01-02T00:00:00.000Z");
+    },
+  );
+});
+
 test("a v0.1 document with no `generated` is not claimed to be agent-written", () => {
   withBundle({ "memory/old.md": "---\ntype: Fact\ntitle: Old\ntimestamp: 2026-01-02\n---\n\nA.\n" }, (root) => {
     const dir = path.join(root, "memory");
