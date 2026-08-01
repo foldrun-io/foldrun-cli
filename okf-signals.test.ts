@@ -286,3 +286,49 @@ test("both index builders agree about the signals", () => {
     }
   });
 });
+
+// §sources: an entry's own usage_window overrides the document's, and an entry
+// without one inherits it. Only the entry's was read, so a window declared once
+// at the top framed nothing — and both ends went through String(), which turns
+// YAML's Date back into "Mon Jun 15 2026 10:00:00 GMT+1000".
+test("a shared usage_window is inherited, and an entry's own overrides it", () => {
+  withBundle(
+    {
+      "memory/s.md": `---
+type: Fact
+title: Traffic
+usage_window: { from: 2026-01-01, to: 2026-06-30 }
+sources:
+  - id: inherits
+    resource: https://x.example/a
+    usage_count: 10
+  - id: overrides
+    resource: https://x.example/b
+    usage_count: 20
+    usage_window: { from: 2026-07-01, to: 2026-07-31 }
+---
+
+x
+`,
+    },
+    (root) => {
+      const [doc] = readBundle(path.join(root, "memory"));
+      const by = Object.fromEntries(doc.sources.map((s) => [s.id, s]));
+      assert.deepEqual(by.inherits.usageWindow, { from: "2026-01-01", to: "2026-06-30" });
+      assert.deepEqual(by.overrides.usageWindow, { from: "2026-07-01", to: "2026-07-31" });
+    },
+  );
+});
+
+// The spec: "A single verifier MAY be written as one { by, at } mapping without
+// the list dash. Consumers MUST treat a bare mapping as a one-element list."
+test("a bare verified mapping is treated as a one-element list", () => {
+  withBundle(
+    { "memory/b.md": "---\ntype: Fact\ntitle: Bare\nverified: { by: human:matt, at: 2026-07-01T09:00:00Z }\n---\n\nx\n" },
+    (root) => {
+      const [doc] = readBundle(path.join(root, "memory"));
+      assert.deepEqual(doc.verified, [{ by: "human:matt", at: "2026-07-01T09:00:00.000Z" }]);
+      assert.equal(doc.trust, "human-reviewed");
+    },
+  );
+});
