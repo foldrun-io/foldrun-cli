@@ -50,8 +50,10 @@ async function init(workspace) {
 // ---------------------------------------------------------------- check
 
 async function check(workspace) {
-  const { listAgents, listFlows, readBundle, listEvals, lintFlow, workspaceTools, libraryTools, checkFormatVersion } =
-    await core();
+  const {
+    listAgents, listFlows, readBundle, conformanceIssues, listEvals, lintFlow,
+    workspaceTools, libraryTools, checkFormatVersion,
+  } = await core();
   const T = "default";
   const P = "workspace";
   const problems = [];
@@ -137,15 +139,19 @@ async function check(workspace) {
     }
   }
 
-  // Knowledge and memory are OKF bundles: `type` is the one required field.
+  // Knowledge and memory are OKF bundles. The conformance rule lives in
+  // conformanceIssues() rather than here: this was a second copy of it, and it
+  // asked readBundle — which hides the files we present as indexes — so it
+  // agreed the bundle was fine while an outside validator would not.
   for (const kind of ["knowledge", "memory"]) {
     for (const dir of bundleDirs(workspace, kind)) {
+      const where = path.relative(workspace, dir);
+      for (const { file, issue } of conformanceIssues(dir)) {
+        note("error", `${where}/${file}`, issue);
+      }
       for (const doc of readBundle(dir)) {
-        if (!doc.type) {
-          note("error", `${path.relative(workspace, dir)}/${doc.file}`, "missing `type:` — required by OKF");
-        }
         if (doc.stale) {
-          note("warn", `${path.relative(workspace, dir)}/${doc.file}`, `stale since ${doc.staleAfter}`);
+          note("warn", `${where}/${doc.file}`, `stale since ${doc.staleAfter}`);
         }
       }
     }
