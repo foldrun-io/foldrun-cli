@@ -1,10 +1,11 @@
 // Would somebody else's OKF validator accept a bundle we emit?
 //
 // That is a different question from "does our reader like it", and the two had
-// been conflated. `MEMORY.md` is ours — OKF reserves exactly `index.md` and
-// `log.md` — but it sat in the same set as those two, so the conformance check
-// skipped it. It is hand-written and carried no frontmatter, which meant every
-// bundle containing one failed the spec's second rule while passing our own.
+// been conflated. We reserved a third filename of our own, MEMORY.md, and put
+// it in the same set as the spec's two — so the conformance check skipped a
+// file every other consumer reads as a concept and requires a `type` on. The
+// name is gone now; these tests hold the line that the reserved set is the
+// spec's and nothing of ours is added to it.
 //
 // These tests apply the spec's rules rather than ours, quoted from
 // GoogleCloudPlatform/knowledge-catalog okf/SPEC.md v0.2 §Conformance:
@@ -23,7 +24,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import matter from "gray-matter";
-import { conformanceIssues, ensureMemoryType, syncIndex, readBundle } from "../packages/core/src/okf.ts";
+import { conformanceIssues, syncIndex } from "../packages/core/src/okf.ts";
 
 /** OKF reserves these two, and only these two. */
 const RESERVED = new Set(["index.md", "log.md"]);
@@ -91,62 +92,6 @@ test("a bundle of typed concepts satisfies an outside validator", () => {
     syncIndex(dir, "Memory", true);
     assert.deepEqual(validate(dir), []);
   });
-});
-
-// The regression. A hand-written MEMORY.md has no frontmatter, and nothing
-// about the file announces that this makes the whole bundle unacceptable.
-test("an untyped MEMORY.md is what an outside validator rejects", () => {
-  withBundle(
-    { "memory/pricing.md": CONCEPT, "memory/MEMORY.md": "# Memory\n\n- [Pricing](pricing.md)\n" },
-    (root) => {
-      const dir = path.join(root, "memory");
-      assert.deepEqual(validate(dir), ["MEMORY.md: no non-empty `type`"]);
-      // ...and our own checker has to agree, rather than reporting a clean bundle.
-      assert.equal(conformanceIssues(dir).length, 1);
-      assert.match(conformanceIssues(dir)[0].issue, /type/);
-    },
-  );
-});
-
-test("syncing repairs it, and the body survives untouched", () => {
-  withBundle(
-    { "memory/MEMORY.md": "# Memory\n\n- [Pricing](pricing.md)\n", "memory/pricing.md": CONCEPT },
-    (root) => {
-      const dir = path.join(root, "memory");
-      assert.equal(ensureMemoryType(dir), true);
-
-      assert.deepEqual(validate(dir), []);
-      assert.deepEqual(conformanceIssues(dir), []);
-
-      const after = matter(fs.readFileSync(path.join(dir, "MEMORY.md"), "utf8"));
-      assert.equal(after.data.type, "Index");
-      assert.match(after.content, /- \[Pricing\]\(pricing\.md\)/);
-    },
-  );
-});
-
-test("repair is idempotent and never overwrites a type someone chose", () => {
-  withBundle({ "memory/MEMORY.md": "---\ntype: Runbook\n---\n\n# Memory\n" }, (root) => {
-    const dir = path.join(root, "memory");
-    assert.equal(ensureMemoryType(dir), false, "a typed MEMORY.md is left alone");
-    assert.equal(matter(fs.readFileSync(path.join(dir, "MEMORY.md"), "utf8")).data.type, "Runbook");
-  });
-});
-
-// MEMORY.md is conformant now, but it is still an index rather than a concept,
-// so it must not start appearing in listings as though it were a fact.
-test("a repaired MEMORY.md is still not listed as a concept", () => {
-  withBundle(
-    { "memory/MEMORY.md": "# Memory\n", "memory/pricing.md": CONCEPT },
-    (root) => {
-      const dir = path.join(root, "memory");
-      ensureMemoryType(dir);
-      assert.deepEqual(
-        readBundle(dir).map((d) => d.file),
-        ["pricing.md"],
-      );
-    },
-  );
 });
 
 // §Conformance is explicit that these four are not grounds for rejection, and
@@ -222,4 +167,38 @@ test("a freshly scaffolded workspace is a valid bundle, not just valid files", a
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// The rule that replaces the MEMORY.md special case: a file we invent inside
+// someone else's format is a concept like any other. It gets no exemption from
+// `type`, and it is not hidden from listings — because a consumer applying the
+// spec's reserved set will do neither of those things for us.
+test("a filename of our own earns no exemption from the spec's rules", () => {
+  withBundle(
+    { "memory/MEMORY.md": "# Memory\n\n- curated notes\n", "memory/pricing.md": CONCEPT },
+    (root) => {
+      const dir = path.join(root, "memory");
+      // Reported, with the ordinary message — no special case, no repair.
+      assert.deepEqual(
+        conformanceIssues(dir).map((i) => i.file),
+        ["MEMORY.md"],
+      );
+      assert.deepEqual(validate(dir), ["MEMORY.md: no non-empty `type`"]);
+    },
+  );
+});
+
+test("only index.md and log.md are treated as bundle structure", () => {
+  withBundle(
+    {
+      "memory/pricing.md": CONCEPT,
+      "memory/index.md": '---\nokf_version: "0.2"\n---\n\n# Memory\n',
+      "memory/log.md": "# Log\n",
+    },
+    (root) => {
+      const dir = path.join(root, "memory");
+      assert.deepEqual(conformanceIssues(dir), [], "the spec's two carry no type and are fine");
+      assert.deepEqual(validate(dir), []);
+    },
+  );
 });

@@ -89,10 +89,6 @@ test("knowledge/ is read-only to an agent, index or not", () => {
   assert.equal(checkPaths("Read", { file_path: `${WORKSPACE}/knowledge/pricing.md` }, ROOTS).ok, true);
 });
 
-test("MEMORY.md stays writable — it is the curated index, not the generated one", () => {
-  assert.equal(write(`${ROOTS.agentDir}/memory/MEMORY.md`).ok, true);
-});
-
 test("an ordinary index.md is not collateral damage", () => {
   // The rule names knowledge/ and memory/ precisely so a deliverable called
   // index.md is still an ordinary file.
@@ -108,7 +104,6 @@ test("an ordinary index.md is not collateral damage", () => {
 test("a memory concept file is still writable", () => {
   // Memory is agent-writable by design; only the derived files are not.
   assert.equal(write(`${ROOTS.agentDir}/memory/house-tone.md`).ok, true);
-  assert.equal(write(`${ROOTS.agentDir}/memory/MEMORY.md`).ok, true);
 });
 
 test("bash that reaches outside the workspace is denied", () => {
