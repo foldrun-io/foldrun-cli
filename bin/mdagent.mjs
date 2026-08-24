@@ -10,7 +10,10 @@
 //   mdagent check [dir]     validate it — no model calls, no cost
 //   mdagent run   <target>  run an agent or a flow
 //   mdagent eval  [name]    run evals
+//   mdagent logs  [run-id]  recent runs, or one run's full event trail
+//   mdagent secrets <verb>  set / ls / rm — the vault, from the terminal
 //   mdagent deploy [dir]    push a workspace into an installation
+//   mdagent invoke <flow>   start a flow on a running platform
 //
 // `check` is the one to run in CI: it catches the mistakes that otherwise only
 // show up as a confidently wrong answer at 3am.
@@ -34,23 +37,30 @@ const HELP = `mdagent — agents are markdown
   mdagent check [dir]       validate agents, flows, tools, evals and knowledge
   mdagent run <target>      run an agent or flow (target: name, or flow:name)
   mdagent eval [name]       run one eval, or all of them
+  mdagent logs [run-id]     recent runs, or one run's full event trail
+  mdagent secrets set NAME  store a secret (prompted, never echoed) — also ls, rm
   mdagent deploy [dir]      push a workspace into an installation
+  mdagent invoke <flow>     start a flow on a running platform (--to <workspace>)
   mdagent --help
 
 Options
   --workspace <dir>         the workspace folder (default: .)
   --from <template>         start from a shipped template, e.g. templates/hello
   --task "<text>"           the instruction for a manual run
+  --follow                  logs: keep tailing a live run
+  --value "<text>"          secrets set: skip the prompt (careful with shell history)
+  --account                 secrets: account scope instead of the workspace's
+  --wait                    invoke: hold on and print the result
 
-Deploy options
-  --to <workspace>          workspace to deploy into (default: the folder name)
-  --tenant <name>           account to deploy into (default: default)
+Platform options (deploy, invoke, secrets)
+  --to <workspace>          workspace on the platform (deploy default: folder name)
+  --tenant <name>           account to deploy into (default: default, local only)
   --data <dir>              the installation's data directory
-  --url <url>               deploy to a running platform (or MDAGENT_URL)
+  --url <url>               a running platform (or MDAGENT_URL)
   --token <key>             API key for --url (or MDAGENT_TOKEN)
-  --commit <sha>            record which commit this is
-  --dry-run                 check and report, change nothing
-  --force                   deploy even while runs are in flight
+  --commit <sha>            deploy: record which commit this is
+  --dry-run                 deploy: check and report, change nothing
+  --force                   deploy: deploy even while runs are in flight
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
 work without one.`;

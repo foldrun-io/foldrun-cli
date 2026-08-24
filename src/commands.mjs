@@ -526,6 +526,233 @@ async function deploy(source, flags) {
   return 0;
 }
 
+// ---------------------------------------------------------------- secrets
+
+/** Read a value without echoing it. A secret typed into a terminal should
+ *  not sit in the scrollback afterwards. */
+function promptHidden(question) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(question);
+    const { stdin } = process;
+    if (!stdin.isTTY) {
+      // Piped input (echo "$VALUE" | mdagent secrets set NAME) — read a line.
+      let buf = "";
+      stdin.setEncoding("utf8");
+      stdin.on("data", (d) => (buf += d));
+      stdin.on("end", () => resolve(buf.replace(/\n$/, "")));
+      return;
+    }
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    let value = "";
+    const onData = (ch) => {
+      if (ch === "\u0003") {
+        cleanup();
+        reject(new Error("cancelled"));
+      } else if (ch === "\r" || ch === "\n") {
+        cleanup();
+        process.stdout.write("\n");
+        resolve(value);
+      } else if (ch === "\u007f" || ch === "\b") {
+        value = value.slice(0, -1);
+      } else {
+        value += ch;
+      }
+    };
+    const cleanup = () => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.off("data", onData);
+    };
+    stdin.on("data", onData);
+  });
+}
+
+const remoteUrl = (flags) => flags.url ?? process.env.MDAGENT_URL;
+
+async function remoteCall(url, flags, apiPath, init = {}) {
+  const token = flags.token ?? process.env.MDAGENT_TOKEN;
+  if (!token) throw new Error("no API key — pass --token or set MDAGENT_TOKEN");
+  const res = await fetch(new URL(apiPath, url), {
+    ...init,
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      ...(init.headers ?? {}),
+    },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `${apiPath} → HTTP ${res.status}`);
+  return body;
+}
+
+/**
+ * `mdagent secrets set|ls|rm` — the vault, from the terminal.
+ *
+ * Local by default (the workspace's own secrets.json, encrypted under the
+ * install key); with --url/MDAGENT_URL the same three verbs go to a running
+ * platform. Values are prompted without echo unless piped or passed with
+ * --value, and are never printed back by any verb.
+ */
+async function secretsCmd(positional, flags) {
+  const [verb, name] = positional;
+  const url = remoteUrl(flags);
+  const scope = flags.account === true ? undefined : flags.to ?? "workspace";
+
+  if (verb === "ls" || verb === undefined) {
+    const entries = url
+      ? (await remoteCall(url, flags, `/api/secrets${flags.to ? `?workspace=${flags.to}` : ""}`)).secrets
+      : (await core()).listSecrets("default", "workspace");
+    if (!entries.length) {
+      console.log(`\n  ${c.dim("no secrets yet — mdagent secrets set NAME")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const s of entries) {
+      console.log(
+        `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}`)}`,
+      );
+    }
+    console.log();
+    return 0;
+  }
+
+  if (!name) throw new Error(`which secret? try \`mdagent secrets ${verb} NAME\``);
+
+  if (verb === "set") {
+    const value =
+      typeof flags.value === "string" ? flags.value : await promptHidden(`  value for ${name}: `);
+    if (!value) throw new Error("empty value — nothing stored");
+    if (url) {
+      await remoteCall(url, flags, "/api/secrets", {
+        method: "PUT",
+        body: JSON.stringify({ name, value, workspace: flags.to }),
+      });
+    } else {
+      (await core()).setSecret("default", name, value, scope === undefined ? undefined : "workspace");
+    }
+    console.log(`\n  ${c.green("✓")} ${name} stored — declare it in agent.md under \`secrets:\` to use it\n`);
+    return 0;
+  }
+
+  if (verb === "rm") {
+    if (url) {
+      await remoteCall(url, flags, "/api/secrets", {
+        method: "DELETE",
+        body: JSON.stringify({ name, workspace: flags.to }),
+      });
+    } else {
+      (await core()).deleteSecret("default", name, scope === undefined ? undefined : "workspace");
+    }
+    console.log(`\n  ${c.green("✓")} ${name} removed\n`);
+    return 0;
+  }
+
+  throw new Error(`unknown secrets verb "${verb}" — set, ls or rm`);
+}
+
+// ---------------------------------------------------------------- logs
+
+const EVENT_MARK = (e) =>
+  e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
+
+/**
+ * `mdagent logs [run-id]` — without an id, the recent runs; with one, that
+ * run's whole event log. `--follow` keeps tailing a live run.
+ */
+async function logsCmd(positional, flags) {
+  const { listRuns, readRun } = await core();
+  const T = "default";
+  const P = "workspace";
+  const runId = positional[0];
+
+  if (!runId) {
+    const runs = listRuns(T, P).slice(0, 20);
+    if (!runs.length) {
+      console.log(`\n  ${c.dim("no runs yet — mdagent run <agent or flow>")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const r of runs) {
+      const cost = r.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+      const mark =
+        r.status === "completed" ? c.green("✓") : r.status === "failed" ? c.red("✗") : c.amber("…");
+      console.log(
+        `  ${mark} ${c.bold(r.id)}  ${r.flow}  ${c.dim(`${r.status} · $${cost.toFixed(4)} · ${r.startedAt}`)}`,
+      );
+    }
+    console.log(`\n  ${c.dim("mdagent logs <run-id> for the full trail")}\n`);
+    return 0;
+  }
+
+  const print = (run, seen) => {
+    run.steps.forEach((step, i) => {
+      const from = seen.get(i) ?? 0;
+      for (const e of step.events.slice(from)) {
+        console.log(`  ${EVENT_MARK(e)} ${c.dim(e.t)} ${c.bold(step.agent)}  ${e.text}`);
+      }
+      seen.set(i, step.events.length);
+    });
+  };
+
+  const seen = new Map();
+  let run = readRun(T, P, runId);
+  if (!run) throw new Error(`no run called "${runId}" here — \`mdagent logs\` lists them`);
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
+  print(run, seen);
+
+  while (flags.follow === true && !run.finishedAt) {
+    await new Promise((r) => setTimeout(r, 700));
+    run = readRun(T, P, runId);
+    if (!run) break;
+    print(run, seen);
+  }
+  if (run?.finishedAt) {
+    const cost = run.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+    console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${run.status} · $${cost.toFixed(4)}\n`);
+  } else {
+    console.log();
+  }
+  return run?.status === "failed" ? 1 : 0;
+}
+
+// ---------------------------------------------------------------- invoke
+
+/**
+ * `mdagent invoke <flow>` — start a flow on a running platform. The remote
+ * sibling of `mdagent run`: same task flag, but the run continues on the
+ * server whether or not this terminal sticks around. `--wait` holds on for
+ * the result like an RPC.
+ */
+async function invoke(target, flags) {
+  const url = remoteUrl(flags);
+  if (!url) {
+    throw new Error(
+      "invoke starts a flow on a platform — pass --url or set MDAGENT_URL. (Running locally? That's `mdagent run`.)",
+    );
+  }
+  if (!target) throw new Error("which flow? try `mdagent invoke <flow> --to <workspace>`");
+  const ws = flags.to;
+  if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
+
+  const wait = flags.wait === true ? "?wait=true" : "";
+  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
+    method: "POST",
+    body: JSON.stringify({ task: typeof flags.task === "string" ? flags.task : "" }),
+  });
+
+  if (!flags.wait) {
+    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)} — ${c.dim(`mdagent logs on the server, or ${url}/dashboard`)}\n`);
+    return 0;
+  }
+  const run = body.run ?? body;
+  const ok = (run.status ?? body.status) === "completed";
+  if (body.result) console.log(`\n${body.result}\n`);
+  console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${run.status ?? body.status ?? "finished"}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}\n`);
+  return ok ? 0 : 1;
+}
+
 export async function run(command, positional, flags, workspace) {
   switch (command) {
     case "init":
@@ -538,6 +765,12 @@ export async function run(command, positional, flags, workspace) {
       return runTarget(positional[0], flags);
     case "eval":
       return runEvals(positional[0]);
+    case "secrets":
+      return secretsCmd(positional, flags);
+    case "logs":
+      return logsCmd(positional, flags);
+    case "invoke":
+      return invoke(positional[0], flags);
     default:
       throw new Error(`unknown command "${command}" — try \`mdagent --help\``);
   }
