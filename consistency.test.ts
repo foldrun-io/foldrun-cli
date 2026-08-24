@@ -282,8 +282,16 @@ test("the starter workspace is defined once", () => {
   );
 });
 
-test("both callers scaffold the same workspace", () => {
-  assert.deepEqual(templateFiles("demo"), starterFiles("demo"));
+test("both callers scaffold the same workspace, minus what only a laptop keeps", () => {
+  // The hosted scaffold is the starter with local-disk concerns removed:
+  // .gitignore guards a clone's secrets, and the hosted store never keeps
+  // secrets in the tree. Everything else must stay byte-identical, or the
+  // dashboard's New button and `mdagent init` drift apart again.
+  const starter = starterFiles("demo");
+  const hosted = templateFiles("demo");
+  const localOnly = starter.filter((f) => !hosted.some((h) => h.path === f.path));
+  assert.deepEqual(localOnly.map((f) => f.path), [".gitignore"]);
+  assert.deepEqual(hosted, starter.filter((f) => f.path !== ".gitignore"));
 });
 
 test("the starter workspace obeys the rules it ships", () => {
