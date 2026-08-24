@@ -311,6 +311,95 @@ test("a bad workspace name is refused rather than reaching the filesystem", opts
   assert.ok(res.status >= 400, `expected a refusal, got ${res.status}`);
 });
 
+// ---------------------------------------------------------------- accounts
+
+// One browser-shaped session, threaded through the auth tests in order:
+// signup mints it, everything after uses it.
+let cookie = "";
+
+test("the first signup is free, and signs you in", opts, async () => {
+  const res = await fetch(`${base}/api/auth/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "founder@example.test", password: "hunter2hunter2", account: "acme-e2e" }),
+  });
+  assert.equal(res.status, 200, await res.text());
+  const set = res.headers.getSetCookie().find((c) => c.startsWith("mdagent_session="));
+  assert.ok(set, "signup must set the session cookie");
+  cookie = set!.split(";")[0];
+});
+
+test("the second signup needs the install to opt in", opts, async () => {
+  const res = await fetch(`${base}/api/auth/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "second@example.test", password: "hunter2hunter2", account: "second-e2e" }),
+  });
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /closed/);
+});
+
+test("a wrong password is one generic refusal", opts, async () => {
+  const res = await fetch(`${base}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "founder@example.test", password: "not-the-password" }),
+  });
+  assert.equal(res.status, 401);
+});
+
+test("the session cookie authenticates the API — same funnel as a key", opts, async () => {
+  const res = await fetch(`${base}/api/workspaces`, { headers: { cookie } });
+  assert.equal(res.status, 200);
+});
+
+test("the dashboard bounces strangers to login", opts, async () => {
+  const res = await fetch(`${base}/dashboard`, { redirect: "manual" });
+  assert.ok([302, 307, 308].includes(res.status), `expected a redirect, got ${res.status}`);
+  assert.match(res.headers.get("location") ?? "", /\/login/);
+});
+
+test("the dashboard admits a session, whatever tenant the URL claims", opts, async () => {
+  // ?tenant=default would be someone else's account — the proxy overwrites
+  // it with the session's own before any page reads it.
+  const res = await fetch(`${base}/dashboard?tenant=default`, { headers: { cookie } });
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /acme-e2e/);
+});
+
+test("billing reads empty, and a top-up moves the balance", opts, async () => {
+  const empty = (await (await fetch(`${base}/api/billing`, { headers: { cookie } })).json()) as {
+    enabled: boolean;
+    balanceUsd: number;
+  };
+  assert.equal(empty.enabled, false);
+  assert.equal(empty.balanceUsd, 0);
+
+  const topped = (await (
+    await fetch(`${base}/api/billing`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ usd: 5, note: "e2e" }),
+    })
+  ).json()) as { balanceUsd: number };
+  assert.equal(topped.balanceUsd, 5);
+});
+
+// ---------------------------------------------------------------- triggers
+
+test("the scheduler's manual tick answers", opts, async () => {
+  const res = await api("/api/schedule", { method: "POST" });
+  assert.equal(res.status, 200);
+});
+
+test("a webhook with a wrong token is refused before anything runs", opts, async () => {
+  const res = await fetch(`${base}/api/hooks/default/hello/anything?token=${"0".repeat(32)}`, {
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(res.status, 401);
+});
+
 // The whole point, and the only test here that spends money.
 test("waiting on a working agent answers with the result and the cost", paid, async () => {
   const res = await api("/api/workspaces/hello/agents/notetaker/run?wait=true&timeout=180", {
