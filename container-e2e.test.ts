@@ -62,6 +62,7 @@ const baseInput = {
   mcpServers: {},
   apis: [],
   scripts: [],
+  runtime: null,
   timeoutSec: 120,
 };
 

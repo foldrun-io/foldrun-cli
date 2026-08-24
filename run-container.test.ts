@@ -25,6 +25,8 @@ test("what the spec says agents own comes back; what they must not touch does no
   assert.ok(!allowedBack("knowledge/policy.md"), "knowledge is read-only, physically");
   assert.ok(!allowedBack("agents/writer/knowledge/prices.md"));
   assert.ok(!allowedBack("secrets.json"));
+  assert.ok(!allowedBack("hooks.json"), "webhook rotation state is the platform's");
+  assert.ok(!allowedBack("hook-deliveries.jsonl"));
   assert.ok(!allowedBack("runs/run-1.json"));
   assert.ok(!allowedBack(".git/config"));
   assert.ok(!allowedBack("../outside.md"), "no escaping the workspace");
