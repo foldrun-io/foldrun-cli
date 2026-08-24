@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { sharedInstructions } from "../packages/core/src/runner.ts";
+import { ensureAccountFiles } from "../packages/core/src/store.ts";
 
 /**
  * A laptop-layout account: `library/` and AGENTS.md beside the workspace.
@@ -128,6 +129,57 @@ test("legacy project.md is still read", () => {
       assert.match(sharedInstructions(agentDir, "acme") ?? "", /Old-style workspace context\./);
     },
   );
+});
+
+// The account file has to be *written* by something, or the outer half of
+// nearest-wins is a feature only the spec knows about. These guard the writer.
+
+test("the account AGENTS.md is scaffolded, and its prose reaches an agent", () => {
+  withAccount({ "desk/agents/writer/agent.md": AGENT }, (agentDir) => {
+    const root = path.resolve(agentDir, "../../..");
+    assert.deepEqual(ensureAccountFiles("acme", root), ["AGENTS.md"]);
+    assert.match(sharedInstructions(agentDir, "acme") ?? "", /Everyone in this account/);
+  });
+});
+
+test("scaffolding an account never overwrites what is already there", () => {
+  withAccount(
+    {
+      "AGENTS.md": "---\nname: acme\n---\n\nHand-written, do not clobber.\n",
+      "desk/agents/writer/agent.md": AGENT,
+    },
+    (agentDir) => {
+      const root = path.resolve(agentDir, "../../..");
+      assert.deepEqual(ensureAccountFiles("acme", root), []);
+      assert.match(sharedInstructions(agentDir, "acme") ?? "", /Hand-written, do not clobber\./);
+    },
+  );
+});
+
+test("an account on the legacy name is left alone", () => {
+  withAccount(
+    {
+      "project.md": "---\nname: acme\n---\n\nOld-style account context.\n",
+      "desk/agents/writer/agent.md": AGENT,
+    },
+    (agentDir) => {
+      const root = path.resolve(agentDir, "../../..");
+      assert.deepEqual(ensureAccountFiles("acme", root), []);
+      assert.equal(fs.existsSync(path.join(root, "AGENTS.md")), false);
+    },
+  );
+});
+
+test("the scaffolded account file declares no provider", () => {
+  withAccount({ "desk/agents/writer/agent.md": AGENT }, (agentDir) => {
+    const root = path.resolve(agentDir, "../../..");
+    ensureAccountFiles("acme", root);
+    const raw = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
+    // Commented out on purpose — a starter that routed every future workspace
+    // at some endpoint would be worse than a starter that routed none.
+    assert.match(raw, /^#\s+provider:$/m);
+    assert.doesNotMatch(raw, /^provider:$/m);
+  });
 });
 
 test("a broken AGENTS.md does not take down every agent under it", () => {
