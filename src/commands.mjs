@@ -47,7 +47,7 @@ function templateFilesFrom(dir) {
 async function init(workspace, from) {
   // The same definition the dashboard's "+ New workspace" uses — see
   // core/src/starter.ts for why it is not two lists.
-  const { starterFiles, syncWorkspaceBundles } = await core();
+  const { starterFiles, syncWorkspaceBundles, ensureAccountFiles } = await core();
 
   // A template is a source, a workspace is a destination. Keeping the two
   // words apart is the whole reason `templates/` is not called `examples/`:
@@ -83,8 +83,19 @@ async function init(workspace, from) {
   // index.md declares no okf_version — so `mdagent init` produced a directory
   // of valid concepts that no consumer could tell the version of.
   syncWorkspaceBundles(workspace);
+
+  // The account scope, one directory up — the same place libraryDir points on
+  // a laptop, so `my-desk/` ends up beside the `AGENTS.md` and `library/` that
+  // cover it. accountDir cannot answer here: nothing has pinned this process
+  // to the new workspace yet, so it is passed explicitly. Listed below with a
+  // `../` prefix because init writing outside its target should be visible,
+  // not discovered later.
+  const account = path.resolve(workspace, "..");
+  const accountWritten = ensureAccountFiles("default", account).map((rel) => `../${rel}`);
+
   console.log(`\n  ${c.green("created")} ${workspace}\n`);
   for (const { path: rel } of files) console.log(`    ${c.dim(rel)}`);
+  for (const rel of accountWritten) console.log(`    ${c.dim(rel)}`);
   const flow = files
     .map((f) => f.path.match(/^flows\/(.+)\.md$/)?.[1])
     .find(Boolean);
