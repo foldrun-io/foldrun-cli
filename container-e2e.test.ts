@@ -23,12 +23,19 @@ import {
 
 const enabled = process.env.MDAGENT_CONTAINER_E2E === "1";
 const opts = { skip: enabled ? false : "set MDAGENT_CONTAINER_E2E=1 to run (needs Docker)" };
+// Either credential the SDK accepts via env works inside the container —
+// an API key, or a Claude subscription OAuth token (what CI uses).
+const modelCreds: Record<string, string> = process.env.ANTHROPIC_API_KEY
+  ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
+  : process.env.CLAUDE_CODE_OAUTH_TOKEN
+    ? { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }
+    : {};
 const paid = {
   skip: !enabled
     ? "set MDAGENT_CONTAINER_E2E=1 to run"
-    : process.env.ANTHROPIC_API_KEY
+    : Object.keys(modelCreds).length
       ? false
-      : "set ANTHROPIC_API_KEY as well to make a real model call from inside the container",
+      : "set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN as well to make a real model call from inside the container",
 };
 
 function stageWorkspace(): string {
@@ -93,7 +100,7 @@ test("a real model call runs isolated, and only owned paths come back", paid, as
         prompt:
           "Write exactly one short sentence into outputs/note.md using the Write tool, then stop.",
       },
-      env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! },
+      env: modelCreds,
       emit: (type, text) => events.push({ type, text }),
     });
     assert.equal(outcome.status, "completed", JSON.stringify(events.slice(-5)));

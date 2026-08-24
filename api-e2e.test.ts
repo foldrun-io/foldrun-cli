@@ -128,6 +128,9 @@ before(async () => {
       MDAGENT_DISABLE_SCHEDULER: "1",
       // Explicitly NOT set: the point is to test the server refusing.
       MDAGENT_DEV_NO_AUTH: "",
+      // A webhook secret we hold, so the Stripe test below can sign a
+      // payment event the way Stripe would and watch it credit the ledger.
+      STRIPE_WEBHOOK_SECRET: "whsec_e2e_testing",
     },
     stdio: "ignore",
   });
@@ -442,6 +445,44 @@ test("rotating a webhook changes its URL, twice changes it twice", opts, async (
   ).json()) as { path: string };
   assert.match(first.path, /token=/);
   assert.notEqual(first.path, second.path);
+});
+
+test("a signed Stripe payment credits the ledger exactly once", opts, async () => {
+  const balance = async () =>
+    ((await (await fetch(`${base}/api/billing`, { headers: { cookie } })).json()) as {
+      balanceUsd: number;
+    }).balanceUsd;
+
+  const event = JSON.stringify({
+    id: "evt_e2e_1",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        metadata: { tenant: "acme-e2e" },
+        amount_total: 700,
+        payment_status: "paid",
+      },
+    },
+  });
+  const t = Math.floor(Date.now() / 1000);
+  const mac = crypto.createHmac("sha256", "whsec_e2e_testing").update(`${t}.${event}`).digest("hex");
+  const deliver = () =>
+    fetch(`${base}/api/billing/stripe`, {
+      method: "POST",
+      headers: { "stripe-signature": `t=${t},v1=${mac}` },
+      body: event,
+    });
+
+  const before = await balance();
+  assert.equal((await deliver()).status, 200);
+  assert.equal(await balance(), before + 7, "the payment landed");
+  assert.equal((await deliver()).status, 200, "a Stripe retry is acknowledged");
+  assert.equal(await balance(), before + 7, "and credits nothing twice");
+
+  // An unsigned copy of the same event is money nobody paid.
+  const forged = await fetch(`${base}/api/billing/stripe`, { method: "POST", body: event });
+  assert.equal(forged.status, 401);
+  assert.equal(await balance(), before + 7);
 });
 
 // ---------------------------------------------------------------- triggers
