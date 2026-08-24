@@ -385,6 +385,65 @@ test("billing reads empty, and a top-up moves the balance", opts, async () => {
   assert.equal(topped.balanceUsd, 5);
 });
 
+test("a team grows by invite link and refuses to lose its last member", opts, async () => {
+  const one = (await (await fetch(`${base}/api/team`, { headers: { cookie } })).json()) as {
+    members: { id: string; email: string }[];
+  };
+  assert.equal(one.members.length, 1);
+
+  const invite = (await (
+    await fetch(`${base}/api/team`, { method: "POST", headers: { cookie } })
+  ).json()) as { path: string };
+  assert.match(invite.path, /^\/signup\?invite=/);
+
+  // The invited signup joins the existing account — no open-signup flag, no
+  // account field, whatever the body claims.
+  const token = decodeURIComponent(invite.path.split("invite=")[1]);
+  const joined = await fetch(`${base}/api/auth/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      email: "teammate@example.test",
+      password: "hunter2hunter2",
+      account: "ignored-entirely",
+      invite: token,
+    }),
+  });
+  const joinedBody = await joined.text();
+  assert.equal(joined.status, 200, joinedBody);
+  assert.equal((JSON.parse(joinedBody) as { tenant: string }).tenant, "acme-e2e");
+
+  const two = (await (await fetch(`${base}/api/team`, { headers: { cookie } })).json()) as {
+    members: { id: string; email: string }[];
+  };
+  assert.equal(two.members.length, 2);
+
+  // Remove the teammate; then the last member must be irremovable.
+  const teammate = two.members.find((m) => m.email === "teammate@example.test")!;
+  const removed = await fetch(`${base}/api/team/members/${teammate.id}`, {
+    method: "DELETE",
+    headers: { cookie },
+  });
+  assert.equal(removed.status, 200);
+  const self = one.members[0];
+  const refused = await fetch(`${base}/api/team/members/${self.id}`, {
+    method: "DELETE",
+    headers: { cookie },
+  });
+  assert.equal(refused.status, 400);
+});
+
+test("rotating a webhook changes its URL, twice changes it twice", opts, async () => {
+  const first = (await (
+    await api("/api/workspaces/hello/hooks/note/rotate", { method: "POST" })
+  ).json()) as { path: string };
+  const second = (await (
+    await api("/api/workspaces/hello/hooks/note/rotate", { method: "POST" })
+  ).json()) as { path: string };
+  assert.match(first.path, /token=/);
+  assert.notEqual(first.path, second.path);
+});
+
 // ---------------------------------------------------------------- triggers
 
 test("the scheduler's manual tick answers", opts, async () => {
