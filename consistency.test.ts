@@ -311,3 +311,66 @@ test("the starter workspace obeys the rules it ships", () => {
 
   assert.deepEqual(bad, []);
 });
+
+// ---------------------------------------------------------------- UI system
+
+// The rules the UI audit established, guarded the same way the data lists
+// are: read the source, refuse the drift.
+
+const WEB = path.join(import.meta.dirname, "..", "web");
+
+function dashboardPages(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === "page.tsx") out.push(full);
+    }
+  };
+  walk(path.join(WEB, "app/dashboard"));
+  return out;
+}
+
+test("content pages share one width; only editors and file trees go wide", () => {
+  const wideAllowed = ["[workspace]/edit", "library/edit", "library/files", "graph"];
+  const offenders: string[] = [];
+  for (const page of dashboardPages()) {
+    const rel = path.relative(path.join(WEB, "app/dashboard"), page);
+    const src = fs.readFileSync(page, "utf8");
+    const widths = [...src.matchAll(/mx-auto (max-w-\w+)/g)].map((m) => m[1]);
+    for (const w of widths) {
+      if (w !== "max-w-5xl" && !wideAllowed.some((a) => rel.includes(a))) {
+        offenders.push(`${rel}: ${w}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], "pages jumped width — max-w-5xl is the standard");
+});
+
+test("no component rolls its own dark primary button", () => {
+  const offenders: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && entry.name !== "node_modules") walk(full);
+      else if (entry.name.endsWith(".tsx") && !full.endsWith("components/ui.tsx")) {
+        if (/bg-gray-900 px-/.test(fs.readFileSync(full, "utf8"))) {
+          offenders.push(path.relative(WEB, full));
+        }
+      }
+    }
+  };
+  walk(path.join(WEB, "app"));
+  walk(path.join(WEB, "components"));
+  assert.deepEqual(offenders, [], "a primary button outside buttonClass() is a fork of the design system");
+});
+
+test("every workspace subpage reaches up through WorkspaceHeader", () => {
+  const subpages = ["agents", "flows", "runs", "evals", "assets", "settings"];
+  for (const p of subpages) {
+    const src = fs.readFileSync(path.join(WEB, `app/dashboard/[workspace]/${p}/page.tsx`), "utf8");
+    assert.ok(src.includes("WorkspaceHeader"), `${p} hand-rolls its header`);
+    assert.ok(!src.includes("← Workspaces"), `${p} still points at the account list`);
+  }
+});
