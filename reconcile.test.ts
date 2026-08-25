@@ -354,7 +354,7 @@ test("the approval gate skips a step a person already approved", () => {
     path.join(import.meta.dirname, "..", "packages/core/src/runner.ts"),
     "utf8",
   );
-  const gate = src.match(/const needsApproval = group\.filter\(([\s\S]*?)\);/);
+  const gate = src.match(/const needsApproval = freshGroup\.filter\(([\s\S]*?)\);/);
   assert.ok(gate, "the approval gate should still be a filter over the group");
   assert.match(gate[1], /!s\.approvedAt/, "the gate must exclude steps already approved");
 });

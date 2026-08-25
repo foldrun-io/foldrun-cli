@@ -63,6 +63,7 @@ const baseInput = {
   apis: [],
   scripts: [],
   runtime: null,
+  consults: [],
   timeoutSec: 120,
 };
 

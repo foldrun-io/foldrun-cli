@@ -50,6 +50,7 @@ test("a step runs as a pod, and the pod is gone afterwards", opts, async () => {
         apis: [],
         scripts: [],
         runtime: null,
+        consults: [],
         timeoutSec: 180,
       },
       env: { MDAGENT_E2E_MARKER: "it's got 'quotes' to survive" },
