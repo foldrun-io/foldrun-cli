@@ -221,7 +221,9 @@ test("there is exactly one way to create something", () => {
   for (const file of walk(path.join(root, "web"), (f) => /\.tsx$/.test(f))) {
     if (file.endsWith("create.tsx")) continue;
     const src = fs.readFileSync(file, "utf8");
-    // A POST that carries a name is a creation form.
+    // A POST whose body *leads* with a name is a creation form. Leading is
+    // the signature: connect-style calls (OAuth start) also carry a name,
+    // as a parameter among others — those order their body accordingly.
     if (/method:\s*"POST"/.test(src) && /JSON\.stringify\(\{\s*name/.test(src)) {
       offenders.push(path.relative(root, file));
     }
