@@ -141,3 +141,50 @@ test("a refused exchange reports the provider's reason and stores nothing", () =
       p.close();
     }
   }));
+
+// ---------------------------------------------------------------- clients
+
+import {
+  saveOAuthClient,
+  listOAuthClients,
+  getOAuthClient,
+  deleteOAuthClient,
+} from "../packages/core/src/oauth-clients.ts";
+
+test("a saved client round-trips, lists without its secret, and runs the flow", () =>
+  withVault(async () => {
+    const p = await provider(true);
+    try {
+      saveOAuthClient("acme", "google-ads", CONFIG(p.tokenUrl));
+      const rows = listOAuthClients("acme");
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].client_id, "cid");
+      assert.ok(!("client_secret" in rows[0]), "the secret never comes back through a list");
+
+      const config = getOAuthClient("acme", "google-ads")!;
+      assert.equal(config.client_secret, "shh", "decrypted for the flow, and only there");
+
+      // The whole point of saving: run consent from the stored client.
+      const { nonce } = startOAuthConnect("acme", "ADS_TOKEN", config, REDIRECT, "desk");
+      const result = await completeOAuthConnect(nonce, "good-code", REDIRECT);
+      assert.equal(result.stored, "oauth2");
+
+      assert.ok(deleteOAuthClient("acme", "google-ads"));
+      assert.equal(listOAuthClients("acme").length, 0);
+      assert.equal(getOAuthClient("acme", "google-ads"), null);
+    } finally {
+      p.close();
+    }
+  }));
+
+test("a client is validated on save, not at connect time", () =>
+  withVault(() => {
+    assert.throws(
+      () => saveOAuthClient("acme", "bad", { ...CONFIG("https://x/t"), client_id: "" }),
+      /needs client_id/,
+    );
+    assert.throws(
+      () => saveOAuthClient("acme", "Bad Name", CONFIG("https://x/t")),
+      /kebab-case/,
+    );
+  }));
