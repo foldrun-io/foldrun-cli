@@ -276,3 +276,25 @@ test("a sibling directory is not inside the workspace", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// A secret env var is for *using*, not printing. The credential guard once
+// matched any reference to $…TOKEN/KEY/SECRET/PASSWORD, which denied the
+// entire point of secrets — ssh -i "$SSH_KEY", curl -H "…: $TOKEN". Now only
+// a command that emits the value is blocked.
+test("a command may use a secret env var, but not print it", () => {
+  for (const cmd of [
+    'ssh -i "$VM_SSH_KEY" -o StrictHostKeyChecking=accept-new mark@host hostname',
+    'curl -H "Authorization: Bearer $API_TOKEN" https://api.example.com',
+    "sshpass -e ssh mark@host uptime",
+    'git clone https://x:$GIT_TOKEN@github.com/o/r',
+  ]) {
+    assert.equal(checkBash(cmd).ok, true, `${cmd} must be allowed`);
+  }
+  for (const cmd of [
+    "echo $VM_SSH_KEY",
+    'printf "%s" "$API_TOKEN"',
+    "cat $SOME_SECRET",
+  ]) {
+    assert.equal(checkBash(cmd).ok, false, `${cmd} must be denied`);
+  }
+});
