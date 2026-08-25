@@ -72,7 +72,16 @@ test("driver lines: events and the done marker parse, noise does not", () => {
     text: "hi",
   });
   const done = parseDriverLine('{"e":"done","status":"completed","result":"out","costUsd":0.01}');
-  assert.deepEqual(done, { e: "done", status: "completed", result: "out", costUsd: 0.01 });
+  assert.deepEqual(done, { e: "done", status: "completed", result: "out", costUsd: 0.01, usage: null });
+  // Token counts survive the boundary when the driver sends them — they are
+  // what lets the host reprice a routed model from the gateway's catalogue.
+  const withUsage = parseDriverLine(
+    '{"e":"done","status":"completed","result":"out","costUsd":0.01,"usage":{"inputTokens":100,"outputTokens":20}}',
+  );
+  assert.deepEqual(
+    withUsage && "usage" in withUsage ? withUsage.usage : null,
+    { inputTokens: 100, outputTokens: 20 },
+  );
 
   assert.equal(parseDriverLine("npm warn deprecated something"), null);
   assert.equal(parseDriverLine('{"unrelated":"json"}'), null);
