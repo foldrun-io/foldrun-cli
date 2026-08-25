@@ -10,6 +10,7 @@
 //   mdagent check [dir]     validate it — no model calls, no cost
 //   mdagent run   <target>  run an agent or a flow
 //   mdagent eval  [name]    run evals
+//   mdagent probe <model>   can this model hold a tool loop? (live check)
 //   mdagent logs  [run-id]  recent runs, or one run's full event trail
 //   mdagent secrets <verb>  set / ls / rm — the vault, from the terminal
 //   mdagent deploy [dir]    push a workspace into an installation
@@ -37,6 +38,7 @@ const HELP = `mdagent — agents are markdown
   mdagent check [dir]       validate agents, flows, tools, evals and knowledge
   mdagent run <target>      run an agent or flow (target: name, or flow:name)
   mdagent eval [name]       run one eval, or all of them
+  mdagent probe <model>     live check: can this model hold a tool loop here?
   mdagent logs [run-id]     recent runs, or one run's full event trail
   mdagent secrets set NAME  store a secret (prompted, never echoed) — also ls, rm
   mdagent deploy [dir]      push a workspace into an installation

@@ -367,6 +367,66 @@ async function runTarget(target, flags) {
   return 1;
 }
 
+// ---------------------------------------------------------------- probe
+
+/**
+ * `mdagent probe <model>` — can this model hold a tool loop, answered by
+ * running one. The workspace's provider block is honoured, so the probe
+ * exercises the exact path a run takes: same endpoint, same token, same
+ * tier remap. The check the run-start gate makes from a catalogue, made
+ * from the ground truth instead.
+ */
+async function probeCmd(modelArg) {
+  if (!modelArg) throw new Error("which model? try `mdagent probe openai/gpt-oss-120b` (or a tier: fast, default, max)");
+  assertCredentials();
+  const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort } = await core();
+
+  // The workspace's provider block, resolved the way a run resolves it —
+  // ${SECRET} values come from the process env here: the CLI's vault is the
+  // shell, which is where a laptop keeps its keys anyway.
+  let env = { ...process.env };
+  try {
+    const matter = (await import("gray-matter")).default;
+    const fm = matter(fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")).data;
+    const spec = parseProvider(fm.provider);
+    if (spec?.baseUrl) {
+      const substitute = (t) => t.replace(/\$\{([A-Z][A-Z0-9_]*)\}/g, (whole, name) => process.env[name] ?? whole);
+      env = {
+        ...env,
+        ...providerEnvFor({
+          baseUrl: spec.baseUrl,
+          token: substitute(spec.token),
+          models: spec.models,
+          headers: Object.fromEntries(Object.entries(spec.headers).map(([k, v]) => [k, substitute(v)])),
+        }),
+      };
+      console.log(`
+  ${c.dim(`via ${spec.baseUrl}`)}`);
+    }
+  } catch {
+    // no AGENTS.md, or no provider block — Anthropic direct, like a run
+  }
+
+  const model = resolveModel(modelArg);
+  process.stdout.write(`  probing ${c.bold(model)} ${c.dim("(one tool call, one echo)")} … `);
+  const report = await probeModel(model, env, resolveEffort(null));
+  console.log(report.ok ? c.green("✓") : c.red("✗"));
+  console.log(`    tool call made      ${report.calledTool ? c.green("yes") : c.red("no")}`);
+  console.log(`    result read back    ${report.echoedNonce ? c.green("yes") : c.red("no")}`);
+  console.log(`    ${c.dim(`${report.durationMs}ms${report.costUsd != null ? ` · $${report.costUsd.toFixed(4)}` : ""}`)}`);
+  if (!report.ok && report.reply) {
+    console.log(`    ${c.dim("reply:")} ${report.reply.slice(0, 200)}`);
+  }
+  if (!report.ok) {
+    console.log(`
+  ${c.amber("this model cannot drive an agent here — pick one that passes, or check the gateway route")}\n`);
+  } else {
+    console.log(`
+  ${c.green("fit to drive an agent")}\n`);
+  }
+  return report.ok ? 0 : 1;
+}
+
 // ---------------------------------------------------------------- eval
 
 async function runEvals(name) {
@@ -801,6 +861,8 @@ export async function run(command, positional, flags, workspace) {
       return runTarget(positional[0], flags);
     case "eval":
       return runEvals(positional[0]);
+    case "probe":
+      return probeCmd(positional[0]);
     case "secrets":
       return secretsCmd(positional, flags);
     case "logs":
