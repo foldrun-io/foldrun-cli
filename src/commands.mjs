@@ -569,6 +569,20 @@ function promptHidden(question) {
   });
 }
 
+/** Read a line with normal echo — for the non-secret halves of a config. */
+function promptVisible(question) {
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    const { stdin } = process;
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    stdin.once("data", (line) => {
+      stdin.pause();
+      resolve(String(line).replace(/\r?\n$/, ""));
+    });
+  });
+}
+
 const remoteUrl = (flags) => flags.url ?? process.env.MDAGENT_URL;
 
 async function remoteCall(url, flags, apiPath, init = {}) {
@@ -621,6 +635,28 @@ async function secretsCmd(positional, flags) {
   if (!name) throw new Error(`which secret? try \`mdagent secrets ${verb} NAME\``);
 
   if (verb === "set") {
+    // --oauth2: store a refresh recipe instead of a static value. The
+    // platform exchanges it for a live access token before every use.
+    if (flags.oauth2 === true) {
+      const token_url =
+        (await promptVisible("  token URL [https://oauth2.googleapis.com/token]: ")) ||
+        "https://oauth2.googleapis.com/token";
+      const client_id = await promptVisible("  client_id: ");
+      const client_secret = await promptHidden("  client_secret: ");
+      const refresh_token = await promptHidden("  refresh_token: ");
+      const config = { token_url, client_id, client_secret, refresh_token };
+      if (url) {
+        await remoteCall(url, flags, "/api/secrets", {
+          method: "PUT",
+          body: JSON.stringify({ name, oauth2: config, workspace: flags.to }),
+        });
+      } else {
+        (await core()).setOAuth2Secret("default", name, config, scope === undefined ? undefined : "workspace");
+      }
+      console.log(`\n  ${c.green("✓")} ${name} stored as an auto-refreshing oauth2 credential\n`);
+      return 0;
+    }
+
     const value =
       typeof flags.value === "string" ? flags.value : await promptHidden(`  value for ${name}: `);
     if (!value) throw new Error("empty value — nothing stored");
