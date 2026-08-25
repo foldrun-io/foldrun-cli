@@ -210,3 +210,72 @@ test("consult tools exist exactly when colleagues are declared", () => {
   assert.deepEqual(built.toolNames, ["mcp__mdagent_agents__consult_fact_checker"]);
   assert.equal(built.drainCost(), 0);
 });
+
+// ---------------------------------------------------------------- routing
+
+test("case: first match wins, later cases and else are routed past", () =>
+  withStubbedRun(
+    {
+      classifier: "This looks like a BUG in the parser.",
+      debugger: "fixed it",
+      writer: "here is prose",
+      triager: "unclear",
+    },
+    [
+      step("classifier", 1),
+      step("debugger", 2, { case: "BUG" }),
+      step("writer", 2, { case: "QUESTION" }),
+      step("triager", 2, { else: true }),
+    ],
+    (run) => {
+      assert.equal(run.status, "completed");
+      const by = (name: string) => run.steps.find((s) => s.agent === name)!;
+      assert.equal(by("debugger").status, "completed");
+      assert.equal(by("writer").status, "skipped");
+      assert.match(by("writer").skipReason ?? "", /routed past/);
+      assert.equal(by("triager").status, "skipped");
+      assert.match(by("triager").skipReason ?? "", /routed past/);
+    },
+  ));
+
+test("case: nothing matches, the else route runs", () =>
+  withStubbedRun(
+    {
+      classifier: "I honestly cannot tell what this is.",
+      debugger: "fixed it",
+      writer: "here is prose",
+      triager: "escalating to a human",
+    },
+    [
+      step("classifier", 1),
+      step("debugger", 2, { case: "BUG" }),
+      step("writer", 2, { case: "QUESTION" }),
+      step("triager", 2, { else: true }),
+    ],
+    (run) => {
+      assert.equal(run.status, "completed");
+      const by = (name: string) => run.steps.find((s) => s.agent === name)!;
+      assert.equal(by("debugger").status, "skipped");
+      assert.match(by("debugger").skipReason ?? "", /not matched/);
+      assert.equal(by("writer").status, "skipped");
+      assert.equal(by("triager").status, "completed");
+      assert.match(by("triager").result ?? "", /escalating/);
+    },
+  ));
+
+test("when: stays independent — routing did not change its semantics", () =>
+  withStubbedRun(
+    {
+      classifier: "urgent and important",
+      a: "ran",
+      b: "ran too",
+    },
+    [
+      step("classifier", 1),
+      step("a", 2, { when: "urgent" }),
+      step("b", 2, { when: "important" }),
+    ],
+    (run) => {
+      assert.equal(run.steps.filter((s) => s.status === "completed").length, 3, "both whens ran");
+    },
+  ));
