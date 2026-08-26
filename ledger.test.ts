@@ -17,6 +17,7 @@ import {
   ledgerSummary,
   noteRunDeleted,
 } from "../packages/core/src/ledger.ts";
+import { accountUsage } from "../packages/core/src/usage.ts";
 
 function withAccount(body: () => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-ledger-"));
@@ -324,5 +325,63 @@ test("deleting an unbilled run leaves no ledger residue", () => {
     recordTopUp("acme", 10);
     noteRunDeleted("acme", "desk", "run-never-billed");
     assert.equal(readLedger("acme").length, 1); // just the top-up
+  });
+});
+
+// ------------------------------------------------------------- usage report
+
+test("the usage report cuts one set of facts three ways that agree", () => {
+  withAccount(() => {
+    process.env.FOLDRUN_RUNNER_CPUS = "2";
+    process.env.FOLDRUN_RUNNER_MEMORY = "4Gi";
+    try {
+      const ws = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk");
+      fs.mkdirSync(path.join(ws, "runs"), { recursive: true });
+      fs.writeFileSync(path.join(ws, "AGENTS.md"), "---\nname: desk\n---\n");
+      fs.writeFileSync(
+        path.join(ws, "runs/run-a.json"),
+        JSON.stringify({
+          id: "run-a", flow: "publish", status: "completed",
+          startedAt: "2026-08-26T00:00:00.000Z", finishedAt: "2026-08-26T00:05:00.000Z",
+          steps: [
+            { agent: "writer", instruction: "", group: 1, optional: false, status: "completed",
+              events: [], result: "x", costUsd: 0.5, computeSecs: 30,
+              tokens: { input: 1000, output: 400 } },
+            { agent: "editor", instruction: "", group: 2, optional: false, status: "completed",
+              events: [], result: "y", costUsd: 0.25, computeSecs: 10,
+              tokens: { input: 500, output: 100 } },
+            // A carried step ran — and was counted — in another run.
+            { agent: "writer", instruction: "", group: 3, optional: false, status: "completed",
+              events: [], result: "z", costUsd: null, computeSecs: null, carriedFrom: "run-0" },
+          ],
+        }),
+      );
+
+      const u = accountUsage("acme");
+      assert.equal(u.totals.runs, 1);
+      assert.equal(u.totals.steps, 2, "the carried step is not consumption");
+      assert.equal(u.totals.tokenCostUsd, 0.75);
+      assert.equal(u.totals.inputTokens, 1500);
+      assert.equal(u.totals.computeSecs, 40);
+      // Reservations: computeSecs × the limits in force.
+      assert.equal(u.totals.cpuSecs, 80);
+      assert.equal(u.totals.gibSecs, 160);
+
+      const desk = u.workspaces.find((w) => w.workspace === "desk")!;
+      // The flow cut and the agent cut are the same facts sliced twice.
+      assert.equal(desk.byFlow.publish.tokenCostUsd, 0.75);
+      assert.equal(desk.byAgent.writer.tokenCostUsd, 0.5);
+      assert.equal(desk.byAgent.editor.tokenCostUsd, 0.25);
+      assert.equal(
+        Object.values(desk.byAgent).reduce((s, b) => s + b.computeSecs, 0),
+        desk.computeSecs,
+      );
+      // Storage sees the files just written.
+      assert.ok(desk.storage.runsBytes > 0);
+      assert.ok(desk.storage.sourceBytes > 0);
+    } finally {
+      delete process.env.FOLDRUN_RUNNER_CPUS;
+      delete process.env.FOLDRUN_RUNNER_MEMORY;
+    }
   });
 });
