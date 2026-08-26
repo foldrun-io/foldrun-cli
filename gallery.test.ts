@@ -130,17 +130,19 @@ test("a wrong-kind template is refused, and an unknown one too", () => {
 
 // --------------------------------------------------- creating a new tool
 
-test("a new script tool starts as a folder holding its own code", () => {
+test("a new script tool is one markdown file with its program in the body", () => {
   const files = toolStarter("my-thing", "script");
-  assert.deepEqual(files.map((f) => f.file), [
-    "tools/my-thing/tool.md",
-    "tools/my-thing/run.mjs",
-  ]);
-  const def = parseToolDef(matter(files[0].content).data as Record<string, unknown>, "my-thing");
+  assert.deepEqual(files.map((f) => f.file), ["tools/my-thing.md"]);
+  const { data, content } = matter(files[0].content);
+  const def = parseToolDef(data as Record<string, unknown>, "my-thing", content);
   assert.equal(def!.kind, "script");
-  // Relative to the tool, naming no scope — which is what lets the folder be
-  // copied anywhere without an edit.
-  assert.equal((def!.spec as { run: string }).run, "run.mjs");
+  const spec = def!.spec as { run?: string; code?: string; codeExt?: string };
+  // No run: — the fenced block IS the program, found by its language tag
+  // rather than by position, so the yaml usage example above it is never
+  // mistaken for code.
+  assert.equal(spec.run, undefined);
+  assert.match(spec.code!, /parseArgs/);
+  assert.equal(spec.codeExt, ".mjs");
 });
 
 test("an API or MCP tool is still one flat file", () => {

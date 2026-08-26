@@ -225,3 +225,39 @@ test("a folder tool is one entry in the listing, not two files", () => {
     },
   );
 });
+
+test("a single-file script tool runs its fenced code block", () => {
+  withAccount(
+    {
+      "acme/workspaces/desk/AGENTS.md": "---\nname: desk\n---\n",
+      "acme/workspaces/desk/tools/echoer.md": [
+        "---",
+        "transport: script",
+        "name: echoer",
+        "description: echoes",
+        "args:",
+        "  input: what to echo",
+        "---",
+        "",
+        "Usage example (must never be mistaken for the program):",
+        "",
+        "```yaml",
+        "use: [echoer]",
+        "```",
+        "",
+        "```js",
+        "console.log('from-the-fence');",
+        "```",
+        "",
+      ].join("\n"),
+    },
+    () => {
+      const def = workspaceTools("acme", "desk").echoer;
+      assert.ok(def, "single-file script tool parses");
+      assert.equal(def.kind, "script");
+      const spec = def.spec as { code?: string };
+      assert.match(spec.code!, /from-the-fence/);
+      assert.doesNotMatch(spec.code!, /use: \[echoer\]/);
+    },
+  );
+});
