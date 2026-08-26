@@ -298,3 +298,21 @@ test("a command may use a secret env var, but not print it", () => {
     assert.equal(checkBash(cmd).ok, false, `${cmd} must be denied`);
   }
 });
+
+test("a grep pattern is a regex, not a location", () => {
+  // Searching for the literal text "/dev/null" inside the workspace was
+  // reported as escaping it — Grep says where to look with `path`, and that
+  // argument is still checked.
+  assert.equal(
+    checkPaths("Grep", { pattern: "/dev/null", path: "." }, ROOTS).ok,
+    true,
+    "an absolute-looking regex is still a regex",
+  );
+  assert.equal(
+    checkPaths("Grep", { pattern: "anything", path: "/etc/passwd" }, ROOTS).ok,
+    false,
+    "but the path argument is a path",
+  );
+  // Glob's pattern really is a path shape, so it keeps its check.
+  assert.equal(checkPaths("Glob", { pattern: "/etc/*.conf" }, ROOTS).ok, false);
+});
