@@ -1,7 +1,7 @@
 {
   "name": "foldrun",
   "version": "0.1.0",
-  "description": "Agents are markdown. Write them, check them, run them \u2014 on your machine.",
+  "description": "Agents are folders. Write them, check them, run them \u2014 on your machine.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
