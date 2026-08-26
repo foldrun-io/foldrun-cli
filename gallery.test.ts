@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import matter from "gray-matter";
-import { GALLERY, installGalleryTool } from "../packages/core/src/gallery.ts";
+import { GALLERY, galleryTemplate, installGalleryTool } from "../packages/core/src/gallery.ts";
 import { readLibraryFile } from "../packages/core/src/library.ts";
 import { parseToolDef, readWorkspaceFile, saveWorkspace } from "../packages/core/src/store.ts";
 
@@ -100,3 +100,26 @@ test("an API tool installs onto the tools shelf, not scripts", () =>
     assert.equal(installGalleryTool("acme", "slack", "desk"), "tools/slack.md");
     assert.match(readWorkspaceFile("acme", "desk", "tools/slack.md"), /chat\.postMessage/);
   }));
+
+// -------------------------------------------------- start-from templates
+
+test("starting from a gallery entry renames it everywhere the name appears", () => {
+  const seed = galleryTemplate("tools", "email", "my-mailer")!;
+  assert.equal(seed.file, "my-mailer.md");
+  const { data } = matter(seed.content);
+  assert.equal(data.name, "my-mailer");
+  // The body's opt-in line would otherwise tell a reader to grant a tool
+  // that does not exist under that name.
+  assert.match(seed.content, /use: \[my-mailer\]/);
+  assert.doesNotMatch(seed.content, /use: \[email\]/);
+  // Still a working definition, not just renamed text.
+  assert.equal(parseToolDef(data as Record<string, unknown>, "my-mailer")!.kind, "http");
+});
+
+test("a script template keeps its extension, and a wrong-kind template is refused", () => {
+  assert.equal(galleryTemplate("scripts", "browser", "my-fetch")!.file, "my-fetch.mjs");
+  // Asking the tools shelf for a script entry (or anything unknown) returns
+  // null, so callers can treat it exactly like "no template chosen".
+  assert.equal(galleryTemplate("tools", "browser", "x"), null);
+  assert.equal(galleryTemplate("tools", "nope", "x"), null);
+});
