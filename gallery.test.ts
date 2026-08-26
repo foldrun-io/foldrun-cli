@@ -12,6 +12,7 @@ import { GALLERY, galleryTemplate, installGalleryTool } from "../packages/core/s
 import { readLibraryFile } from "../packages/core/src/library.ts";
 import { parseToolDef, readWorkspaceFile, saveWorkspace, workspaceTools } from "../packages/core/src/store.ts";
 import { toolStarter } from "../packages/core/src/kinds.ts";
+import { fencedCode } from "../packages/core/src/store.ts";
 
 function withData(body: () => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-gallery-"));
@@ -26,46 +27,48 @@ function withData(body: () => void) {
   }
 }
 
-test("the browser ships as a folder tool: definition and code together", () => {
+test("the browser ships as one markdown file with its code in the body", () => {
   const browser = GALLERY.find((t) => t.name === "browser");
   assert.ok(browser, "browser tool exists");
   assert.equal(browser!.kind, "tools");
-  assert.match(browser!.content, /chromium\.launch/);
-  assert.match(browser!.content, /--no-sandbox/);
+  assert.equal(browser!.file, "browser.md");
+  assert.equal(browser!.wrapper, undefined, "nothing beside it — it is one file");
   assert.equal(browser!.snippet, "use: [browser]");
-  // Both files inside one folder — the shape that makes the run path
-  // relative to the tool rather than to a scope.
-  assert.equal(browser!.file, "browser/run.mjs");
-  assert.equal(browser!.wrapper!.file, "browser/tool.md");
-  const def = parseToolDef(matter(browser!.wrapper!.content).data as Record<string, unknown>, "browser");
+
+  const { data, content } = matter(browser!.content);
+  const def = parseToolDef(data as Record<string, unknown>, "browser", content);
   assert.equal(def!.kind, "script");
-  assert.equal((def!.spec as { run: string }).run, "run.mjs");
+  const spec = def!.spec as { run?: string; code?: string };
+  assert.equal(spec.run, undefined);
+  assert.match(spec.code!, /chromium\.launch/);
+  // The body opens with a ```yaml usage example; the program is found by
+  // language tag, so documentation is never mistaken for code.
+  assert.doesNotMatch(spec.code!, /use: \[browser\]/);
 });
 
-test("a folder tool installs unchanged at either scope", () =>
+test("installing the browser writes one file at either scope", () =>
   withData(() => {
-    // Account: definition and code land beside each other.
-    assert.equal(installGalleryTool("acme", "browser"), "browser/run.mjs");
-    assert.match(readLibraryFile("acme", "tools", "browser/run.mjs"), /chromium\.launch/);
-    const accountDef = readLibraryFile("acme", "tools", "browser/tool.md");
-    assert.match(accountDef, /run: run\.mjs/);
+    assert.equal(installGalleryTool("acme", "browser"), "browser.md");
+    assert.match(readLibraryFile("acme", "tools", "browser.md"), /chromium\.launch/);
 
-    // Workspace: byte-identical. The rewrite that used to be needed here is
-    // what the folder shape exists to delete.
     saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
-    assert.equal(installGalleryTool("acme", "browser", "desk"), "tools/browser/run.mjs");
-    assert.equal(readWorkspaceFile("acme", "desk", "tools/browser/tool.md"), accountDef);
+    assert.equal(installGalleryTool("acme", "browser", "desk"), "tools/browser.md");
+    // Byte-identical: nothing to rewrite, because nothing names a scope.
+    assert.equal(
+      readWorkspaceFile("acme", "desk", "tools/browser.md"),
+      readLibraryFile("acme", "tools", "browser.md"),
+    );
   }));
 
-test("a folder tool resolves its code from the scope it was found in", () =>
+test("a single-file script tool resolves with no path at all", () =>
   withData(() => {
     saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
     installGalleryTool("acme", "browser", "desk");
     const def = workspaceTools("acme", "desk").browser;
     assert.equal(def.kind, "script");
-    // readToolDir qualifies the relative path with the scope it read it from,
-    // so the runner can find it from an agent directory two levels down.
-    assert.equal((def.spec as { run: string }).run, "workspace/tools/browser/run.mjs");
+    const spec = def.spec as { run?: string; code?: string };
+    assert.equal(spec.run, undefined, "no run path to point at the wrong scope");
+    assert.ok(spec.code, "the program travels with the definition");
   }));
 
 test("an unknown tool is refused", () =>
@@ -78,7 +81,8 @@ test("an unknown tool is refused", () =>
 test("every API tool in the gallery parses into a working http tool", () => {
   // The http ones: everything on the tools shelf that isn't a folder tool
   // carrying its own code.
-  for (const t of GALLERY.filter((t) => t.kind === "tools" && !t.wrapper)) {
+  // The http ones: a tool whose body carries a program is a script tool.
+  for (const t of GALLERY.filter((t) => t.kind === "tools" && !fencedCode(t.content))) {
     const { data } = matter(t.content);
     const def = parseToolDef(data as Record<string, unknown>, t.name);
     assert.ok(def, `${t.name} parses`);
