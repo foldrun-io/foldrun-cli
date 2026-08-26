@@ -20,7 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ALL_KINDS, kindsAt, docKeyOf, docTypeOf, type Kind } from "../packages/core/src/kinds.ts";
 
-import { WORKSPACE_DIRS, templateFiles } from "../packages/core/src/store.ts";
+import { WORKSPACE_DIRS, templateFiles, anchoredReason } from "../packages/core/src/store.ts";
 import { starterFiles } from "../packages/core/src/starter.ts";
 import { LIBRARY_KINDS } from "../packages/core/src/library.ts";
 
@@ -403,5 +403,43 @@ test("every workspace subpage reaches up through WorkspaceHeader", () => {
     const src = fs.readFileSync(path.join(WEB, `app/dashboard/[workspace]/${p}/page.tsx`), "utf8");
     assert.ok(src.includes("WorkspaceHeader"), `${p} hand-rolls its header`);
     assert.ok(!src.includes("← Workspaces"), `${p} still points at the account list`);
+  }
+});
+
+test("an anchored file explains itself instead of failing generically", () => {
+  // Location is meaning here, so a refusal has to name the reason: "not an
+  // editable path" is true of AGENTS.md and teaches nothing about why.
+  for (const [rel, expect] of [
+    ["AGENTS.md", /workspace's own identity/],
+    ["agents/writer/agent.md", /because of where it sits/],
+    ["skills/plain-english/SKILL.md", /names its skill/],
+    ["tools/browser/tool.md", /names its tool/],
+    ["knowledge/index.md", /generated from the files around it/],
+    ["agents/writer/memory/log.md", /generated from the files around it/],
+  ] as const) {
+    const why = anchoredReason(rel);
+    assert.ok(why, `${rel} should be anchored`);
+    assert.match(why!, expect);
+  }
+  // Everything else moves freely.
+  for (const rel of ["knowledge/sources.md", "flows/publish.md", "tools/email.md"]) {
+    assert.equal(anchoredReason(rel), null, `${rel} should move`);
+  }
+});
+
+test("the tree's refusals are the server's refusals, word for word", () => {
+  // The tree cannot import store.ts (it reads disk), so it mirrors these
+  // sentences. A mirror that drifts is worse than no mirror: the gesture
+  // would be refused by one and allowed by the other.
+  const tree = read("web/components/file-tree.tsx");
+  for (const phrase of [
+    "is the workspace's own identity",
+    "because of where it sits",
+    "names its skill",
+    "names its tool",
+    "generated from the files around it",
+    "is its folder's identity",
+  ]) {
+    assert.ok(tree.includes(phrase), `file-tree.tsx is missing: ${phrase}`);
   }
 });
