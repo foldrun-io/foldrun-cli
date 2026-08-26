@@ -16,6 +16,7 @@ import {
   priceRun,
   ledgerSummary,
   noteRunDeleted,
+  accrueDaily,
 } from "../packages/core/src/ledger.ts";
 import { accountUsage } from "../packages/core/src/usage.ts";
 
@@ -27,7 +28,7 @@ function withAccount(body: () => void) {
     "FOLDRUN_MARGIN",
     "FOLDRUN_MIN_RUN_FEE",
     "FOLDRUN_RUN_FEE",
-    "FOLDRUN_STEP_FEE",
+    "FOLDRUN_NET_USD_PER_GB",
     "FOLDRUN_COMPUTE_USD_PER_SEC",
     "FOLDRUN_MAX_RUN_EXPOSURE",
   ];
@@ -169,32 +170,35 @@ test("with nothing configured, a BYOK run is free — the self-hoster default", 
   assert.equal(priceRun({ tokenCostUsd: 0, steps: 4, computeSecs: 120 }), 0);
 });
 
-test("a BYOK run bills the run, its steps and its sandbox seconds — never tokens", () => {
+test("a BYOK run bills compute and network — never tokens, never steps", () => {
   process.env.FOLDRUN_RUN_FEE = "0.02";
-  process.env.FOLDRUN_STEP_FEE = "0.005";
   process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.0001";
+  process.env.FOLDRUN_NET_USD_PER_GB = "0.10";
   process.env.FOLDRUN_MARGIN = "1.25";
   try {
-    // 0.02 + 4×0.005 + 120×0.0001 = 0.052, and the margin never applies
-    // because no tokens were bought on our account.
-    assert.equal(priceRun({ tokenCostUsd: 0, steps: 4, computeSecs: 120 }), 0.052);
+    // 0.02 + 120×0.0001 + 0.5GB×0.10 = 0.082. No step fee by design — a
+    // step is not a unit the platform pays for, and charging one would
+    // punish well-factored flows. No margin: their key bought the tokens.
+    assert.equal(
+      priceRun({ tokenCostUsd: 0, steps: 4, computeSecs: 120, netBytes: 0.5 * 1024 ** 3 }),
+      0.082,
+    );
   } finally {
-    for (const k of ["FOLDRUN_RUN_FEE", "FOLDRUN_STEP_FEE", "FOLDRUN_COMPUTE_USD_PER_SEC", "FOLDRUN_MARGIN"]) {
+    for (const k of ["FOLDRUN_RUN_FEE", "FOLDRUN_NET_USD_PER_GB", "FOLDRUN_COMPUTE_USD_PER_SEC", "FOLDRUN_MARGIN"]) {
       delete process.env[k];
     }
   }
 });
 
-test("models-included stacks both: marked-up tokens on top of the same compute", () => {
+test("models-included stacks the margin on top of the same meters", () => {
   process.env.FOLDRUN_RUN_FEE = "0.02";
-  process.env.FOLDRUN_STEP_FEE = "0.005";
   process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.0001";
   process.env.FOLDRUN_MARGIN = "1.25";
   try {
-    // 1×1.25 + 0.052
-    assert.equal(priceRun({ tokenCostUsd: 1, steps: 4, computeSecs: 120 }), 1.302);
+    // 1×1.25 + 0.02 + 120×0.0001
+    assert.equal(priceRun({ tokenCostUsd: 1, steps: 4, computeSecs: 120 }), 1.282);
   } finally {
-    for (const k of ["FOLDRUN_RUN_FEE", "FOLDRUN_STEP_FEE", "FOLDRUN_COMPUTE_USD_PER_SEC", "FOLDRUN_MARGIN"]) {
+    for (const k of ["FOLDRUN_RUN_FEE", "FOLDRUN_COMPUTE_USD_PER_SEC", "FOLDRUN_MARGIN"]) {
       delete process.env[k];
     }
   }
@@ -215,18 +219,44 @@ test("a run that did nothing is free however the fees are set", () => {
 
 test("a BYOK line records zero provider cost, so the margin is the whole charge", () => {
   withAccount(() => {
-    process.env.FOLDRUN_STEP_FEE = "0.01";
-    recordTopUp("acme", 10);
-    recordRunCost("acme", "desk", "run-a", { tokenCostUsd: 0, steps: 3, computeSecs: 42.5 });
-    const [, run] = readLedger("acme");
-    assert.equal(run.usd, -0.03);
-    assert.equal(run.cost, 0);
-    assert.deepEqual(run.meter, { steps: 3, computeSecs: 42.5 });
+    process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.001";
+    try {
+      recordTopUp("acme", 10);
+      recordRunCost("acme", "desk", "run-a", { tokenCostUsd: 0, steps: 3, computeSecs: 30 });
+      const [, run] = readLedger("acme");
+      assert.equal(run.usd, -0.03);
+      assert.equal(run.cost, 0);
+      assert.deepEqual(run.meter, { steps: 3, computeSecs: 30 });
 
-    const s = ledgerSummary("acme");
-    assert.equal(s.chargedUsd, 0.03);
-    assert.equal(s.providerCostUsd, 0); // we bought no tokens
-    assert.equal(s.marginUsd, 0.03); // so all of it is margin
+      const s = ledgerSummary("acme");
+      assert.equal(s.chargedUsd, 0.03);
+      assert.equal(s.providerCostUsd, 0); // we bought no tokens
+      assert.equal(s.marginUsd, 0.03); // so all of it is margin
+    } finally {
+      delete process.env.FOLDRUN_COMPUTE_USD_PER_SEC;
+    }
+  });
+});
+
+test("a day accrues the base fee and storage once, however often it is swept", () => {
+  withAccount(() => {
+    process.env.FOLDRUN_BILLING = "1";
+    process.env.FOLDRUN_BASE_FEE_MONTHLY = "30";
+    process.env.FOLDRUN_STORAGE_USD_PER_GB_MONTH = "0.15";
+    try {
+      const day = new Date("2026-09-15T08:00:00.000Z"); // September: 30 days
+      const first = accrueDaily("acme", 2 * 1024 ** 3, day);
+      assert.equal(first.length, 2);
+      assert.equal(first[0].usd, -1); // 30 / 30 days
+      assert.equal(first[1].usd, -0.01); // 2GB × 0.15 / 30
+      // Swept again the same day: nothing doubles.
+      assert.equal(accrueDaily("acme", 2 * 1024 ** 3, day).length, 0);
+      // A new day accrues again.
+      assert.equal(accrueDaily("acme", 2 * 1024 ** 3, new Date("2026-09-16T08:00:00.000Z")).length, 2);
+    } finally {
+      delete process.env.FOLDRUN_BASE_FEE_MONTHLY;
+      delete process.env.FOLDRUN_STORAGE_USD_PER_GB_MONTH;
+    }
   });
 });
 

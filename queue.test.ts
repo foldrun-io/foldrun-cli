@@ -204,7 +204,7 @@ test("the meter counts steps that ran, not steps that were written", () => {
     ],
   } as unknown as RunRecord;
 
-  assert.deepEqual(runMeter(run), { tokenCostUsd: 0.03, steps: 3, computeSecs: 16 });
+  assert.deepEqual(runMeter(run), { tokenCostUsd: 0.03, steps: 3, computeSecs: 16, netBytes: 0 });
 });
 
 // ------------------------------------------------------------ re-running
@@ -264,7 +264,7 @@ test("a re-run carries the finished steps and resets the rest", () =>
           { ...fresh, status: "completed", costUsd: 0.03, computeSecs: 10 },
         ],
       } as RunRecord),
-      { tokenCostUsd: 0.03, steps: 1, computeSecs: 10 },
+      { tokenCostUsd: 0.03, steps: 1, computeSecs: 10, netBytes: 0 },
     );
   }));
 
