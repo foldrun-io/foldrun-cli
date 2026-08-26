@@ -201,3 +201,27 @@ test("a tool with broken frontmatter is reported, not silently missing", () => {
     },
   );
 });
+
+test("a folder tool is one entry in the listing, not two files", () => {
+  withAccount(
+    {
+      "acme/library/tools/browser/tool.md":
+        "---\ntransport: script\nname: browser\ndescription: renders a page\nrun: run.mjs\n---\n",
+      "acme/library/tools/browser/run.mjs": "console.log('hi')\n",
+      "acme/library/tools/email.md":
+        "---\nname: email\ndescription: sends mail\nbase: https://api.resend.com\n---\n",
+    },
+    () => {
+      const entries = listLibrary("acme", "tools");
+      // Two tools, not three rows — run.mjs is the browser's code, and
+      // listing it separately claims a tool nobody can grant.
+      assert.deepEqual(
+        entries.map((e) => e.name).sort(),
+        ["browser", "email"],
+      );
+      const browser = entries.find((e) => e.name === "browser")!;
+      assert.equal(browser.path, "browser/tool.md");
+      assert.equal(browser.transport, "script");
+    },
+  );
+});
