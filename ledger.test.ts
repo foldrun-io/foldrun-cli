@@ -30,7 +30,9 @@ function withAccount(body: () => void) {
     "FOLDRUN_RUN_FEE",
     "FOLDRUN_NET_USD_PER_GB",
     "FOLDRUN_COMPUTE_USD_PER_SEC",
-    "FOLDRUN_COMPUTE_USD_PER_SEC_SMALL",
+    "FOLDRUN_COMPUTE_USD_PER_CORE_SEC",
+    "FOLDRUN_COMPUTE_USD_PER_GIB_SEC",
+    "FOLDRUN_CPU_USD_PER_BUSY_SEC",
     "FOLDRUN_MAX_RUN_EXPOSURE",
   ];
   const prevPrices = priceVars.map((k) => [k, process.env[k]] as const);
@@ -429,17 +431,51 @@ test("compute bills in whole seconds with a one-second floor", () => {
   }
 });
 
-test("small seconds bill at the small rate, and default to the large one", () => {
-  process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.01";
+test("hold plus work: reserved slices and burned CPU each carry a price", () => {
+  process.env.FOLDRUN_COMPUTE_USD_PER_CORE_SEC = "0.00003";
+  process.env.FOLDRUN_COMPUTE_USD_PER_GIB_SEC = "0.000004";
+  process.env.FOLDRUN_CPU_USD_PER_BUSY_SEC = "0.0001";
   try {
-    // No small rate set: a size is a fact, a discount is a decision — until
-    // the operator sets one, every second costs the same.
-    assert.equal(priceRun({ tokenCostUsd: 0, steps: 2, computeSecs: 10, smallSecs: 4 }), 0.1);
-    process.env.FOLDRUN_COMPUTE_USD_PER_SEC_SMALL = "0.0025";
-    // 6 large × 0.01 + 4 small × 0.0025
-    assert.equal(priceRun({ tokenCostUsd: 0, steps: 2, computeSecs: 10, smallSecs: 4 }), 0.07);
+    // A browser-ish step: 60s holding 3 cores / 6 GiB, 45 CPU-seconds burned.
+    // hold: 180 core·s × 0.00003 + 360 GiB·s × 0.000004 = 0.00684
+    // work: 45 × 0.0001 = 0.0045
+    const busy = priceRun({
+      tokenCostUsd: 0, steps: 1, computeSecs: 60,
+      compute: { coreSecs: 180, gibSecs: 360, busyCpuSecs: 45, flatSecs: 0 },
+    });
+    assert.equal(busy, 0.01134);
+    // The same 60 seconds idle on a small slice: 60 core·s + 60 GiB·s, no burn.
+    // The idle small pod pays a fraction of the busy large one — both facts
+    // (held less, worked less) lower the bill, which is the fairness asked for.
+    const idle = priceRun({
+      tokenCostUsd: 0, steps: 1, computeSecs: 60,
+      compute: { coreSecs: 60, gibSecs: 60, busyCpuSecs: 0, flatSecs: 0 },
+    });
+    assert.equal(idle, 0.01134 - 0.00684 - 0.0045 + 0.00204);
+    // An unreadable work meter bills hold only — a bill never guesses.
+    assert.ok(idle < busy / 2);
+  } finally {
+    for (const k of ["FOLDRUN_COMPUTE_USD_PER_CORE_SEC", "FOLDRUN_COMPUTE_USD_PER_GIB_SEC", "FOLDRUN_CPU_USD_PER_BUSY_SEC"]) {
+      delete process.env[k];
+    }
+  }
+});
+
+test("steps recorded before reservations were facts bill at the flat rate", () => {
+  process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.01";
+  process.env.FOLDRUN_COMPUTE_USD_PER_CORE_SEC = "0.001";
+  try {
+    // Mixed run: one modern step (10 core·s) and one pre-reservation step
+    // (5 plain seconds). Each is priced by the meter that exists for it.
+    assert.equal(
+      priceRun({
+        tokenCostUsd: 0, steps: 2, computeSecs: 15,
+        compute: { coreSecs: 10, gibSecs: 0, busyCpuSecs: 0, flatSecs: 5 },
+      }),
+      0.06, // 10×0.001 + 5×0.01
+    );
   } finally {
     delete process.env.FOLDRUN_COMPUTE_USD_PER_SEC;
-    delete process.env.FOLDRUN_COMPUTE_USD_PER_SEC_SMALL;
+    delete process.env.FOLDRUN_COMPUTE_USD_PER_CORE_SEC;
   }
 });
