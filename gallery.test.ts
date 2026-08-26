@@ -11,6 +11,7 @@ import matter from "gray-matter";
 import { GALLERY, galleryTemplate, installGalleryTool } from "../packages/core/src/gallery.ts";
 import { readLibraryFile } from "../packages/core/src/library.ts";
 import { parseToolDef, readWorkspaceFile, saveWorkspace, workspaceTools } from "../packages/core/src/store.ts";
+import { toolStarter } from "../packages/core/src/kinds.ts";
 
 function withData(body: () => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-gallery-"));
@@ -125,4 +126,29 @@ test("a wrong-kind template is refused, and an unknown one too", () => {
   // returns null — which callers treat exactly like "no template chosen".
   assert.equal(galleryTemplate("scripts", "browser", "x"), null);
   assert.equal(galleryTemplate("tools", "nope", "x"), null);
+});
+
+// --------------------------------------------------- creating a new tool
+
+test("a new script tool starts as a folder holding its own code", () => {
+  const files = toolStarter("my-thing", "script");
+  assert.deepEqual(files.map((f) => f.file), [
+    "tools/my-thing/tool.md",
+    "tools/my-thing/run.mjs",
+  ]);
+  const def = parseToolDef(matter(files[0].content).data as Record<string, unknown>, "my-thing");
+  assert.equal(def!.kind, "script");
+  // Relative to the tool, naming no scope — which is what lets the folder be
+  // copied anywhere without an edit.
+  assert.equal((def!.spec as { run: string }).run, "run.mjs");
+});
+
+test("an API or MCP tool is still one flat file", () => {
+  for (const [transport, kind] of [["http", "http"], ["mcp", "mcp"]] as const) {
+    const files = toolStarter("my-thing", transport);
+    assert.equal(files.length, 1, `${transport} is one file`);
+    assert.equal(files[0].file, "tools/my-thing.md");
+    const def = parseToolDef(matter(files[0].content).data as Record<string, unknown>, "my-thing");
+    assert.equal(def!.kind, kind);
+  }
 });
