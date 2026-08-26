@@ -73,7 +73,7 @@ for (const name of templates) {
   // file as it was. A reader clones a bundle whose index disagrees with its
   // own contents, and nothing anywhere says so.
   test(`${name}: the committed indexes are current`, () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `mdagent-ex-${name}-`));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `foldrun-ex-${name}-`));
     try {
       fs.cpSync(root, tmp, { recursive: true });
       syncWorkspaceBundles(tmp);

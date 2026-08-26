@@ -17,9 +17,9 @@ import { libraryUsage, type LibraryUse } from "../packages/core/src/library.ts";
 
 /** Build a throwaway account on disk and point core at it for one callback. */
 function withAccount(files: Record<string, string>, run: () => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-usage-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-usage-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   try {
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(root, rel);
@@ -28,8 +28,8 @@ function withAccount(files: Record<string, string>, run: () => void) {
     }
     run();
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

@@ -17,13 +17,13 @@ import { ensureAccountFiles } from "../packages/core/src/store.ts";
 
 /**
  * A laptop-layout account: `library/` and AGENTS.md beside the workspace.
- * MDAGENT_WORKSPACE is what puts the runtime in single-workspace mode, where
+ * FOLDRUN_WORKSPACE is what puts the runtime in single-workspace mode, where
  * the account is the workspace's parent.
  */
 function withAccount(files: Record<string, string>, run: (agentDir: string) => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-shared-"));
-  const previous = process.env.MDAGENT_WORKSPACE;
-  process.env.MDAGENT_WORKSPACE = path.join(root, "desk");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-shared-"));
+  const previous = process.env.FOLDRUN_WORKSPACE;
+  process.env.FOLDRUN_WORKSPACE = path.join(root, "desk");
   try {
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(root, rel);
@@ -32,8 +32,8 @@ function withAccount(files: Record<string, string>, run: (agentDir: string) => v
     }
     run(path.join(root, "desk/agents/writer"));
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_WORKSPACE;
-    else process.env.MDAGENT_WORKSPACE = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_WORKSPACE;
+    else process.env.FOLDRUN_WORKSPACE = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

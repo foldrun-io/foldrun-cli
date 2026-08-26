@@ -30,7 +30,7 @@ import { conformanceIssues, syncIndex } from "../packages/core/src/okf.ts";
 const RESERVED = new Set(["index.md", "log.md"]);
 
 function withBundle(files: Record<string, string>, run: (dir: string) => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-okf-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-okf-"));
   try {
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(root, rel);
@@ -102,7 +102,7 @@ test("unknown keys, unknown types and broken links are not rejections", () => {
       "memory/odd.md": `---
 type: Something We Invented
 name: odd
-mdagent_only_key: true
+foldrun_only_key: true
 ---
 
 See [[nothing-here]].
@@ -142,7 +142,7 @@ test("a freshly scaffolded workspace is a valid bundle, not just valid files", a
     async (okf) => ({ ...okf, ...(await import("../packages/core/src/starter.ts")) }),
   );
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-scaffold-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-scaffold-"));
   try {
     for (const { path: rel, content } of starterFiles("demo")) {
       const file = path.join(root, rel);

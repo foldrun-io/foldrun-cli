@@ -21,11 +21,11 @@ async function withStubbedRun(
   steps: FlowStep[],
   body: (finished: NonNullable<ReturnType<typeof readRun>>) => void,
 ) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-patterns-"));
-  const prevData = process.env.MDAGENT_DATA;
-  const prevStub = process.env.MDAGENT_STUB_STEP;
-  process.env.MDAGENT_DATA = root;
-  process.env.MDAGENT_STUB_STEP = "1";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-patterns-"));
+  const prevData = process.env.FOLDRUN_DATA;
+  const prevStub = process.env.FOLDRUN_STUB_STEP;
+  process.env.FOLDRUN_DATA = root;
+  process.env.FOLDRUN_STUB_STEP = "1";
   try {
     const ws = path.join(root, "acme/workspaces/desk");
     fs.writeFileSync(path.join(root, "acme"), "", { flag: "wx" });
@@ -43,10 +43,10 @@ async function withStubbedRun(
     assert.ok(finished, "the run record survived");
     body(finished);
   } finally {
-    if (prevData === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = prevData;
-    if (prevStub === undefined) delete process.env.MDAGENT_STUB_STEP;
-    else process.env.MDAGENT_STUB_STEP = prevStub;
+    if (prevData === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = prevData;
+    if (prevStub === undefined) delete process.env.FOLDRUN_STUB_STEP;
+    else process.env.FOLDRUN_STUB_STEP = prevStub;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -180,7 +180,7 @@ test("loop: exhausting the budget without the marker fails the step, with the re
 // ---------------------------------------------------------------- consults
 
 test("gatherConsults reads personas and reports what does not exist", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-consult-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-consult-"));
   try {
     const ws = path.join(root, "desk");
     fs.mkdirSync(path.join(ws, "agents/researcher"), { recursive: true });
@@ -207,7 +207,7 @@ test("consult tools exist exactly when colleagues are declared", () => {
     () => {},
   );
   assert.ok(built.server);
-  assert.deepEqual(built.toolNames, ["mcp__mdagent_agents__consult_fact_checker"]);
+  assert.deepEqual(built.toolNames, ["mcp__foldrun_agents__consult_fact_checker"]);
   assert.equal(built.drainCost(), 0);
 });
 

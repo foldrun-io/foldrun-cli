@@ -12,14 +12,14 @@ import { readLibraryFile } from "../packages/core/src/library.ts";
 import { readWorkspaceFile, saveWorkspace } from "../packages/core/src/store.ts";
 
 function withData(body: () => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-gallery-"));
-  const prev = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-gallery-"));
+  const prev = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   try {
     body();
   } finally {
-    if (prev === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = prev;
+    if (prev === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = prev;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

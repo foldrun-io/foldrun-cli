@@ -22,9 +22,9 @@ import { readRun, writeRun, type RunRecord } from "../packages/core/src/store.ts
 
 /** A tenant/workspace on disk, and core pointed at it. */
 function withWorkspace(body: () => void | Promise<void>) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-queue-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-queue-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   try {
     const ws = path.join(root, "acme/workspaces/desk");
     fs.mkdirSync(path.join(ws, "agents/writer"), { recursive: true });
@@ -45,15 +45,15 @@ function withWorkspace(body: () => void | Promise<void>) {
 }
 
 function cleanup(root: string, previous: string | undefined) {
-  if (previous === undefined) delete process.env.MDAGENT_DATA;
-  else process.env.MDAGENT_DATA = previous;
+  if (previous === undefined) delete process.env.FOLDRUN_DATA;
+  else process.env.FOLDRUN_DATA = previous;
   fs.rmSync(root, { recursive: true, force: true });
 }
 
 const STEP = { agent: "writer", instruction: "draft it", group: 1, optional: false };
 
-const pendingDir = () => path.join(process.env.MDAGENT_DATA!, "queue/pending");
-const claimedDir = () => path.join(process.env.MDAGENT_DATA!, "queue/claimed");
+const pendingDir = () => path.join(process.env.FOLDRUN_DATA!, "queue/pending");
+const claimedDir = () => path.join(process.env.FOLDRUN_DATA!, "queue/claimed");
 const pendingJobs = () =>
   fs.existsSync(pendingDir()) ? fs.readdirSync(pendingDir()).filter((f) => f.endsWith(".json")) : [];
 

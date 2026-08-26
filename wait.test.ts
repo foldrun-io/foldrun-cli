@@ -17,11 +17,11 @@ import { waitForRun, runResult } from "../packages/core/src/runner.ts";
 const HOUR = 60 * 60 * 1000;
 
 function withRun(run: unknown, body: (ws: string) => Promise<void> | void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-wait-"));
-  const previous = process.env.MDAGENT_DATA;
-  const previousWs = process.env.MDAGENT_WORKSPACE;
-  process.env.MDAGENT_DATA = root;
-  delete process.env.MDAGENT_WORKSPACE;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-wait-"));
+  const previous = process.env.FOLDRUN_DATA;
+  const previousWs = process.env.FOLDRUN_WORKSPACE;
+  process.env.FOLDRUN_DATA = root;
+  delete process.env.FOLDRUN_WORKSPACE;
   const ws = path.join(root, "acme/workspaces/desk");
   fs.mkdirSync(path.join(ws, "runs"), { recursive: true });
   const write = (r: unknown) =>
@@ -31,9 +31,9 @@ function withRun(run: unknown, body: (ws: string) => Promise<void> | void) {
     );
   write(run);
   return Promise.resolve(body(ws)).finally(() => {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
-    if (previousWs !== undefined) process.env.MDAGENT_WORKSPACE = previousWs;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
+    if (previousWs !== undefined) process.env.FOLDRUN_WORKSPACE = previousWs;
     fs.rmSync(root, { recursive: true, force: true });
   });
 }

@@ -18,12 +18,12 @@ function withWorkspace(
   body: () => void | Promise<void>,
   accountAgentsMd?: string,
 ) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-notify-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-notify-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   const done = () => {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   };
   try {
@@ -113,7 +113,7 @@ test("a subscribed event POSTs the run, with secrets resolved into the URL", () 
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const port = (server.address() as { port: number }).port;
 
-    const ws = path.join(process.env.MDAGENT_DATA!, "acme/workspaces/desk");
+    const ws = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk");
     fs.writeFileSync(
       path.join(ws, "AGENTS.md"),
       `---\nnotify:\n  url: http://127.0.0.1:${port}/hook/\${HOOK_PATH}\n  events: [failed]\n---\n`,

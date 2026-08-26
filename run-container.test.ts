@@ -33,7 +33,7 @@ test("what the spec says agents own comes back; what they must not touch does no
 });
 
 test("apply copies allowed changes, skips denied ones, deletes nothing", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-apply-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-apply-"));
   try {
     const host = path.join(root, "host");
     const out = path.join(root, "out");

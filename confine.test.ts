@@ -217,7 +217,7 @@ test("bash may read a generated index but not rewrite it", () => {
 // the workspace — on every write, for a whole run, while the run still
 // reported success because the agent gave up politely.
 test("a workspace reached through a symlink is still its own workspace", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-link-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-link-"));
   try {
     const real = fs.realpathSync.native(root);
     const roots = {
@@ -250,7 +250,7 @@ test("a workspace reached through a symlink is still its own workspace", () => {
 // because as text it is. Containment is a question about paths, and only
 // path.relative answers it.
 test("a sibling directory is not inside the workspace", () => {
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-sib-")));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-sib-")));
   try {
     const inside = path.join(root, "workspaces/desk");
     const sibling = path.join(root, "workspaces/desk-attacker");

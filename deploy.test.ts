@@ -23,17 +23,17 @@ import {
 import type { DeployFile } from "../packages/core/src/store.ts";
 
 function withData(body: (root: string) => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-deploy-"));
-  const previous = process.env.MDAGENT_DATA;
-  const previousWs = process.env.MDAGENT_WORKSPACE;
-  process.env.MDAGENT_DATA = root;
-  delete process.env.MDAGENT_WORKSPACE;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-deploy-"));
+  const previous = process.env.FOLDRUN_DATA;
+  const previousWs = process.env.FOLDRUN_WORKSPACE;
+  process.env.FOLDRUN_DATA = root;
+  delete process.env.FOLDRUN_WORKSPACE;
   try {
     body(root);
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
-    if (previousWs !== undefined) process.env.MDAGENT_WORKSPACE = previousWs;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
+    if (previousWs !== undefined) process.env.FOLDRUN_WORKSPACE = previousWs;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -55,7 +55,7 @@ const workspace = (over: Record<string, string> = {}): DeployFile[] =>
 // workspace. Those are skipped, not rejected — refusing to deploy a repo
 // because it has a README would make the feature useless.
 test("reading a tree takes workspace files and ignores the rest of the repo", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-src-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-src-"));
   try {
     const write = (rel: string, body = "x\n") => {
       fs.mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
@@ -84,7 +84,7 @@ test("reading a tree takes workspace files and ignores the rest of the repo", ()
 // repo, so if someone commits their secrets despite the shipped .gitignore, a
 // deploy must not carry them into the platform's own secret store.
 test("secrets.json is never read out of a source tree", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-src-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-src-"));
   try {
     fs.writeFileSync(path.join(dir, "AGENTS.md"), "x\n");
     fs.writeFileSync(path.join(dir, "secrets.json"), '{"TOKEN":"hunter2"}');
@@ -131,7 +131,7 @@ test("a path escaping the workspace is rejected", () => {
 });
 
 // A memory file that would fail the OKF validator should not become live —
-// this is the same question `mdagent check` asks, asked earlier.
+// this is the same question `foldrun check` asks, asked earlier.
 test("a non-conformant memory file is rejected", () => {
   const issues = deployIssues(
     workspace({ "memory/a-fact.md": "no frontmatter at all, so no type\n" }),
@@ -165,7 +165,7 @@ test("a plan says what would change, without changing it", () => {
     assert.deepEqual(plan.updated, ["agents/writer/agent.md"]);
     assert.deepEqual(plan.removed, ["flows/publish.md"]);
     // and nothing happened
-    assert.ok(fs.existsSync(path.join(process.env.MDAGENT_DATA!, "acme/workspaces/desk/flows/publish.md")));
+    assert.ok(fs.existsSync(path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/flows/publish.md")));
   });
 });
 

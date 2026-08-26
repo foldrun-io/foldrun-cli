@@ -28,7 +28,7 @@ import {
 import { buildMemoryIndex } from "../packages/core/src/store.ts";
 
 function withBundle(files: Record<string, string>, run: (dir: string) => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-signals-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-signals-"));
   try {
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(root, rel);
@@ -46,7 +46,7 @@ const AGENT_WRITTEN = `---
 type: Fact
 title: Q3 revenue
 generated:
-  by: mdagent/0.1.0
+  by: foldrun/0.1.0
 ---
 
 Revenue was 4.2M.
@@ -70,7 +70,7 @@ const MACHINE_CONFIRMED = `---
 type: Fact
 title: Row count
 generated:
-  by: mdagent/0.1.0
+  by: foldrun/0.1.0
 verified:
   - by: process:checker
 ---
@@ -209,7 +209,7 @@ test("an undated verification still states the tier, without inventing a date", 
 test("`generated.at` is captured, and a v0.1 timestamp stands in for it", () => {
   withBundle(
     {
-      "memory/new.md": "---\ntype: Fact\ntitle: New\ngenerated: { by: mdagent/0.1.0, at: 2026-06-30T14:00:00Z }\n---\n\nx\n",
+      "memory/new.md": "---\ntype: Fact\ntitle: New\ngenerated: { by: foldrun/0.1.0, at: 2026-06-30T14:00:00Z }\n---\n\nx\n",
       "memory/old.md": "---\ntype: Fact\ntitle: Old\ntimestamp: 2026-01-02\n---\n\nx\n",
     },
     (root) => {
@@ -344,7 +344,7 @@ test("a bare verified mapping is treated as a one-element list", () => {
 // for nothing that any producer actually writes.
 test("every non-human actor form is recognised as machine-written", () => {
   for (const by of [
-    "mdagent/0.1.0", // what stampGenerated writes
+    "foldrun/0.1.0", // what stampGenerated writes
     "reference_agent/gemini-2.5-pro", // the spec's own example
     "process:finance-nightly", // §7's automated process
   ]) {

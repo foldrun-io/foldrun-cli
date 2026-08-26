@@ -16,15 +16,15 @@ import {
 } from "../packages/core/src/webhook.ts";
 
 function withWorkspace(body: () => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-hook-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-hook-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   try {
     fs.mkdirSync(path.join(root, "acme/workspaces/desk"), { recursive: true });
     body();
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -70,7 +70,7 @@ test("deliveries are recorded newest-first and bounded", () => {
     assert.equal(recent.length, 10);
     assert.equal(recent[0].runId, "run-1099", "newest first");
 
-    const file = path.join(process.env.MDAGENT_DATA!, "acme/workspaces/desk/hook-deliveries.jsonl");
+    const file = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/hook-deliveries.jsonl");
     const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
     assert.ok(lines.length <= 1001, `log stays bounded, got ${lines.length}`);
   });

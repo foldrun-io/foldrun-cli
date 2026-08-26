@@ -16,7 +16,7 @@
 // `npm test` (which skips anything named *e2e*):
 //
 //   npm run api            # everything except the model call
-//   MDAGENT_E2E=1 npm run api   # and the model call too
+//   FOLDRUN_E2E=1 npm run api   # and the model call too
 //
 // The last one spends money. Everything above it does not.
 
@@ -30,17 +30,17 @@ import crypto from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 const ROOT = path.join(import.meta.dirname, "..");
-const CLI = path.join(ROOT, "packages/cli/bin/mdagent.mjs");
+const CLI = path.join(ROOT, "packages/cli/bin/foldrun.mjs");
 
-const enabled = process.env.MDAGENT_API_E2E === "1";
-const opts = { skip: enabled ? false : "set MDAGENT_API_E2E=1 to run (starts a server)" };
+const enabled = process.env.FOLDRUN_API_E2E === "1";
+const opts = { skip: enabled ? false : "set FOLDRUN_API_E2E=1 to run (starts a server)" };
 // The one that costs money.
 const paid = {
   skip: !enabled
-    ? "set MDAGENT_API_E2E=1 to run"
-    : process.env.MDAGENT_E2E === "1"
+    ? "set FOLDRUN_API_E2E=1 to run"
+    : process.env.FOLDRUN_E2E === "1"
       ? false
-      : "set MDAGENT_E2E=1 as well to make a real model call",
+      : "set FOLDRUN_E2E=1 as well to make a real model call",
 };
 
 let server: ChildProcess | null = null;
@@ -93,11 +93,11 @@ const api = (p: string, init: RequestInit = {}) =>
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init.headers },
   });
 
-const mdagent = (...args: string[]) =>
+const foldrun = (...args: string[]) =>
   spawnSync(process.execPath, [CLI, ...args], {
     encoding: "utf8",
     cwd: ROOT,
-    env: { ...process.env, MDAGENT_TOKEN: token, MDAGENT_URL: base },
+    env: { ...process.env, FOLDRUN_TOKEN: token, FOLDRUN_URL: base },
   });
 
 before(async () => {
@@ -107,7 +107,7 @@ before(async () => {
     throw new Error("the dashboard is not built — run `cd web && npx next build` first");
   }
 
-  data = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-api-"));
+  data = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-api-"));
   source = path.join(data, "source");
   token = writeKey(path.join(data, "store"));
 
@@ -123,11 +123,11 @@ before(async () => {
     cwd: path.join(ROOT, "web"),
     env: {
       ...process.env,
-      MDAGENT_DATA: path.join(data, "store"),
+      FOLDRUN_DATA: path.join(data, "store"),
       // The scheduler would fire this workspace's flows underneath the tests.
-      MDAGENT_DISABLE_SCHEDULER: "1",
+      FOLDRUN_DISABLE_SCHEDULER: "1",
       // Explicitly NOT set: the point is to test the server refusing.
-      MDAGENT_DEV_NO_AUTH: "",
+      FOLDRUN_DEV_NO_AUTH: "",
       // A webhook secret we hold, so the Stripe test below can sign a
       // payment event the way Stripe would and watch it credit the ledger.
       STRIPE_WEBHOOK_SECRET: "whsec_e2e_testing",
@@ -202,7 +202,7 @@ test("a flow naming an agent the deploy does not ship is refused", opts, async (
 });
 
 test("a good deploy lands, and the workspace is really there", opts, async () => {
-  const out = mdagent("deploy", source, "--to", "hello");
+  const out = foldrun("deploy", source, "--to", "hello");
   assert.equal(out.status, 0, `deploy failed:\n${out.stdout}\n${out.stderr}`);
 
   const ws = path.join(data, "store/default/workspaces/hello");
@@ -232,7 +232,7 @@ test("a refused deploy exits non-zero", opts, () => {
     "---\nname: note\ntrigger: manual\n---\n\n1. [[ghost]] — vanish\n",
   );
 
-  const out = mdagent("deploy", broken, "--to", "hello");
+  const out = foldrun("deploy", broken, "--to", "hello");
   assert.equal(out.status, 1, "a broken workspace must fail the build");
   assert.match(out.stdout, /ghost/, "and say what was wrong");
 
@@ -327,7 +327,7 @@ test("the first signup is free, and signs you in", opts, async () => {
     body: JSON.stringify({ email: "founder@example.test", password: "hunter2hunter2", account: "acme-e2e" }),
   });
   assert.equal(res.status, 200, await res.text());
-  const set = res.headers.getSetCookie().find((c) => c.startsWith("mdagent_session="));
+  const set = res.headers.getSetCookie().find((c) => c.startsWith("foldrun_session="));
   assert.ok(set, "signup must set the session cookie");
   cookie = set!.split(";")[0];
 });

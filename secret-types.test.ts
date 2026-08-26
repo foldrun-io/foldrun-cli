@@ -26,12 +26,12 @@ import { setOAuth2Secret } from "../packages/core/src/secrets.ts";
 import { materializeFileSecrets, cleanupFileSecrets } from "../packages/core/src/secret-files.ts";
 
 function withVault(body: () => void | Promise<void>) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-types-"));
-  const prev = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-types-"));
+  const prev = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   const done = () => {
-    if (prev === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = prev;
+    if (prev === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = prev;
     fs.rmSync(root, { recursive: true, force: true });
   };
   try {

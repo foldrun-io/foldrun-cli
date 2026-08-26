@@ -17,7 +17,7 @@ import path from "node:path";
 import { copyTreeBytes } from "../packages/core/src/runner.ts";
 
 function withTmp(body: (dir: string) => void) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-archive-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-archive-"));
   try {
     body(dir);
   } finally {

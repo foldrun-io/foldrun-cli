@@ -20,9 +20,9 @@ const HOUR = 60 * 60 * 1000;
 
 /** A workspace with one run on disk, and core pointed at it. */
 function withRun(run: unknown, body: (now: number) => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-reconcile-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-reconcile-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   try {
     const ws = path.join(root, "acme/workspaces/desk");
     fs.mkdirSync(path.join(ws, "runs"), { recursive: true });
@@ -33,14 +33,14 @@ function withRun(run: unknown, body: (now: number) => void) {
     );
     body(Date.now());
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
 const read = (id: string) => {
-  const f = path.join(process.env.MDAGENT_DATA!, "acme/workspaces/desk/runs", `${id}.json`);
+  const f = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/runs", `${id}.json`);
   return JSON.parse(fs.readFileSync(f, "utf8"));
 };
 
@@ -174,9 +174,9 @@ test("finished runs are never touched", () => {
 // on disk forever — the exact false state the whole mechanism exists to
 // prevent, restored for everyone but the first customer.
 test("every account is reconciled, not just one", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-tenants-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-tenants-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   const started = Date.now() - 3 * HOUR;
   try {
     for (const tenant of ["acme", "globex"]) {
@@ -209,8 +209,8 @@ test("every account is reconciled, not just one", () => {
       assert.equal(JSON.parse(fs.readFileSync(f, "utf8")).status, "failed");
     }
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -220,9 +220,9 @@ test("every account is reconciled, not just one", () => {
 // cache directory, and `assertSafeName` would throw on the dot before it got
 // anywhere useful.
 test("only directories that hold workspaces count as accounts", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-tenants-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-tenants-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   try {
     fs.mkdirSync(path.join(root, "acme/workspaces/desk"), { recursive: true });
     fs.mkdirSync(path.join(root, "legacy/projects/desk"), { recursive: true }); // pre-rename
@@ -232,8 +232,8 @@ test("only directories that hold workspaces count as accounts", () => {
 
     assert.deepEqual(listTenants(), ["acme", "legacy"]);
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -244,9 +244,9 @@ test("only directories that hold workspaces count as accounts", () => {
 // the step stopped emitting, the process carried on serving pages, and nothing
 // was ever going to close it. So the scheduler sweeps too.
 test("the scheduler closes abandoned runs without a restart", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-sweep-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-sweep-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   const started = Date.now() - 3 * HOUR;
   try {
     const ws = path.join(root, "acme/workspaces/desk");
@@ -275,8 +275,8 @@ test("the scheduler closes abandoned runs without a restart", async () => {
     for (let i = 1; i < RECONCILE_EVERY; i++) tick(new Date());
     assert.equal(status(), "failed", "the sweep never fired");
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -291,9 +291,9 @@ test("the scheduler closes abandoned runs without a restart", async () => {
 // is deliberately exempt from being closed, so nothing rescued it either.
 // Observed live: a run stuck four minutes after a person clicked Approve.
 test("a run whose approval was granted, then abandoned, is picked back up", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-resume-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-resume-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   const started = Date.now() - 3 * HOUR;
   try {
     const ws = path.join(root, "acme/workspaces/desk");
@@ -339,8 +339,8 @@ test("a run whose approval was granted, then abandoned, is picked back up", asyn
     );
     assert.equal(run.steps[0].status, "completed", "finished work must survive a resume");
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

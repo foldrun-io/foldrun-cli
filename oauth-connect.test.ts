@@ -14,12 +14,12 @@ import { startOAuthConnect, completeOAuthConnect } from "../packages/core/src/oa
 import { listSecrets, resolveSecrets } from "../packages/core/src/secrets.ts";
 
 function withVault(body: () => void | Promise<void>) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-connect-"));
-  const previous = process.env.MDAGENT_DATA;
-  process.env.MDAGENT_DATA = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-connect-"));
+  const previous = process.env.FOLDRUN_DATA;
+  process.env.FOLDRUN_DATA = root;
   const done = () => {
-    if (previous === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previous;
     fs.rmSync(root, { recursive: true, force: true });
   };
   try {

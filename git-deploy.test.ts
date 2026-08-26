@@ -19,7 +19,7 @@ import { verifySignature, parsePush, gitSecret, fetchTarball } from "../packages
 
 /** A real tarball, rooted at one directory the way GitHub's are. */
 function tarball(files: Record<string, string>, root = "owner-repo-9f2c1ab"): Buffer {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-tar-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-tar-"));
   try {
     for (const [rel, body] of Object.entries(files)) {
       const abs = path.join(dir, root, rel);
@@ -86,7 +86,7 @@ test("a workspace inside a larger repo can be picked out", () => {
 // A tarball is untrusted input from whoever controls the repository, and `../`
 // in an archive is the oldest way to write outside the destination.
 test("an entry that climbs out of the archive is dropped", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-evil-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-evil-"));
   try {
     // Built by hand: `tar` refuses to create this, which is the point.
     const header = Buffer.alloc(512);
@@ -191,11 +191,11 @@ test("a repo or commit that could rewrite the URL is refused", async () => {
 // which is where a format mismatch would actually bite.
 test("a tarball becomes a deployed workspace", async () => {
   const { deployWorkspace, deployedCommit } = await import("../packages/core/src/deploy.ts");
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-push-"));
-  const previousData = process.env.MDAGENT_DATA;
-  const previousWs = process.env.MDAGENT_WORKSPACE;
-  process.env.MDAGENT_DATA = root;
-  delete process.env.MDAGENT_WORKSPACE;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-push-"));
+  const previousData = process.env.FOLDRUN_DATA;
+  const previousWs = process.env.FOLDRUN_WORKSPACE;
+  process.env.FOLDRUN_DATA = root;
+  delete process.env.FOLDRUN_WORKSPACE;
   try {
     const gz = tarball({
       "README.md": "not part of the workspace\n",
@@ -223,9 +223,9 @@ test("a tarball becomes a deployed workspace", async () => {
       "a deployed bundle should be conformant on arrival",
     );
   } finally {
-    if (previousData === undefined) delete process.env.MDAGENT_DATA;
-    else process.env.MDAGENT_DATA = previousData;
-    if (previousWs !== undefined) process.env.MDAGENT_WORKSPACE = previousWs;
+    if (previousData === undefined) delete process.env.FOLDRUN_DATA;
+    else process.env.FOLDRUN_DATA = previousData;
+    if (previousWs !== undefined) process.env.FOLDRUN_WORKSPACE = previousWs;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -5,7 +5,7 @@
 //
 // Opt-in, run where kubectl reaches a cluster that has the runner image:
 //
-//   MDAGENT_K8S_E2E=1 MDAGENT_RUNNER_IMAGE=mdagent-runner:<tag> \
+//   FOLDRUN_K8S_E2E=1 FOLDRUN_RUNNER_IMAGE=foldrun-runner:<tag> \
 //     node --test tests/k8s-e2e.test.ts
 
 import { test } from "node:test";
@@ -16,17 +16,17 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { runStepInK8s } from "../packages/core/src/run-k8s.ts";
 
-const enabled = process.env.MDAGENT_K8S_E2E === "1";
+const enabled = process.env.FOLDRUN_K8S_E2E === "1";
 const opts = {
   skip: enabled
-    ? process.env.MDAGENT_RUNNER_IMAGE
+    ? process.env.FOLDRUN_RUNNER_IMAGE
       ? false
-      : "set MDAGENT_RUNNER_IMAGE to an image the cluster holds"
-    : "set MDAGENT_K8S_E2E=1 to run (needs kubectl + a cluster)",
+      : "set FOLDRUN_RUNNER_IMAGE to an image the cluster holds"
+    : "set FOLDRUN_K8S_E2E=1 to run (needs kubectl + a cluster)",
 };
 
 test("a step runs as a pod, and the pod is gone afterwards", opts, async () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-k8s-e2e-"));
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-k8s-e2e-"));
   fs.mkdirSync(path.join(ws, "agents/writer"), { recursive: true });
   fs.writeFileSync(path.join(ws, "AGENTS.md"), "---\nname: desk\n---\n");
   fs.writeFileSync(
@@ -53,7 +53,7 @@ test("a step runs as a pod, and the pod is gone afterwards", opts, async () => {
         consults: [],
         timeoutSec: 180,
       },
-      env: { MDAGENT_E2E_MARKER: "it's got 'quotes' to survive" },
+      env: { FOLDRUN_E2E_MARKER: "it's got 'quotes' to survive" },
       emit: (type, text) => events.push({ type, text }),
     });
 
@@ -62,8 +62,8 @@ test("a step runs as a pod, and the pod is gone afterwards", opts, async () => {
     assert.ok(events.length > 0, "the failure arrived as streamed events");
 
     // Nothing left behind.
-    const ns = process.env.MDAGENT_K8S_NAMESPACE ?? "mdagent-runs";
-    const pods = spawnSync("kubectl", ["get", "pods", "-n", ns, "-l", "app=mdagent-run", "--no-headers"], {
+    const ns = process.env.FOLDRUN_K8S_NAMESPACE ?? "foldrun-runs";
+    const pods = spawnSync("kubectl", ["get", "pods", "-n", ns, "-l", "app=foldrun-run", "--no-headers"], {
       encoding: "utf8",
     });
     const lingering = (pods.stdout ?? "")

@@ -21,8 +21,8 @@ import {
   runStepInContainer,
 } from "../packages/core/src/run-container.ts";
 
-const enabled = process.env.MDAGENT_CONTAINER_E2E === "1";
-const opts = { skip: enabled ? false : "set MDAGENT_CONTAINER_E2E=1 to run (needs Docker)" };
+const enabled = process.env.FOLDRUN_CONTAINER_E2E === "1";
+const opts = { skip: enabled ? false : "set FOLDRUN_CONTAINER_E2E=1 to run (needs Docker)" };
 // Either credential the SDK accepts via env works inside the container —
 // an API key, or a Claude subscription OAuth token (what CI uses).
 const modelCreds: Record<string, string> = process.env.ANTHROPIC_API_KEY
@@ -32,14 +32,14 @@ const modelCreds: Record<string, string> = process.env.ANTHROPIC_API_KEY
     : {};
 const paid = {
   skip: !enabled
-    ? "set MDAGENT_CONTAINER_E2E=1 to run"
+    ? "set FOLDRUN_CONTAINER_E2E=1 to run"
     : Object.keys(modelCreds).length
       ? false
       : "set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN as well to make a real model call from inside the container",
 };
 
 function stageWorkspace(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-ce2e-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-ce2e-"));
   fs.mkdirSync(path.join(root, "agents/writer"), { recursive: true });
   fs.mkdirSync(path.join(root, "knowledge"), { recursive: true });
   fs.writeFileSync(path.join(root, "AGENTS.md"), "---\nname: desk\n---\n");
@@ -69,7 +69,7 @@ const baseInput = {
 
 test("the image builds and the driver answers the protocol, even with no credentials", opts, async () => {
   const { tag } = ensureRunnerImage();
-  assert.match(tag, /^mdagent-runner:/);
+  assert.match(tag, /^foldrun-runner:/);
 
   const ws = stageWorkspace();
   const events: { type: string; text: string }[] = [];

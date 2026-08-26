@@ -14,7 +14,7 @@
 // This test is those readings, written down. It costs money and depends on a
 // model, so it is opt-in and skipped by default:
 //
-//   MDAGENT_E2E=1 node --test tests/e2e.test.ts
+//   FOLDRUN_E2E=1 node --test tests/e2e.test.ts
 //
 // Credentials come from ANTHROPIC_API_KEY or an existing Claude Code login —
 // the Agent SDK spawns the Claude Code executable, so a local subscription is
@@ -30,22 +30,22 @@ import matter from "gray-matter";
 import { conformanceIssues, readBundle, provenanceMarks, PRODUCER } from "../packages/core/src/okf.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
-const CLI = path.join(ROOT, "packages/cli/bin/mdagent.mjs");
+const CLI = path.join(ROOT, "packages/cli/bin/foldrun.mjs");
 
 // Opt-in: `npm test` must stay free and offline.
-const enabled = process.env.MDAGENT_E2E === "1";
-const opts = { skip: enabled ? false : "set MDAGENT_E2E=1 to run (spends money)" };
+const enabled = process.env.FOLDRUN_E2E === "1";
+const opts = { skip: enabled ? false : "set FOLDRUN_E2E=1 to run (spends money)" };
 
-const mdagent = (...args: string[]) =>
+const foldrun = (...args: string[]) =>
   spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", cwd: ROOT });
 
 test("a template runs, and leaves a conformant workspace behind", opts, () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-e2e-"));
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-e2e-"));
   try {
-    const created = mdagent("init", ws, "--from", "templates/hello");
+    const created = foldrun("init", ws, "--from", "templates/hello");
     assert.equal(created.status, 0, `init failed:\n${created.stderr}`);
 
-    const run = mdagent("run", "note", "--workspace", ws);
+    const run = foldrun("run", "note", "--workspace", ws);
     assert.equal(run.status, 0, `run failed:\n${run.stdout}\n${run.stderr}`);
     assert.match(run.stdout, /completed/, "the flow did not report completion");
 
@@ -116,7 +116,7 @@ test("a template runs, and leaves a conformant workspace behind", opts, () => {
 
     // And the workspace it left behind still passes its own checker — a run
     // may add files, never break the thing that validates them.
-    const check = mdagent("check", ws);
+    const check = foldrun("check", ws);
     assert.equal(check.status, 0, `check failed after the run:\n${check.stdout}`);
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });

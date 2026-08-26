@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { runPodManifest, envFileShell } from "../packages/core/src/run-k8s.ts";
 
 test("the pod carries the same hardening as the docker flags", () => {
-  const pod = runPodManifest("mdagent-run-x", "mdagent-runner:abc") as {
+  const pod = runPodManifest("foldrun-run-x", "foldrun-runner:abc") as {
     metadata: { labels: Record<string, string>; namespace: string };
     spec: {
       restartPolicy: string;
@@ -23,7 +23,7 @@ test("the pod carries the same hardening as the docker flags", () => {
     };
   };
   assert.equal(pod.spec.restartPolicy, "Never");
-  assert.equal(pod.metadata.labels.app, "mdagent-run", "the NetworkPolicy selector");
+  assert.equal(pod.metadata.labels.app, "foldrun-run", "the NetworkPolicy selector");
   const sc = pod.spec.containers[0].securityContext;
   assert.deepEqual(sc.capabilities.drop, ["ALL"]);
   // DAC_OVERRIDE and FOWNER are the extras over the docker flags — kubectl cp execs
@@ -33,14 +33,14 @@ test("the pod carries the same hardening as the docker flags", () => {
 });
 
 test("a RuntimeClass rides in from the same env var docker uses", () => {
-  const previous = process.env.MDAGENT_RUNNER_RUNTIME;
-  process.env.MDAGENT_RUNNER_RUNTIME = "gvisor";
+  const previous = process.env.FOLDRUN_RUNNER_RUNTIME;
+  process.env.FOLDRUN_RUNNER_RUNTIME = "gvisor";
   try {
     const pod = runPodManifest("x", "img") as { spec: { runtimeClassName?: string } };
     assert.equal(pod.spec.runtimeClassName, "gvisor");
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_RUNNER_RUNTIME;
-    else process.env.MDAGENT_RUNNER_RUNTIME = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_RUNNER_RUNTIME;
+    else process.env.FOLDRUN_RUNNER_RUNTIME = previous;
   }
 });
 

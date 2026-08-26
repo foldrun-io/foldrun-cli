@@ -35,15 +35,15 @@ const TENANT = "default";
 const WS = "demo";
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-files-"));
-  process.env.MDAGENT_DATA = root;
-  delete process.env.MDAGENT_FILES_DRIVER;
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-files-"));
+  process.env.FOLDRUN_DATA = root;
+  delete process.env.FOLDRUN_FILES_DRIVER;
   fs.mkdirSync(path.join(workspaceDir(TENANT, WS), "agents"), { recursive: true });
 });
 
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
-  delete process.env.MDAGENT_DATA;
+  delete process.env.FOLDRUN_DATA;
 });
 
 // ---------- paths ----------
@@ -105,22 +105,22 @@ test("re-writing a name replaces the record and keeps one entry", async () => {
 });
 
 test("the per-object limit is enforced", async () => {
-  process.env.MDAGENT_FILES_MAX_MB = "0.001"; // 1 KB
+  process.env.FOLDRUN_FILES_MAX_MB = "0.001"; // 1 KB
   await assert.rejects(
     putFile(TENANT, WS, "big.bin", Buffer.alloc(4096), "user:me"),
     /the limit is/,
   );
-  delete process.env.MDAGENT_FILES_MAX_MB;
+  delete process.env.FOLDRUN_FILES_MAX_MB;
 });
 
 test("the workspace quota is enforced", async () => {
-  process.env.MDAGENT_FILES_QUOTA_MB = "0.001"; // 1 KB
+  process.env.FOLDRUN_FILES_QUOTA_MB = "0.001"; // 1 KB
   await putFile(TENANT, WS, "a.bin", Buffer.alloc(600), "user:me");
   await assert.rejects(
     putFile(TENANT, WS, "b.bin", Buffer.alloc(600), "user:me"),
     /quota exceeded/,
   );
-  delete process.env.MDAGENT_FILES_QUOTA_MB;
+  delete process.env.FOLDRUN_FILES_QUOTA_MB;
 });
 
 // ---------- the run mirror ----------
@@ -249,11 +249,11 @@ test("SigV4 matches AWS's published test vector", () => {
 });
 
 test("a presigned GET is signed as an attachment, and expires", async () => {
-  process.env.MDAGENT_FILES_DRIVER = "s3";
-  process.env.MDAGENT_S3_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
-  process.env.MDAGENT_S3_BUCKET = "mdagent-files";
-  process.env.MDAGENT_S3_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE";
-  process.env.MDAGENT_S3_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+  process.env.FOLDRUN_FILES_DRIVER = "s3";
+  process.env.FOLDRUN_S3_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
+  process.env.FOLDRUN_S3_BUCKET = "foldrun-files";
+  process.env.FOLDRUN_S3_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE";
+  process.env.FOLDRUN_S3_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
   try {
     const { downloadUrl } = await import("../packages/core/src/files.ts");
     const url = (await downloadUrl(TENANT, WS, {
@@ -267,7 +267,7 @@ test("a presigned GET is signed as an attachment, and expires", async () => {
 
     const parsed = new URL(url);
     assert.equal(parsed.host, "acct.r2.cloudflarestorage.com");
-    assert.equal(parsed.pathname, `/mdagent-files/t/${TENANT}/w/${WS}/blobs/${"a".repeat(64)}`);
+    assert.equal(parsed.pathname, `/foldrun-files/t/${TENANT}/w/${WS}/blobs/${"a".repeat(64)}`);
     // The one that matters: an agent-written .html can never render as a page.
     assert.match(
       parsed.searchParams.get("response-content-disposition") ?? "",
@@ -278,25 +278,25 @@ test("a presigned GET is signed as an attachment, and expires", async () => {
     assert.equal(parsed.searchParams.get("X-Amz-SignedHeaders"), "host");
   } finally {
     for (const k of [
-      "MDAGENT_FILES_DRIVER",
-      "MDAGENT_S3_ENDPOINT",
-      "MDAGENT_S3_BUCKET",
-      "MDAGENT_S3_ACCESS_KEY_ID",
-      "MDAGENT_S3_SECRET_ACCESS_KEY",
+      "FOLDRUN_FILES_DRIVER",
+      "FOLDRUN_S3_ENDPOINT",
+      "FOLDRUN_S3_BUCKET",
+      "FOLDRUN_S3_ACCESS_KEY_ID",
+      "FOLDRUN_S3_SECRET_ACCESS_KEY",
     ]) delete process.env[k];
   }
 });
 
 test("a half-configured bucket falls back rather than failing every upload", async () => {
-  process.env.MDAGENT_FILES_DRIVER = "s3";
-  process.env.MDAGENT_S3_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
+  process.env.FOLDRUN_FILES_DRIVER = "s3";
+  process.env.FOLDRUN_S3_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
   // No bucket, no credentials.
   try {
     const rec = await putFile(TENANT, WS, "still-works.txt", Buffer.from("hi"), "user:me");
     assert.ok(fs.existsSync(blobPath(TENANT, WS, rec.sha)));
   } finally {
-    delete process.env.MDAGENT_FILES_DRIVER;
-    delete process.env.MDAGENT_S3_ENDPOINT;
+    delete process.env.FOLDRUN_FILES_DRIVER;
+    delete process.env.FOLDRUN_S3_ENDPOINT;
   }
 });
 

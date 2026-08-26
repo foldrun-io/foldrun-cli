@@ -22,14 +22,14 @@ import { listWorkspaceFiles, writeWorkspaceFile } from "../packages/core/src/sto
 import { starterFiles } from "../packages/core/src/starter.ts";
 
 function withWorkspace(run: (root: string) => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mdagent-state-"));
-  const previous = process.env.MDAGENT_WORKSPACE;
-  process.env.MDAGENT_WORKSPACE = root;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-state-"));
+  const previous = process.env.FOLDRUN_WORKSPACE;
+  process.env.FOLDRUN_WORKSPACE = root;
   try {
     run(root);
   } finally {
-    if (previous === undefined) delete process.env.MDAGENT_WORKSPACE;
-    else process.env.MDAGENT_WORKSPACE = previous;
+    if (previous === undefined) delete process.env.FOLDRUN_WORKSPACE;
+    else process.env.FOLDRUN_WORKSPACE = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -75,20 +75,20 @@ test("the runtime names state/ to the agent, with a reachable path", () => {
 
 // A workspace is meant to be a git repository — that is the pitch. So the one
 // file in it that must never be committed has to be ignored from the moment it
-// is created: `mdagent init` writes the workspace, and the CLI later writes the
-// key that decrypts every secret in it to `.mdagent/.secret-key`, inside that
+// is created: `foldrun init` writes the workspace, and the CLI later writes the
+// key that decrypts every secret in it to `.foldrun/.secret-key`, inside that
 // same directory. Without a shipped .gitignore the first `git add -A` after
 // setting a secret commits the key.
 test("a new workspace ignores its own secret key and run store", () => {
   const ignore = starterFiles("desk").find((f) => f.path === ".gitignore");
-  assert.ok(ignore, "mdagent init must write a .gitignore");
+  assert.ok(ignore, "foldrun init must write a .gitignore");
 
   const rules = ignore.content
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"));
 
-  for (const required of [".mdagent/", "runs/", "outputs/"]) {
+  for (const required of [".foldrun/", "runs/", "outputs/"]) {
     assert.ok(rules.includes(required), `.gitignore must cover ${required}`);
   }
 });
@@ -96,18 +96,18 @@ test("a new workspace ignores its own secret key and run store", () => {
 // The path the rule has to match, asserted against the code that builds it
 // rather than against a copy of it — the ignore rule and the key's location
 // are two statements about one path, and only one of them is enforceable.
-test("the secret key really does live under .mdagent/", () => {
+test("the secret key really does live under .foldrun/", () => {
   const cli = fs.readFileSync(
-    path.join(import.meta.dirname, "..", "packages/cli/bin/mdagent.mjs"),
+    path.join(import.meta.dirname, "..", "packages/cli/bin/foldrun.mjs"),
     "utf8",
   );
   // The guarantee, not the wording: when a workspace keeps its own store, that
-  // store is `.mdagent/` inside it — which is what the shipped .gitignore
+  // store is `.foldrun/` inside it — which is what the shipped .gitignore
   // covers. The CLI may pick a different root for a workspace that belongs to
   // an installation; that one lives under data/ and is ignored already.
   assert.match(
     cli,
-    /path\.join\(workspace, "\.mdagent"\)/,
+    /path\.join\(workspace, "\.foldrun"\)/,
     "a self-contained workspace must keep its store where the shipped .gitignore looks",
   );
 });

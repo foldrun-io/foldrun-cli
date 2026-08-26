@@ -214,7 +214,7 @@ test("KINDS only claims a noun where OKF asks for one", () => {
 test("there is exactly one way to create something", () => {
   // Creation drifted into four components — and the workspace one built the
   // file's *content* in the browser, so a skill made by the dashboard and a
-  // skill made by `mdagent init` were different files. Everything that makes
+  // skill made by `foldrun init` were different files. Everything that makes
   // a thing must go through CreateForm.
   const offenders: string[] = [];
 
@@ -262,7 +262,7 @@ test("no server component passes a function as a prop", () => {
 });
 
 test("the starter workspace is defined once", () => {
-  // `mdagent init` and the dashboard's "+ New workspace" each had their own
+  // `foldrun init` and the dashboard's "+ New workspace" each had their own
   // copy. They drifted to different flow names and different file sets, and
   // when structural documents moved to `kind:` only one copy was migrated —
   // so every workspace made from the dashboard was born in the old format.
@@ -288,7 +288,7 @@ test("both callers scaffold the same workspace, minus what only a laptop keeps",
   // The hosted scaffold is the starter with local-disk concerns removed:
   // .gitignore guards a clone's secrets, and the hosted store never keeps
   // secrets in the tree. Everything else must stay byte-identical, or the
-  // dashboard's New button and `mdagent init` drift apart again.
+  // dashboard's New button and `foldrun init` drift apart again.
   const starter = starterFiles("demo");
   const hosted = templateFiles("demo");
   const localOnly = starter.filter((f) => !hosted.some((h) => h.path === f.path));
