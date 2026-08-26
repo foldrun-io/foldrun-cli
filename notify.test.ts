@@ -137,3 +137,24 @@ test("a dead receiver is logged, never thrown", () =>
   withWorkspace('---\nnotify:\n  url: http://127.0.0.1:1/hook\n  events: [failed]\n---\n', async () => {
     assert.equal(await sendRunNotification("acme", "desk", run("failed")), false);
   }));
+
+test("notify: email is a destination like a URL is", () =>
+  withWorkspace(
+    "---\nname: desk\nnotify:\n  email: ops@example.com\n  events: [failed, completed]\n---\n",
+    () => {
+      const c = notifyConfig("acme", "desk")!;
+      assert.equal(c.email, "ops@example.com");
+      assert.equal(c.url, undefined);
+      assert.deepEqual(c.events, ["failed", "completed"]);
+    },
+  ));
+
+test("a bare string destination is read as what it looks like", () =>
+  withWorkspace("---\nname: desk\nnotify: ops@example.com\n---\n", () => {
+    assert.equal(notifyConfig("acme", "desk")!.email, "ops@example.com");
+  }));
+
+test("a bare URL string stays a webhook", () =>
+  withWorkspace("---\nname: desk\nnotify: https://ntfy.sh/topic\n---\n", () => {
+    assert.equal(notifyConfig("acme", "desk")!.url, "https://ntfy.sh/topic");
+  }));
