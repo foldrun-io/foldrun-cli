@@ -15,6 +15,7 @@ import {
   assertFunds,
   priceRun,
   ledgerSummary,
+  noteRunDeleted,
 } from "../packages/core/src/ledger.ts";
 
 function withAccount(body: () => void) {
@@ -295,5 +296,33 @@ test("without an exposure ceiling the gate keeps its old shape: positive admits"
     process.env.FOLDRUN_BILLING = "1";
     recordTopUp("acme", 0.01);
     assertFunds("acme", 50); // in-flight count is ignored when no ceiling is set
+  });
+});
+
+// ------------------------------------------------------ deletion and money
+
+test("deleting a charged run explains itself in the ledger and moves nothing", () => {
+  withAccount(() => {
+    recordTopUp("acme", 10);
+    recordRunCost("acme", "desk", "run-a", 2);
+    const before = creditBalance("acme");
+
+    noteRunDeleted("acme", "desk", "run-a");
+    const entries = readLedger("acme");
+    const note = entries[entries.length - 1];
+    assert.equal(note.kind, "adjustment");
+    assert.equal(note.usd, 0);
+    assert.equal(note.runId, "run-a");
+    assert.match(note.note!, /charge stands/);
+    // The story is completed; the money is untouched.
+    assert.equal(creditBalance("acme"), before);
+  });
+});
+
+test("deleting an unbilled run leaves no ledger residue", () => {
+  withAccount(() => {
+    recordTopUp("acme", 10);
+    noteRunDeleted("acme", "desk", "run-never-billed");
+    assert.equal(readLedger("acme").length, 1); // just the top-up
   });
 });
