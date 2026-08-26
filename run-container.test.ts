@@ -72,7 +72,7 @@ test("driver lines: events and the done marker parse, noise does not", () => {
     text: "hi",
   });
   const done = parseDriverLine('{"e":"done","status":"completed","result":"out","costUsd":0.01}');
-  assert.deepEqual(done, { e: "done", status: "completed", result: "out", costUsd: 0.01, usage: null });
+  assert.deepEqual(done, { e: "done", status: "completed", result: "out", costUsd: 0.01, usage: null, res: null });
   // Token counts survive the boundary when the driver sends them — they are
   // what lets the host reprice a routed model from the gateway's catalogue.
   const withUsage = parseDriverLine(
@@ -88,4 +88,19 @@ test("driver lines: events and the done marker parse, noise does not", () => {
   assert.equal(parseDriverLine('{broken'), null);
   const junkStatus = parseDriverLine('{"e":"done","status":"nonsense"}');
   assert.equal(junkStatus && "status" in junkStatus ? junkStatus.status : null, "failed");
+});
+
+test("the driver's resource reading survives the boundary, nulls intact", () => {
+  const done = parseDriverLine(
+    '{"e":"done","status":"completed","result":"out","costUsd":0.01,' +
+      '"res":{"busyCpuSecs":12.5,"peakMemBytes":1073741824,"rxBytes":180000000,"txBytes":null}}',
+  );
+  assert.deepEqual((done as { res?: unknown }).res, {
+    busyCpuSecs: 12.5,
+    peakMemBytes: 1073741824,
+    rxBytes: 180000000,
+    // A metric the sandbox couldn't read stays null — never zero, which
+    // would claim "measured: nothing" where the truth is "not measured".
+    txBytes: null,
+  });
 });
