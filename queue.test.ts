@@ -20,7 +20,7 @@ import {
   stopRun,
 } from "../packages/core/src/queue.ts";
 import { driveRun } from "../packages/core/src/runner.ts";
-import { deleteRun, readRun, writeRun, runMeter, type RunRecord } from "../packages/core/src/store.ts";
+import { deleteRun, readRun, writeRun, runDisplayStatus, runMeter, type RunRecord } from "../packages/core/src/store.ts";
 
 /** A tenant/workspace on disk, and core pointed at it. */
 function withWorkspace(body: () => void | Promise<void>) {
@@ -427,4 +427,14 @@ test("deleting a run erases its record and its archived outputs", () =>
     assert.equal(fs.existsSync(archive), false);
     // Deleting what is already gone is not an error worth throwing over.
     assert.equal(deleteRun("acme", "desk", run.id), false);
+  }));
+
+test("a stopped run displays as stopped, a broken one as failed", () =>
+  withWorkspace(() => {
+    const base = {
+      id: "run-x", flow: "f", startedAt: "2026-08-26T00:00:00.000Z", finishedAt: null, steps: [],
+    };
+    assert.equal(runDisplayStatus({ ...base, status: "failed", stopRequested: true } as RunRecord), "stopped");
+    assert.equal(runDisplayStatus({ ...base, status: "failed" } as RunRecord), "failed");
+    assert.equal(runDisplayStatus({ ...base, status: "completed", stopRequested: true } as RunRecord), "completed");
   }));
