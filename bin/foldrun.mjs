@@ -1,20 +1,20 @@
 #!/usr/bin/env node
-// mdagent — the open-source CLI.
+// foldrun — the open-source CLI.
 //
 // Local-first by design: every command here works on a plain folder with no
 // account, no server and no network beyond the model call itself. That is the
 // point. A framework whose free version is a crippled demo gets no adoption,
 // and adoption is the only reason a hosted version has customers.
 //
-//   mdagent init  [dir]     scaffold a working workspace
-//   mdagent check [dir]     validate it — no model calls, no cost
-//   mdagent run   <target>  run an agent or a flow
-//   mdagent eval  [name]    run evals
-//   mdagent probe <model>   can this model hold a tool loop? (live check)
-//   mdagent logs  [run-id]  recent runs, or one run's full event trail
-//   mdagent secrets <verb>  set / ls / rm — the vault, from the terminal
-//   mdagent deploy [dir]    push a workspace into an installation
-//   mdagent invoke <flow>   start a flow on a running platform
+//   foldrun init  [dir]     scaffold a working workspace
+//   foldrun check [dir]     validate it — no model calls, no cost
+//   foldrun run   <target>  run an agent or a flow
+//   foldrun eval  [name]    run evals
+//   foldrun probe <model>   can this model hold a tool loop? (live check)
+//   foldrun logs  [run-id]  recent runs, or one run's full event trail
+//   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
+//   foldrun deploy [dir]    push a workspace into an installation
+//   foldrun invoke <flow>   start a flow on a running platform
 //
 // `check` is the one to run in CI: it catches the mistakes that otherwise only
 // show up as a confidently wrong answer at 3am.
@@ -32,18 +32,18 @@ process.on("warning", () => {});
 
 const [, , command, ...rest] = process.argv;
 
-const HELP = `mdagent — agents are markdown
+const HELP = `foldrun — agents are markdown
 
-  mdagent init [dir]        create a workspace you can run immediately
-  mdagent check [dir]       validate agents, flows, tools, evals and knowledge
-  mdagent run <target>      run an agent or flow (target: name, or flow:name)
-  mdagent eval [name]       run one eval, or all of them
-  mdagent probe <model>     live check: can this model hold a tool loop here?
-  mdagent logs [run-id]     recent runs, or one run's full event trail
-  mdagent secrets set NAME  store a secret (prompted, never echoed) — also ls, rm
-  mdagent deploy [dir]      push a workspace into an installation
-  mdagent invoke <flow>     start a flow on a running platform (--to <workspace>)
-  mdagent --help
+  foldrun init [dir]        create a workspace you can run immediately
+  foldrun check [dir]       validate agents, flows, tools, evals and knowledge
+  foldrun run <target>      run an agent or flow (target: name, or flow:name)
+  foldrun eval [name]       run one eval, or all of them
+  foldrun probe <model>     live check: can this model hold a tool loop here?
+  foldrun logs [run-id]     recent runs, or one run's full event trail
+  foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm
+  foldrun deploy [dir]      push a workspace into an installation
+  foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
+  foldrun --help
 
 Options
   --workspace <dir>         the workspace folder (default: .)
@@ -58,8 +58,8 @@ Platform options (deploy, invoke, secrets)
   --to <workspace>          workspace on the platform (deploy default: folder name)
   --tenant <name>           account to deploy into (default: default, local only)
   --data <dir>              the installation's data directory
-  --url <url>               a running platform (or MDAGENT_URL)
-  --token <key>             API key for --url (or MDAGENT_TOKEN)
+  --url <url>               a running platform (or FOLDRUN_URL)
+  --token <key>             API key for --url (or FOLDRUN_TOKEN)
   --commit <sha>            deploy: record which commit this is
   --dry-run                 deploy: check and report, change nothing
   --force                   deploy: deploy even while runs are in flight
@@ -83,7 +83,7 @@ for (let i = 0; i < rest.length; i++) {
 
 // `deploy` is the one command that is not about a single folder: it reads a
 // source directory and writes into an installation, which has accounts and
-// many workspaces. Pinning MDAGENT_WORKSPACE would collapse that layout to one
+// many workspaces. Pinning FOLDRUN_WORKSPACE would collapse that layout to one
 // folder and send every deploy to the same place.
 const isDeploy = command === "deploy";
 
@@ -93,14 +93,14 @@ const takesDir = command === "init" || command === "check";
 const workspace = path.resolve(
   flags.workspace ?? (takesDir ? positional.shift() ?? "." : "."),
 );
-if (!isDeploy) process.env.MDAGENT_WORKSPACE = workspace;
+if (!isDeploy) process.env.FOLDRUN_WORKSPACE = workspace;
 
 // Where the secrets, keys and run store live.
 //
-// A workspace on a laptop keeps them inside itself, in `.mdagent/`. But a
+// A workspace on a laptop keeps them inside itself, in `.foldrun/`. But a
 // workspace that belongs to an installation sits at
 // `<data>/<tenant>/workspaces/<name>`, and its secrets belong to the tenant,
-// two levels up — so pointing --workspace at one and defaulting to `.mdagent/`
+// two levels up — so pointing --workspace at one and defaulting to `.foldrun/`
 // opened an empty store beside it. Every declared secret came back missing,
 // and the error told you to add secrets that were already there.
 //
@@ -113,9 +113,9 @@ const installationRoot =
 if (isDeploy) {
   // The destination is an installation, so --data names it outright. Without
   // one, dataRoot()'s own default applies: data/ at the project root.
-  if (flags.data) process.env.MDAGENT_DATA = path.resolve(flags.data);
+  if (flags.data) process.env.FOLDRUN_DATA = path.resolve(flags.data);
 } else {
-  process.env.MDAGENT_DATA ??= installationRoot ?? path.join(workspace, ".mdagent");
+  process.env.FOLDRUN_DATA ??= installationRoot ?? path.join(workspace, ".foldrun");
 }
 
 const { run } = await import(path.join(HERE, "../src/commands.mjs"));

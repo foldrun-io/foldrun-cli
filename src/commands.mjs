@@ -13,10 +13,10 @@ const c = {
 };
 
 // The published runtime, not a relative reach into a sibling directory. It was
-// `../../core/index.ts` — which works only inside this repo, so `npx mdagent`
+// `../../core/index.ts` — which works only inside this repo, so `npx foldrun`
 // installed a CLI that could not find its own runtime. Imported lazily so
 // `--help` and argument errors never pay for loading it.
-const core = async () => import("@mdagent/core");
+const core = async () => import("@foldrun/core");
 
 // ---------------------------------------------------------------- init
 
@@ -29,7 +29,7 @@ const core = async () => import("@mdagent/core");
  * history it never had.
  */
 function templateFilesFrom(dir) {
-  const skip = new Set(["runs", "outputs", ".mdagent", "node_modules", ".git"]);
+  const skip = new Set(["runs", "outputs", ".foldrun", "node_modules", ".git"]);
   const out = [];
   const walk = (abs, rel) => {
     for (const entry of fs.readdirSync(abs).sort()) {
@@ -80,7 +80,7 @@ async function init(workspace, from) {
     fs.writeFileSync(file, content);
   }
   // knowledge/ and memory/ are OKF bundles, and a bundle without its root
-  // index.md declares no okf_version — so `mdagent init` produced a directory
+  // index.md declares no okf_version — so `foldrun init` produced a directory
   // of valid concepts that no consumer could tell the version of.
   syncWorkspaceBundles(workspace);
 
@@ -101,8 +101,8 @@ async function init(workspace, from) {
     .find(Boolean);
   console.log(`
   ${c.bold("Next")}
-    mdagent check ${workspace}${" ".repeat(Math.max(1, 16 - workspace.length))}${c.dim("validate it — costs nothing")}
-    mdagent run ${flow ?? "publish"} --workspace ${workspace}   ${c.dim("run the flow")}
+    foldrun check ${workspace}${" ".repeat(Math.max(1, 16 - workspace.length))}${c.dim("validate it — costs nothing")}
+    foldrun run ${flow ?? "publish"} --workspace ${workspace}   ${c.dim("run the flow")}
 `);
   return 0;
 }
@@ -140,7 +140,7 @@ async function check(workspace) {
   // What format does this workspace target?
   const agentsMd = path.join(workspace, "AGENTS.md");
   if (fs.existsSync(agentsMd)) {
-    const m = fs.readFileSync(agentsMd, "utf8").match(/^mdagent_version:\s*["']?([\d.]+)/m);
+    const m = fs.readFileSync(agentsMd, "utf8").match(/^(?:foldrun|mdagent)_version:\s*["']?([\d.]+)/m);
     const { warning } = checkFormatVersion(m?.[1]);
     if (warning) note("warn", "AGENTS.md", warning);
   }
@@ -310,12 +310,12 @@ function assertCredentials() {
   if (home && fs.existsSync(path.join(home, ".claude"))) return; // Claude Code login
   throw new Error(
     "no credentials — set ANTHROPIC_API_KEY, or log in with Claude Code.\n" +
-      "  `mdagent check` works without either.",
+      "  `foldrun check` works without either.",
   );
 }
 
 async function runTarget(target, flags) {
-  if (!target) throw new Error("what should I run? try `mdagent run <agent>` or `mdagent run <flow>`");
+  if (!target) throw new Error("what should I run? try `foldrun run <agent>` or `foldrun run <flow>`");
   assertCredentials();
   const { startFlowRun, loadFlow, listAgents, readRun } = await core();
   const T = "default";
@@ -370,14 +370,14 @@ async function runTarget(target, flags) {
 // ---------------------------------------------------------------- probe
 
 /**
- * `mdagent probe <model>` — can this model hold a tool loop, answered by
+ * `foldrun probe <model>` — can this model hold a tool loop, answered by
  * running one. The workspace's provider block is honoured, so the probe
  * exercises the exact path a run takes: same endpoint, same token, same
  * tier remap. The check the run-start gate makes from a catalogue, made
  * from the ground truth instead.
  */
 async function probeCmd(modelArg) {
-  if (!modelArg) throw new Error("which model? try `mdagent probe openai/gpt-oss-120b` (or a tier: fast, default, max)");
+  if (!modelArg) throw new Error("which model? try `foldrun probe openai/gpt-oss-120b` (or a tier: fast, default, max)");
   assertCredentials();
   const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort } = await core();
 
@@ -476,10 +476,10 @@ async function runEvals(name) {
  * read exactly like one refused on disk.
  */
 async function deployOverHttp(url, workspace, files, flags) {
-  const token = flags.token ?? process.env.MDAGENT_TOKEN;
+  const token = flags.token ?? process.env.FOLDRUN_TOKEN;
   if (!token) {
     throw new Error(
-      "deploying to a server needs an API key — set MDAGENT_TOKEN, or pass --token.\n" +
+      "deploying to a server needs an API key — set FOLDRUN_TOKEN, or pass --token.\n" +
         "  Create one in the dashboard under Settings → API keys.",
     );
   }
@@ -502,7 +502,7 @@ async function deployOverHttp(url, workspace, files, flags) {
   }
 
   const body = await res.json().catch(() => ({}));
-  if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — check MDAGENT_TOKEN`);
+  if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — check FOLDRUN_TOKEN`);
   // 422 is a refusal the caller has to read, not a transport failure: the
   // issues are in the body and reported like any other refused deploy.
   if (!res.ok && res.status !== 422) {
@@ -532,7 +532,7 @@ async function deploy(source, flags) {
   // Two destinations, one command. Without --url the workspace is written
   // straight to the installation on this machine; with one it is POSTed to a
   // running platform, which is what a laptop or a CI job does.
-  const url = flags.url ?? process.env.MDAGENT_URL;
+  const url = flags.url ?? process.env.FOLDRUN_URL;
   const plan = url
     ? await deployOverHttp(url, workspace, files, flags)
     : flags["dry-run"]
@@ -595,7 +595,7 @@ function promptHidden(question) {
     process.stdout.write(question);
     const { stdin } = process;
     if (!stdin.isTTY) {
-      // Piped input (echo "$VALUE" | mdagent secrets set NAME) — read a line.
+      // Piped input (echo "$VALUE" | foldrun secrets set NAME) — read a line.
       let buf = "";
       stdin.setEncoding("utf8");
       stdin.on("data", (d) => (buf += d));
@@ -643,11 +643,11 @@ function promptVisible(question) {
   });
 }
 
-const remoteUrl = (flags) => flags.url ?? process.env.MDAGENT_URL;
+const remoteUrl = (flags) => flags.url ?? process.env.FOLDRUN_URL;
 
 async function remoteCall(url, flags, apiPath, init = {}) {
-  const token = flags.token ?? process.env.MDAGENT_TOKEN;
-  if (!token) throw new Error("no API key — pass --token or set MDAGENT_TOKEN");
+  const token = flags.token ?? process.env.FOLDRUN_TOKEN;
+  if (!token) throw new Error("no API key — pass --token or set FOLDRUN_TOKEN");
   const res = await fetch(new URL(apiPath, url), {
     ...init,
     headers: {
@@ -662,10 +662,10 @@ async function remoteCall(url, flags, apiPath, init = {}) {
 }
 
 /**
- * `mdagent secrets set|ls|rm` — the vault, from the terminal.
+ * `foldrun secrets set|ls|rm` — the vault, from the terminal.
  *
  * Local by default (the workspace's own secrets.json, encrypted under the
- * install key); with --url/MDAGENT_URL the same three verbs go to a running
+ * install key); with --url/FOLDRUN_URL the same three verbs go to a running
  * platform. Values are prompted without echo unless piped or passed with
  * --value, and are never printed back by any verb.
  */
@@ -679,7 +679,7 @@ async function secretsCmd(positional, flags) {
       ? (await remoteCall(url, flags, `/api/secrets${flags.to ? `?workspace=${flags.to}` : ""}`)).secrets
       : (await core()).listSecrets("default", "workspace");
     if (!entries.length) {
-      console.log(`\n  ${c.dim("no secrets yet — mdagent secrets set NAME")}\n`);
+      console.log(`\n  ${c.dim("no secrets yet — foldrun secrets set NAME")}\n`);
       return 0;
     }
     console.log();
@@ -692,7 +692,7 @@ async function secretsCmd(positional, flags) {
     return 0;
   }
 
-  if (!name) throw new Error(`which secret? try \`mdagent secrets ${verb} NAME\``);
+  if (!name) throw new Error(`which secret? try \`foldrun secrets ${verb} NAME\``);
 
   if (verb === "set") {
     // --oauth2: store a refresh recipe instead of a static value. The
@@ -754,7 +754,7 @@ const EVENT_MARK = (e) =>
   e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
 
 /**
- * `mdagent logs [run-id]` — without an id, the recent runs; with one, that
+ * `foldrun logs [run-id]` — without an id, the recent runs; with one, that
  * run's whole event log. `--follow` keeps tailing a live run.
  */
 async function logsCmd(positional, flags) {
@@ -766,7 +766,7 @@ async function logsCmd(positional, flags) {
   if (!runId) {
     const runs = listRuns(T, P).slice(0, 20);
     if (!runs.length) {
-      console.log(`\n  ${c.dim("no runs yet — mdagent run <agent or flow>")}\n`);
+      console.log(`\n  ${c.dim("no runs yet — foldrun run <agent or flow>")}\n`);
       return 0;
     }
     console.log();
@@ -778,7 +778,7 @@ async function logsCmd(positional, flags) {
         `  ${mark} ${c.bold(r.id)}  ${r.flow}  ${c.dim(`${r.status} · $${cost.toFixed(4)} · ${r.startedAt}`)}`,
       );
     }
-    console.log(`\n  ${c.dim("mdagent logs <run-id> for the full trail")}\n`);
+    console.log(`\n  ${c.dim("foldrun logs <run-id> for the full trail")}\n`);
     return 0;
   }
 
@@ -794,7 +794,7 @@ async function logsCmd(positional, flags) {
 
   const seen = new Map();
   let run = readRun(T, P, runId);
-  if (!run) throw new Error(`no run called "${runId}" here — \`mdagent logs\` lists them`);
+  if (!run) throw new Error(`no run called "${runId}" here — \`foldrun logs\` lists them`);
   console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
   print(run, seen);
 
@@ -816,8 +816,8 @@ async function logsCmd(positional, flags) {
 // ---------------------------------------------------------------- invoke
 
 /**
- * `mdagent invoke <flow>` — start a flow on a running platform. The remote
- * sibling of `mdagent run`: same task flag, but the run continues on the
+ * `foldrun invoke <flow>` — start a flow on a running platform. The remote
+ * sibling of `foldrun run`: same task flag, but the run continues on the
  * server whether or not this terminal sticks around. `--wait` holds on for
  * the result like an RPC.
  */
@@ -825,10 +825,10 @@ async function invoke(target, flags) {
   const url = remoteUrl(flags);
   if (!url) {
     throw new Error(
-      "invoke starts a flow on a platform — pass --url or set MDAGENT_URL. (Running locally? That's `mdagent run`.)",
+      "invoke starts a flow on a platform — pass --url or set FOLDRUN_URL. (Running locally? That's `foldrun run`.)",
     );
   }
-  if (!target) throw new Error("which flow? try `mdagent invoke <flow> --to <workspace>`");
+  if (!target) throw new Error("which flow? try `foldrun invoke <flow> --to <workspace>`");
   const ws = flags.to;
   if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
 
@@ -839,7 +839,7 @@ async function invoke(target, flags) {
   });
 
   if (!flags.wait) {
-    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)} — ${c.dim(`mdagent logs on the server, or ${url}/dashboard`)}\n`);
+    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)} — ${c.dim(`foldrun logs on the server, or ${url}/dashboard`)}\n`);
     return 0;
   }
   const run = body.run ?? body;
@@ -870,6 +870,6 @@ export async function run(command, positional, flags, workspace) {
     case "invoke":
       return invoke(positional[0], flags);
     default:
-      throw new Error(`unknown command "${command}" — try \`mdagent --help\``);
+      throw new Error(`unknown command "${command}" — try \`foldrun --help\``);
   }
 }

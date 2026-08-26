@@ -1,17 +1,17 @@
 {
-  "name": "mdagent",
+  "name": "foldrun",
   "version": "0.1.0",
   "description": "Agents are markdown. Write them, check them, run them \u2014 on your machine.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "mdagent": "./bin/mdagent.mjs"
+    "foldrun": "./bin/foldrun.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "@mdagent/core": "0.1.0"
+    "@foldrun/core": "0.1.0"
   },
   "files": [
     "bin",
