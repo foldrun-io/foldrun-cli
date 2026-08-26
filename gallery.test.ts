@@ -30,9 +30,25 @@ test("the gallery ships the browser tool with a usable snippet", () => {
   assert.ok(browser, "browser tool exists");
   assert.match(browser!.content, /chromium\.launch/);
   assert.match(browser!.content, /--no-sandbox/);
-  assert.match(browser!.snippet, /fetch_rendered/);
-  assert.match(browser!.snippet, /account\/scripts\/fetch-rendered\.mjs/);
+  // Granted like every other capability, by name.
+  assert.equal(browser!.snippet, "use: [browser]");
+  const def = parseToolDef(matter(browser!.wrapper!.content).data as Record<string, unknown>, "browser");
+  assert.equal(def!.kind, "script");
+  assert.equal((def!.spec as { run: string }).run, "account/scripts/fetch-rendered.mjs");
 });
+
+test("a script's wrapper follows the code into whichever scope it lands in", () =>
+  withData(() => {
+    installGalleryTool("acme", "browser");
+    assert.match(readLibraryFile("acme", "tools", "browser.md"), /run: account\/scripts\//);
+
+    saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
+    installGalleryTool("acme", "browser", "desk");
+    // The wrapper is rewritten, because a workspace copy of the code is not
+    // reachable at the account path — a wrapper pointing at the wrong scope
+    // is a tool that resolves to nothing at run time.
+    assert.match(readWorkspaceFile("acme", "desk", "tools/browser.md"), /run: workspace\/scripts\//);
+  }));
 
 test("install copies to the account library by default", () =>
   withData(() => {
