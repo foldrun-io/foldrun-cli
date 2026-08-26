@@ -368,6 +368,27 @@ test("no component rolls its own dark primary button", () => {
   assert.deepEqual(offenders, [], "a primary button outside buttonClass() is a fork of the design system");
 });
 
+test("nothing asks for confirmation through the browser", () => {
+  // window.confirm renders with the *origin* as its title, so a destructive
+  // action announces itself as "192.168.1.140 says" — indistinguishable from
+  // the scam warnings people are trained to dismiss. It also cannot name the
+  // dangerous button or show what is about to be deleted. useConfirm() can.
+  const offenders: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && entry.name !== "node_modules") walk(full);
+      else if (entry.name.endsWith(".tsx")) {
+        const src = fs.readFileSync(full, "utf8");
+        if (/\bwindow\.confirm\(/.test(src)) offenders.push(path.relative(WEB, full));
+      }
+    }
+  };
+  walk(path.join(WEB, "app"));
+  walk(path.join(WEB, "components"));
+  assert.deepEqual(offenders, [], "use useConfirm() from components/confirm.tsx");
+});
+
 test("every workspace subpage reaches up through WorkspaceHeader", () => {
   const subpages = ["agents", "flows", "runs", "evals", "assets", "files", "settings"];
   for (const p of subpages) {
