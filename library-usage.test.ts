@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { libraryUsage, type LibraryUse } from "../packages/core/src/library.ts";
+import { libraryUsage, listLibrary, type LibraryUse } from "../packages/core/src/library.ts";
 
 /** Build a throwaway account on disk and point core at it for one callback. */
 function withAccount(files: Record<string, string>, run: () => void) {
@@ -154,5 +154,28 @@ test("the data root is read per call, not captured at import", () => {
       "acme/workspaces/desk/agents/writer/agent.md": agent("writer"),
     },
     () => assert.deepEqual(libraryUsage("acme", "tools", "billing"), []),
+  );
+});
+
+// ------------------------------------------------- tools list their shape
+
+test("a tools listing says how each tool connects, and what a script one runs", () => {
+  withAccount(
+    {
+      "acme/library/tools/api.md": "---\nname: api\nbase: https://example.com\n---\n",
+      "acme/library/tools/code.md":
+        "---\ntransport: script\nname: code\nrun: account/scripts/x.mjs\n---\n",
+      "acme/library/tools/broken.md": "---\nname: broken\n---\nno base, no run\n",
+    },
+    () => {
+      const byName = new Map(listLibrary("acme", "tools").map((e) => [e.name, e]));
+      assert.equal(byName.get("api")!.transport, "http");
+      assert.equal(byName.get("code")!.transport, "script");
+      // The link between the two shelves, shown rather than inferred.
+      assert.equal(byName.get("code")!.runs, "account/scripts/x.mjs");
+      // A definition the runner would reject gets no badge, and does not
+      // take the page down with it.
+      assert.equal(byName.get("broken")?.transport, undefined);
+    },
   );
 });
