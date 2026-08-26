@@ -27,6 +27,7 @@ function withAccount(body: () => void) {
     "FOLDRUN_RUN_FEE",
     "FOLDRUN_STEP_FEE",
     "FOLDRUN_COMPUTE_USD_PER_SEC",
+    "FOLDRUN_MAX_RUN_EXPOSURE",
   ];
   const prevPrices = priceVars.map((k) => [k, process.env[k]] as const);
   for (const k of priceVars) delete process.env[k];
@@ -233,5 +234,66 @@ test("a run priced at zero writes no line, however many steps it ran", () => {
     // to observe, so the ledger stays empty rather than filling with $0.
     assert.equal(recordRunCost("acme", "desk", "run-a", { tokenCostUsd: 0, steps: 9, computeSecs: 300 }), null);
     assert.equal(readLedger("acme").length, 0);
+  });
+});
+
+// --------------------------------------------------- the two billing races
+
+test("two racing settles cannot bill a run twice, even with the ledger scan blinded", () => {
+  withAccount(() => {
+    recordTopUp("acme", 10);
+    // The scan-then-append window: both drivers read a ledger with no line
+    // for this run. The marker claim is what must hold — simulate the loser
+    // arriving after the winner's marker but as if its scan saw nothing, by
+    // simply calling again (the marker, not the scan, is the guarantee).
+    assert.ok(recordRunCost("acme", "desk", "run-a", 1));
+    // Delete the ledger line, keep the marker: the scan now says "not
+    // billed", and only the marker stands between this and a double charge.
+    const file = path.join(process.env.FOLDRUN_DATA!, "acme/ledger.jsonl");
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    fs.writeFileSync(file, lines.filter((l) => !l.includes("run-a")).join("\n") + "\n");
+    assert.equal(recordRunCost("acme", "desk", "run-a", 1), null);
+  });
+});
+
+test("runs billed before markers existed are not re-billed after the upgrade", () => {
+  withAccount(() => {
+    recordTopUp("acme", 10);
+    // A pre-marker line: written directly, no marker file beside it.
+    const file = path.join(process.env.FOLDRUN_DATA!, "acme/ledger.jsonl");
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ t: "2026-01-01T00:00:00.000Z", kind: "run", usd: -1, workspace: "desk", runId: "run-old" }) + "\n",
+    );
+    assert.equal(recordRunCost("acme", "desk", "run-old", 1), null);
+    assert.equal(creditBalance("acme"), 9);
+  });
+});
+
+test("exposure holds the balance for every unsettled run", () => {
+  withAccount(() => {
+    process.env.FOLDRUN_BILLING = "1";
+    process.env.FOLDRUN_MAX_RUN_EXPOSURE = "2";
+    recordTopUp("acme", 5);
+
+    assertFunds("acme", 0); // $5 covers one $2 hold
+    assertFunds("acme", 1); // and two
+    let threw: unknown = null;
+    try {
+      assertFunds("acme", 2); // a third would need $6 held against $5
+    } catch (err) {
+      threw = err;
+    }
+    assert.ok(threw instanceof Error, "the burst is refused, not admitted");
+    assert.equal((threw as Error & { status?: number }).status, 402);
+    assert.match((threw as Error).message, /held/);
+  });
+});
+
+test("without an exposure ceiling the gate keeps its old shape: positive admits", () => {
+  withAccount(() => {
+    process.env.FOLDRUN_BILLING = "1";
+    recordTopUp("acme", 0.01);
+    assertFunds("acme", 50); // in-flight count is ignored when no ceiling is set
   });
 });
