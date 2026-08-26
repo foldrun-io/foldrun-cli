@@ -17,9 +17,10 @@ import {
   claimNext,
   recoverQueue,
   rerunFrom,
+  stopRun,
 } from "../packages/core/src/queue.ts";
 import { driveRun } from "../packages/core/src/runner.ts";
-import { readRun, writeRun, runMeter, type RunRecord } from "../packages/core/src/store.ts";
+import { deleteRun, readRun, writeRun, runMeter, type RunRecord } from "../packages/core/src/store.ts";
 
 /** A tenant/workspace on disk, and core pointed at it. */
 function withWorkspace(body: () => void | Promise<void>) {
@@ -367,4 +368,63 @@ test("a step orphaned mid-run is re-run, not stepped over", () =>
       after.steps[0].events.some((e) => e.text.includes("interrupted mid-step")),
       "the orphan was noticed and restarted rather than stepped over",
     );
+  }));
+
+// ------------------------------------------------------- stop and delete
+
+test("stopping a run drops its job, skips the rest, and says who did it", () =>
+  withWorkspace(() => {
+    const run = enqueueFlowRun("acme", "desk", [
+      { agent: "writer", instruction: "one", group: 1, optional: false },
+      { agent: "writer", instruction: "two", group: 2, optional: false },
+    ], "twostep");
+    // Mid-flight: step one finished, step two is running.
+    const live = readRun("acme", "desk", run.id)!;
+    live.status = "running";
+    live.steps[0].status = "completed";
+    live.steps[0].result = "did one";
+    live.steps[0].costUsd = 0.4;
+    live.steps[1].status = "running";
+    writeRun("acme", "desk", live);
+
+    const stopped = stopRun("acme", "desk", run.id);
+    assert.equal(stopped.status, "failed");
+    assert.equal(stopped.stopRequested, true);
+    // What ran is kept — it ran, and the ledger already knows.
+    assert.equal(stopped.steps[0].status, "completed");
+    assert.equal(stopped.steps[0].costUsd, 0.4);
+    // What hadn't finished is skipped with a reason, not silently dropped.
+    assert.equal(stopped.steps[1].status, "skipped");
+    assert.equal(stopped.steps[1].skipReason, "run stopped");
+    // And nothing is left for a worker to pick up.
+    assert.equal(claimNext(), null);
+  }));
+
+test("a finished run cannot be stopped", () =>
+  withWorkspace(() => {
+    const run = enqueueFlowRun("acme", "desk", [
+      { agent: "writer", instruction: "x", group: 1, optional: false },
+    ], "one");
+    const done = readRun("acme", "desk", run.id)!;
+    done.status = "completed";
+    writeRun("acme", "desk", done);
+    assert.throws(() => stopRun("acme", "desk", run.id), /already completed/);
+  }));
+
+test("deleting a run erases its record and its archived outputs", () =>
+  withWorkspace(() => {
+    const run = enqueueFlowRun("acme", "desk", [
+      { agent: "writer", instruction: "x", group: 1, optional: false },
+    ], "one");
+    const archive = path.join(
+      process.env.FOLDRUN_DATA!, "acme/workspaces/desk/runs", run.id, "outputs/writer",
+    );
+    fs.mkdirSync(archive, { recursive: true });
+    fs.writeFileSync(path.join(archive, "draft.md"), "kept nowhere else");
+
+    assert.equal(deleteRun("acme", "desk", run.id), true);
+    assert.equal(readRun("acme", "desk", run.id), null);
+    assert.equal(fs.existsSync(archive), false);
+    // Deleting what is already gone is not an error worth throwing over.
+    assert.equal(deleteRun("acme", "desk", run.id), false);
   }));
