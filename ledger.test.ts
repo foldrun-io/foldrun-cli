@@ -30,6 +30,7 @@ function withAccount(body: () => void) {
     "FOLDRUN_RUN_FEE",
     "FOLDRUN_NET_USD_PER_GB",
     "FOLDRUN_COMPUTE_USD_PER_SEC",
+    "FOLDRUN_COMPUTE_USD_PER_SEC_SMALL",
     "FOLDRUN_MAX_RUN_EXPOSURE",
   ];
   const prevPrices = priceVars.map((k) => [k, process.env[k]] as const);
@@ -414,4 +415,31 @@ test("the usage report cuts one set of facts three ways that agree", () => {
       delete process.env.FOLDRUN_RUNNER_MEMORY;
     }
   });
+});
+
+test("compute bills in whole seconds with a one-second floor", () => {
+  process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.01";
+  try {
+    assert.equal(priceRun({ tokenCostUsd: 0, steps: 1, computeSecs: 0.4 }), 0.01); // floor
+    assert.equal(priceRun({ tokenCostUsd: 0, steps: 1, computeSecs: 10.2 }), 0.11); // ceil
+    // Zero compute is zero — the floor never invents a bill.
+    assert.equal(priceRun({ tokenCostUsd: 0, steps: 0, computeSecs: 0 }), 0);
+  } finally {
+    delete process.env.FOLDRUN_COMPUTE_USD_PER_SEC;
+  }
+});
+
+test("small seconds bill at the small rate, and default to the large one", () => {
+  process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.01";
+  try {
+    // No small rate set: a size is a fact, a discount is a decision — until
+    // the operator sets one, every second costs the same.
+    assert.equal(priceRun({ tokenCostUsd: 0, steps: 2, computeSecs: 10, smallSecs: 4 }), 0.1);
+    process.env.FOLDRUN_COMPUTE_USD_PER_SEC_SMALL = "0.0025";
+    // 6 large × 0.01 + 4 small × 0.0025
+    assert.equal(priceRun({ tokenCostUsd: 0, steps: 2, computeSecs: 10, smallSecs: 4 }), 0.07);
+  } finally {
+    delete process.env.FOLDRUN_COMPUTE_USD_PER_SEC;
+    delete process.env.FOLDRUN_COMPUTE_USD_PER_SEC_SMALL;
+  }
 });

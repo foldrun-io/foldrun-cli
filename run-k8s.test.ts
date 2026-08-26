@@ -58,3 +58,20 @@ test("the env file survives shell metacharacters — quoting is load-bearing", (
   // inert inside single quotes, and embedded quotes hop out and back in.
   assert.ok(file.includes(`'it'\\''s got '\\''quotes'\\'' and $HOME and \`backticks\`'`));
 });
+
+test("a small step's pod reserves the small limits", () => {
+  process.env.FOLDRUN_RUNNER_MEMORY = "6Gi";
+  process.env.FOLDRUN_RUNNER_CPUS = "3";
+  try {
+    const large = runPodManifest("p1", "img", "run-x") as {
+      spec: { containers: { resources: { limits: { memory: string; cpu: string } } }[] };
+    };
+    assert.deepEqual(large.spec.containers[0].resources.limits, { memory: "6Gi", cpu: "3" });
+    const small = runPodManifest("p2", "img", "run-x", "small") as typeof large;
+    // The defaults; FOLDRUN_RUNNER_*_SMALL overrides them.
+    assert.deepEqual(small.spec.containers[0].resources.limits, { memory: "1Gi", cpu: "1" });
+  } finally {
+    delete process.env.FOLDRUN_RUNNER_MEMORY;
+    delete process.env.FOLDRUN_RUNNER_CPUS;
+  }
+});
