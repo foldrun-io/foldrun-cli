@@ -21,10 +21,15 @@ function withAccount(body: () => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-ledger-"));
   const prevData = process.env.FOLDRUN_DATA;
   const prevBilling = process.env.FOLDRUN_BILLING;
-  const prevMargin = process.env.FOLDRUN_MARGIN;
-  const prevMinFee = process.env.FOLDRUN_MIN_RUN_FEE;
-  delete process.env.FOLDRUN_MARGIN;
-  delete process.env.FOLDRUN_MIN_RUN_FEE;
+  const priceVars = [
+    "FOLDRUN_MARGIN",
+    "FOLDRUN_MIN_RUN_FEE",
+    "FOLDRUN_RUN_FEE",
+    "FOLDRUN_STEP_FEE",
+    "FOLDRUN_COMPUTE_USD_PER_SEC",
+  ];
+  const prevPrices = priceVars.map((k) => [k, process.env[k]] as const);
+  for (const k of priceVars) delete process.env[k];
   process.env.FOLDRUN_DATA = root;
   try {
     fs.mkdirSync(path.join(root, "acme/workspaces"), { recursive: true });
@@ -34,10 +39,10 @@ function withAccount(body: () => void) {
     else process.env.FOLDRUN_DATA = prevData;
     if (prevBilling === undefined) delete process.env.FOLDRUN_BILLING;
     else process.env.FOLDRUN_BILLING = prevBilling;
-    if (prevMargin === undefined) delete process.env.FOLDRUN_MARGIN;
-    else process.env.FOLDRUN_MARGIN = prevMargin;
-    if (prevMinFee === undefined) delete process.env.FOLDRUN_MIN_RUN_FEE;
-    else process.env.FOLDRUN_MIN_RUN_FEE = prevMinFee;
+    for (const [k, v] of prevPrices) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -150,5 +155,83 @@ test("pre-margin entries count as charge == cost in the summary", () => {
     assert.equal(s.chargedUsd, 1);
     assert.equal(s.providerCostUsd, 1);
     assert.equal(s.marginUsd, 0);
+  });
+});
+
+// ------------------------------------------------- runs, steps and compute
+
+test("with nothing configured, a BYOK run is free — the self-hoster default", () => {
+  // Their key bought the tokens, so tokenCostUsd is 0. Nothing is charged
+  // until an operator decides what a run and a sandbox second are worth.
+  assert.equal(priceRun({ tokenCostUsd: 0, steps: 4, computeSecs: 120 }), 0);
+});
+
+test("a BYOK run bills the run, its steps and its sandbox seconds — never tokens", () => {
+  process.env.FOLDRUN_RUN_FEE = "0.02";
+  process.env.FOLDRUN_STEP_FEE = "0.005";
+  process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.0001";
+  process.env.FOLDRUN_MARGIN = "1.25";
+  try {
+    // 0.02 + 4×0.005 + 120×0.0001 = 0.052, and the margin never applies
+    // because no tokens were bought on our account.
+    assert.equal(priceRun({ tokenCostUsd: 0, steps: 4, computeSecs: 120 }), 0.052);
+  } finally {
+    for (const k of ["FOLDRUN_RUN_FEE", "FOLDRUN_STEP_FEE", "FOLDRUN_COMPUTE_USD_PER_SEC", "FOLDRUN_MARGIN"]) {
+      delete process.env[k];
+    }
+  }
+});
+
+test("models-included stacks both: marked-up tokens on top of the same compute", () => {
+  process.env.FOLDRUN_RUN_FEE = "0.02";
+  process.env.FOLDRUN_STEP_FEE = "0.005";
+  process.env.FOLDRUN_COMPUTE_USD_PER_SEC = "0.0001";
+  process.env.FOLDRUN_MARGIN = "1.25";
+  try {
+    // 1×1.25 + 0.052
+    assert.equal(priceRun({ tokenCostUsd: 1, steps: 4, computeSecs: 120 }), 1.302);
+  } finally {
+    for (const k of ["FOLDRUN_RUN_FEE", "FOLDRUN_STEP_FEE", "FOLDRUN_COMPUTE_USD_PER_SEC", "FOLDRUN_MARGIN"]) {
+      delete process.env[k];
+    }
+  }
+});
+
+test("a run that did nothing is free however the fees are set", () => {
+  process.env.FOLDRUN_RUN_FEE = "0.02";
+  process.env.FOLDRUN_MIN_RUN_FEE = "0.01";
+  try {
+    // No tokens, no steps, no seconds: our own gate refused it before it
+    // started, and the per-run fee must not invent a bill for that.
+    assert.equal(priceRun({ tokenCostUsd: 0, steps: 0, computeSecs: 0 }), 0);
+  } finally {
+    delete process.env.FOLDRUN_RUN_FEE;
+    delete process.env.FOLDRUN_MIN_RUN_FEE;
+  }
+});
+
+test("a BYOK line records zero provider cost, so the margin is the whole charge", () => {
+  withAccount(() => {
+    process.env.FOLDRUN_STEP_FEE = "0.01";
+    recordTopUp("acme", 10);
+    recordRunCost("acme", "desk", "run-a", { tokenCostUsd: 0, steps: 3, computeSecs: 42.5 });
+    const [, run] = readLedger("acme");
+    assert.equal(run.usd, -0.03);
+    assert.equal(run.cost, 0);
+    assert.deepEqual(run.meter, { steps: 3, computeSecs: 42.5 });
+
+    const s = ledgerSummary("acme");
+    assert.equal(s.chargedUsd, 0.03);
+    assert.equal(s.providerCostUsd, 0); // we bought no tokens
+    assert.equal(s.marginUsd, 0.03); // so all of it is margin
+  });
+});
+
+test("a run priced at zero writes no line, however many steps it ran", () => {
+  withAccount(() => {
+    // Self-host, no pricing configured, BYOK: nothing to charge and nothing
+    // to observe, so the ledger stays empty rather than filling with $0.
+    assert.equal(recordRunCost("acme", "desk", "run-a", { tokenCostUsd: 0, steps: 9, computeSecs: 300 }), null);
+    assert.equal(readLedger("acme").length, 0);
   });
 });

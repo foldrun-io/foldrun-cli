@@ -18,7 +18,7 @@ import {
   recoverQueue,
 } from "../packages/core/src/queue.ts";
 import { driveRun } from "../packages/core/src/runner.ts";
-import { readRun, writeRun, type RunRecord } from "../packages/core/src/store.ts";
+import { readRun, writeRun, runMeter, type RunRecord } from "../packages/core/src/store.ts";
 
 /** A tenant/workspace on disk, and core pointed at it. */
 function withWorkspace(body: () => void | Promise<void>) {
@@ -183,3 +183,24 @@ test("an approved parked run drives to the end of what it can do without a model
     assert.ok(done.finishedAt, "a resumed run that ends gets an end");
     assert.equal(done.parkedAt, null, "resuming clears the parked marker");
   }));
+
+// --------------------------------------------------------- the run meter
+
+test("the meter counts steps that ran, not steps that were written", () => {
+  const run = {
+    id: "run-a",
+    flow: "f",
+    status: "completed",
+    startedAt: "2026-08-26T00:00:00.000Z",
+    finishedAt: "2026-08-26T00:10:00.000Z",
+    steps: [
+      { status: "completed", costUsd: 0.01, computeSecs: 12.5 },
+      { status: "failed", costUsd: 0.02, computeSecs: 3.5 },
+      { status: "skipped", costUsd: null, computeSecs: 99 }, // `when` said no
+      { status: "pending", costUsd: null, computeSecs: 99 }, // never reached
+      { status: "completed", costUsd: null, computeSecs: null }, // in-process
+    ],
+  } as unknown as RunRecord;
+
+  assert.deepEqual(runMeter(run), { tokenCostUsd: 0.03, steps: 3, computeSecs: 16 });
+});
