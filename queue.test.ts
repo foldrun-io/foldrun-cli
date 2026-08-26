@@ -267,6 +267,63 @@ test("a re-run carries the finished steps and resets the rest", () =>
     );
   }));
 
+test("a re-run takes its instructions from the flow as it reads now", () =>
+  withWorkspace(() => {
+    // The iterate loop this exists for: the first run failed because the
+    // instruction pointed at the wrong path, the author fixed the flow, and
+    // the re-run must carry the fix — replaying the recorded text re-fails
+    // for the exact reason that was just corrected.
+    const ws = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk");
+    fs.mkdirSync(path.join(ws, "flows"), { recursive: true });
+    fs.writeFileSync(
+      path.join(ws, "flows/send.md"),
+      "---\nname: send\n---\n\n1. [[writer]] — write it\n2. [[writer]] — email files/summary.md\n",
+    );
+    const source = {
+      id: "run-stale", flow: "send", status: "completed",
+      startedAt: "2026-08-26T00:00:00.000Z", finishedAt: "2026-08-26T00:10:00.000Z",
+      steps: [
+        { agent: "writer", instruction: "write it", group: 1, optional: false,
+          status: "completed", events: [], result: "done", costUsd: 0.1 },
+        { agent: "writer", instruction: "email outputs/summary.md", group: 2, optional: false,
+          status: "failed", events: [], result: null, costUsd: 0.01 },
+      ],
+    } as unknown as RunRecord;
+    writeRun("acme", "desk", source);
+
+    const rerun = rerunFrom("acme", "desk", "run-stale", { step: 2 });
+    // The reset step reads the corrected flow; the carried one keeps the
+    // history of what actually ran.
+    assert.equal(rerun.steps[1].instruction, "email files/summary.md");
+    assert.equal(rerun.steps[0].instruction, "write it");
+    assert.equal(rerun.steps[0].carriedFrom, "run-stale");
+  }));
+
+test("a reshaped flow falls back to the recorded instructions", () =>
+  withWorkspace(() => {
+    const ws = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk");
+    fs.mkdirSync(path.join(ws, "flows"), { recursive: true });
+    // The flow gained a step since the run: positions no longer mean the
+    // same thing, so guessing would rewrite the wrong step's orders.
+    fs.writeFileSync(
+      path.join(ws, "flows/send.md"),
+      "---\nname: send\n---\n\n1. [[writer]] — research\n2. [[writer]] — write it\n3. [[writer]] — email it\n",
+    );
+    const source = {
+      id: "run-shaped", flow: "send", status: "failed",
+      startedAt: "2026-08-26T00:00:00.000Z", finishedAt: "2026-08-26T00:10:00.000Z",
+      steps: [
+        { agent: "writer", instruction: "write it", group: 1, optional: false,
+          status: "completed", events: [], result: "done", costUsd: 0.1 },
+        { agent: "writer", instruction: "email outputs/summary.md", group: 2, optional: false,
+          status: "failed", events: [], result: null, costUsd: null },
+      ],
+    } as unknown as RunRecord;
+    writeRun("acme", "desk", source);
+    const rerun = rerunFrom("acme", "desk", "run-shaped", { step: 2 });
+    assert.equal(rerun.steps[1].instruction, "email outputs/summary.md");
+  }));
+
 test("a live run cannot be re-run from, and a missing agent is refused", () =>
   withWorkspace(() => {
     const live = {
