@@ -106,13 +106,21 @@ test("noun order is the same in the library, the asset pages and the sidebar", (
     "the account library lists the nouns in a different order than the asset pages",
   );
 
-  // The sidebar links each noun by ?kind=, so its order is readable from source.
+  // The sidebar links each noun by ?kind=, so its order is readable from
+  // source. It navigates every kind except scripts: a script tool carries
+  // its own code inside its folder, so code is material a tool holds rather
+  // than a shelf anyone picks from. The directory still exists and still
+  // works — it just isn't a decision, so it isn't a door.
+  const navigated = assetKinds.filter((k) => k !== "scripts");
   const sidebar = read("web/components/sidebar.tsx");
   const navOrder = [...sidebar.matchAll(/kind=([a-z]+)\$\{accountQuery\}/g)].map((m) => m[1]);
-  const workspaceNav = navOrder.slice(0, assetKinds.length);
+  assert.ok(
+    !navOrder.includes("scripts"),
+    "scripts is not a shelf any more — a tool folder holds its own code",
+  );
   assert.deepEqual(
-    workspaceNav,
-    assetKinds,
+    navOrder.slice(0, navigated.length),
+    navigated,
     "the sidebar lists the nouns in a different order than the asset pages",
   );
 });

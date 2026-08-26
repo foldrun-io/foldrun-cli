@@ -10,7 +10,7 @@ import path from "node:path";
 import matter from "gray-matter";
 import { GALLERY, galleryTemplate, installGalleryTool } from "../packages/core/src/gallery.ts";
 import { readLibraryFile } from "../packages/core/src/library.ts";
-import { parseToolDef, readWorkspaceFile, saveWorkspace } from "../packages/core/src/store.ts";
+import { parseToolDef, readWorkspaceFile, saveWorkspace, workspaceTools } from "../packages/core/src/store.ts";
 
 function withData(body: () => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-gallery-"));
@@ -25,44 +25,46 @@ function withData(body: () => void) {
   }
 }
 
-test("the gallery ships the browser tool with a usable snippet", () => {
+test("the browser ships as a folder tool: definition and code together", () => {
   const browser = GALLERY.find((t) => t.name === "browser");
   assert.ok(browser, "browser tool exists");
+  assert.equal(browser!.kind, "tools");
   assert.match(browser!.content, /chromium\.launch/);
   assert.match(browser!.content, /--no-sandbox/);
-  // Granted like every other capability, by name.
   assert.equal(browser!.snippet, "use: [browser]");
+  // Both files inside one folder — the shape that makes the run path
+  // relative to the tool rather than to a scope.
+  assert.equal(browser!.file, "browser/run.mjs");
+  assert.equal(browser!.wrapper!.file, "browser/tool.md");
   const def = parseToolDef(matter(browser!.wrapper!.content).data as Record<string, unknown>, "browser");
   assert.equal(def!.kind, "script");
-  assert.equal((def!.spec as { run: string }).run, "account/scripts/fetch-rendered.mjs");
+  assert.equal((def!.spec as { run: string }).run, "run.mjs");
 });
 
-test("a script's wrapper follows the code into whichever scope it lands in", () =>
+test("a folder tool installs unchanged at either scope", () =>
   withData(() => {
-    installGalleryTool("acme", "browser");
-    assert.match(readLibraryFile("acme", "tools", "browser.md"), /run: account\/scripts\//);
+    // Account: definition and code land beside each other.
+    assert.equal(installGalleryTool("acme", "browser"), "browser/run.mjs");
+    assert.match(readLibraryFile("acme", "tools", "browser/run.mjs"), /chromium\.launch/);
+    const accountDef = readLibraryFile("acme", "tools", "browser/tool.md");
+    assert.match(accountDef, /run: run\.mjs/);
 
+    // Workspace: byte-identical. The rewrite that used to be needed here is
+    // what the folder shape exists to delete.
+    saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
+    assert.equal(installGalleryTool("acme", "browser", "desk"), "tools/browser/run.mjs");
+    assert.equal(readWorkspaceFile("acme", "desk", "tools/browser/tool.md"), accountDef);
+  }));
+
+test("a folder tool resolves its code from the scope it was found in", () =>
+  withData(() => {
     saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
     installGalleryTool("acme", "browser", "desk");
-    // The wrapper is rewritten, because a workspace copy of the code is not
-    // reachable at the account path — a wrapper pointing at the wrong scope
-    // is a tool that resolves to nothing at run time.
-    assert.match(readWorkspaceFile("acme", "desk", "tools/browser.md"), /run: workspace\/scripts\//);
-  }));
-
-test("install copies to the account library by default", () =>
-  withData(() => {
-    const rel = installGalleryTool("acme", "browser");
-    assert.equal(rel, "fetch-rendered.mjs");
-    assert.match(readLibraryFile("acme", "scripts", rel), /chromium\.launch/);
-  }));
-
-test("install with a workspace copies into that workspace's scripts", () =>
-  withData(() => {
-    saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
-    const rel = installGalleryTool("acme", "browser", "desk");
-    assert.equal(rel, "scripts/fetch-rendered.mjs");
-    assert.match(readWorkspaceFile("acme", "desk", rel), /chromium\.launch/);
+    const def = workspaceTools("acme", "desk").browser;
+    assert.equal(def.kind, "script");
+    // readToolDir qualifies the relative path with the scope it read it from,
+    // so the runner can find it from an agent directory two levels down.
+    assert.equal((def.spec as { run: string }).run, "workspace/tools/browser/run.mjs");
   }));
 
 test("an unknown tool is refused", () =>
@@ -73,7 +75,9 @@ test("an unknown tool is refused", () =>
 // ------------------------------------------------------------- API tools
 
 test("every API tool in the gallery parses into a working http tool", () => {
-  for (const t of GALLERY.filter((t) => t.kind === "tools")) {
+  // The http ones: everything on the tools shelf that isn't a folder tool
+  // carrying its own code.
+  for (const t of GALLERY.filter((t) => t.kind === "tools" && !t.wrapper)) {
     const { data } = matter(t.content);
     const def = parseToolDef(data as Record<string, unknown>, t.name);
     assert.ok(def, `${t.name} parses`);
@@ -116,10 +120,9 @@ test("starting from a gallery entry renames it everywhere the name appears", () 
   assert.equal(parseToolDef(data as Record<string, unknown>, "my-mailer")!.kind, "http");
 });
 
-test("a script template keeps its extension, and a wrong-kind template is refused", () => {
-  assert.equal(galleryTemplate("scripts", "browser", "my-fetch")!.file, "my-fetch.mjs");
-  // Asking the tools shelf for a script entry (or anything unknown) returns
-  // null, so callers can treat it exactly like "no template chosen".
-  assert.equal(galleryTemplate("tools", "browser", "x"), null);
+test("a wrong-kind template is refused, and an unknown one too", () => {
+  // browser lives on the tools shelf now, so asking the scripts shelf for it
+  // returns null — which callers treat exactly like "no template chosen".
+  assert.equal(galleryTemplate("scripts", "browser", "x"), null);
   assert.equal(galleryTemplate("tools", "nope", "x"), null);
 });
