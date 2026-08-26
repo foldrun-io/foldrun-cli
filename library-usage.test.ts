@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { libraryUsage, listLibrary, type LibraryUse } from "../packages/core/src/library.ts";
+import { brokenToolReport, workspaceTools } from "../packages/core/src/store.ts";
 
 /** Build a throwaway account on disk and point core at it for one callback. */
 function withAccount(files: Record<string, string>, run: () => void) {
@@ -176,6 +177,27 @@ test("a tools listing says how each tool connects, and what a script one runs", 
       // A definition the runner would reject gets no badge, and does not
       // take the page down with it.
       assert.equal(byName.get("broken")?.transport, undefined);
+    },
+  );
+});
+
+test("a tool with broken frontmatter is reported, not silently missing", () => {
+  withAccount(
+    {
+      // The exact shape that cost two runs to diagnose: a value beginning
+      // with a quoted scalar, which YAML reads as a scalar followed by junk.
+      "acme/workspaces/desk/AGENTS.md": "---\nname: desk\n---\n",
+      "acme/workspaces/desk/tools/typo.md":
+        '---\ntransport: script\nname: typo\nrun: run.mjs\nargs:\n  flag: "true" to do the thing\n---\n',
+    },
+    () => {
+      // It does not load — that part is correct, a definition we cannot parse
+      // is one we must not hand to an agent.
+      assert.equal(workspaceTools("acme", "desk").typo, undefined);
+      // But it does not vanish either.
+      const broken = brokenToolReport("acme", "desk");
+      assert.equal(broken.length, 1);
+      assert.match(broken[0], /^typo: /);
     },
   );
 });
