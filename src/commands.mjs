@@ -181,6 +181,14 @@ function importedAgentNames(workspace, nativeNames) {
   for (const dir of [".agents/agents", ".claude/agents"]) {
     for (const entry of ls(path.join(workspace, dir))) {
       if (!entry.endsWith(".md")) continue;
+      // A real file, not a directory named x.md — deploy's readTree reads the
+      // file and would skip a directory, so check must agree or it counts an
+      // agent that never ships.
+      try {
+        if (!fs.statSync(path.join(workspace, dir, entry)).isFile()) continue;
+      } catch {
+        continue;
+      }
       const name = entry.replace(/\.md$/, "");
       if (nativeNames.has(name)) continue; // native wins
       names.add(name);
