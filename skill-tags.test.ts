@@ -94,9 +94,13 @@ test("every hop from the run record to the filter carries the tags", () => {
     .filter((args) => !args.includes("agentDir: string")); // the declaration
   assert.ok(calls.length > 0, "expected agentContext to be called somewhere");
   for (const args of calls) {
+    // The third argument is the tags. Position, not arity: the call grew a
+    // fourth argument (the run's identity for script provenance), and a
+    // count check would forbid every future one while missing a call that
+    // kept the count but dropped the tags.
     assert.equal(
-      args.split(",").length,
-      3,
+      args.split(",")[2]?.trim(),
+      "tags",
       `agentContext(${args}) drops the run's tags — a \`when:\` skill can then never load`,
     );
   }
