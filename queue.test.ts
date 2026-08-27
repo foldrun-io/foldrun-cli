@@ -17,10 +17,11 @@ import {
   claimNext,
   recoverQueue,
   rerunFrom,
+  startFlowFromStep,
   stopRun,
 } from "../packages/core/src/queue.ts";
 import { driveRun } from "../packages/core/src/runner.ts";
-import { deleteRun, readRun, writeRun, runDisplayStatus, runMeter, type RunRecord } from "../packages/core/src/store.ts";
+import { deleteRun, flowHasLiveRun, listFlows, readRun, writeRun, runDisplayStatus, runMeter, type RunRecord } from "../packages/core/src/store.ts";
 
 /** A tenant/workspace on disk, and core pointed at it. */
 function withWorkspace(body: () => void | Promise<void>) {
@@ -437,4 +438,47 @@ test("a stopped run displays as stopped, a broken one as failed", () =>
     assert.equal(runDisplayStatus({ ...base, status: "failed", stopRequested: true } as RunRecord), "stopped");
     assert.equal(runDisplayStatus({ ...base, status: "failed" } as RunRecord), "failed");
     assert.equal(runDisplayStatus({ ...base, status: "completed", stopRequested: true } as RunRecord), "completed");
+  }));
+
+test("startFlowFromStep skips the earlier groups, whole groups at a time", () =>
+  withWorkspace(() => {
+    // Group numbers, not array indices: step 2 is two parallel agents, and
+    // starting "from step 2" must keep both of them.
+    fs.mkdirSync(path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/flows"), { recursive: true });
+    fs.writeFileSync(
+      path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/flows/pipeline.md"),
+      "---\nname: pipeline\n---\n\n1. [[writer]] — fetch\n2. [[writer]] — clean\n2. [[writer]] — dedupe\n3. [[writer]] — send\n",
+    );
+    const run = startFlowFromStep("acme", "desk", "pipeline", 2);
+    assert.equal(run.status, "queued");
+    assert.deepEqual(
+      run.steps.map((s) => s.status),
+      ["skipped", "pending", "pending", "pending"],
+    );
+    assert.equal(run.steps[0].skipReason, "started from step 2");
+    // The job is real: a worker can claim it.
+    assert.equal(pendingJobs().length, 1);
+    assert.throws(() => startFlowFromStep("acme", "desk", "pipeline", 9), /has no step 9/);
+  }));
+
+test("overlap: is parsed from flow frontmatter, and only its two words count", () =>
+  withWorkspace(() => {
+    const flowsDir = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/flows");
+    fs.mkdirSync(flowsDir, { recursive: true });
+    fs.writeFileSync(path.join(flowsDir, "a.md"), "---\nname: a\noverlap: skip\n---\n\n1. [[writer]] — go\n");
+    fs.writeFileSync(path.join(flowsDir, "b.md"), "---\nname: b\noverlap: sideways\n---\n\n1. [[writer]] — go\n");
+    const flows = listFlows("acme", "desk");
+    assert.equal(flows.find((f) => f.name === "a")!.overlap, "skip");
+    assert.equal(flows.find((f) => f.name === "b")!.overlap, null);
+  }));
+
+test("flowHasLiveRun sees queued, running and parked runs — not finished ones", () =>
+  withWorkspace(() => {
+    const run = enqueueFlowRun("acme", "desk", [STEP], "pipeline", null);
+    assert.equal(flowHasLiveRun("acme", "desk", "pipeline"), true);
+    assert.equal(flowHasLiveRun("acme", "desk", "other"), false);
+    const record = readRun("acme", "desk", run.id)!;
+    record.status = "completed";
+    writeRun("acme", "desk", record);
+    assert.equal(flowHasLiveRun("acme", "desk", "pipeline"), false);
   }));
