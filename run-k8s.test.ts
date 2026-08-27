@@ -59,17 +59,33 @@ test("the env file survives shell metacharacters — quoting is load-bearing", (
   assert.ok(file.includes(`'it'\\''s got '\\''quotes'\\'' and $HOME and \`backticks\`'`));
 });
 
-test("a small step's pod reserves the small limits", () => {
+test("a pod caps memory per class but never caps CPU", () => {
   process.env.FOLDRUN_RUNNER_MEMORY = "6Gi";
   process.env.FOLDRUN_RUNNER_CPUS = "3";
   try {
-    const large = runPodManifest("p1", "img", "run-x") as {
-      spec: { containers: { resources: { limits: { memory: string; cpu: string } } }[] };
+    type Manifest = {
+      spec: {
+        containers: {
+          resources: { requests?: { cpu?: string }; limits: { memory: string; cpu?: string } }[];
+        }[];
+      };
     };
-    assert.deepEqual(large.spec.containers[0].resources.limits, { memory: "6Gi", cpu: "3" });
-    const small = runPodManifest("p2", "img", "run-x", "small") as typeof large;
-    // The defaults; FOLDRUN_RUNNER_*_SMALL overrides them.
-    assert.deepEqual(small.spec.containers[0].resources.limits, { memory: "1Gi", cpu: "1" });
+    const res = (m: Manifest) => m.spec.containers[0].resources;
+
+    const large = runPodManifest("p1", "img", "run-x") as Manifest;
+    // Memory is a hard ceiling; CPU is deliberately absent from limits so the
+    // pod bursts uncapped. A CPU limit reappearing here is the regression this
+    // guards: it silently throttles work the customer is paying for.
+    assert.deepEqual(res(large).limits, { memory: "6Gi" });
+    assert.equal(res(large).limits.cpu, undefined);
+    // A small CPU request remains, as a scheduling hint only.
+    assert.equal(res(large).requests?.cpu, "100m");
+
+    const small = runPodManifest("p2", "img", "run-x", "small") as Manifest;
+    assert.deepEqual(res(small).limits, { memory: "1Gi" });
+
+    const heavy = runPodManifest("p3", "img", "run-x", "heavy") as Manifest;
+    assert.deepEqual(res(heavy).limits, { memory: "8Gi" });
   } finally {
     delete process.env.FOLDRUN_RUNNER_MEMORY;
     delete process.env.FOLDRUN_RUNNER_CPUS;
