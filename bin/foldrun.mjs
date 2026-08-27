@@ -53,6 +53,7 @@ Options
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke: hold on and print the result
+  --from <n>                invoke: start at step n; earlier steps are skipped
 
 Platform options (deploy, invoke, secrets)
   --to <workspace>          workspace on the platform (deploy default: folder name)

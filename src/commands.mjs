@@ -833,9 +833,16 @@ async function invoke(target, flags) {
   if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
 
   const wait = flags.wait === true ? "?wait=true" : "";
+  // --from N starts at step N of the flow as its file numbers them; the
+  // earlier steps are recorded as skipped. Mutually exclusive with --task
+  // server-side (the task goes to step 1, which --from skips).
+  const from = flags.from !== undefined ? Number(flags.from) : undefined;
   const body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
     method: "POST",
-    body: JSON.stringify({ task: typeof flags.task === "string" ? flags.task : "" }),
+    body: JSON.stringify({
+      task: typeof flags.task === "string" ? flags.task : "",
+      ...(from !== undefined ? { from } : {}),
+    }),
   });
 
   if (!flags.wait) {
