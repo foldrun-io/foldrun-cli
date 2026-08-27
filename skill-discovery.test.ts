@@ -27,6 +27,8 @@ function fixture(): string {
   write(".agents/skills/portable/SKILL.md", "---\nname: portable\ndescription: A portable skill.\n---\nBody.");
   write("skills/no-desc/SKILL.md", "---\nname: no-desc\n---\nBody.");
   write("skills/colon/SKILL.md", "---\nname: colon\ndescription: Use when: the user mentions colons\n---\nBody.");
+  // A broken-YAML value (colon) that ALSO contains $ replacement patterns.
+  write("skills/dollar/SKILL.md", "---\nname: dollar\ndescription: Cost: A$&B and $$ per item\n---\nBody.");
   return root;
 }
 
@@ -58,4 +60,11 @@ test("a description with an unquoted colon still loads (lenient YAML)", () => {
   const colon = discoverSkills(root, "skills").find((s) => s.name === "colon");
   assert.ok(colon, "the colon skill should load rather than drop");
   assert.match(colon!.description, /colons/);
+});
+
+test("a broken-YAML description with $ patterns is not corrupted", () => {
+  const root = fixture();
+  const dollar = discoverSkills(root, "skills").find((s) => s.name === "dollar");
+  assert.ok(dollar, "the skill should load");
+  assert.equal(dollar!.description, "Cost: A$&B and $$ per item", "the $ sequences survive verbatim");
 });
