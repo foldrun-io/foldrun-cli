@@ -10,6 +10,7 @@ import {
   updateFlowStep,
   updateFlowStepInstruction,
   parseFlow,
+  parseWait,
   FLOW_PATTERNS,
 } from "../packages/core/src/store.ts";
 
@@ -122,4 +123,50 @@ test("parallel groups survive an instruction edit", () => {
 
 test("an index off the end refuses rather than writing garbage", () => {
   assert.throws(() => updateFlowStepInstruction(FLOW, 9, "nope"), /no step 9/);
+});
+
+// ------------------------------------------------- the five newest options
+
+test("on-fail, wait, each: rows, ask and delegate all parse", () => {
+  const raw = `---
+name: pipeline
+---
+
+1. [[scraper]] — fetch the pages
+   retry: 1
+   on-fail: fallback-scraper
+2. [[emailer]] — send the follow-up
+   wait: 3d
+3. [[enricher]] — enrich each lead
+   each: rows of ../../files/leads.csv
+   max: 15
+4. [[writer]] — draft the subject line
+   ask: Which tone — formal or friendly?
+5. [[coordinator]] — decide who finishes this
+   delegate: enricher, emailer, writer
+`;
+  const flow = parseFlow("pipeline.md", raw);
+  assert.equal(flow.steps[0].onFail, "fallback-scraper");
+  assert.equal(flow.steps[1].waitSecs, 3 * 86400);
+  assert.equal(flow.steps[2].each, "rows");
+  assert.equal(flow.steps[2].eachPath, "../../files/leads.csv");
+  assert.equal(flow.steps[2].max, 15);
+  assert.equal(flow.steps[3].ask, "Which tone — formal or friendly?");
+  assert.deepEqual(flow.steps[4].delegate, ["enricher", "emailer", "writer"]);
+});
+
+test("wait: understands units, clamps at 30 days, refuses nonsense", () => {
+  assert.equal(parseWait("90"), 90);
+  assert.equal(parseWait("90s"), 90);
+  assert.equal(parseWait("30m"), 1800);
+  assert.equal(parseWait("4h"), 14400);
+  assert.equal(parseWait("3d"), 259200);
+  assert.equal(parseWait("365d"), 30 * 86400, "clamped");
+  assert.equal(parseWait("soon"), undefined);
+  assert.equal(parseWait("0"), undefined);
+});
+
+test("a delegate list strips wikilink brackets and caps at five", () => {
+  const raw = "---\nname: d\n---\n\n1. [[boss]] — choose\n   delegate: [[a]], b, [[c]], d, e, f, g\n";
+  assert.deepEqual(parseFlow("d.md", raw).steps[0].delegate, ["a", "b", "c", "d", "e"]);
 });

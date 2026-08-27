@@ -482,3 +482,67 @@ test("flowHasLiveRun sees queued, running and parked runs — not finished ones"
     writeRun("acme", "desk", record);
     assert.equal(flowHasLiveRun("acme", "desk", "pipeline"), false);
   }));
+
+test("a wait: parks the run in the queue with a deadline, and the queue honours it", async () =>
+  withWorkspace(async () => {
+    // A flow whose FIRST step waits — parks before any model could be
+    // needed, which is what makes this testable without one.
+    const run = enqueueFlowRun(
+      "acme",
+      "desk",
+      [{ ...STEP, waitSecs: 3600 }],
+      "drip",
+      null,
+    );
+    const claim = claimNext()!;
+    await driveRun("acme", "desk", readRun("acme", "desk", run.id)!, null, [], { parkOnApproval: true });
+
+    const parked = readRun("acme", "desk", run.id)!;
+    assert.equal(parked.status, "queued", "waiting is queued, not failed");
+    assert.ok(parked.parkedAt, "the slot was handed back");
+    assert.ok(parked.steps[0].waitUntil, "the deadline is stamped on the record");
+    const until = new Date(parked.steps[0].waitUntil!).getTime();
+    assert.ok(until > Date.now() + 3500 * 1000, "roughly an hour out");
+
+    // Re-enqueue with the deadline, the way the worker does.
+    fs.rmSync(claim.claimedFile, { force: true });
+    enqueueResume("acme", "desk", run.id);
+    const pending = pendingDir();
+    const jobFile = fs.readdirSync(pending).find((f) => f.includes(run.id))!;
+    const job = JSON.parse(fs.readFileSync(path.join(pending, jobFile), "utf8"));
+    fs.writeFileSync(
+      path.join(pending, jobFile),
+      JSON.stringify({ ...job, notBefore: parked.steps[0].waitUntil }),
+    );
+    assert.equal(claimNext(), null, "an unexpired notBefore is not claimable");
+
+    // The deadline passing makes it claimable again.
+    fs.writeFileSync(
+      path.join(pending, jobFile),
+      JSON.stringify({ ...job, notBefore: new Date(Date.now() - 1000).toISOString() }),
+    );
+    const reclaimed = claimNext();
+    assert.ok(reclaimed, "an expired notBefore claims normally");
+    fs.rmSync(reclaimed!.claimedFile, { force: true });
+  }));
+
+test("ask: parks like an approval and the answer rides the record", async () =>
+  withWorkspace(async () => {
+    const run = enqueueFlowRun(
+      "acme",
+      "desk",
+      [{ ...STEP, ask: "Formal or friendly?" }],
+      "drafting",
+      null,
+    );
+    const claim = claimNext()!;
+    await driveRun("acme", "desk", readRun("acme", "desk", run.id)!, null, [], { parkOnApproval: true });
+    fs.rmSync(claim.claimedFile, { force: true });
+
+    const parked = readRun("acme", "desk", run.id)!;
+    assert.equal(parked.status, "awaiting-approval");
+    assert.match(
+      parked.steps[0].events.map((e) => e.text).join("\n"),
+      /waiting for an answer: Formal or friendly\?/,
+    );
+  }));
