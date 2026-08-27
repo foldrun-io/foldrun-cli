@@ -86,6 +86,14 @@ test("a pod caps memory per class but never caps CPU", () => {
 
     const heavy = runPodManifest("p3", "img", "run-x", "heavy") as Manifest;
     assert.deepEqual(res(heavy).limits, { memory: "8Gi" });
+
+    // Every run pod carries a k8s-native deadline so an orphan (platform
+    // restarted mid-run, shim spinning on a `go` that never comes) is reaped
+    // by the cluster rather than holding its reservation indefinitely.
+    type WithDeadline = { spec: { activeDeadlineSeconds?: number } };
+    assert.equal(typeof (large as unknown as WithDeadline).spec.activeDeadlineSeconds, "number");
+    const custom = runPodManifest("p4", "img", "run-x", "large", 900) as unknown as WithDeadline;
+    assert.equal(custom.spec.activeDeadlineSeconds, 900);
   } finally {
     delete process.env.FOLDRUN_RUNNER_MEMORY;
     delete process.env.FOLDRUN_RUNNER_CPUS;
