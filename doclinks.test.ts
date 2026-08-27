@@ -48,6 +48,25 @@ test("filenames, titles and files/ paths all resolve — spelling-blind", () =>
     assert.match(out, /write to `\.\.\/\.\.\/files\/leads\.csv`/);
   }));
 
+test("a folder is a reference too — [[files/]] and [[state]] resolve", () =>
+  withWorkspace((root) => {
+    const out = resolveDocLinks("Read what your instruction names in [[files/]]; ledgers live in [[knowledge]].", root);
+    assert.match(out, /in `\.\.\/\.\.\/files\/`/, "trailing slash form");
+    assert.match(out, /in `\.\.\/\.\.\/knowledge\/`/, "bare folder name");
+    // A folder that does not exist stays prose, like any other miss.
+    assert.match(resolveDocLinks("see [[outputs]]", root), /see \[\[outputs\]\]/);
+  }));
+
+test("a document beats a folder of the same name", () =>
+  withWorkspace((root) => {
+    fs.writeFileSync(path.join(root, "knowledge", "files.md"), "---\ntype: Reference\n---\n\nx\n");
+    assert.match(
+      resolveDocLinks("[[files]]", root),
+      /`\.\.\/\.\.\/knowledge\/files\.md`/,
+      "the more specific reference wins",
+    );
+  }));
+
 test("what doesn't match passes through untouched — sugar, never a gate", () =>
   withWorkspace((root) => {
     const text = "Consult [[enricher]] about [[something we never wrote down]].";
