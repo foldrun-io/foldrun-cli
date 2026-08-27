@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   flowPatternTemplate,
   updateFlowStep,
+  updateFlowStepInstruction,
   parseFlow,
   FLOW_PATTERNS,
 } from "../packages/core/src/store.ts";
@@ -79,4 +80,46 @@ test("fan-out options write and clear as a pair", () => {
 
 test("an index off the end refuses rather than writing garbage", () => {
   assert.throws(() => updateFlowStep(FLOW, 9, { model: "fast" }), /no step 9/);
+});
+
+
+// ------------------------------------------------------- step instructions
+
+test("editing an instruction keeps the number, the marker and the link", () => {
+  const marked = `---\nname: digest\n---\n\n1? [[researcher]] — gather the week\n2! [[writer]] — write it up\n   retry: 1\n`;
+  const out = updateFlowStepInstruction(marked, 0, "gather the month instead");
+  const flow = parseFlow("digest.md", out);
+  assert.equal(flow.steps[0].instruction, "gather the month instead");
+  assert.equal(flow.steps[0].optional, true, "the ? marker survived");
+  assert.equal(flow.steps[0].agent, "researcher");
+  assert.equal(flow.steps[1].approve, true, "the other step's ! marker survived");
+  assert.equal(flow.steps[1].instruction, "write it up", "the other step is untouched");
+  assert.equal(flow.steps[1].retry, 1, "its options survived");
+});
+
+test("a multi-line instruction is flattened — one step is one line", () => {
+  const out = updateFlowStepInstruction(FLOW, 0, "  gather the week\n  then summarise it  ");
+  assert.equal(parseFlow("d.md", out).steps[0].instruction, "gather the week then summarise it");
+  assert.equal(out.split("\n").filter((l) => l.startsWith("1.")).length, 1);
+});
+
+test("clearing an instruction leaves a step that still parses", () => {
+  const out = updateFlowStepInstruction(FLOW, 1, "");
+  const flow = parseFlow("d.md", out);
+  assert.equal(flow.steps.length, 2);
+  assert.equal(flow.steps[1].instruction, "");
+  assert.equal(flow.steps[1].agent, "writer");
+  assert.equal(flow.steps[1].verify, "test -s outputs/post.md", "options survived");
+});
+
+test("parallel groups survive an instruction edit", () => {
+  const parallel = `---\nname: p\n---\n\n1. [[a]] — one\n2. [[b]] — two\n2. [[c]] — three\n`;
+  const out = updateFlowStepInstruction(parallel, 1, "two, revised");
+  const groups = parseFlow("p.md", out).steps.map((s) => s.group);
+  assert.deepEqual(groups, [1, 2, 2], "b and c still run in parallel");
+  assert.equal(parseFlow("p.md", out).steps[2].instruction, "three");
+});
+
+test("an index off the end refuses rather than writing garbage", () => {
+  assert.throws(() => updateFlowStepInstruction(FLOW, 9, "nope"), /no step 9/);
 });
