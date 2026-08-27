@@ -170,6 +170,25 @@ function validateSkills(workspace, note) {
   }
 }
 
+// Single-file subagents authored by ANY coding tool. The vendor-neutral
+// cross-client location is .agents/agents/<name>.md (scanned first); a tool's
+// own dir (.claude/agents/ so far) follows for pragmatic compatibility.
+// readTree maps these into agents/<name>/agent.md at deploy; check mirrors it
+// so the local, pre-deploy experience matches — otherwise a workspace whose
+// only agents were authored elsewhere reports "no agents" until it deploys.
+function importedAgentNames(workspace, nativeNames) {
+  const names = new Set();
+  for (const dir of [".agents/agents", ".claude/agents"]) {
+    for (const entry of ls(path.join(workspace, dir))) {
+      if (!entry.endsWith(".md")) continue;
+      const name = entry.replace(/\.md$/, "");
+      if (nativeNames.has(name)) continue; // native wins
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 async function check(workspace) {
   const {
     listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
@@ -194,9 +213,11 @@ async function check(workspace) {
   // workspace itself defines.
   const usable = { ...libraryTools(T), ...tools };
   const agentNames = new Set(agents.map((a) => a.name));
+  const imported = importedAgentNames(workspace, agentNames);
+  for (const n of imported) agentNames.add(n);
   const flowNames = new Set(flows.map((f) => f.name));
 
-  if (agents.length === 0) note("error", "agents/", "no agents — a workspace needs at least one");
+  if (agentNames.size === 0) note("error", "agents/", "no agents — a workspace needs at least one");
 
   // What format does this workspace target?
   const agentsMd = path.join(workspace, "AGENTS.md");
@@ -299,7 +320,7 @@ async function check(workspace) {
     const tag = p.level === "error" ? c.red("error") : c.amber(" warn");
     console.log(`  ${tag}  ${c.bold(p.where)}  ${p.message}`);
   }
-  const summary = `${agents.length} agents · ${flows.length} flows · ${evals.length} evals · ${Object.keys(tools).length} tools`;
+  const summary = `${agentNames.size} agents · ${flows.length} flows · ${evals.length} evals · ${Object.keys(tools).length} tools`;
   console.log(
     problems.length === 0
       ? `  ${c.green("✓")} ${summary} — no problems\n`
