@@ -19,7 +19,10 @@ function withWorkspace(body: (root: string) => void) {
       path.join(root, "knowledge", "sources-of-conveyancers.md"),
       "---\ntype: Reference\ntitle: Sources for conveyancer leads\n---\n\ndirectories…\n",
     );
-    fs.writeFileSync(path.join(root, "memory", "known-duds.md"), "---\ntype: Fact\n---\n\n…\n");
+    fs.writeFileSync(
+      path.join(root, "memory", "known-duds.md"),
+      "---\ntype: Fact\nname: numbers that never answer\n---\n\n…\n",
+    );
     fs.writeFileSync(path.join(root, "files", "leads.csv"), "email\na@b.c\n");
     body(root);
   } finally {
@@ -37,6 +40,11 @@ test("filenames, titles and files/ paths all resolve — spelling-blind", () =>
     assert.match(out, /`\.\.\/\.\.\/knowledge\/sources-of-conveyancers\.md` first/);
     assert.match(out, /honour `\.\.\/\.\.\/knowledge\/sources-of-conveyancers\.md`/, "title matches too");
     assert.match(out, /check `\.\.\/\.\.\/memory\/known-duds\.md`/, "underscores and hyphens compare equal");
+    assert.match(
+      resolveDocLinks("Avoid [[numbers that never answer]].", root),
+      /`\.\.\/\.\.\/memory\/known-duds\.md`/,
+      "the older `name:` frontmatter matches like title",
+    );
     assert.match(out, /write to `\.\.\/\.\.\/files\/leads\.csv`/);
   }));
 
