@@ -19,6 +19,9 @@ import {
   rerunFrom,
   startFlowFromStep,
   stopRun,
+  holdsWorkerLease,
+  peekWorkerLease,
+  queueStats,
 } from "../packages/core/src/queue.ts";
 import { driveRun } from "../packages/core/src/runner.ts";
 import { deleteRun, flowHasLiveRun, listFlows, readRun, writeRun, runDisplayStatus, runMeter, type RunRecord } from "../packages/core/src/store.ts";
@@ -545,4 +548,48 @@ test("ask: parks like an approval and the answer rides the record", async () =>
       parked.steps[0].events.map((e) => e.text).join("\n"),
       /waiting for an answer: Formal or friendly\?/,
     );
+  }));
+
+test("the worker lease: one holder, stale takeover, and a peek that never writes", () =>
+  withWorkspace(() => {
+    const lease = path.join(process.env.FOLDRUN_DATA!, ".worker-lease");
+
+    assert.equal(peekWorkerLease(), false, "peek before any lease exists");
+    assert.ok(!fs.existsSync(lease), "and peeking wrote nothing");
+
+    assert.equal(holdsWorkerLease(), true, "an unclaimed lease is taken");
+    assert.equal(peekWorkerLease(), true, "and peek now sees our ownership");
+    assert.equal(holdsWorkerLease(), true, "the holder renews freely");
+
+    // A fresh lease held by someone else blocks us…
+    fs.writeFileSync(lease, JSON.stringify({ owner: "other-worker", renewedAt: Date.now() }));
+    assert.equal(holdsWorkerLease(), false, "a live foreign lease is respected");
+    assert.equal(peekWorkerLease(), false);
+
+    // …until it goes stale, and then it's claimable.
+    fs.writeFileSync(lease, JSON.stringify({ owner: "other-worker", renewedAt: Date.now() - 120_000 }));
+    assert.equal(holdsWorkerLease(), true, "a stale lease is taken over");
+  }));
+
+test("queueStats separates ready, scheduled-ahead and claimed", () =>
+  withWorkspace(() => {
+    enqueueFlowRun("acme", "desk", [STEP], "a", null);
+    enqueueFlowRun("acme", "desk", [STEP], "b", null);
+    // Push one job's deadline into the future, the way a wait: does.
+    const pending = pendingDir();
+    const name = fs.readdirSync(pending).filter((f) => f.endsWith(".json"))[0];
+    const job = JSON.parse(fs.readFileSync(path.join(pending, name), "utf8"));
+    fs.writeFileSync(
+      path.join(pending, name),
+      JSON.stringify({ ...job, notBefore: new Date(Date.now() + 60_000).toISOString() }),
+    );
+    const claimed = claimNext(); // claims the OTHER job (deadline is skipped)
+    assert.ok(claimed);
+
+    const stats = queueStats();
+    assert.equal(stats.pending, 0, "the ready job was claimed");
+    assert.equal(stats.scheduledAhead, 1, "the deadline job is scheduled, not late");
+    assert.equal(stats.claimed, 1);
+    assert.equal(stats.oldestPendingSecs, null, "nothing ready means no age to report");
+    fs.rmSync(claimed!.claimedFile, { force: true });
   }));
