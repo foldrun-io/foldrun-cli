@@ -13,7 +13,11 @@ import {
   walletConfig,
   saveWalletConfig,
   warnThresholdUsd,
+  workspaceBudgetUsd,
+  assertWorkspaceBudget,
 } from "../packages/core/src/wallet.ts";
+import { demoWorkspaceFiles } from "../packages/core/src/demo-workspace.ts";
+import { parseFlow } from "../packages/core/src/store.ts";
 
 function withAccount(body: () => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-wallet-"));
@@ -88,3 +92,47 @@ test("wallet config round-trips and starts empty", () =>
     saveWalletConfig("acme", { ...walletConfig("acme"), warnedAt: undefined });
     assert.equal(walletConfig("acme").warnedAt, undefined, "clearing a marker sticks");
   }));
+
+test("budget: caps a workspace at admission, and only that workspace", () =>
+  withAccount(() => {
+    const ws = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/leads");
+    fs.mkdirSync(ws, { recursive: true });
+    fs.writeFileSync(path.join(ws, "AGENTS.md"), "---\nname: leads\nbudget: 10\n---\n");
+    assert.equal(workspaceBudgetUsd("acme", "leads"), 10);
+    assert.equal(workspaceBudgetUsd("acme", "other"), null, "no file, no cap");
+
+    // Under budget: admission passes.
+    recordTopUp("acme", 100);
+    assert.doesNotThrow(() => assertWorkspaceBudget("acme", "leads"));
+
+    // This month's spend in THIS workspace crosses the cap → 402.
+    const file = path.join(process.env.FOLDRUN_DATA!, "acme", "ledger.jsonl");
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ t: new Date().toISOString(), kind: "run", usd: -11, workspace: "leads" }) + "\n",
+    );
+    assert.throws(
+      () => assertWorkspaceBudget("acme", "leads"),
+      (e: Error & { status?: number }) => e.status === 402 && /monthly budget/.test(e.message),
+    );
+    // Another workspace's spend is not this workspace's problem.
+    assert.doesNotThrow(() => assertWorkspaceBudget("acme", "other"));
+  }));
+
+test("the demo workspace parses into the shape the button promises", () => {
+  const files = demoWorkspaceFiles();
+  const flow = files.find((f) => f.path === "flows/extract-and-import.md")!;
+  const parsed = parseFlow("extract-and-import.md", flow.content);
+  const groups = parsed.steps.map((s) => s.group);
+  assert.deepEqual(groups, [1, 2, 2, 3], "extract, then a parallel pair, then the gate");
+  assert.equal(parsed.steps[3].approve, true, "the import waits for a human");
+  assert.equal(parsed.overlap, "skip");
+  // Every agent a step names ships in the same bundle.
+  const agents = new Set(
+    files.filter((f) => f.path.startsWith("agents/")).map((f) => f.path.split("/")[1]),
+  );
+  for (const s of parsed.steps) assert.ok(agents.has(s.agent), `agent ${s.agent} ships with the demo`);
+  // The pretend CRM must stay pretend: no fetch anywhere in its code.
+  const tool = files.find((f) => f.path === "tools/crm-upload.md")!;
+  assert.ok(!/fetch\(/.test(tool.content), "the demo tool sends nothing");
+});
