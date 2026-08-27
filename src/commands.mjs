@@ -109,6 +109,67 @@ async function init(workspace, from) {
 
 // ---------------------------------------------------------------- check
 
+// The Agent Skills spec constrains the `name` field and requires a non-empty
+// `description`. Validation is deliberately lenient — the client guide says to
+// warn and load rather than reject, so cross-client skills still run — so these
+// are warnings and one error (an empty description cannot be disclosed, so the
+// runtime skips that skill; the error says why it vanished).
+const SKILL_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+function readFm(file) {
+  const block = readFrontmatter(file);
+  if (block === null) return null;
+  const field = (k) => {
+    const m = new RegExp(`^${k}:\\s*(.+)$`, "m").exec(block);
+    return m ? m[1].trim().replace(/^["']|["']$/g, "") : null;
+  };
+  return { name: field("name"), description: field("description") };
+}
+
+// Every skill root the runtime scans: each agent's own skills/, the workspace
+// skills/, and the cross-client .agents/skills/ convention.
+function skillRoots(workspace) {
+  const roots = [];
+  for (const agent of ls(path.join(workspace, "agents"))) {
+    roots.push(`agents/${agent}/skills`);
+  }
+  roots.push("skills", ".agents/skills");
+  return roots;
+}
+
+function validateSkills(workspace, note) {
+  for (const root of skillRoots(workspace)) {
+    for (const folder of ls(path.join(workspace, root))) {
+      const dir = path.join(workspace, root, folder);
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+      const skillMd = path.join(dir, "SKILL.md");
+      if (!fs.existsSync(skillMd)) continue;
+      const where = `${root}/${folder}/SKILL.md`;
+      const fm = readFm(skillMd);
+      if (!fm) { note("warn", where, "no frontmatter — needs name and description"); continue; }
+
+      if (!fm.description) {
+        note("error", where, "no description — the runtime skips a skill it cannot disclose");
+      } else if (fm.description.length > 1024) {
+        note("warn", where, `description is ${fm.description.length} chars — the spec limit is 1024`);
+      }
+
+      const name = fm.name;
+      if (!name) {
+        note("warn", where, "no name — the folder name is used, but declare it");
+      } else {
+        if (name !== folder) {
+          note("warn", where, `name "${name}" does not match its folder "${folder}" — the spec requires they match`);
+        }
+        if (name.length > 64) note("warn", where, `name is ${name.length} chars — the spec limit is 64`);
+        if (!SKILL_NAME_RE.test(name)) {
+          note("warn", where, `name "${name}" is not lowercase-alphanumeric-with-single-hyphens`);
+        }
+      }
+    }
+  }
+}
+
 async function check(workspace) {
   const {
     listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
@@ -156,6 +217,8 @@ async function check(workspace) {
       // declared script tools must point at a file that exists
     }
   }
+
+  validateSkills(workspace, note);
 
   for (const f of flows) {
     if (f.steps.length === 0) note("error", `flows/${f.file}`, "no steps");
