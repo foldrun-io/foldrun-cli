@@ -398,7 +398,7 @@ test("nothing asks for confirmation through the browser", () => {
 });
 
 test("every workspace subpage reaches up through WorkspaceHeader", () => {
-  const subpages = ["agents", "flows", "runs", "evals", "assets", "files", "settings"];
+  const subpages = ["agents", "flows", "runs", "evals", "assets", "storage", "settings"];
   for (const p of subpages) {
     const src = fs.readFileSync(path.join(WEB, `app/dashboard/[workspace]/${p}/page.tsx`), "utf8");
     assert.ok(src.includes("WorkspaceHeader"), `${p} hand-rolls its header`);
