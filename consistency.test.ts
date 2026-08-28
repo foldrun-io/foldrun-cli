@@ -610,8 +610,35 @@ test("every step option the parser accepts is documented", () => {
 // telling people to write [[files/leads.csv]] — a path that resolves only
 // through the legacy alias. Docs that name a directory should name the one
 // the code uses.
-test("the help page names storage/, not the pre-rename files/", () => {
-  const help = read("web/app/dashboard/help/page.tsx");
-  assert.ok(!/[^a-z]files\//.test(help), "help page still refers to files/ — it is storage/ now");
-  assert.ok(help.includes("storage/"), "help page should name storage/");
+test("nothing a person reads still names the pre-rename files/", () => {
+  // The help page was not the only place. The run-from-step dialog told people
+  // their run would "lean on whatever they last left in files/", and the
+  // scaling ADR — which now renders inside the app — said "files/ stays R2".
+  // Anything a person reads should name the directory the code actually uses.
+  const surfaces = [
+    "web/app/dashboard/help/page.tsx",
+    "web/app/dashboard/[workspace]/flows/flow-board.tsx",
+    "docs/scaling-adr.md",
+    "docs/grammar-adr.md",
+    "SPEC.md",
+    "README.md",
+  ];
+  const offenders: string[] = [];
+  for (const rel of surfaces) {
+    let src: string;
+    try {
+      src = read(rel);
+    } catch {
+      continue; // a doc that no longer exists is not a stale reference
+    }
+    for (const line of src.split("\n")) {
+      // `files` as a bare word is fine ("the file store", "foldrun-files").
+      // A PATH segment — files/ — is the thing that was renamed. Skip lines
+      // that are explicitly about the legacy alias or the bucket name.
+      if (!/(^|[^\w-])files\//.test(line)) continue;
+      if (/legacy|LEGACY|foldrun-files|api\/|route/.test(line)) continue;
+      offenders.push(`${rel}: ${line.trim().slice(0, 70)}`);
+    }
+  }
+  assert.deepEqual(offenders, [], "files/ was renamed to storage/ — these still say files/");
 });

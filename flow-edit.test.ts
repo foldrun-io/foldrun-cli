@@ -138,7 +138,7 @@ name: pipeline
 2. [[emailer]] — send the follow-up
    wait: 3d
 3. [[enricher]] — enrich each lead
-   each: rows of ../../files/leads.csv
+   each: rows of ../../storage/leads.csv
    max: 15
 4. [[writer]] — draft the subject line
    ask: Which tone — formal or friendly?
@@ -149,7 +149,7 @@ name: pipeline
   assert.equal(flow.steps[0].onFail, "fallback-scraper");
   assert.equal(flow.steps[1].waitSecs, 3 * 86400);
   assert.equal(flow.steps[2].each, "rows");
-  assert.equal(flow.steps[2].eachPath, "../../files/leads.csv");
+  assert.equal(flow.steps[2].eachPath, "../../storage/leads.csv");
   assert.equal(flow.steps[2].max, 15);
   assert.equal(flow.steps[3].ask, "Which tone — formal or friendly?");
   assert.deepEqual(flow.steps[4].delegate, ["enricher", "emailer", "writer"]);
