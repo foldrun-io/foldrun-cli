@@ -570,3 +570,48 @@ test("only the worker may create run pods", () => {
   assert.ok(bound.includes(worker), "the worker's account must hold the run-pod Role");
   assert.ok(!bound.includes(web), "the web account must hold no RBAC at all");
 });
+
+// ------------------------------------------------------- the grammar's docs
+//
+// A flow step accepts seventeen options, and they arrived one reasonable
+// feature at a time. Four of them (`approve:`, `retry:`, `timeout:`,
+// `verify:`) were shipped, parsed and clamped without ever reaching SPEC.md —
+// found only by counting the parser against the prose. The help page's own
+// header says "the consistency suite can't check that". It can.
+
+/** Every option key the flow parser actually accepts. */
+function parsedStepOptions(): string[] {
+  const src = read("packages/core/src/store.ts");
+  const keys = [...src.matchAll(/key === "([a-z-]+)"/g)].map((m) => m[1]);
+  // `onfail` is spelled two ways at the parser; documenting one is enough.
+  return [...new Set(keys)].filter((k) => k !== "onfail");
+}
+
+test("every step option the parser accepts is documented", () => {
+  const options = parsedStepOptions();
+  assert.ok(options.length >= 15, `expected the full option set, found ${options.length}`);
+
+  const spec = read("SPEC.md");
+  const help = read("web/app/dashboard/help/page.tsx");
+
+  for (const key of options) {
+    assert.ok(
+      spec.includes(`\`${key}:`) || spec.includes(`${key}:`),
+      `step option "${key}:" is parsed but absent from SPEC.md — the format spec has to name it`,
+    );
+    assert.ok(
+      help.includes(`${key}:`),
+      `step option "${key}:" is parsed but absent from the in-app help page`,
+    );
+  }
+});
+
+// The rename of files/ to storage/ reached the code and left the help page
+// telling people to write [[files/leads.csv]] — a path that resolves only
+// through the legacy alias. Docs that name a directory should name the one
+// the code uses.
+test("the help page names storage/, not the pre-rename files/", () => {
+  const help = read("web/app/dashboard/help/page.tsx");
+  assert.ok(!/[^a-z]files\//.test(help), "help page still refers to files/ — it is storage/ now");
+  assert.ok(help.includes("storage/"), "help page should name storage/");
+});
