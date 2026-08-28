@@ -642,3 +642,51 @@ test("nothing a person reads still names the pre-rename files/", () => {
   }
   assert.deepEqual(offenders, [], "files/ was renamed to storage/ — these still say files/");
 });
+
+// ------------------------------------------------- what agents are told to do
+//
+// The prompt tells every agent where to leave deliverables. harvestFiles reads
+// exactly one directory. If those two disagree, a run writes its output to a
+// place nothing collects and the Storage page stays empty — no error, no
+// warning, the run reports success.
+//
+// That is not hypothetical: after files/ was renamed to storage/, the prompt
+// still said `../../files/`. Nothing rescued it either, because
+// materializeFiles always creates storage/ before the step, which makes
+// adoptLegacyFilesDir's "move files/ into storage/" a no-op by harvest time.
+
+test("agents are told to write where harvestFiles actually reads", () => {
+  const runner = read("packages/core/src/runner.ts");
+  const storage = read("packages/core/src/storage.ts");
+
+  // The directory the store harvests from, taken from the source of truth.
+  const dir = read("packages/core/src/store.ts").match(/export const STORAGE_DIR = "([^"]+)"/)?.[1];
+  assert.ok(dir, "STORAGE_DIR should be a literal in store.ts");
+
+  // Only the lines that tell an agent where DELIVERABLES go. Other
+  // `../../x/` paths in the prompt (knowledge/, memory/) are read locations
+  // and correctly point elsewhere.
+  const told = runner
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("//"))
+    .filter((l) => /deliverable|file store/i.test(l))
+    .flatMap((l) => [...l.matchAll(/\.\.\/\.\.\/([a-z]+)\//g)].map((m) => m[1]))
+    .filter((d) => d !== "outputs"); // outputs/ is working text, not delivered
+  assert.ok(told.length > 0, "the prompt should name a deliverables directory");
+
+  for (const named of new Set(told)) {
+    assert.equal(
+      named,
+      dir,
+      `the prompt tells agents to write to ../../${named}/ but the store harvests ${dir}/ — ` +
+        `anything written there is silently never collected`,
+    );
+  }
+
+  // And harvest really does read that constant rather than a literal.
+  assert.match(
+    storage,
+    /harvestFiles[\s\S]{0,400}STORAGE_DIR/,
+    "harvestFiles should read STORAGE_DIR, so this test compares against the real path",
+  );
+});

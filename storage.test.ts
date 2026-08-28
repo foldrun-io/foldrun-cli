@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import {
   assertFilePath,
   putFile,
-  listFiles,
+  listStorage,
   getFile,
   deleteFile,
   usedBytes,
@@ -27,7 +27,7 @@ import {
   harvestFiles,
   blobPath,
   mimeFor,
-} from "../packages/core/src/files.ts";
+} from "../packages/core/src/storage.ts";
 import { workspaceDir, isPlatformPath, saveWorkspace, adoptLegacyFilesDir } from "../packages/core/src/store.ts";
 
 let root: string;
@@ -37,7 +37,7 @@ const WS = "demo";
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-files-"));
   process.env.FOLDRUN_DATA = root;
-  delete process.env.FOLDRUN_FILES_DRIVER;
+  delete process.env.FOLDRUN_STORAGE_DRIVER;
   fs.mkdirSync(path.join(workspaceDir(TENANT, WS), "agents"), { recursive: true });
 });
 
@@ -74,7 +74,7 @@ test("a file round-trips, and identical bytes store one blob", async () => {
 
   assert.equal(first.sha, second.sha, "same bytes hashed differently");
   assert.equal(first.mime, "text/csv");
-  assert.equal(listFiles(TENANT, WS).length, 2);
+  assert.equal(listStorage(TENANT, WS).length, 2);
   // Two records, one blob — and the quota counts the blob once.
   assert.equal(usedBytes(TENANT, WS), bytes.length);
   assert.deepEqual(await readFileBytes(TENANT, WS, "copy-of-leads.csv"), bytes);
@@ -98,29 +98,29 @@ test("re-writing a name replaces the record and keeps one entry", async () => {
   await putFile(TENANT, WS, "report.md", Buffer.from("draft"), "user:me");
   await putFile(TENANT, WS, "report.md", Buffer.from("final"), "run:run-xyz");
 
-  const files = listFiles(TENANT, WS);
+  const files = listStorage(TENANT, WS);
   assert.equal(files.length, 1);
   assert.equal(files[0].by, "run:run-xyz");
   assert.equal((await readFileBytes(TENANT, WS, "report.md"))?.toString(), "final");
 });
 
 test("the per-object limit is enforced", async () => {
-  process.env.FOLDRUN_FILES_MAX_MB = "0.001"; // 1 KB
+  process.env.FOLDRUN_STORAGE_MAX_MB = "0.001"; // 1 KB
   await assert.rejects(
     putFile(TENANT, WS, "big.bin", Buffer.alloc(4096), "user:me"),
     /the limit is/,
   );
-  delete process.env.FOLDRUN_FILES_MAX_MB;
+  delete process.env.FOLDRUN_STORAGE_MAX_MB;
 });
 
 test("the workspace quota is enforced", async () => {
-  process.env.FOLDRUN_FILES_QUOTA_MB = "0.001"; // 1 KB
+  process.env.FOLDRUN_STORAGE_QUOTA_MB = "0.001"; // 1 KB
   await putFile(TENANT, WS, "a.bin", Buffer.alloc(600), "user:me");
   await assert.rejects(
     putFile(TENANT, WS, "b.bin", Buffer.alloc(600), "user:me"),
     /quota exceeded/,
   );
-  delete process.env.FOLDRUN_FILES_QUOTA_MB;
+  delete process.env.FOLDRUN_STORAGE_QUOTA_MB;
 });
 
 // ---------- the run mirror ----------
@@ -249,13 +249,13 @@ test("SigV4 matches AWS's published test vector", () => {
 });
 
 test("a presigned GET is signed as an attachment, and expires", async () => {
-  process.env.FOLDRUN_FILES_DRIVER = "s3";
+  process.env.FOLDRUN_STORAGE_DRIVER = "s3";
   process.env.FOLDRUN_S3_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
   process.env.FOLDRUN_S3_BUCKET = "foldrun-files";
   process.env.FOLDRUN_S3_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE";
   process.env.FOLDRUN_S3_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
   try {
-    const { downloadUrl } = await import("../packages/core/src/files.ts");
+    const { downloadUrl } = await import("../packages/core/src/storage.ts");
     const url = (await downloadUrl(TENANT, WS, {
       path: "out/report.html",
       sha: "a".repeat(64),
@@ -278,7 +278,7 @@ test("a presigned GET is signed as an attachment, and expires", async () => {
     assert.equal(parsed.searchParams.get("X-Amz-SignedHeaders"), "host");
   } finally {
     for (const k of [
-      "FOLDRUN_FILES_DRIVER",
+      "FOLDRUN_STORAGE_DRIVER",
       "FOLDRUN_S3_ENDPOINT",
       "FOLDRUN_S3_BUCKET",
       "FOLDRUN_S3_ACCESS_KEY_ID",
@@ -288,14 +288,14 @@ test("a presigned GET is signed as an attachment, and expires", async () => {
 });
 
 test("a half-configured bucket falls back rather than failing every upload", async () => {
-  process.env.FOLDRUN_FILES_DRIVER = "s3";
+  process.env.FOLDRUN_STORAGE_DRIVER = "s3";
   process.env.FOLDRUN_S3_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
   // No bucket, no credentials.
   try {
     const rec = await putFile(TENANT, WS, "still-works.txt", Buffer.from("hi"), "user:me");
     assert.ok(fs.existsSync(blobPath(TENANT, WS, rec.sha)));
   } finally {
-    delete process.env.FOLDRUN_FILES_DRIVER;
+    delete process.env.FOLDRUN_STORAGE_DRIVER;
     delete process.env.FOLDRUN_S3_ENDPOINT;
   }
 });
