@@ -148,7 +148,10 @@ test("loop: winds back one group until the marker appears", () =>
   withStubbedRun(
     {
       writer: "draft v1\n---\ndraft v2",
-      editor: "needs work\n---\nAPPROVED — ship draft v2",
+      // The marker stands alone on its line; notes may follow it. Written
+              // inline ("APPROVED — ship v2") this is a conditional-shaped
+              // reply and no longer ends the loop — see tests/until-marker.
+              editor: "needs work\n---\nAPPROVED\nship draft v2",
     },
     [step("writer", 1), step("editor", 2, { loop: 3, until: "APPROVED" })],
     (run) => {
