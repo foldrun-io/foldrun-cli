@@ -20,7 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ALL_KINDS, kindsAt, docKeyOf, docTypeOf, type Kind } from "../packages/core/src/kinds.ts";
 
-import { WORKSPACE_DIRS, templateFiles, anchoredReason } from "../packages/core/src/store.ts";
+import { WORKSPACE_DIRS, templateFiles, anchoredReason, accountFileSealed } from "../packages/core/src/store.ts";
 import { starterFiles } from "../packages/core/src/starter.ts";
 import { LIBRARY_KINDS } from "../packages/core/src/library.ts";
 
@@ -442,4 +442,27 @@ test("the tree's refusals are the server's refusals, word for word", () => {
   ]) {
     assert.ok(tree.includes(phrase), `file-tree.tsx is missing: ${phrase}`);
   }
+});
+
+// The account file tree is a faithful walk of the account directory, not a
+// curated view of it. A tree that silently differs from the filesystem teaches
+// the filesystem wrong — which is why the vault and the ledger are LISTED and
+// then refused by name, rather than hidden and wondered about.
+test("the vault and the ledger are sealed, and authored files are not", () => {
+  const sealed = ["secrets.json", "ledger.jsonl", "oauth-clients.json", "billed/2026-08.json"];
+  for (const p of sealed) {
+    assert.ok(accountFileSealed(p), `${p} must not be servable`);
+  }
+  const open = [
+    "AGENTS.md",
+    "library/tools/browser.md",
+    "workspaces/blog-desk/agents/writer/agent.md",
+    "storage/blog-desk/index.json",
+  ];
+  for (const p of open) {
+    assert.equal(accountFileSealed(p), null, `${p} is authored and should open`);
+  }
+  // A workspace's own vault and its run history are sealed the same way.
+  assert.ok(accountFileSealed("workspaces/blog-desk/secrets.json"));
+  assert.ok(accountFileSealed("workspaces/blog-desk/runs/run-x.json"));
 });
