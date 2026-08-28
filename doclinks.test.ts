@@ -14,7 +14,7 @@ function withWorkspace(body: (root: string) => void) {
   try {
     fs.mkdirSync(path.join(root, "knowledge"), { recursive: true });
     fs.mkdirSync(path.join(root, "memory"), { recursive: true });
-    fs.mkdirSync(path.join(root, "files"), { recursive: true });
+    fs.mkdirSync(path.join(root, "storage"), { recursive: true });
     fs.writeFileSync(
       path.join(root, "knowledge", "sources-of-conveyancers.md"),
       "---\ntype: Reference\ntitle: Sources for conveyancer leads\n---\n\ndirectories…\n",
@@ -23,18 +23,18 @@ function withWorkspace(body: (root: string) => void) {
       path.join(root, "memory", "known-duds.md"),
       "---\ntype: Fact\nname: numbers that never answer\n---\n\n…\n",
     );
-    fs.writeFileSync(path.join(root, "files", "leads.csv"), "email\na@b.c\n");
+    fs.writeFileSync(path.join(root, "storage", "leads.csv"), "email\na@b.c\n");
     body(root);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
-test("filenames, titles and files/ paths all resolve — spelling-blind", () =>
+test("filenames, titles and storage/ paths all resolve — spelling-blind", () =>
   withWorkspace((root) => {
     const out = resolveDocLinks(
       "Read [[sources-of-conveyancers]] first, honour [[Sources for conveyancer leads]], " +
-        "check [[known_duds]] and write to [[files/leads.csv]].",
+        "check [[known_duds]] and write to [[storage/leads.csv]].",
       root,
     );
     assert.match(out, /`\.\.\/\.\.\/knowledge\/sources-of-conveyancers\.md` first/);
@@ -45,13 +45,13 @@ test("filenames, titles and files/ paths all resolve — spelling-blind", () =>
       /`\.\.\/\.\.\/memory\/known-duds\.md`/,
       "the older `name:` frontmatter matches like title",
     );
-    assert.match(out, /write to `\.\.\/\.\.\/files\/leads\.csv`/);
+    assert.match(out, /write to `\.\.\/\.\.\/storage\/leads\.csv`/);
   }));
 
-test("a folder is a reference too — [[files/]] and [[state]] resolve", () =>
+test("a folder is a reference too — [[storage/]] and [[state]] resolve", () =>
   withWorkspace((root) => {
-    const out = resolveDocLinks("Read what your instruction names in [[files/]]; ledgers live in [[knowledge]].", root);
-    assert.match(out, /in `\.\.\/\.\.\/files\/`/, "trailing slash form");
+    const out = resolveDocLinks("Read what your instruction names in [[storage/]]; ledgers live in [[knowledge]].", root);
+    assert.match(out, /in `\.\.\/\.\.\/storage\/`/, "trailing slash form");
     assert.match(out, /in `\.\.\/\.\.\/knowledge\/`/, "bare folder name");
     // A folder that does not exist stays prose, like any other miss.
     assert.match(resolveDocLinks("see [[outputs]]", root), /see \[\[outputs\]\]/);

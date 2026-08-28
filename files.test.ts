@@ -28,7 +28,7 @@ import {
   blobPath,
   mimeFor,
 } from "../packages/core/src/files.ts";
-import { workspaceDir, isPlatformPath, saveWorkspace } from "../packages/core/src/store.ts";
+import { workspaceDir, isPlatformPath, saveWorkspace, adoptLegacyFilesDir } from "../packages/core/src/store.ts";
 
 let root: string;
 const TENANT = "default";
@@ -130,7 +130,7 @@ test("files are mirrored into the workspace for a run, and cost no extra bytes",
   const rec = await putFile(TENANT, WS, "prices/2026.txt", bytes, "user:me");
   const brought = await materializeFiles(TENANT, WS);
 
-  const mirrored = path.join(workspaceDir(TENANT, WS), "files", "prices/2026.txt");
+  const mirrored = path.join(workspaceDir(TENANT, WS), "storage", "prices/2026.txt");
   assert.deepEqual(brought, ["prices/2026.txt"]);
   assert.deepEqual(fs.readFileSync(mirrored), bytes);
   // Hardlinked, not copied: the mirror and the blob are one inode, so a large
@@ -145,8 +145,8 @@ test("files are mirrored into the workspace for a run, and cost no extra bytes",
   assert.deepEqual(await materializeFiles(TENANT, WS), []);
 });
 
-test("what a run leaves in files/ is harvested, stamped with the run", async () => {
-  const dir = path.join(workspaceDir(TENANT, WS), "files");
+test("what a run leaves in storage/ is harvested, stamped with the run", async () => {
+  const dir = path.join(workspaceDir(TENANT, WS), "storage");
   fs.mkdirSync(path.join(dir, "out"), { recursive: true });
   fs.writeFileSync(path.join(dir, "out", "report.pdf"), "%PDF-1.4 pretend");
 
@@ -168,7 +168,7 @@ test("a run that changes a mirrored file is harvested as a new version", async (
   await putFile(TENANT, WS, "notes.txt", Buffer.from("before"), "user:me");
   await materializeFiles(TENANT, WS);
 
-  const mirrored = path.join(workspaceDir(TENANT, WS), "files", "notes.txt");
+  const mirrored = path.join(workspaceDir(TENANT, WS), "storage", "notes.txt");
   // rm-then-write, the way a container copy-out applies changes — writing
   // through the hardlink would edit the blob itself.
   fs.rmSync(mirrored);
@@ -180,12 +180,12 @@ test("a run that changes a mirrored file is harvested as a new version", async (
 
 // ---------- keeping bytes out of the source tree ----------
 
-test("files/ is not source: a deploy cannot ship one, and does not delete one", async () => {
+test("storage/ is not source: a deploy cannot ship one, and does not delete one", async () => {
   await putFile(TENANT, WS, "keep.txt", Buffer.from("survive the deploy"), "user:me");
   await materializeFiles(TENANT, WS);
 
   assert.throws(
-    () => saveWorkspace(TENANT, WS, [{ path: "files/sneaky.png", content: "binary-ish" }]),
+    () => saveWorkspace(TENANT, WS, [{ path: "storage/sneaky.png", content: "binary-ish" }]),
     /unexpected file/,
     "a deploy carried a blob into the source tree",
   );
@@ -196,16 +196,16 @@ test("files/ is not source: a deploy cannot ship one, and does not delete one", 
   ]);
 
   assert.ok(
-    fs.existsSync(path.join(workspaceDir(TENANT, WS), "files", "keep.txt")),
+    fs.existsSync(path.join(workspaceDir(TENANT, WS), "storage", "keep.txt")),
     "a deploy wiped the file mirror",
   );
   assert.equal(getFile(TENANT, WS, "keep.txt")?.size, 18);
 });
 
-test("a run may carry files/ across the container boundary", async () => {
-  // The copy-in filter drops platform-owned paths. files/ must not be one, or
+test("a run may carry storage/ across the container boundary", async () => {
+  // The copy-in filter drops platform-owned paths. storage/ must not be one, or
   // the mirror would never reach the pod that is supposed to read it.
-  assert.equal(isPlatformPath("files/prices.csv"), false);
+  assert.equal(isPlatformPath("storage/prices.csv"), false);
   assert.equal(isPlatformPath("runs/run-1/x"), true);
 });
 
@@ -304,4 +304,42 @@ test("mime comes from the extension, and defaults to bytes", () => {
   assert.equal(mimeFor("a/b/c.PDF"), "application/pdf");
   assert.equal(mimeFor("data.csv"), "text/csv");
   assert.equal(mimeFor("mystery"), "application/octet-stream");
+});
+
+// The rename: files/ became storage/. An install created before it has bytes
+// under the old name, and a workspace whose files vanished on upgrade is a
+// data-loss bug however cosmetic the cause. adoptLegacyFilesDir moves one
+// across, in place, the first time either root is resolved.
+test("a pre-rename files/ directory is adopted as storage/", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-adopt-"));
+  const legacy = path.join(root, "files");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "prices.csv"), "a,b\n1,2\n");
+
+  adoptLegacyFilesDir(root);
+
+  assert.ok(fs.existsSync(path.join(root, "storage", "prices.csv")), "content moved across");
+  assert.equal(fs.existsSync(legacy), false, "the old directory is gone, not duplicated");
+  assert.equal(fs.readFileSync(path.join(root, "storage", "prices.csv"), "utf8"), "a,b\n1,2\n");
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("adoption never overwrites an existing storage/, and is a no-op when there is nothing to move", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-adopt2-"));
+  fs.mkdirSync(path.join(root, "storage"), { recursive: true });
+  fs.writeFileSync(path.join(root, "storage", "keep.txt"), "current");
+  fs.mkdirSync(path.join(root, "files"), { recursive: true });
+  fs.writeFileSync(path.join(root, "files", "old.txt"), "legacy");
+
+  adoptLegacyFilesDir(root);
+
+  assert.equal(fs.readFileSync(path.join(root, "storage", "keep.txt"), "utf8"), "current");
+  assert.equal(fs.existsSync(path.join(root, "storage", "old.txt")), false, "no merge — current wins");
+
+  // And a fresh install, with neither directory, must not throw.
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-adopt3-"));
+  adoptLegacyFilesDir(fresh);
+  assert.equal(fs.existsSync(path.join(fresh, "storage")), false);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(fresh, { recursive: true, force: true });
 });
