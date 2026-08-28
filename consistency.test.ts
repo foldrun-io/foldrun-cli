@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import yaml from "js-yaml";
 import { ALL_KINDS, kindsAt, docKeyOf, docTypeOf, type Kind } from "../packages/core/src/kinds.ts";
 
 import { WORKSPACE_DIRS, templateFiles, anchoredReason, accountFileSealed } from "../packages/core/src/store.ts";
@@ -491,4 +492,81 @@ test("a pre-rename mdagent_version is migrated, not tolerated", () => {
   );
 
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- role split
+//
+// The production manifest runs the same image twice — a web tier that serves
+// and a worker that drives runs — and the ONLY difference between them is
+// FOLDRUN_ROLE. Everything else (the runner image, the size ceilings, all
+// eleven secret references) is written out in both, which is exactly the bug
+// this file exists to catch: a list in two places, one updated, the other not.
+// A worker whose FOLDRUN_RUNNER_IMAGE lagged the web tier's would run every
+// step on a stale runner and nothing would say so.
+
+const manifest = () => {
+  const docs = yaml.loadAll(read("infra/production/manifests/platform.yaml")) as any[];
+  const byName = (kind: string, name: string) =>
+    docs.find((d) => d && d.kind === kind && d.metadata?.name === name);
+  return { docs, byName };
+};
+
+const envOf = (deploy: any) => {
+  const env = deploy.spec.template.spec.containers[0].env as any[];
+  return new Map(env.map((e) => [e.name, JSON.stringify(e.value ?? e.valueFrom)]));
+};
+
+test("web and worker differ by FOLDRUN_ROLE and nothing else", () => {
+  const { byName } = manifest();
+  const web = envOf(byName("Deployment", "foldrun-web"));
+  const worker = envOf(byName("Deployment", "foldrun-worker"));
+
+  assert.equal(web.get("FOLDRUN_ROLE"), JSON.stringify("web"));
+  assert.equal(worker.get("FOLDRUN_ROLE"), JSON.stringify("worker"));
+
+  const keys = new Set([...web.keys(), ...worker.keys()]);
+  keys.delete("FOLDRUN_ROLE");
+  for (const k of keys) {
+    assert.equal(
+      web.get(k),
+      worker.get(k),
+      `${k} differs between the web and worker tiers — they run the same image and must agree`,
+    );
+  }
+});
+
+test("exactly one worker, and the Service never routes to it", () => {
+  const { byName } = manifest();
+  const worker = byName("Deployment", "foldrun-worker");
+  const web = byName("Deployment", "foldrun-web");
+  const svc = byName("Service", "foldrun");
+
+  // Two workers driving one queue is the failure the worker lease exists to
+  // stop. The manifest agrees with the lease rather than leaning on it.
+  assert.equal(worker.spec.replicas, 1, "a second worker would double-drive every run");
+  assert.equal(worker.spec.strategy.type, "Recreate", "two workers must not overlap during a roll");
+
+  // The whole point of the split: rolling the web tier leaves a server up.
+  assert.ok(web.spec.replicas >= 2, "one web replica still has a gap with nothing serving");
+  assert.equal(web.spec.strategy.type, "RollingUpdate");
+
+  assert.deepEqual(svc.spec.selector, web.spec.template.metadata.labels);
+  assert.notDeepEqual(
+    svc.spec.selector,
+    worker.spec.template.metadata.labels,
+    "dashboard traffic on the worker would compete with driving runs",
+  );
+});
+
+test("only the worker may create run pods", () => {
+  const { byName, docs } = manifest();
+  const worker = byName("Deployment", "foldrun-worker").spec.template.spec.serviceAccountName;
+  const web = byName("Deployment", "foldrun-web").spec.template.spec.serviceAccountName;
+  assert.notEqual(web, worker, "a serving replica has no business creating run pods");
+
+  const bound = docs
+    .filter((d) => d && d.kind === "RoleBinding")
+    .flatMap((d) => (d.subjects ?? []).map((s: any) => s.name));
+  assert.ok(bound.includes(worker), "the worker's account must hold the run-pod Role");
+  assert.ok(!bound.includes(web), "the web account must hold no RBAC at all");
 });
