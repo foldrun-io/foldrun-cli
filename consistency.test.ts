@@ -18,10 +18,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { ALL_KINDS, kindsAt, docKeyOf, docTypeOf, type Kind } from "../packages/core/src/kinds.ts";
 
 import { WORKSPACE_DIRS, templateFiles, anchoredReason, accountFileSealed } from "../packages/core/src/store.ts";
 import { starterFiles } from "../packages/core/src/starter.ts";
+import { readAgentsMd } from "../packages/core/src/runner.ts";
 import { LIBRARY_KINDS } from "../packages/core/src/library.ts";
 
 const root = path.join(import.meta.dirname, "..");
@@ -465,4 +467,28 @@ test("the vault and the ledger are sealed, and authored files are not", () => {
   // A workspace's own vault and its run history are sealed the same way.
   assert.ok(accountFileSealed("workspaces/blog-desk/secrets.json"));
   assert.ok(accountFileSealed("workspaces/blog-desk/runs/run-x.json"));
+});
+
+test("a pre-rename mdagent_version is migrated, not tolerated", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-rename-"));
+  fs.writeFileSync(
+    path.join(dir, "AGENTS.md"),
+    '---\nmdagent_version: "0.1"\nprovider: anthropic\n---\n\nShared context.\n',
+  );
+
+  const read = readAgentsMd(dir);
+  assert.equal(read?.data.foldrun_version, "0.1", "the reader sees one spelling");
+  assert.equal(read?.data.mdagent_version, undefined, "and only one");
+  assert.match(
+    fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"),
+    /^foldrun_version: "0\.1"$/m,
+    "the file itself was converted, so the old name retires",
+  );
+  assert.match(
+    fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"),
+    /^provider: anthropic$/m,
+    "and nothing else about the file moved",
+  );
+
+  fs.rmSync(dir, { recursive: true, force: true });
 });
