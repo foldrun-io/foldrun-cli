@@ -230,7 +230,7 @@ async function check(workspace) {
   // What format does this workspace target?
   const agentsMd = path.join(workspace, "AGENTS.md");
   if (fs.existsSync(agentsMd)) {
-    const m = fs.readFileSync(agentsMd, "utf8").match(/^(?:foldrun|mdagent)_version:\s*["']?([\d.]+)/m);
+    const m = fs.readFileSync(agentsMd, "utf8").match(/^foldrun_version:\s*["']?([\d.]+)/m);
     const { warning } = checkFormatVersion(m?.[1]);
     if (warning) note("warn", "AGENTS.md", warning);
   }
