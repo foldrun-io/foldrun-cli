@@ -690,3 +690,44 @@ test("agents are told to write where harvestFiles actually reads", () => {
     "harvestFiles should read STORAGE_DIR, so this test compares against the real path",
   );
 });
+
+// ------------------------------------------------------------------ clocks
+//
+// toLocaleString() in a server component formats on the BOX. Every viewer then
+// reads the server's clock — "8:26 AM" meaning nothing to anyone in another
+// city. LocalTime and RunDot exist because of that; this keeps the pattern.
+//
+// The one legitimate server-side format is a schedule preview, which quotes a
+// cron's own declared timezone and must pass `timeZone` explicitly to say so.
+
+test("only client components format a timestamp for a viewer", () => {
+  const roots = ["web/app", "web/components"];
+  const offenders: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(path.join(import.meta.dirname, "..", dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules" && !entry.name.startsWith(".")) walk(rel);
+        continue;
+      }
+      if (!entry.name.endsWith(".tsx") && !entry.name.endsWith(".ts")) continue;
+      const src = read(rel);
+      if (/^"use client"/m.test(src)) continue; // formats in the browser — correct
+      for (const line of src.split("\n")) {
+        const code = line.trimStart();
+        if (code.startsWith("//") || code.startsWith("*")) continue; // prose, not a call
+        if (!/toLocale(String|DateString|TimeString)\s*\(/.test(line)) continue;
+        // Passing an explicit timeZone is a deliberate, deterministic choice.
+        if (/timeZone/.test(line)) continue;
+        offenders.push(`${rel}: ${line.trim().slice(0, 72)}`);
+      }
+    }
+  };
+  roots.forEach(walk);
+  assert.deepEqual(
+    offenders,
+    [],
+    "these format a date in a server component — the viewer sees the box's timezone. " +
+      "Use <LocalTime>, or pass an explicit timeZone if the zone is the point.",
+  );
+});
