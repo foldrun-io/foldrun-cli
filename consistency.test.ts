@@ -700,7 +700,7 @@ test("agents are told to write where harvestFiles actually reads", () => {
 // The one legitimate server-side format is a schedule preview, which quotes a
 // cron's own declared timezone and must pass `timeZone` explicitly to say so.
 
-test("only client components format a timestamp for a viewer", () => {
+test("one place decides which clock a viewer reads", () => {
   const roots = ["web/app", "web/components"];
   const offenders: string[] = [];
   const walk = (dir: string) => {
@@ -712,7 +712,9 @@ test("only client components format a timestamp for a viewer", () => {
       }
       if (!entry.name.endsWith(".tsx") && !entry.name.endsWith(".ts")) continue;
       const src = read(rel);
-      if (/^"use client"/m.test(src)) continue; // formats in the browser — correct
+      // viewer-time.tsx IS the owner of this decision; it is allowed to call
+      // Intl directly. Everything else goes through it.
+      if (rel.endsWith("components/viewer-time.tsx")) continue;
       for (const line of src.split("\n")) {
         const code = line.trimStart();
         if (code.startsWith("//") || code.startsWith("*")) continue; // prose, not a call
@@ -727,7 +729,8 @@ test("only client components format a timestamp for a viewer", () => {
   assert.deepEqual(
     offenders,
     [],
-    "these format a date in a server component — the viewer sees the box's timezone. " +
-      "Use <LocalTime>, or pass an explicit timeZone if the zone is the point.",
+    "these format a timestamp outside components/viewer-time.tsx, so they ignore the zone " +
+      "the person chose on their profile. Use <LocalTime> or useViewerTime(), or pass an " +
+      "explicit timeZone when the zone itself is the subject (a schedule preview).",
   );
 });
