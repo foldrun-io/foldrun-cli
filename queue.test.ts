@@ -64,9 +64,9 @@ const claimedDir = () => path.join(process.env.FOLDRUN_DATA!, "queue/claimed");
 const pendingJobs = () =>
   fs.existsSync(pendingDir()) ? fs.readdirSync(pendingDir()).filter((f) => f.endsWith(".json")) : [];
 
-test("enqueueing writes a queued record and one pending job", () => {
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [STEP], "publish");
+test("enqueueing writes a queued record and one pending job", async () => {
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [STEP], "publish");
     assert.equal(run.status, "queued");
     assert.equal(readRun("acme", "desk", run.id)!.status, "queued");
     assert.equal(pendingJobs().length, 1);
@@ -74,78 +74,78 @@ test("enqueueing writes a queued record and one pending job", () => {
   });
 });
 
-test("claiming is first-in-first-out and moves the job, not copies it", () => {
-  withWorkspace(() => {
-    const first = enqueueFlowRun("acme", "desk", [STEP], "one");
-    const second = enqueueFlowRun("acme", "desk", [STEP], "two");
+test("claiming is first-in-first-out and moves the job, not copies it", async () => {
+  await withWorkspace(async () => {
+    const first = await enqueueFlowRun("acme", "desk", [STEP], "one");
+    const second = await enqueueFlowRun("acme", "desk", [STEP], "two");
 
-    const a = claimNext();
+    const a = await claimNext();
     assert.equal(a!.job.runId, first.id);
-    const b = claimNext();
+    const b = await claimNext();
     assert.equal(b!.job.runId, second.id);
-    assert.equal(claimNext(), null);
+    assert.equal(await claimNext(), null);
 
     assert.equal(pendingJobs().length, 0);
     assert.equal(fs.readdirSync(claimedDir()).length, 2);
   });
 });
 
-test("re-enqueueing a run that is already pending does not duplicate it", () => {
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [STEP], "publish");
-    enqueueResume("acme", "desk", run.id);
-    enqueueResume("acme", "desk", run.id);
+test("re-enqueueing a run that is already pending does not duplicate it", async () => {
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [STEP], "publish");
+    await enqueueResume("acme", "desk", run.id);
+    await enqueueResume("acme", "desk", run.id);
     assert.equal(pendingJobs().length, 1);
   });
 });
 
-test("recovery returns claimed jobs to pending", () => {
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [STEP], "publish");
-    claimNext(); // a worker took it, then the process died
+test("recovery returns claimed jobs to pending", async () => {
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [STEP], "publish");
+    await claimNext(); // a worker took it, then the process died
     assert.equal(pendingJobs().length, 0);
 
-    const { requeued } = recoverQueue();
+    const { requeued } = await recoverQueue();
     assert.equal(requeued.length, 1);
     assert.equal(pendingJobs().length, 1);
-    assert.equal(claimNext()!.job.runId, run.id);
+    assert.equal((await claimNext())!.job.runId, run.id);
   });
 });
 
-test("recovery re-creates the job for a queued run whose file was lost", () => {
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [STEP], "publish");
+test("recovery re-creates the job for a queued run whose file was lost", async () => {
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [STEP], "publish");
     fs.rmSync(pendingDir(), { recursive: true, force: true });
 
-    const { requeued } = recoverQueue();
+    const { requeued } = await recoverQueue();
     assert.ok(requeued.includes(run.id));
-    assert.equal(claimNext()!.job.runId, run.id);
+    assert.equal((await claimNext())!.job.runId, run.id);
   });
 });
 
-test("recovery drops a pending job whose run already finished", () => {
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [STEP], "publish");
+test("recovery drops a pending job whose run already finished", async () => {
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [STEP], "publish");
     const record = readRun("acme", "desk", run.id)!;
     record.status = "completed";
     record.finishedAt = new Date().toISOString();
     writeRun("acme", "desk", record);
 
-    const { dropped } = recoverQueue();
+    const { dropped } = await recoverQueue();
     assert.equal(dropped.length, 1);
     assert.equal(pendingJobs().length, 0);
   });
 });
 
-test("a worker-driven run parks at an approval gate instead of blocking", () =>
-  withWorkspace(async () => {
-    const run = enqueueFlowRun(
+test("a worker-driven run parks at an approval gate instead of blocking", async () =>
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun(
       "acme",
       "desk",
       [{ ...STEP, approve: true }],
       "sign-off",
     );
-    const claim = claimNext()!;
+    const claim = (await claimNext())!;
 
     // What the worker does with a claim — and it must come back promptly,
     // not in 24 hours.
@@ -158,14 +158,14 @@ test("a worker-driven run parks at an approval gate instead of blocking", () =>
     assert.ok(parked.parkedAt, "a parked run carries the marker the approval API keys on");
     assert.equal(parked.steps[0].status, "awaiting-approval");
     assert.equal(parked.finishedAt, null, "parked is paused, not finished");
-    fs.rmSync(claim.claimedFile, { force: true });
+    await claim.release(); // the job is finished with, whichever store held it
   }));
 
-test("an approved parked run drives to the end of what it can do without a model", () =>
-  withWorkspace(async () => {
+test("an approved parked run drives to the end of what it can do without a model", async () =>
+  await withWorkspace(async () => {
     // Park it.
-    const run = enqueueFlowRun("acme", "desk", [{ ...STEP, approve: true }], "sign-off");
-    claimNext();
+    const run = await enqueueFlowRun("acme", "desk", [{ ...STEP, approve: true }], "sign-off");
+    await claimNext();
     await driveRun("acme", "desk", readRun("acme", "desk", run.id)!, null, [], {
       parkOnApproval: true,
     });
@@ -193,7 +193,7 @@ test("an approved parked run drives to the end of what it can do without a model
 
 // --------------------------------------------------------- the run meter
 
-test("the meter counts steps that ran, not steps that were written", () => {
+test("the meter counts steps that ran, not steps that were written", async () => {
   const run = {
     id: "run-a",
     flow: "f",
@@ -214,8 +214,8 @@ test("the meter counts steps that ran, not steps that were written", () => {
 
 // ------------------------------------------------------------ re-running
 
-test("a re-run carries the finished steps and resets the rest", () =>
-  withWorkspace(() => {
+test("a re-run carries the finished steps and resets the rest", async () =>
+  await withWorkspace(async () => {
     const source = {
       id: "run-src",
       flow: "extract-and-send",
@@ -238,7 +238,7 @@ test("a re-run carries the finished steps and resets the rest", () =>
     } as unknown as RunRecord;
     writeRun("acme", "desk", source);
 
-    const rerun = rerunFrom("acme", "desk", "run-src", { agent: "emailer" });
+    const rerun = await rerunFrom("acme", "desk", "run-src", { agent: "emailer" });
     assert.notEqual(rerun.id, "run-src");
     assert.equal(rerun.status, "queued");
 
@@ -273,8 +273,8 @@ test("a re-run carries the finished steps and resets the rest", () =>
     );
   }));
 
-test("a re-run takes its instructions from the flow as it reads now", () =>
-  withWorkspace(() => {
+test("a re-run takes its instructions from the flow as it reads now", async () =>
+  await withWorkspace(async () => {
     // The iterate loop this exists for: the first run failed because the
     // instruction pointed at the wrong path, the author fixed the flow, and
     // the re-run must carry the fix — replaying the recorded text re-fails
@@ -297,7 +297,7 @@ test("a re-run takes its instructions from the flow as it reads now", () =>
     } as unknown as RunRecord;
     writeRun("acme", "desk", source);
 
-    const rerun = rerunFrom("acme", "desk", "run-stale", { step: 2 });
+    const rerun = await rerunFrom("acme", "desk", "run-stale", { step: 2 });
     // The reset step reads the corrected flow; the carried one keeps the
     // history of what actually ran.
     assert.equal(rerun.steps[1].instruction, "email files/summary.md");
@@ -305,8 +305,8 @@ test("a re-run takes its instructions from the flow as it reads now", () =>
     assert.equal(rerun.steps[0].carriedFrom, "run-stale");
   }));
 
-test("a reshaped flow falls back to the recorded instructions", () =>
-  withWorkspace(() => {
+test("a reshaped flow falls back to the recorded instructions", async () =>
+  await withWorkspace(async () => {
     const ws = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk");
     fs.mkdirSync(path.join(ws, "flows"), { recursive: true });
     // The flow gained a step since the run: positions no longer mean the
@@ -326,12 +326,12 @@ test("a reshaped flow falls back to the recorded instructions", () =>
       ],
     } as unknown as RunRecord;
     writeRun("acme", "desk", source);
-    const rerun = rerunFrom("acme", "desk", "run-shaped", { step: 2 });
+    const rerun = await rerunFrom("acme", "desk", "run-shaped", { step: 2 });
     assert.equal(rerun.steps[1].instruction, "email outputs/summary.md");
   }));
 
-test("a live run cannot be re-run from, and a missing agent is refused", () =>
-  withWorkspace(() => {
+test("a live run cannot be re-run from, and a missing agent is refused", async () =>
+  await withWorkspace(async () => {
     const live = {
       id: "run-live", flow: "f", status: "running",
       startedAt: "2026-08-26T00:00:00.000Z", finishedAt: null,
@@ -339,18 +339,18 @@ test("a live run cannot be re-run from, and a missing agent is refused", () =>
         status: "running", events: [], result: null, costUsd: null }],
     } as unknown as RunRecord;
     writeRun("acme", "desk", live);
-    assert.throws(() => rerunFrom("acme", "desk", "run-live", { agent: "a" }), /only a finished run/);
+    await assert.rejects(async () => await rerunFrom("acme", "desk", "run-live", { agent: "a" }), /only a finished run/);
 
     live.status = "failed";
     live.steps[0].status = "failed";
     writeRun("acme", "desk", live);
-    assert.throws(() => rerunFrom("acme", "desk", "run-live", { agent: "nope" }), /no step in run/);
+    await assert.rejects(async () => await rerunFrom("acme", "desk", "run-live", { agent: "nope" }), /no step in run/);
   }));
 
 // ------------------------------------------- orphaned steps never skipped
 
-test("a step orphaned mid-run is re-run, not stepped over", () =>
-  withWorkspace(async () => {
+test("a step orphaned mid-run is re-run, not stepped over", async () =>
+  await withWorkspace(async () => {
     // The deploy-mid-run shape: the driver died while step 1 was running,
     // recovery re-queued the job, and the next drive must not treat the
     // half-done step as finished work.
@@ -377,9 +377,9 @@ test("a step orphaned mid-run is re-run, not stepped over", () =>
 
 // ------------------------------------------------------- stop and delete
 
-test("stopping a run drops its job, skips the rest, and says who did it", () =>
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [
+test("stopping a run drops its job, skips the rest, and says who did it", async () =>
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [
       { agent: "writer", instruction: "one", group: 1, optional: false },
       { agent: "writer", instruction: "two", group: 2, optional: false },
     ], "twostep");
@@ -402,12 +402,12 @@ test("stopping a run drops its job, skips the rest, and says who did it", () =>
     assert.equal(stopped.steps[1].status, "skipped");
     assert.equal(stopped.steps[1].skipReason, "run stopped");
     // And nothing is left for a worker to pick up.
-    assert.equal(claimNext(), null);
+    assert.equal(await claimNext(), null);
   }));
 
-test("a finished run cannot be stopped", () =>
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [
+test("a finished run cannot be stopped", async () =>
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [
       { agent: "writer", instruction: "x", group: 1, optional: false },
     ], "one");
     const done = readRun("acme", "desk", run.id)!;
@@ -416,9 +416,9 @@ test("a finished run cannot be stopped", () =>
     assert.throws(() => stopRun("acme", "desk", run.id), /already completed/);
   }));
 
-test("deleting a run erases its record and its archived outputs", () =>
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [
+test("deleting a run erases its record and its archived outputs", async () =>
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [
       { agent: "writer", instruction: "x", group: 1, optional: false },
     ], "one");
     const archive = path.join(
@@ -434,8 +434,8 @@ test("deleting a run erases its record and its archived outputs", () =>
     assert.equal(deleteRun("acme", "desk", run.id), false);
   }));
 
-test("a stopped run displays as stopped, a broken one as failed", () =>
-  withWorkspace(() => {
+test("a stopped run displays as stopped, a broken one as failed", async () =>
+  await withWorkspace(async () => {
     const base = {
       id: "run-x", flow: "f", startedAt: "2026-08-26T00:00:00.000Z", finishedAt: null, steps: [],
     };
@@ -444,8 +444,8 @@ test("a stopped run displays as stopped, a broken one as failed", () =>
     assert.equal(runDisplayStatus({ ...base, status: "completed", stopRequested: true } as RunRecord), "completed");
   }));
 
-test("startFlowFromStep skips the earlier groups, whole groups at a time", () =>
-  withWorkspace(() => {
+test("startFlowFromStep skips the earlier groups, whole groups at a time", async () =>
+  await withWorkspace(async () => {
     // Group numbers, not array indices: step 2 is two parallel agents, and
     // starting "from step 2" must keep both of them.
     fs.mkdirSync(path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/flows"), { recursive: true });
@@ -453,7 +453,7 @@ test("startFlowFromStep skips the earlier groups, whole groups at a time", () =>
       path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/flows/pipeline.md"),
       "---\nname: pipeline\n---\n\n1. [[writer]] — fetch\n2. [[writer]] — clean\n2. [[writer]] — dedupe\n3. [[writer]] — send\n",
     );
-    const run = startFlowFromStep("acme", "desk", "pipeline", 2);
+    const run = await startFlowFromStep("acme", "desk", "pipeline", 2);
     assert.equal(run.status, "queued");
     assert.deepEqual(
       run.steps.map((s) => s.status),
@@ -462,11 +462,11 @@ test("startFlowFromStep skips the earlier groups, whole groups at a time", () =>
     assert.equal(run.steps[0].skipReason, "started from step 2");
     // The job is real: a worker can claim it.
     assert.equal(pendingJobs().length, 1);
-    assert.throws(() => startFlowFromStep("acme", "desk", "pipeline", 9), /has no step 9/);
+    await assert.rejects(async () => await startFlowFromStep("acme", "desk", "pipeline", 9), /has no step 9/);
   }));
 
-test("overlap: is parsed from flow frontmatter, and only its two words count", () =>
-  withWorkspace(() => {
+test("overlap: is parsed from flow frontmatter, and only its two words count", async () =>
+  await withWorkspace(async () => {
     const flowsDir = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk/flows");
     fs.mkdirSync(flowsDir, { recursive: true });
     fs.writeFileSync(path.join(flowsDir, "a.md"), "---\nname: a\noverlap: skip\n---\n\n1. [[writer]] — go\n");
@@ -476,9 +476,9 @@ test("overlap: is parsed from flow frontmatter, and only its two words count", (
     assert.equal(flows.find((f) => f.name === "b")!.overlap, null);
   }));
 
-test("flowHasLiveRun sees queued, running and parked runs — not finished ones", () =>
-  withWorkspace(() => {
-    const run = enqueueFlowRun("acme", "desk", [STEP], "pipeline", null);
+test("flowHasLiveRun sees queued, running and parked runs — not finished ones", async () =>
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [STEP], "pipeline", null);
     assert.equal(flowHasLiveRun("acme", "desk", "pipeline"), true);
     assert.equal(flowHasLiveRun("acme", "desk", "other"), false);
     const record = readRun("acme", "desk", run.id)!;
@@ -488,17 +488,17 @@ test("flowHasLiveRun sees queued, running and parked runs — not finished ones"
   }));
 
 test("a wait: parks the run in the queue with a deadline, and the queue honours it", async () =>
-  withWorkspace(async () => {
+  await withWorkspace(async () => {
     // A flow whose FIRST step waits — parks before any model could be
     // needed, which is what makes this testable without one.
-    const run = enqueueFlowRun(
+    const run = await enqueueFlowRun(
       "acme",
       "desk",
       [{ ...STEP, waitSecs: 3600 }],
       "drip",
       null,
     );
-    const claim = claimNext()!;
+    const claim = (await claimNext())!;
     await driveRun("acme", "desk", readRun("acme", "desk", run.id)!, null, [], { parkOnApproval: true });
 
     const parked = readRun("acme", "desk", run.id)!;
@@ -509,8 +509,8 @@ test("a wait: parks the run in the queue with a deadline, and the queue honours 
     assert.ok(until > Date.now() + 3500 * 1000, "roughly an hour out");
 
     // Re-enqueue with the deadline, the way the worker does.
-    fs.rmSync(claim.claimedFile, { force: true });
-    enqueueResume("acme", "desk", run.id);
+    await claim.release(); // the job is finished with, whichever store held it
+    await enqueueResume("acme", "desk", run.id);
     const pending = pendingDir();
     const jobFile = fs.readdirSync(pending).find((f) => f.includes(run.id))!;
     const job = JSON.parse(fs.readFileSync(path.join(pending, jobFile), "utf8"));
@@ -518,30 +518,30 @@ test("a wait: parks the run in the queue with a deadline, and the queue honours 
       path.join(pending, jobFile),
       JSON.stringify({ ...job, notBefore: parked.steps[0].waitUntil }),
     );
-    assert.equal(claimNext(), null, "an unexpired notBefore is not claimable");
+    assert.equal(await claimNext(), null, "an unexpired notBefore is not claimable");
 
     // The deadline passing makes it claimable again.
     fs.writeFileSync(
       path.join(pending, jobFile),
       JSON.stringify({ ...job, notBefore: new Date(Date.now() - 1000).toISOString() }),
     );
-    const reclaimed = claimNext();
+    const reclaimed = await claimNext();
     assert.ok(reclaimed, "an expired notBefore claims normally");
-    fs.rmSync(reclaimed!.claimedFile, { force: true });
+    await reclaimed!.release();
   }));
 
 test("ask: parks like an approval and the answer rides the record", async () =>
-  withWorkspace(async () => {
-    const run = enqueueFlowRun(
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun(
       "acme",
       "desk",
       [{ ...STEP, ask: "Formal or friendly?" }],
       "drafting",
       null,
     );
-    const claim = claimNext()!;
+    const claim = (await claimNext())!;
     await driveRun("acme", "desk", readRun("acme", "desk", run.id)!, null, [], { parkOnApproval: true });
-    fs.rmSync(claim.claimedFile, { force: true });
+    await claim.release(); // the job is finished with, whichever store held it
 
     const parked = readRun("acme", "desk", run.id)!;
     assert.equal(parked.status, "awaiting-approval");
@@ -551,8 +551,8 @@ test("ask: parks like an approval and the answer rides the record", async () =>
     );
   }));
 
-test("the worker lease: one holder, stale takeover, and a peek that never writes", () =>
-  withWorkspace(() => {
+test("the worker lease: one holder, stale takeover, and a peek that never writes", async () =>
+  await withWorkspace(async () => {
     const lease = path.join(process.env.FOLDRUN_DATA!, ".worker-lease");
 
     assert.equal(peekWorkerLease(), false, "peek before any lease exists");
@@ -575,10 +575,10 @@ test("the worker lease: one holder, stale takeover, and a peek that never writes
     assert.equal(holdsWorkerLease(), true, "a stale lease is taken over");
   }));
 
-test("queueStats separates ready, scheduled-ahead and claimed", () =>
-  withWorkspace(() => {
-    enqueueFlowRun("acme", "desk", [STEP], "a", null);
-    enqueueFlowRun("acme", "desk", [STEP], "b", null);
+test("queueStats separates ready, scheduled-ahead and claimed", async () =>
+  await withWorkspace(async () => {
+    await enqueueFlowRun("acme", "desk", [STEP], "a", null);
+    await enqueueFlowRun("acme", "desk", [STEP], "b", null);
     // Push one job's deadline into the future, the way a wait: does.
     const pending = pendingDir();
     const name = fs.readdirSync(pending).filter((f) => f.endsWith(".json"))[0];
@@ -587,15 +587,15 @@ test("queueStats separates ready, scheduled-ahead and claimed", () =>
       path.join(pending, name),
       JSON.stringify({ ...job, notBefore: new Date(Date.now() + 60_000).toISOString() }),
     );
-    const claimed = claimNext(); // claims the OTHER job (deadline is skipped)
+    const claimed = await claimNext(); // claims the OTHER job (deadline is skipped)
     assert.ok(claimed);
 
-    const stats = queueStats();
+    const stats = await queueStats();
     assert.equal(stats.pending, 0, "the ready job was claimed");
     assert.equal(stats.scheduledAhead, 1, "the deadline job is scheduled, not late");
     assert.equal(stats.claimed, 1);
     assert.equal(stats.oldestPendingSecs, null, "nothing ready means no age to report");
-    fs.rmSync(claimed!.claimedFile, { force: true });
+    await claimed!.release();
   }));
 
 // ---------------------------------------------------------- fair scheduling
@@ -604,7 +604,7 @@ test("queueStats separates ready, scheduled-ahead and claimed", () =>
 // The case that matters is the one a customer notices: someone else enqueued a
 // backlog first, and now your single job is behind all of it.
 
-test("one account's backlog does not put another account behind all of it", () => {
+test("one account's backlog does not put another account behind all of it", async () => {
   // 'bulk' enqueues 100 jobs, then 'small' enqueues 1. Under FIFO the small
   // account waits for 100 runs; under fair ordering it waits for one.
   const entries: { name: string; tenant: string }[] = [];
@@ -622,7 +622,7 @@ test("one account's backlog does not put another account behind all of it", () =
   );
 });
 
-test("within one account it is still first come, first served", () => {
+test("within one account it is still first come, first served", async () => {
   const entries = [3, 1, 2].map((i) => ({
     name: `${String(i).padStart(14, "0")}-run-${i}.json`,
     tenant: "solo",
@@ -635,7 +635,7 @@ test("within one account it is still first come, first served", () => {
   );
 });
 
-test("accounts are taken in the order their oldest job arrived, not alphabetically", () => {
+test("accounts are taken in the order their oldest job arrived, not alphabetically", async () => {
   // 'zeta' was waiting first; fairness must not hand 'alpha' the front of the
   // queue for having an earlier name.
   const order = fairOrder([
@@ -645,7 +645,7 @@ test("accounts are taken in the order their oldest job arrived, not alphabetical
   assert.equal(order[0], "00000000000001-run-z1.json");
 });
 
-test("a single account is unchanged by fair ordering", () => {
+test("a single account is unchanged by fair ordering", async () => {
   const names = ["00000000000001-run-a.json", "00000000000002-run-b.json"];
   const order = fairOrder(names.map((name) => ({ name, tenant: "one" })));
   assert.deepEqual(order, names, "the common case is exactly FIFO");
