@@ -775,11 +775,17 @@ test("one place decides which clock a viewer reads", () => {
 // died in CreateContainerConfigError, pointing at the deploy rather than at a
 // timer that had quietly emptied the key hours earlier.
 
-/** Every --from-literal key a shell script writes into foldrun-keys. */
-function secretKeysIn(rel: string): Set<string> {
-  return new Set(
-    [...read(rel).matchAll(/--from-literal=([a-z0-9-]+)=/g)].map((m) => m[1]),
-  );
+/** Every --from-literal key a shell script writes into ONE named secret.
+ *  Scoped to the block, because these scripts create more than one secret and
+ *  the lists are only required to agree per-secret. */
+function secretKeysIn(rel: string, secret = "foldrun-keys"): Set<string> {
+  const source = read(rel);
+  const at = source.indexOf(`create secret generic ${secret}`);
+  if (at === -1) return new Set();
+  // The block runs to the --dry-run that terminates the pipeline.
+  const end = source.indexOf("--dry-run", at);
+  const block = source.slice(at, end === -1 ? undefined : end);
+  return new Set([...block.matchAll(/--from-literal=([a-zA-Z0-9_-]+)=/g)].map((m) => m[1]));
 }
 
 test("bootstrap and token-refresh write the same secret keys", () => {
@@ -949,5 +955,24 @@ test("the datastores may not open an outbound connection except DNS", () => {
     assert.ok(p, `no policy for ${app}`);
     const ports = p.spec.egress.flatMap((e: any) => (e.ports ?? []).map((x: any) => x.port));
     assert.deepEqual([...new Set(ports)], [53], `${app} may egress only to DNS`);
+  }
+});
+
+// An alert on a metric nothing emits never fires, and a never-firing alert is
+// indistinguishable from a healthy system. So every foldrun_* metric named in
+// the rules has to be one something actually produces — the API endpoint or
+// the host collector.
+test("every foldrun_ metric an alert references is one we emit", () => {
+  const emitted = new Set([
+    ...[...read("web/app/api/metrics/route.ts").matchAll(/^\s*"# HELP (foldrun_\w+)/gm)].map((m) => m[1]),
+    ...[...read("infra/production/node-metrics.sh").matchAll(/# HELP (foldrun_\w+)/g)].map((m) => m[1]),
+  ]);
+  assert.ok(emitted.size > 5, "found the emitted metric names at all");
+  const referenced = new Set(
+    [...read("infra/production/observability/alerts.yaml").matchAll(/\b(foldrun_\w+)/g)].map((m) => m[1]),
+  );
+  assert.ok(referenced.size > 3, "found the alert expressions at all");
+  for (const metric of referenced) {
+    assert.ok(emitted.has(metric), `alerts.yaml watches ${metric}, which nothing emits`);
   }
 });
