@@ -1054,4 +1054,26 @@ test("the scaffolded CLAUDE.md names every directory and agent field", () => {
       `mentions them, so nobody authoring with a coding tool will use them: ` +
       `${undocumented.join(", ")}`,
   );
+
+  // Step options, from parseFlow's own if-chain. Same argument: an option the
+  // parser accepts and this file never mentions is a feature that exists only
+  // for people who read the source.
+  const store = read("packages/core/src/store.ts");
+  const parseFlowBody = store.slice(store.indexOf("export function parseFlow"));
+  const options = new Set(
+    [...parseFlowBody.slice(0, parseFlowBody.indexOf("steps.sort")).matchAll(
+      /key === "([a-z-]+)"/g,
+    )].map((m) => m[1]),
+  );
+  assert.ok(options.size > 10, "found parseFlow's option list at all");
+  // `onfail` is an accepted spelling of `on-fail`, not a second feature.
+  const missingOptions = [...options].filter(
+    (o) => o !== "onfail" && !doc.includes(`${o}:`),
+  );
+  assert.deepEqual(
+    missingOptions,
+    [],
+    `parseFlow accepts these step options and CLAUDE.md never mentions them: ` +
+      `${missingOptions.join(", ")}`,
+  );
 });
