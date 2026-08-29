@@ -558,17 +558,44 @@ test("exactly one worker, and the Service never routes to it", () => {
   );
 });
 
-test("only the worker may create run pods", () => {
+test("only the worker may create run pods or exec into them", () => {
+  // This asserted that web held NO RBAC, which was both wrong and the weaker
+  // property: the /stop route runs on web and has to delete a pod, so denying
+  // everything meant stop marked the record and left the pod running, billing,
+  // until activeDeadlineSeconds reaped it. The invariant that actually matters
+  // is the VERBS — starting work and opening a shell inside it belong to the
+  // worker alone.
   const { byName, docs } = manifest();
   const worker = byName("Deployment", "foldrun-worker").spec.template.spec.serviceAccountName;
   const web = byName("Deployment", "foldrun-web").spec.template.spec.serviceAccountName;
-  assert.notEqual(web, worker, "a serving replica has no business creating run pods");
+  assert.notEqual(web, worker, "the tiers must not share an account");
 
-  const bound = docs
-    .filter((d) => d && d.kind === "RoleBinding")
-    .flatMap((d) => (d.subjects ?? []).map((s: any) => s.name));
-  assert.ok(bound.includes(worker), "the worker's account must hold the run-pod Role");
-  assert.ok(!bound.includes(web), "the web account must hold no RBAC at all");
+  /** Every verb/resource pair an account can reach, through its bindings. */
+  const grants = (account: string) => {
+    const roles = docs
+      .filter((d) => d && d.kind === "RoleBinding")
+      .filter((d) => (d.subjects ?? []).some((s: any) => s.name === account))
+      .map((d) => d.roleRef.name);
+    const out: string[] = [];
+    for (const r of docs.filter((d) => d && d.kind === "Role" && roles.includes(d.metadata.name))) {
+      for (const rule of r.rules ?? []) {
+        for (const res of rule.resources ?? []) {
+          for (const v of rule.verbs ?? []) out.push(`${v} ${res}`);
+        }
+      }
+    }
+    return new Set(out);
+  };
+
+  const webCan = grants(web);
+  const workerCan = grants(worker);
+
+  assert.ok(workerCan.has("create pods"), "the worker must be able to start a run");
+  assert.ok(workerCan.has("create pods/exec"), "kubectl cp into a run pod is an exec");
+
+  assert.ok(webCan.has("delete pods"), "stop runs on the web tier and must reach the pod");
+  assert.ok(!webCan.has("create pods"), "a dashboard replica must not start work");
+  assert.ok(!webCan.has("create pods/exec"), "a dashboard replica must not open a shell in a run");
 });
 
 // ------------------------------------------------------- the grammar's docs
