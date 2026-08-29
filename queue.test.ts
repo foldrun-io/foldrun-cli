@@ -555,24 +555,24 @@ test("the worker lease: one holder, stale takeover, and a peek that never writes
   await withWorkspace(async () => {
     const lease = path.join(process.env.FOLDRUN_DATA!, ".worker-lease");
 
-    assert.equal(peekWorkerLease(), false, "peek before any lease exists");
+    assert.equal(await peekWorkerLease(), false, "peek before any lease exists");
     assert.ok(!fs.existsSync(lease), "and peeking wrote nothing");
 
-    assert.equal(holdsWorkerLease(), true, "an unclaimed lease is taken");
-    assert.equal(peekWorkerLease(), true, "and peek now sees our ownership");
-    assert.equal(holdsWorkerLease(), true, "the holder renews freely");
+    assert.equal(await holdsWorkerLease(), true, "an unclaimed lease is taken");
+    assert.equal(await peekWorkerLease(), true, "and peek now sees our ownership");
+    assert.equal(await holdsWorkerLease(), true, "the holder renews freely");
 
     // A fresh lease held by someone else blocks us from CLAIMING — but the
     // peek still reports a live worker, because that is the operational
     // question a probe asks (and module identity doesn't survive bundling).
     fs.writeFileSync(lease, JSON.stringify({ owner: "other-worker", renewedAt: Date.now() }));
-    assert.equal(holdsWorkerLease(), false, "a live foreign lease is respected");
-    assert.equal(peekWorkerLease(), true, "a live worker exists — whoever it is");
-    assert.equal(peekWorkerLease(Date.now() + 120_000), false, "a stale lease is no worker");
+    assert.equal(await holdsWorkerLease(), false, "a live foreign lease is respected");
+    assert.equal(await peekWorkerLease(), true, "a live worker exists — whoever it is");
+    assert.equal(await peekWorkerLease(Date.now() + 120_000), false, "a stale lease is no worker");
 
     // …until it goes stale, and then it's claimable.
     fs.writeFileSync(lease, JSON.stringify({ owner: "other-worker", renewedAt: Date.now() - 120_000 }));
-    assert.equal(holdsWorkerLease(), true, "a stale lease is taken over");
+    assert.equal(await holdsWorkerLease(), true, "a stale lease is taken over");
   }));
 
 test("queueStats separates ready, scheduled-ahead and claimed", async () =>
