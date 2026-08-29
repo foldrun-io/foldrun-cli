@@ -734,3 +734,67 @@ test("one place decides which clock a viewer reads", () => {
       "explicit timeZone when the zone itself is the subject (a schedule preview).",
   );
 });
+
+// The secret is written in two places and read in a third. bootstrap.sh
+// creates it, token-refresh.sh REPLACES it every hour, and platform.yaml
+// mounts keys out of it — and `create secret --dry-run | apply` replaces the
+// whole object, so a key in bootstrap but not in token-refresh exists only
+// until the timer next fires.
+//
+// This is the bug this file was written for, in its most expensive form:
+// postgres-password was added to bootstrap.sh and not to token-refresh.sh, and
+// nothing failed for three days, because running pods keep the environment
+// they started with. The next pod created — a deploy, an eviction, a reboot —
+// died in CreateContainerConfigError, pointing at the deploy rather than at a
+// timer that had quietly emptied the key hours earlier.
+
+/** Every --from-literal key a shell script writes into foldrun-keys. */
+function secretKeysIn(rel: string): Set<string> {
+  return new Set(
+    [...read(rel).matchAll(/--from-literal=([a-z0-9-]+)=/g)].map((m) => m[1]),
+  );
+}
+
+test("bootstrap and token-refresh write the same secret keys", () => {
+  const bootstrap = secretKeysIn("infra/production/bootstrap.sh");
+  const refresh = secretKeysIn("infra/production/token-refresh.sh");
+  assert.ok(bootstrap.size > 5, "found the bootstrap key list at all");
+  const missing = [...bootstrap].filter((k) => !refresh.has(k));
+  assert.deepEqual(
+    missing,
+    [],
+    `token-refresh.sh replaces the whole secret, so these keys would be deleted ` +
+      `the next time the timer fires: ${missing.join(", ")}`,
+  );
+  const extra = [...refresh].filter((k) => !bootstrap.has(k));
+  assert.deepEqual(extra, [], `keys a fresh box would never get: ${extra.join(", ")}`);
+});
+
+test("every secret key the manifests read is one the scripts write", () => {
+  const written = secretKeysIn("infra/production/bootstrap.sh");
+  const manifest = read("infra/production/manifests/platform.yaml");
+  const referenced = [
+    ...manifest.matchAll(/secretKeyRef:\s*\{\s*name:\s*foldrun-keys,\s*key:\s*([a-z0-9-]+)([^}]*)\}/g),
+  ];
+  assert.ok(referenced.length > 5, "found the secretKeyRefs at all");
+  for (const [, key, rest] of referenced) {
+    // An optional key may be absent by design; a required one may not.
+    if (rest.includes("optional: true")) continue;
+    assert.ok(written.has(key), `platform.yaml requires ${key}, which bootstrap.sh never writes`);
+  }
+});
+
+test("the scripts restart deployments that exist", () => {
+  const docs = yaml.loadAll(read("infra/production/manifests/platform.yaml")) as any[];
+  const deployments = new Set(
+    docs.filter((d) => d?.kind === "Deployment").map((d) => d.metadata.name as string),
+  );
+  for (const rel of ["infra/production/token-refresh.sh", "infra/production/deploy.sh"]) {
+    for (const [, name] of read(rel).matchAll(/deploy\/([a-z0-9-]+)/g)) {
+      // deploy.sh deletes the pre-split deployment on purpose; it is the one
+      // name that is expected NOT to be in the manifests.
+      if (name === "foldrun-platform" && rel.endsWith("deploy.sh")) continue;
+      assert.ok(deployments.has(name), `${rel} names deploy/${name}, which no manifest creates`);
+    }
+  }
+});
