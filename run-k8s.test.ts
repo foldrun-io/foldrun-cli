@@ -99,3 +99,72 @@ test("a pod caps memory per class but never caps CPU", () => {
     delete process.env.FOLDRUN_RUNNER_CPUS;
   }
 });
+
+// ---------- the dependency cache ----------
+//
+// The volume that turns the runner's runtime cache from "rebuilt every step"
+// into "built once per account". Two properties matter more than the mount
+// itself: it is absent unless configured (a claim name pointing at nothing
+// leaves every run pod Pending, which is worse than a slow one), and the
+// subPath that separates tenants can never be talked into leaving its parent.
+
+function withCachePvc<T>(value: string | undefined, fn: () => T): T {
+  const previous = process.env.FOLDRUN_RUNTIME_CACHE_PVC;
+  if (value === undefined) delete process.env.FOLDRUN_RUNTIME_CACHE_PVC;
+  else process.env.FOLDRUN_RUNTIME_CACHE_PVC = value;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env.FOLDRUN_RUNTIME_CACHE_PVC;
+    else process.env.FOLDRUN_RUNTIME_CACHE_PVC = previous;
+  }
+}
+
+type Pod = {
+  spec: {
+    volumes?: { name: string; persistentVolumeClaim: { claimName: string } }[];
+    containers: {
+      volumeMounts?: { name: string; mountPath: string; subPath: string }[];
+    }[];
+  };
+};
+
+test("no claim configured, no volume — the pod is exactly what it was before", () => {
+  withCachePvc(undefined, () => {
+    const pod = runPodManifest("x", "img", "run1", "small", 600, "acct-1") as Pod;
+    assert.equal(pod.spec.volumes, undefined);
+    assert.equal(pod.spec.containers[0].volumeMounts, undefined);
+  });
+});
+
+test("with a claim, the tenant's cache mounts by subPath", () => {
+  withCachePvc("foldrun-runtimes", () => {
+    const pod = runPodManifest("x", "img", "run1", "small", 600, "acct-1") as Pod;
+    assert.deepEqual(pod.spec.volumes, [
+      { name: "runtime-cache", persistentVolumeClaim: { claimName: "foldrun-runtimes" } },
+    ]);
+    const mount = pod.spec.containers[0].volumeMounts?.[0];
+    assert.equal(mount?.subPath, "acct-1", "one sub-directory per account, not a shared root");
+    // The path is load-bearing, not cosmetic: a venv writes its own absolute
+    // path into every shebang, so a cache mounted anywhere else is a cache of
+    // broken interpreters. It must equal what the driver's FOLDRUN_DATA and
+    // the in-container tenant name produce.
+    assert.equal(mount?.mountPath, "/home/agent/.foldrun/runner/.runtimes");
+  });
+});
+
+test("a tenant name that is not one safe segment gets no volume at all", () => {
+  withCachePvc("foldrun-runtimes", () => {
+    for (const bad of ["../other", "a/b", "..", ".", "", "  "]) {
+      const pod = runPodManifest("x", "img", "run1", "small", 600, bad) as Pod;
+      assert.equal(pod.spec.volumes, undefined, `${JSON.stringify(bad)} must not mount`);
+    }
+  });
+});
+
+test("no tenant (an embedder with no tenancy) simply gets no cache", () => {
+  withCachePvc("foldrun-runtimes", () => {
+    const pod = runPodManifest("x", "img") as Pod;
+    assert.equal(pod.spec.volumes, undefined);
+  });
+});
