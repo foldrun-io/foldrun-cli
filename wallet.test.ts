@@ -19,7 +19,7 @@ import {
 import { demoWorkspaceFiles } from "../packages/core/src/demo-workspace.ts";
 import { parseFlow } from "../packages/core/src/store.ts";
 
-function withAccount(body: () => void) {
+async function withAccount(body: () => void | Promise<void>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-wallet-"));
   const prevData = process.env.FOLDRUN_DATA;
   const prevLow = process.env.FOLDRUN_LOW_BALANCE_USD;
@@ -27,7 +27,7 @@ function withAccount(body: () => void) {
   delete process.env.FOLDRUN_LOW_BALANCE_USD;
   try {
     fs.mkdirSync(path.join(root, "acme/workspaces"), { recursive: true });
-    body();
+    await body();
   } finally {
     if (prevData === undefined) delete process.env.FOLDRUN_DATA;
     else process.env.FOLDRUN_DATA = prevData;
@@ -45,12 +45,12 @@ function spend(tenant: string, usd: number, daysAgo: number) {
   fs.appendFileSync(file, JSON.stringify({ t, kind: "run", usd: -usd }) + "\n");
 }
 
-test("burn divides by the days that have data, not by a flattering 30", () =>
-  withAccount(() => {
-    recordTopUp("acme", 100);
+test("burn divides by the days that have data, not by a flattering 30", async () =>
+  await withAccount(async () => {
+    await recordTopUp("acme", 100);
     spend("acme", 5, 0.5);
     spend("acme", 5, 1.5);
-    const s = walletSummary("acme");
+    const s = await walletSummary("acme");
     // $10 over ~1.5 days ≈ $6.7/day — dividing by 30 would claim $0.33/day
     // and a runway of 9 months for a wallet that dies in a fortnight.
     assert.ok(s.burnPerDayUsd > 5, `burn ${s.burnPerDayUsd} should reflect the short window`);
@@ -58,34 +58,34 @@ test("burn divides by the days that have data, not by a flattering 30", () =>
     assert.equal(s.spend7dUsd, 10);
   }));
 
-test("no spend means no runway claim", () =>
-  withAccount(() => {
-    recordTopUp("acme", 50);
-    const s = walletSummary("acme");
+test("no spend means no runway claim", async () =>
+  await withAccount(async () => {
+    await recordTopUp("acme", 50);
+    const s = await walletSummary("acme");
     assert.equal(s.burnPerDayUsd, 0);
     assert.equal(s.daysLeft, null);
     assert.equal(s.emptyOn, null);
   }));
 
-test("top-ups are not burn", () =>
-  withAccount(() => {
-    recordTopUp("acme", 100);
+test("top-ups are not burn", async () =>
+  await withAccount(async () => {
+    await recordTopUp("acme", 100);
     spend("acme", 2, 1);
-    recordTopUp("acme", 100);
-    const s = walletSummary("acme");
+    await recordTopUp("acme", 100);
+    const s = await walletSummary("acme");
     assert.equal(s.spend30dUsd, 2, "the second top-up must not count as spend");
   }));
 
-test("the warn threshold prefers the auto top-up's own line", () =>
-  withAccount(() => {
+test("the warn threshold prefers the auto top-up's own line", async () =>
+  await withAccount(async () => {
     assert.equal(warnThresholdUsd("acme", 0), 5, "floor with no history");
     assert.equal(warnThresholdUsd("acme", 4), 12, "3 days of burn beats the floor");
     saveWalletConfig("acme", { autoTopUp: { enabled: true, thresholdUsd: 25, amountUsd: 50 } });
     assert.equal(warnThresholdUsd("acme", 4), 25, "an enabled refill rule sets the line");
   }));
 
-test("wallet config round-trips and starts empty", () =>
-  withAccount(() => {
+test("wallet config round-trips and starts empty", async () =>
+  await withAccount(async () => {
     assert.deepEqual(walletConfig("acme"), {});
     saveWalletConfig("acme", { stripeCustomerId: "cus_1", warnedAt: "2026-08-27T00:00:00Z" });
     assert.equal(walletConfig("acme").stripeCustomerId, "cus_1");
@@ -93,8 +93,8 @@ test("wallet config round-trips and starts empty", () =>
     assert.equal(walletConfig("acme").warnedAt, undefined, "clearing a marker sticks");
   }));
 
-test("budget: caps a workspace at admission, and only that workspace", () =>
-  withAccount(() => {
+test("budget: caps a workspace at admission, and only that workspace", async () =>
+  await withAccount(async () => {
     const ws = path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/leads");
     fs.mkdirSync(ws, { recursive: true });
     fs.writeFileSync(path.join(ws, "AGENTS.md"), "---\nname: leads\nbudget: 10\n---\n");
@@ -102,8 +102,8 @@ test("budget: caps a workspace at admission, and only that workspace", () =>
     assert.equal(workspaceBudgetUsd("acme", "other"), null, "no file, no cap");
 
     // Under budget: admission passes.
-    recordTopUp("acme", 100);
-    assert.doesNotThrow(() => assertWorkspaceBudget("acme", "leads"));
+    await recordTopUp("acme", 100);
+    await assert.doesNotReject(async () => await assertWorkspaceBudget("acme", "leads"));
 
     // This month's spend in THIS workspace crosses the cap → 402.
     const file = path.join(process.env.FOLDRUN_DATA!, "acme", "ledger.jsonl");
@@ -111,15 +111,15 @@ test("budget: caps a workspace at admission, and only that workspace", () =>
       file,
       JSON.stringify({ t: new Date().toISOString(), kind: "run", usd: -11, workspace: "leads" }) + "\n",
     );
-    assert.throws(
-      () => assertWorkspaceBudget("acme", "leads"),
+    await assert.rejects(
+      async () => await assertWorkspaceBudget("acme", "leads"),
       (e: Error & { status?: number }) => e.status === 402 && /monthly budget/.test(e.message),
     );
     // Another workspace's spend is not this workspace's problem.
-    assert.doesNotThrow(() => assertWorkspaceBudget("acme", "other"));
+    await assert.doesNotReject(async () => await assertWorkspaceBudget("acme", "other"));
   }));
 
-test("the demo workspace parses into the shape the button promises", () => {
+test("the demo workspace parses into the shape the button promises", async () => {
   const files = demoWorkspaceFiles();
   const flow = files.find((f) => f.path === "flows/extract-and-import.md")!;
   const parsed = parseFlow("extract-and-import.md", flow.content);
