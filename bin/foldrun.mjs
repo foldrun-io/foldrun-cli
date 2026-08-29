@@ -36,6 +36,7 @@ const HELP = `foldrun — agents are folders
 
   foldrun init [dir]        create a workspace you can run immediately
   foldrun check [dir]       validate agents, flows, tools, evals and knowledge
+  foldrun extract [dir]     move single-file script tools into folders (tool.md + run.*)
   foldrun run <target>      run an agent or flow (target: name, or flow:name)
   foldrun eval [name]       run one eval, or all of them
   foldrun probe <model>     live check: can this model hold a tool loop here?
@@ -90,7 +91,7 @@ const isDeploy = command === "deploy";
 
 // `init` and `check` take a directory; `run` and `eval` take the name of a
 // thing to run, so a directory there would be ambiguous — use --workspace.
-const takesDir = command === "init" || command === "check";
+const takesDir = command === "init" || command === "check" || command === "extract";
 const workspace = path.resolve(
   flags.workspace ?? (takesDir ? positional.shift() ?? "." : "."),
 );

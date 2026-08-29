@@ -197,10 +197,140 @@ function importedAgentNames(workspace, nativeNames) {
   return names;
 }
 
+// ---------------------------------------------------------------- extract
+
+/**
+ * Lift a single-file script tool's program out of its markdown and into a
+ * file beside it: `tools/x.md` becomes `tools/x/tool.md` + `tools/x/run.py`.
+ *
+ * The tool's NAME does not change, which is the property that makes this
+ * safe to run against a live workspace: `use: [x]` in an agent still names
+ * the same tool, so no agent, flow or schedule has to be edited alongside.
+ * Only where the bytes live changes.
+ *
+ * Written to be re-runnable. A tool already in folder form, or one with a
+ * `run:`, is skipped rather than touched, so a half-finished migration is
+ * finished by running it again rather than by unpicking it.
+ *
+ * Order matters on a live box: the folder is written and re-parsed FIRST,
+ * and the flat file is removed only once the result loads as a script tool
+ * whose program is on disk. A crash between the two leaves the old file
+ * intact and a folder beside it — visible, and fixed by re-running.
+ */
+async function extract(workspace, flags) {
+  const { fencedCodeBlock, parseToolDef } = await core();
+  const dry = Boolean(flags["dry-run"]);
+  const dir = path.join(workspace, "tools");
+
+  if (!fs.existsSync(dir)) {
+    console.log(`\n  no tools/ in ${workspace} — nothing to extract\n`);
+    return 0;
+  }
+
+  const done = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const entry of fs.readdirSync(dir).sort()) {
+    if (!entry.endsWith(".md")) continue;
+    const name = entry.replace(/\.md$/, "");
+    const flat = path.join(dir, entry);
+    const raw = fs.readFileSync(flat, "utf8");
+
+    // Frontmatter is edited as text, never re-serialised. A YAML round-trip
+    // reorders keys, drops comments and rewrites quoting — a diff nobody
+    // asked for across every tool on the box, hiding the one line that
+    // actually changed.
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
+    if (!fm) {
+      skipped.push([name, "no frontmatter"]);
+      continue;
+    }
+    const front = fm[1];
+    const body = raw.slice(fm[0].length);
+
+    if (/^transport:\s*script\s*$/m.test(front) === false && /^run:/m.test(front) === false) {
+      skipped.push([name, "not a script tool"]);
+      continue;
+    }
+    if (/^run:/m.test(front)) {
+      skipped.push([name, "already points at a file"]);
+      continue;
+    }
+
+    const block = fencedCodeBlock(body);
+    if (!block) {
+      failed.push([name, "transport: script with no run: and no fenced program — nothing to extract"]);
+      continue;
+    }
+
+    const program = `run${block.ext}`;
+    const folder = path.join(dir, name);
+    if (fs.existsSync(folder)) {
+      failed.push([name, `tools/${name}/ already exists — resolve by hand`]);
+      continue;
+    }
+
+    // The body keeps its prose and loses the block that is now a file. The
+    // pointer replaces it so the document still says where the program is.
+    const trimmed =
+      body.slice(0, block.start).replace(/\n{3,}$/, "\n\n") +
+      `\`${program}\` beside this file is the program.\n` +
+      body.slice(block.end).replace(/^\n+/, "\n");
+
+    const manifest =
+      `---\n${front.replace(/(^name:.*$)/m, `$1\nrun: ${program}`)}\n---\n\n` + trimmed.replace(/^\n+/, "");
+
+    if (dry) {
+      done.push([name, `${program} (${block.code.split("\n").length} lines)`]);
+      continue;
+    }
+
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, program), block.code);
+    fs.writeFileSync(path.join(folder, "tool.md"), manifest);
+
+    // Prove it before deleting anything. parseToolDef is what the runtime
+    // uses, so "it loads" here means it loads there.
+    const check = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(manifest);
+    const data = Object.fromEntries(
+      check[1]
+        .split("\n")
+        .map((l) => /^([a-z_-]+):\s*(.*)$/.exec(l))
+        .filter(Boolean)
+        .map((m) => [m[1], m[2]]),
+    );
+    const def = parseToolDef(data, name, manifest.slice(check[0].length));
+    const ok =
+      def?.kind === "script" &&
+      def.spec.run === program &&
+      fs.existsSync(path.join(folder, program));
+    if (!ok) {
+      failed.push([name, "the extracted folder did not parse back as a script tool — flat file left in place"]);
+      continue;
+    }
+
+    fs.rmSync(flat);
+    done.push([name, `${program} (${block.code.split("\n").length} lines)`]);
+  }
+
+  const label = dry ? "would extract" : "extracted";
+  console.log("");
+  for (const [name, what] of done) console.log(`  ${c.green("✓")} ${label} ${c.bold(name)} → tools/${name}/${what}`);
+  for (const [name, why] of skipped) console.log(`  ${c.dim("·")} ${c.dim(`${name} — ${why}`)}`);
+  for (const [name, why] of failed) console.log(`  ${c.red("!")} ${c.bold(name)} — ${why}`);
+  console.log(
+    `\n  ${done.length} ${label}, ${skipped.length} skipped, ${failed.length} failed` +
+      (dry ? `  ${c.dim("(--dry-run: nothing written)")}` : "") +
+      `\n\n  ${c.dim("next: foldrun check " + workspace)}\n`,
+  );
+  return failed.length ? 1 : 0;
+}
+
 async function check(workspace) {
   const {
     listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
-    workspaceTools, libraryTools, checkFormatVersion,
+    workspaceTools, libraryTools, checkFormatVersion, missingToolPrograms,
   } = await core();
   const T = "default";
   const P = "workspace";
@@ -239,12 +369,26 @@ async function check(workspace) {
     if (!a.description) note("warn", `agents/${a.name}`, "no description — other agents and people read it");
     for (const t of a.use) {
       if (!usable[t]) {
-        note("error", `agents/${a.name}`, `use: [${t}] — no tools/${t}.md in this workspace or the account library`);
+        note(
+          "error",
+          `agents/${a.name}`,
+          `use: [${t}] — no tools/${t}/tool.md or tools/${t}.md in this workspace or the account library`,
+        );
       }
     }
-    for (const s of a.scripts ?? []) {
-      // declared script tools must point at a file that exists
-    }
+  }
+
+  // A script tool whose `run:` resolves to nothing parses, counts, and is
+  // offered to the agent — then fails inside a turn. Checking it here is the
+  // difference between a typo found in CI and a flow that quietly stops
+  // using one of its tools. Resolution comes from core, so this agrees with
+  // the runner by construction rather than by maintenance.
+  for (const m of missingToolPrograms(T, P)) {
+    note(
+      "error",
+      m.scope === "account" ? `library/tools/${m.name}` : `tools/${m.name}`,
+      `run: ${m.run} — no such file (looked for ${m.looked})`,
+    );
   }
 
   validateSkills(workspace, note);
@@ -954,6 +1098,8 @@ export async function run(command, positional, flags, workspace) {
       return init(workspace, flags.from);
     case "check":
       return check(workspace);
+    case "extract":
+      return extract(workspace, flags);
     case "deploy":
       return deploy(positional[0] ?? ".", flags);
     case "run":
