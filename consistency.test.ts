@@ -798,3 +798,51 @@ test("the scripts restart deployments that exist", () => {
     }
   }
 });
+
+// The host scripts are the third place a change can land and not run. They
+// are systemd timers on the box, so deploy.sh's rollout never touches them —
+// install-host-scripts.sh is the one thing that does, and both bootstrap.sh
+// and deploy.sh call it. These tests keep its three lists agreeing with the
+// unit files beside it.
+
+const installer = () => read("infra/production/install-host-scripts.sh");
+
+test("every unit file in the directory is one the installer installs", () => {
+  const onDisk = fs
+    .readdirSync(path.join(root, "infra/production"))
+    .filter((f) => f.endsWith(".service") || f.endsWith(".timer"))
+    .map((f) => f.replace(/\.(service|timer)$/, ""));
+  assert.ok(onDisk.length > 0, "found unit files at all");
+  const listed = (installer().match(/^UNITS="([^"]+)"/m)?.[1] ?? "")
+    .split(/\s+/)
+    .filter(Boolean);
+  assert.ok(listed.length > 0, "found the UNITS list at all");
+  for (const unit of new Set(onDisk)) {
+    assert.ok(listed.includes(unit), `${unit} has unit files but the installer never installs it`);
+  }
+});
+
+test("every ExecStart points at a path the installer writes", () => {
+  const installs = new Set(
+    [...installer().matchAll(/^[a-z-]+\.sh:(\S+)$/gm)].map((m) => m[1]),
+  );
+  assert.ok(installs.size > 0, "found the script map at all");
+  for (const f of fs.readdirSync(path.join(root, "infra/production"))) {
+    if (!f.endsWith(".service")) continue;
+    const exec = read(`infra/production/${f}`).match(/^ExecStart=(\S+)/m)?.[1];
+    assert.ok(exec, `${f} has no ExecStart`);
+    assert.ok(installs.has(exec!), `${f} runs ${exec}, which nothing installs`);
+  }
+});
+
+test("only the installer installs host scripts — one definition, not three", () => {
+  // bootstrap.sh used to do this itself, which is exactly why a fixed
+  // token-refresh.sh could sit unrun on the box for three days.
+  for (const rel of ["infra/production/bootstrap.sh", "infra/production/deploy.sh"]) {
+    assert.equal(
+      /install -m755[^\n]*\/usr\/local\/bin\/foldrun-/.test(read(rel)),
+      false,
+      `${rel} installs a host script directly instead of calling install-host-scripts.sh`,
+    );
+  }
+});
