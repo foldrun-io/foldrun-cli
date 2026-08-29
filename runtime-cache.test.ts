@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { prepareRuntime, fingerprint, safeTenantSegment } from "../packages/core/src/runtime.ts";
+import { prepareRuntime, parseRuntime, fingerprint, safeTenantSegment } from "../packages/core/src/runtime.ts";
 
 const SPEC = { python: true as const, packages: [], npm: [] };
 const FP = fingerprint(SPEC);
@@ -134,4 +134,55 @@ test("different declarations get different entries", () => {
     fingerprint({ ...SPEC, packages: ["requests", "pandas"] }),
     fingerprint({ ...SPEC, packages: ["pandas", "requests"] }),
   );
+});
+
+// ---------- what may be handed to an installer ----------
+//
+// pip and npm read options out of the same argv as their operands, so the list
+// of packages an agent declares is an argument vector, not a list of names. It
+// is validated as one.
+
+const kept = (v: unknown) => parseRuntime({ packages: v })?.packages ?? [];
+const keptNpm = (v: unknown) => parseRuntime({ npm: v })?.npm ?? [];
+
+test("a leading dash is refused — the declaration is an argv, not a name list", () => {
+  // The shape that mattered: pip takes the index from its arguments, so this
+  // moved every install in the declaration to somebody else's server, and the
+  // packages it returned then ran inside the sandbox with the step's secrets.
+  const poisoned = ["--index-url", "http://elsewhere.example/simple", "pandas"];
+  assert.deepEqual(kept(poisoned), ["pandas"], "only the actual package survives");
+  for (const flag of ["--index-url", "--extra-index-url", "--find-links", "--target", "-r", "-e"]) {
+    assert.deepEqual(kept([flag]), [], `${flag} must never reach pip`);
+  }
+  for (const flag of ["--registry", "-g", "--prefix"]) {
+    assert.deepEqual(keptNpm([flag]), [], `${flag} must never reach npm`);
+  }
+});
+
+test("the pins people actually write survive", () => {
+  // Each of these was silently dropped before: the pattern allowed a single
+  // comparator character, so `pandas>2` passed and `pandas>=2` did not — and a
+  // dropped requirement is never installed, so the script failed later with
+  // "no module named pandas" and nothing pointing at the declaration.
+  for (const req of ["pandas", "pandas>=2", "pandas==2.1.4", "pandas>=2,<3", "requests[socks]", "ruamel.yaml"]) {
+    assert.deepEqual(kept([req]), [req], `${req} must reach pip`);
+  }
+  assert.deepEqual(keptNpm(["lodash", "@scope/pkg", "lodash@^4"]), ["lodash", "@scope/pkg", "lodash@^4"]);
+});
+
+test("a refused requirement is reported, not swallowed", () => {
+  const spec = parseRuntime({ packages: ["pandas", "--index-url"] });
+  assert.deepEqual(spec?.rejected, ["--index-url"]);
+  inTempData(() => {
+    const out = prepareRuntime("acct", spec!);
+    assert.match(out.log.join("\n"), /ignored invalid requirement\(s\): --index-url/);
+  });
+});
+
+test("what was rejected does not change the cache key", () => {
+  // Otherwise a typo would fork the cache: same installed packages, new entry,
+  // new install.
+  const clean = parseRuntime({ packages: ["pandas"] })!;
+  const noisy = parseRuntime({ packages: ["pandas", "--index-url"] })!;
+  assert.equal(fingerprint(clean), fingerprint(noisy));
 });
