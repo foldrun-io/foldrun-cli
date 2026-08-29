@@ -873,3 +873,81 @@ test("only the installer installs host scripts — one definition, not three", (
     );
   }
 });
+
+// --------------------------------------------------------- cluster hardening
+//
+// A kubescape scan took the manifests from 63% to 96% on the NSA framework.
+// Everything below is one of those fixes, kept as a test because a scan is
+// something someone remembers to run and a test is not.
+//
+// What is deliberately NOT asserted, because it is architecture rather than
+// oversight: the worker holds pods/exec (kubectl cp into a run pod IS an exec)
+// and both tiers mount a service-account token (both call the API — the worker
+// creates run pods, the web tier deletes one when you press Stop).
+
+test("no container in the cluster runs as root", () => {
+  const docs = [
+    ...(manifest().docs),
+    ...(yaml.loadAll(read("infra/production/manifests/datastores.yaml")) as any[]),
+  ].filter(Boolean);
+  for (const d of docs.filter((x) => x.kind === "Deployment")) {
+    const pod = d.spec.template.spec;
+    assert.equal(
+      pod.securityContext?.runAsNonRoot,
+      true,
+      `${d.metadata.name} does not declare runAsNonRoot`,
+    );
+    assert.ok(
+      typeof pod.securityContext?.runAsUser === "number" && pod.securityContext.runAsUser !== 0,
+      `${d.metadata.name} must name the non-root uid it runs as`,
+    );
+  }
+});
+
+test("every container drops capabilities and cannot write its own image", () => {
+  const docs = [
+    ...(manifest().docs),
+    ...(yaml.loadAll(read("infra/production/manifests/datastores.yaml")) as any[]),
+  ].filter(Boolean);
+  for (const d of docs.filter((x) => x.kind === "Deployment")) {
+    for (const c of d.spec.template.spec.containers) {
+      const sc = c.securityContext ?? {};
+      assert.equal(sc.allowPrivilegeEscalation, false, `${d.metadata.name}/${c.name}`);
+      assert.deepEqual(sc.capabilities?.drop, ["ALL"], `${d.metadata.name}/${c.name}`);
+      assert.equal(sc.readOnlyRootFilesystem, true, `${d.metadata.name}/${c.name}`);
+    }
+  }
+});
+
+test("every workload is covered by a NetworkPolicy that names it", () => {
+  // matchLabels, not matchExpressions: kubescape could not resolve the
+  // expression form, and a policy no tool can evaluate is one nobody can
+  // audit. The selector has to say the app out loud.
+  const docs = [
+    ...(manifest().docs),
+    ...(yaml.loadAll(read("infra/production/manifests/datastores.yaml")) as any[]),
+  ].filter(Boolean);
+  const policies = docs.filter((d) => d.kind === "NetworkPolicy");
+  for (const d of docs.filter((x) => x.kind === "Deployment")) {
+    const app = d.spec.template.metadata.labels.app;
+    const covering = policies.find((p) => p.spec.podSelector?.matchLabels?.app === app);
+    assert.ok(covering, `${d.metadata.name} is not covered by any NetworkPolicy`);
+    assert.deepEqual(
+      [...covering.spec.policyTypes].sort(),
+      ["Egress", "Ingress"],
+      `${app}'s policy must restrict both directions`,
+    );
+  }
+});
+
+test("the datastores may not open an outbound connection except DNS", () => {
+  // A database that can reach the internet is a database that can exfiltrate
+  // to it. Verified on the box: postgres cannot open 1.1.1.1:443.
+  const docs = (yaml.loadAll(read("infra/production/manifests/datastores.yaml")) as any[]).filter(Boolean);
+  for (const app of ["foldrun-postgres", "foldrun-redis"]) {
+    const p = docs.find((d) => d.kind === "NetworkPolicy" && d.metadata.name === app);
+    assert.ok(p, `no policy for ${app}`);
+    const ports = p.spec.egress.flatMap((e: any) => (e.ports ?? []).map((x: any) => x.port));
+    assert.deepEqual([...new Set(ports)], [53], `${app} may egress only to DNS`);
+  }
+});
