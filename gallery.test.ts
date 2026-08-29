@@ -10,7 +10,8 @@ import path from "node:path";
 import matter from "gray-matter";
 import { GALLERY, galleryTemplate, installGalleryTool } from "../packages/core/src/gallery.ts";
 import { readLibraryFile } from "../packages/core/src/library.ts";
-import { parseToolDef, readWorkspaceFile, saveWorkspace, workspaceTools } from "../packages/core/src/store.ts";
+import { parseToolDef, readWorkspaceFile, saveWorkspace, workspaceTools, writeWorkspaceFile } from "../packages/core/src/store.ts";
+import { missingToolPrograms } from "../packages/core/src/tool-programs.ts";
 import { toolStarter } from "../packages/core/src/kinds.ts";
 import { fencedCode } from "../packages/core/src/store.ts";
 
@@ -175,3 +176,24 @@ test("an API or MCP tool is still one flat file", () => {
     assert.equal(def!.kind, kind);
   }
 });
+
+// Creating a script tool is one action that writes two files, and both have
+// to land. The starter returning a manifest whose `run:` names a file nobody
+// wrote is the exact failure `foldrun check` now reports — so the create flow
+// must not be able to produce it.
+test("creating a script tool writes the program its definition points at", () =>
+  withData(() => {
+    saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
+    for (const f of toolStarter("my-thing", "script")) {
+      writeWorkspaceFile("acme", "desk", f.file, f.content);
+    }
+
+    // It loads as a tool, under the name that was asked for.
+    const def = workspaceTools("acme", "desk")["my-thing"];
+    assert.ok(def, "the new tool did not load");
+    assert.equal(def.kind, "script");
+
+    // And its program is on disk where the definition says — the check that
+    // `foldrun check` runs, applied to what "New tool" just produced.
+    assert.deepEqual(missingToolPrograms("acme", "desk"), []);
+  }));
