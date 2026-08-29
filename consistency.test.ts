@@ -976,3 +976,45 @@ test("every foldrun_ metric an alert references is one we emit", () => {
     assert.ok(emitted.has(metric), `alerts.yaml watches ${metric}, which nothing emits`);
   }
 });
+
+// production.env.example is the only copy of the environment anyone can read —
+// the real file is gitignored, and rightly so. That makes it the fourth list in
+// this file that drifts: bootstrap.sh gained FOLDRUN_POSTGRES_PASSWORD as a
+// HARD requirement (${VAR:?}, so the script exits) and the example never
+// mentioned it, which means the documented way to build a fresh box stopped
+// working and nothing said so.
+test("every variable bootstrap.sh requires is documented in the example", () => {
+  const example = read("infra/production/production.env.example");
+  const scripts = ["bootstrap.sh", "token-refresh.sh", "backup.sh", "node-metrics.sh"]
+    .map((f) => read(`infra/production/${f}`))
+    .join("\n");
+
+  // ${VAR:?...} — the script refuses to run without it.
+  const required = new Set(
+    [...scripts.matchAll(/\$\{([A-Z][A-Z0-9_]*):\?/g)].map((m) => m[1]),
+  );
+  assert.ok(required.size > 2, "found the required-variable syntax at all");
+  for (const key of required) {
+    assert.ok(
+      new RegExp(`\\b${key}=`).test(example),
+      `bootstrap refuses to run without ${key}, and the example never mentions it`,
+    );
+  }
+
+  // ${VAR:-} with an EMPTY default — optional, but read from the env file, so
+  // it still needs a line or nobody knows it exists. A non-empty default
+  // (${K3S_CHANNEL:-stable}) is a knob with a built-in answer, not something
+  // anyone puts in the file, and SUDO_USER is handed to the script by sudo.
+  const FROM_THE_ENVIRONMENT = new Set(["SUDO_USER"]);
+  const optional = new Set(
+    [...scripts.matchAll(/\$\{([A-Z][A-Z0-9_]*):-\}/g)]
+      .map((m) => m[1])
+      .filter((k) => !FROM_THE_ENVIRONMENT.has(k)),
+  );
+  const undocumented = [...optional].filter((k) => !new RegExp(`\\b${k}=`).test(example));
+  assert.deepEqual(
+    undocumented,
+    [],
+    `read by the install scripts but documented nowhere: ${undocumented.join(", ")}`,
+  );
+});
