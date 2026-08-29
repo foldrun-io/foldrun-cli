@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { libraryTools, libraryUsage, listLibrary, type LibraryUse } from "../packages/core/src/library.ts";
 import { brokenToolReport, workspaceTools } from "../packages/core/src/store.ts";
+import { commandFor } from "../packages/core/src/script-tools.ts";
 
 /** Build a throwaway account on disk and point core at it for one callback. */
 function withAccount(files: Record<string, string>, run: () => void) {
@@ -311,4 +312,34 @@ test("the same tool at two scopes keeps its own run: path", () => {
       assert.equal(workspaceTools("acme", "desk").browser.spec.run, "workspace/tools/browser/run.mjs");
     },
   );
+});
+
+// The Test-tool button and a real run must choose the same interpreter.
+//
+// They did not: the tester carried its own shorter table, which knew `.js`
+// but not `.mjs`, so it spawned the program as an executable and reported
+// EACCES for a tool that runs correctly. Every extracted tool defaults to
+// run.mjs, so the button broke for all of them at once.
+test("the tester and the runner pick the same interpreter", () => {
+  for (const [file, cmd] of [
+    ["/w/tools/x/run.mjs", "node"],
+    ["/w/tools/x/run.js", "node"],
+    ["/w/tools/x/run.py", "python3"],
+    ["/w/tools/x/run.sh", "bash"],
+    ["/w/tools/x/run.rb", "ruby"],
+  ] as const) {
+    const chosen = commandFor(
+      { name: "x", run: file, description: "", args: {} },
+      file,
+    );
+    assert.equal(chosen.cmd, cmd, `${file} should run under ${cmd}`);
+    assert.deepEqual(chosen.args, [file]);
+  }
+
+  // A declared interpreter still wins over the extension.
+  const pinned = commandFor(
+    { name: "x", run: "run.mjs", description: "", args: {}, interpreter: "bun" },
+    "/w/tools/x/run.mjs",
+  );
+  assert.equal(pinned.cmd, "bun");
 });
