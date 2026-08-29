@@ -296,15 +296,17 @@ test("the starter workspace is defined once", () => {
 });
 
 test("both callers scaffold the same workspace, minus what only a laptop keeps", () => {
-  // The hosted scaffold is the starter with local-disk concerns removed:
-  // .gitignore guards a clone's secrets, and the hosted store never keeps
-  // secrets in the tree. Everything else must stay byte-identical, or the
+  // The hosted scaffold is the starter with local-EDITING concerns removed:
+  // .gitignore guards a clone's secrets, which the hosted store never keeps in
+  // the tree, and CLAUDE.md tells a coding tool the conventions, which is noise
+  // in a dashboard file list. Everything else must stay byte-identical, or the
   // dashboard's New button and `foldrun init` drift apart again.
+  const LOCAL_ONLY = [".gitignore", "CLAUDE.md"];
   const starter = starterFiles("demo");
   const hosted = templateFiles("demo");
   const localOnly = starter.filter((f) => !hosted.some((h) => h.path === f.path));
-  assert.deepEqual(localOnly.map((f) => f.path), [".gitignore"]);
-  assert.deepEqual(hosted, starter.filter((f) => f.path !== ".gitignore"));
+  assert.deepEqual(localOnly.map((f) => f.path), LOCAL_ONLY);
+  assert.deepEqual(hosted, starter.filter((f) => !LOCAL_ONLY.includes(f.path)));
 });
 
 test("the starter workspace obeys the rules it ships", () => {
