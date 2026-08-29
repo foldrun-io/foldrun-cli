@@ -1077,3 +1077,40 @@ test("the scaffolded CLAUDE.md names every directory and agent field", () => {
       `${missingOptions.join(", ")}`,
   );
 });
+
+// docs/api.md is the only description of the HTTP surface anyone has. A route
+// that exists and is not in it is a capability nobody outside this repo can
+// find — the same failure as an undocumented frontmatter field, one layer up.
+test("every API route is in docs/api.md", () => {
+  const doc = read("docs/api.md");
+  const apiRoot = path.join(root, "web/app/api");
+
+  const routes: string[] = [];
+  const walkApi = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walkApi(full);
+      else if (e.name === "route.ts") {
+        routes.push("/api/" + path.relative(apiRoot, dir).split(path.sep).join("/"));
+      }
+    }
+  };
+  walkApi(apiRoot);
+  assert.ok(routes.length > 40, `found only ${routes.length} routes — is the walk right?`);
+
+  const missing = routes.filter((r) => {
+    // The doc writes <ws> for [workspace] and <flow> for [flow] — compare on
+    // the shape, not the placeholder spelling, or this only ever checks the
+    // routes with no parameters in them.
+    const shape = r
+      .replace("/api/workspaces/[workspace]", "/api/workspaces/<ws>")
+      .replace(/\[[a-zA-Z]+\]/g, "<>");
+    const asWritten = doc.replace(/<[a-zA-Z]+>/g, "<>");
+    return !asWritten.includes(shape.replace(/<[a-zA-Z]+>/g, "<>"));
+  });
+  assert.deepEqual(
+    missing,
+    [],
+    `these routes exist and docs/api.md never mentions them:\n  ${missing.join("\n  ")}`,
+  );
+});
