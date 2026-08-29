@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  fairOrder,
   enqueueFlowRun,
   enqueueResume,
   claimNext,
@@ -596,3 +597,56 @@ test("queueStats separates ready, scheduled-ahead and claimed", () =>
     assert.equal(stats.oldestPendingSecs, null, "nothing ready means no age to report");
     fs.rmSync(claimed!.claimedFile, { force: true });
   }));
+
+// ---------------------------------------------------------- fair scheduling
+//
+// A plain FIFO is correct for one account and wrong the moment there are two.
+// The case that matters is the one a customer notices: someone else enqueued a
+// backlog first, and now your single job is behind all of it.
+
+test("one account's backlog does not put another account behind all of it", () => {
+  // 'bulk' enqueues 100 jobs, then 'small' enqueues 1. Under FIFO the small
+  // account waits for 100 runs; under fair ordering it waits for one.
+  const entries: { name: string; tenant: string }[] = [];
+  for (let i = 0; i < 100; i++) {
+    entries.push({ name: `${String(1000 + i).padStart(14, "0")}-run-bulk${i}.json`, tenant: "bulk" });
+  }
+  entries.push({ name: `${String(9999).padStart(14, "0")}-run-small.json`, tenant: "small" });
+
+  const order = fairOrder(entries);
+  const smallAt = order.findIndex((n) => n.includes("run-small"));
+  assert.equal(order.length, 101, "every job is still scheduled, none dropped");
+  assert.ok(
+    smallAt <= 1,
+    `the quiet account should be served in the first round, was position ${smallAt}`,
+  );
+});
+
+test("within one account it is still first come, first served", () => {
+  const entries = [3, 1, 2].map((i) => ({
+    name: `${String(i).padStart(14, "0")}-run-${i}.json`,
+    tenant: "solo",
+  }));
+  const order = fairOrder(entries);
+  assert.deepEqual(
+    order.map((n) => n.split("-run-")[1]),
+    ["1.json", "2.json", "3.json"],
+    "one account keeps strict arrival order",
+  );
+});
+
+test("accounts are taken in the order their oldest job arrived, not alphabetically", () => {
+  // 'zeta' was waiting first; fairness must not hand 'alpha' the front of the
+  // queue for having an earlier name.
+  const order = fairOrder([
+    { name: "00000000000001-run-z1.json", tenant: "zeta" },
+    { name: "00000000000002-run-a1.json", tenant: "alpha" },
+  ]);
+  assert.equal(order[0], "00000000000001-run-z1.json");
+});
+
+test("a single account is unchanged by fair ordering", () => {
+  const names = ["00000000000001-run-a.json", "00000000000002-run-b.json"];
+  const order = fairOrder(names.map((name) => ({ name, tenant: "one" })));
+  assert.deepEqual(order, names, "the common case is exactly FIFO");
+});
