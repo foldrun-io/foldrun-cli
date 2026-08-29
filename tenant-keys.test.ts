@@ -75,3 +75,25 @@ test("a tampered ciphertext is refused, not returned as garbage", () => {
     assert.equal(getSecret("acme", "API_TOKEN"), null);
   });
 });
+
+// ------------------------------------------------------------- the root key
+//
+// Wrapped keys carry a prefix naming the provider that sealed them, so accounts
+// can move to a different root key one at a time and a half-migrated install
+// reads correctly instead of throwing. These prove the format, which is the
+// part that has to be right BEFORE a provider is added — a stored blob whose
+// origin cannot be told is a key nobody can migrate.
+
+import { wrappedBy } from "../packages/core/src/tenant-keys.ts";
+
+test("a wrapped key says which provider sealed it", () => {
+  assert.equal(wrappedBy("env:AAAA"), "env");
+  assert.equal(wrappedBy("kms:arn-blob"), "kms");
+});
+
+test("an unprefixed blob is read as env, so nothing written before the seam breaks", () => {
+  // Absence means the original — the same rule the secret records use. Without
+  // it, every key stored before providers existed becomes unopenable the moment
+  // one is added.
+  assert.equal(wrappedBy("AAAAnotprefixed"), "env");
+});
