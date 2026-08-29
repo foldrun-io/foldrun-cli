@@ -647,6 +647,8 @@ test("nothing a person reads still names the pre-rename files/", () => {
   const surfaces = [
     "web/app/dashboard/help/page.tsx",
     "web/app/dashboard/[workspace]/flows/flow-board.tsx",
+    "site/src/pages/index.astro",
+    "site/src/pages/docs/index.astro",
     "docs/scaling-adr.md",
     "docs/grammar-adr.md",
     "SPEC.md",
@@ -1113,4 +1115,87 @@ test("every API route is in docs/api.md", () => {
     [],
     `these routes exist and docs/api.md never mentions them:\n  ${missing.join("\n  ")}`,
   );
+});
+
+// ------------------------------------------------- the site and the app split
+//
+// foldrun.com and the dashboard used to be one Next server: web/app/page.tsx
+// was the landing page, so the marketing site went down when the box did and
+// could only ship when the app shipped. The site now lives in site/ — static
+// Astro, its own host — and the app's root is a redirect to /dashboard.
+//
+// A split like that is undone one reasonable commit at a time: a landing
+// section added back to the app "just for now", a doc copied into site/ to
+// tweak the wording, a "Sign in" written as /login because it works in dev.
+// These tests are what makes each of those fail loudly instead.
+
+/** Every file under site/src, which is small enough to read whole. */
+function siteSources(): { rel: string; src: string }[] {
+  const dir = path.join(root, "site", "src");
+  return walk(dir, () => true).map((f) => ({
+    rel: path.relative(root, f),
+    src: fs.readFileSync(f, "utf8"),
+  }));
+}
+
+test("the docs are not forked into the site — it renders docs/ itself", () => {
+  // A copy under site/ would render fine and be outside every test that keeps
+  // docs/*.md honest against the code. The collection has to point up and out.
+  const config = read("site/src/content.config.ts");
+  assert.match(
+    config,
+    /base:\s*"\.\.\/docs"/,
+    "site's docs collection must load the repo's docs/, not a copy inside site/",
+  );
+
+  const copies = siteSources().filter((f) => f.rel.endsWith(".md"));
+  assert.deepEqual(
+    copies.map((f) => f.rel),
+    [],
+    "markdown under site/src is a second copy of docs/ waiting to drift",
+  );
+});
+
+test("the grouping lives in one place, not once per surface", () => {
+  // packages/docs-index is the shared home. Either app growing its own GROUPS
+  // is the start of two docs sections that disagree about what order to read
+  // them in — which is how design-notes.ts and docs-index.ts came to exist.
+  const shared = read("packages/docs-index/index.ts");
+  assert.match(shared, /export const GROUPS/, "the shared index defines the grouping");
+
+  for (const { rel, src } of siteSources()) {
+    assert.ok(
+      !/const GROUPS\s*[:=]/.test(src),
+      `${rel} defines its own GROUPS — import it from packages/docs-index instead`,
+    );
+  }
+});
+
+test("the site links to the app by origin, never by path", () => {
+  // href="/login" resolves to foldrun.com/login, which the static host has no
+  // page for. Every link into the app goes through site.ts, which builds it
+  // from PUBLIC_APP_URL.
+  const offenders: string[] = [];
+  for (const { rel, src } of siteSources()) {
+    if (rel.endsWith("site.ts")) continue; // where the two origins are defined
+    for (const line of src.split("\n")) {
+      if (/href="\/(login|signup|dashboard)/.test(line)) offenders.push(`${rel}: ${line.trim()}`);
+    }
+  }
+  assert.deepEqual(offenders, [], "these link to app pages as if they were on this host");
+});
+
+test("the app's root is a redirect, not a second landing page", () => {
+  const page = read("web/app/page.tsx");
+  // Every destination proxy.ts knows about. The empty-install case is the one
+  // that gets forgotten: a first operator sent to /login cannot pass it, and
+  // signup is the only door that opens.
+  for (const to of ["/dashboard", "/login", "/signup"]) {
+    assert.match(page, new RegExp(`"${to}"`), `web/app/page.tsx never sends anyone to ${to}`);
+  }
+  // The pitch is one thing that must exist in exactly one place: two copies of
+  // it is two copies to keep true as the product changes.
+  const pitch = "Agents are just";
+  assert.ok(!page.includes(pitch), "the landing copy belongs in site/, not in the app");
+  assert.ok(read("site/src/pages/index.astro").includes(pitch), "…and the site should still have it");
 });

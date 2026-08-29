@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { libraryUsage, listLibrary, type LibraryUse } from "../packages/core/src/library.ts";
+import { libraryTools, libraryUsage, listLibrary, type LibraryUse } from "../packages/core/src/library.ts";
 import { brokenToolReport, workspaceTools } from "../packages/core/src/store.ts";
 
 /** Build a throwaway account on disk and point core at it for one callback. */
@@ -258,6 +258,57 @@ test("a single-file script tool runs its fenced code block", () => {
       const spec = def.spec as { code?: string };
       assert.match(spec.code!, /from-the-fence/);
       assert.doesNotMatch(spec.code!, /use: \[echoer\]/);
+    },
+  );
+});
+
+// The bug this pins, found by migrating a live account to folder tools.
+//
+// gray-matter caches its parse by the input string, so two byte-identical
+// definitions — the same gallery tool installed at the account AND in a
+// workspace, which is the ordinary case — are handed the SAME `data` object.
+// readToolDir qualifies a folder tool's `run:` with its scope by mutating
+// that object, so the first read stamped its scope onto the second: the
+// account's copy came back `workspace/tools/browser/run.mjs`, resolved into
+// whichever workspace happened to be read first, and found nothing there.
+//
+// Silent, and dependent on read order. The tool simply stopped working.
+test("the same tool at two scopes keeps its own run: path", () => {
+  const definition = [
+    "---",
+    "transport: script",
+    "name: browser",
+    "run: run.mjs",
+    "description: Byte-identical to the account's copy, which is the point.",
+    "---",
+    "",
+    "The program is beside this file.",
+    "",
+  ].join("\n");
+
+  withAccount(
+    {
+      "acme/library/tools/browser/tool.md": definition,
+      "acme/library/tools/browser/run.mjs": "console.log('{}')\n",
+      "acme/workspaces/desk/AGENTS.md": "---\nname: desk\n---\n",
+      "acme/workspaces/desk/tools/browser/tool.md": definition,
+      "acme/workspaces/desk/tools/browser/run.mjs": "console.log('{}')\n",
+    },
+    () => {
+      // Workspace first, then account — the order the runner uses, and the
+      // one that used to poison the second read.
+      const inWorkspace = workspaceTools("acme", "desk").browser;
+      const inLibrary = libraryTools("acme").browser;
+      assert.equal(inWorkspace.spec.run, "workspace/tools/browser/run.mjs");
+      assert.equal(
+        inLibrary.spec.run,
+        "account/tools/browser/run.mjs",
+        "the account's copy was stamped with the workspace's scope",
+      );
+
+      // And the other order, so neither read can poison the other.
+      assert.equal(libraryTools("acme").browser.spec.run, "account/tools/browser/run.mjs");
+      assert.equal(workspaceTools("acme", "desk").browser.spec.run, "workspace/tools/browser/run.mjs");
     },
   );
 });
