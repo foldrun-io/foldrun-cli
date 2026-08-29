@@ -1020,3 +1020,38 @@ test("every variable bootstrap.sh requires is documented in the example", () => 
     `read by the install scripts but documented nowhere: ${undocumented.join(", ")}`,
   );
 });
+
+// The scaffolded CLAUDE.md is what a coding tool reads instead of guessing, so
+// a feature missing from it is a feature the author's tool does not know
+// exists. That is the same failure as prose reaching no model: the capability
+// is there and nothing says so. `.claude/agents/` import worked for months
+// before anything told anyone.
+test("the scaffolded CLAUDE.md names every directory and agent field", () => {
+  const claude = starterFiles("demo").find((f) => f.path === "CLAUDE.md");
+  assert.ok(claude, "the scaffold must ship a CLAUDE.md");
+  const doc = claude!.content;
+
+  for (const dir of WORKSPACE_DIRS) {
+    assert.ok(doc.includes(`${dir}/`), `CLAUDE.md never mentions ${dir}/`);
+  }
+
+  // Frontmatter the runner actually reads. Taken from runner.ts rather than
+  // listed here, so a field added there fails this until it is documented.
+  const fields = new Set(
+    [...read("packages/core/src/runner.ts").matchAll(/\bfront\.([A-Za-z][A-Za-z0-9_]*)/g)].map(
+      (m) => m[1],
+    ),
+  );
+  // `front.x` that are not author-facing knobs: internals and re-reads.
+  const NOT_AUTHORED = new Set(["foldrun_version", "name", "description", "kind", "type"]);
+  const undocumented = [...fields]
+    .filter((f) => !NOT_AUTHORED.has(f))
+    .filter((f) => !doc.includes(`${f}:`));
+  assert.deepEqual(
+    undocumented,
+    [],
+    `runner.ts reads these from an agent's frontmatter and CLAUDE.md never ` +
+      `mentions them, so nobody authoring with a coding tool will use them: ` +
+      `${undocumented.join(", ")}`,
+  );
+});
