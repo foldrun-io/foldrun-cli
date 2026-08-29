@@ -75,16 +75,19 @@ test("a percentile over a handful of runs is not reported as one", () => {
 
 test("script and API outcome lines parse; prose does not", () => {
   assert.deepEqual(parseToolLog("script: ads_summary(customer_id=123) → exit 0 (412ms, sandbox)"), {
+    kind: "script",
     name: "ads_summary",
     ok: true,
     ms: 412,
   });
   assert.deepEqual(parseToolLog("script: wordcount() → exit 1 (90ms, docker)"), {
+    kind: "script",
     name: "wordcount",
     ok: false,
     ms: 90,
   });
   assert.deepEqual(parseToolLog("api: GET /v18/customers?… → 200 (91ms)"), {
+    kind: "api",
     name: "GET /v18/customers?…",
     ok: true,
     ms: 91,
@@ -190,3 +193,28 @@ test("a workspace with no runs reports zeros, not an error", () =>
     assert.deepEqual(o.agents, []);
     assert.deepEqual(o.failures, []);
   }));
+
+test("an API tool's untimed error lines still count as calls", () =>
+  withRuns(
+    [
+      run("r1", 1, [
+        step("emailer", {
+          events: [
+            // Found on a real box: two error lines and no timed success made
+            // the report say calls=1, errors=2 — errors exceeding calls.
+            { t: at(1, 1000), type: "info", text: "api: POST /emails → error: fetch failed" },
+            { t: at(1, 2000), type: "info", text: "api: POST /emails → error: fetch failed" },
+            { t: at(1, 3000), type: "info", text: "api: POST /emails → 200 (140ms)" },
+          ],
+        }),
+      ]),
+    ],
+    (tenant, ws) => {
+      const o = observeWorkspace(tenant, ws, 30, NOW);
+      const t = o.tools.find((x) => x.name === "POST /emails")!;
+      assert.equal(t.calls, 3, "every log line is a call — an API tool has no other record");
+      assert.equal(t.errors, 2);
+      assert.equal(t.measured, 1);
+      assert.ok(t.errors <= t.calls, "errors can never exceed calls");
+    },
+  ));
