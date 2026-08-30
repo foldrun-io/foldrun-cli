@@ -28,48 +28,56 @@ function withData(body: () => void) {
   }
 }
 
-test("the browser ships as one markdown file with its code in the body", () => {
+test("the browser ships as a folder: a definition, and the program beside it", () => {
   const browser = GALLERY.find((t) => t.name === "browser");
   assert.ok(browser, "browser tool exists");
   assert.equal(browser!.kind, "tools");
-  assert.equal(browser!.file, "browser.md");
-  assert.equal(browser!.wrapper, undefined, "nothing beside it — it is one file");
+  assert.equal(browser!.file, "browser/tool.md");
   assert.equal(browser!.snippet, "use: [browser]");
+  assert.equal(browser!.wrapper?.file, "browser/run.mjs", "the program is a file");
 
   const { data, content } = matter(browser!.content);
   const def = parseToolDef(data as Record<string, unknown>, "browser", content);
   assert.equal(def!.kind, "script");
   const spec = def!.spec as { run?: string; code?: string };
-  assert.equal(spec.run, undefined);
-  assert.match(spec.code!, /chromium\.launch/);
-  // The body opens with a ```yaml usage example; the program is found by
-  // language tag, so documentation is never mistaken for code.
-  assert.doesNotMatch(spec.code!, /use: \[browser\]/);
+  // Points at the file, carries no code — the shape every script tool takes.
+  assert.equal(spec.run, "run.mjs");
+  assert.equal(spec.code, undefined);
+  assert.match(browser!.wrapper!.content, /chromium\.launch/);
+
+  // And the definition's prose must not itself parse as a program: the body
+  // keeps a ```yaml usage example, which no interpreter claims.
+  assert.equal(fencedCode(content), null);
 });
 
-test("installing the browser writes one file at either scope", () =>
+test("installing the browser writes both files at either scope", () =>
   withData(() => {
-    assert.equal(installGalleryTool("acme", "browser"), "browser.md");
-    assert.match(readLibraryFile("acme", "tools", "browser.md"), /chromium\.launch/);
+    assert.equal(installGalleryTool("acme", "browser"), "browser/tool.md");
+    assert.match(readLibraryFile("acme", "tools", "browser/run.mjs"), /chromium\.launch/);
 
     saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
-    assert.equal(installGalleryTool("acme", "browser", "desk"), "tools/browser.md");
-    // Byte-identical: nothing to rewrite, because nothing names a scope.
+    assert.equal(installGalleryTool("acme", "browser", "desk"), "tools/browser/tool.md");
+    // Byte-identical at both scopes: nothing to rewrite, because a folder
+    // tool's run: names the file beside it and never the scope it sits in.
     assert.equal(
-      readWorkspaceFile("acme", "desk", "tools/browser.md"),
-      readLibraryFile("acme", "tools", "browser.md"),
+      readWorkspaceFile("acme", "desk", "tools/browser/tool.md"),
+      readLibraryFile("acme", "tools", "browser/tool.md"),
+    );
+    assert.equal(
+      readWorkspaceFile("acme", "desk", "tools/browser/run.mjs"),
+      readLibraryFile("acme", "tools", "browser/run.mjs"),
     );
   }));
 
-test("a single-file script tool resolves with no path at all", () =>
+test("an installed gallery script tool loads with its program on disk", () =>
   withData(() => {
     saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
     installGalleryTool("acme", "browser", "desk");
     const def = workspaceTools("acme", "desk").browser;
     assert.equal(def.kind, "script");
-    const spec = def.spec as { run?: string; code?: string };
-    assert.equal(spec.run, undefined, "no run path to point at the wrong scope");
-    assert.ok(spec.code, "the program travels with the definition");
+    assert.equal((def.spec as { run?: string }).run, "workspace/tools/browser/run.mjs");
+    // The check `foldrun check` runs, applied to what the gallery installed.
+    assert.deepEqual(missingToolPrograms("acme", "desk"), []);
   }));
 
 test("an unknown tool is refused", () =>
@@ -83,7 +91,8 @@ test("every API tool in the gallery parses into a working http tool", () => {
   // The http ones: everything on the tools shelf that isn't a folder tool
   // carrying its own code.
   // The http ones: a tool whose body carries a program is a script tool.
-  for (const t of GALLERY.filter((t) => t.kind === "tools" && !fencedCode(t.content))) {
+  // The http ones: a gallery entry with a program beside it is a script tool.
+  for (const t of GALLERY.filter((t) => t.kind === "tools" && !t.wrapper)) {
     const { data } = matter(t.content);
     const def = parseToolDef(data as Record<string, unknown>, t.name);
     assert.ok(def, `${t.name} parses`);
@@ -114,7 +123,7 @@ test("an API tool installs onto the tools shelf, not scripts", () =>
 // -------------------------------------------------- start-from templates
 
 test("starting from a gallery entry renames it everywhere the name appears", () => {
-  const seed = galleryTemplate("tools", "email", "my-mailer")!;
+  const [seed] = galleryTemplate("tools", "email", "my-mailer")!;
   assert.equal(seed.file, "my-mailer.md");
   const { data } = matter(seed.content);
   assert.equal(data.name, "my-mailer");
@@ -131,6 +140,21 @@ test("a wrong-kind template is refused, and an unknown one too", () => {
   // returns null — which callers treat exactly like "no template chosen".
   assert.equal(galleryTemplate("scripts", "browser", "x"), null);
   assert.equal(galleryTemplate("tools", "nope", "x"), null);
+});
+
+// Starting from a folder entry must seed the folder. Handing back only the
+// definition would write a `run:` pointing at a file nobody created — the
+// exact state `foldrun check` now reports as an error.
+test("starting from a folder gallery entry seeds both of its files", () => {
+  const seed = galleryTemplate("tools", "browser", "my-browser")!;
+  assert.deepEqual(seed.map((f) => f.file), ["my-browser/tool.md", "my-browser/run.mjs"]);
+  const { data } = matter(seed[0].content);
+  assert.equal(data.name, "my-browser");
+  // run: still names the file beside it — the folder was renamed, not the
+  // program, and neither travels without the other.
+  assert.equal(data.run, "run.mjs");
+  assert.match(seed[0].content, /use: \[my-browser\]/);
+  assert.match(seed[1].content, /chromium\.launch/);
 });
 
 // --------------------------------------------------- creating a new tool
