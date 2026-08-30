@@ -12,7 +12,7 @@ import { GALLERY, galleryTemplate, installGalleryTool } from "../packages/core/s
 import { readLibraryFile } from "../packages/core/src/library.ts";
 import { parseToolDef, readWorkspaceFile, saveWorkspace, workspaceTools, writeWorkspaceFile } from "../packages/core/src/store.ts";
 import { missingToolPrograms } from "../packages/core/src/tool-programs.ts";
-import { toolStarter } from "../packages/core/src/kinds.ts";
+import { SCRIPT_LANGUAGES, toolStarter } from "../packages/core/src/kinds.ts";
 import { fencedCode } from "../packages/core/src/store.ts";
 
 function withData(body: () => void) {
@@ -221,3 +221,45 @@ test("creating a script tool writes the program its definition points at", () =>
     // `foldrun check` runs, applied to what "New tool" just produced.
     assert.deepEqual(missingToolPrograms("acme", "desk"), []);
   }));
+
+// Three questions, and the third used to be answered silently: "script tool"
+// meant JavaScript, which you found out by opening the file it wrote. The
+// runner has always chosen an interpreter from the extension, so the choice
+// was real and merely hidden.
+test("a script tool is written in the language you picked", () => {
+  const expected: Record<string, { program: string; marker: RegExp }> = {
+    javascript: { program: "tools/x/run.mjs", marker: /parseArgs/ },
+    python: { program: "tools/x/run.py", marker: /argparse/ },
+    bash: { program: "tools/x/run.sh", marker: /#!\/usr\/bin\/env bash/ },
+  };
+
+  for (const lang of SCRIPT_LANGUAGES) {
+    const files = toolStarter("x", "script", lang.value);
+    const want = expected[lang.value];
+    assert.deepEqual(
+      files.map((f) => f.file),
+      ["tools/x/tool.md", want.program],
+      `${lang.value} writes the wrong files`,
+    );
+
+    // The definition points at the program that was actually written —
+    // this is the pair `foldrun check` verifies.
+    const { data } = matter(files[0].content);
+    assert.equal(data.run, want.program.split("/").pop(), `${lang.value}: run: disagrees`);
+    assert.match(files[1].content, want.marker, `${lang.value}: not that language`);
+
+    // Every language keeps the same contract: validate the argument the
+    // model may omit, and fail loudly rather than returning nothing.
+    assert.match(files[1].content, /input/, `${lang.value}: does not read its arg`);
+    assert.match(files[1].content, /1|required/, `${lang.value}: no failure path`);
+  }
+});
+
+test("no language, or an unknown one, still writes a working tool", () => {
+  // An older client that does not send the field must not create a folder
+  // with a definition and no program.
+  for (const files of [toolStarter("x", "script"), toolStarter("x", "script", "klingon" as never)]) {
+    assert.deepEqual(files.map((f) => f.file), ["tools/x/tool.md", "tools/x/run.mjs"]);
+    assert.equal(matter(files[0].content).data.run, "run.mjs");
+  }
+});
