@@ -12,6 +12,7 @@ import { GALLERY, galleryTemplate, installGalleryTool } from "../packages/core/s
 import { readLibraryFile } from "../packages/core/src/library.ts";
 import { parseToolDef, readWorkspaceFile, saveWorkspace, workspaceTools, writeWorkspaceFile } from "../packages/core/src/store.ts";
 import { missingToolPrograms } from "../packages/core/src/tool-programs.ts";
+import { isEditablePath, listWorkspaceFiles } from "../packages/core/src/store.ts";
 import { SCRIPT_LANGUAGES, toolStarter } from "../packages/core/src/kinds.ts";
 import { fencedCode } from "../packages/core/src/store.ts";
 
@@ -263,3 +264,35 @@ test("no language, or an unknown one, still writes a working tool", () => {
     assert.equal(matter(files[0].content).data.run, "run.mjs");
   }
 });
+
+// The program half of a folder tool must be VISIBLE, not merely writable.
+//
+// The file tree admitted markdown, scripts/, skill assets and state/ — and
+// not tools/<name>/run.*. So the code you were told to edit was writable,
+// readable, and absent from the tree that is the only way to reach it. The
+// listing now asks the writer, which is the same fix the state/ case got and
+// the reason this cannot drift a third time.
+test("a folder tool's program appears in the file tree", () =>
+  withData(() => {
+    saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
+    for (const f of toolStarter("counter", "script", "python")) {
+      writeWorkspaceFile("acme", "desk", f.file, f.content);
+    }
+
+    const files = listWorkspaceFiles("acme", "desk");
+    assert.ok(files.includes("tools/counter/tool.md"), "the definition is listed");
+    assert.ok(files.includes("tools/counter/run.py"), "the program is listed");
+  }));
+
+test("everything the writer accepts is listed, and nothing it refuses is", () =>
+  withData(() => {
+    saveWorkspace("acme", "desk", [{ path: "AGENTS.md", content: "---\nname: desk\n---\n" }]);
+    for (const f of toolStarter("counter", "script")) {
+      writeWorkspaceFile("acme", "desk", f.file, f.content);
+    }
+    // The invariant, not a list of paths: a file that can be saved is a file
+    // that shows, or someone is told to edit something they cannot find.
+    for (const rel of listWorkspaceFiles("acme", "desk")) {
+      assert.equal(isEditablePath(rel), true, `${rel} is listed but not editable`);
+    }
+  }));
