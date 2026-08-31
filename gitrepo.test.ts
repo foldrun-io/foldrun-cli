@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 
 import { commitChanges, filesAt, gitAvailable, headSha, listCommits, listRefs, listTree, readCommit, repoDir, repoExists } from "../packages/core/src/gitrepo.ts";
 import { ensureImported, listRevisions, readRevision, latestRevisionId } from "../packages/core/src/history.ts";
-import { saveWorkspace, writeWorkspaceFile, deleteWorkspacePath } from "../packages/core/src/store.ts";
+import { saveWorkspace, writeWorkspaceFile, deleteWorkspacePath, listWorkspaceFiles } from "../packages/core/src/store.ts";
 
 const HAVE_GIT = gitAvailable();
 
@@ -92,10 +92,15 @@ test("the store's writers commit to git, and history reads it back", { skip: !HA
     const style = edit.files.find((f) => f.path === "knowledge/style.md")!;
     assert.match(style.before!, /short\./);
     assert.match(style.after!, /shorter\./);
-    assert.ok(edit.files.some((f) => f.path === "knowledge/index.md"), "the generated index rides along, so a clone's index matches its files");
+    // The generated index rode along with the CREATION (that is when the
+    // index gained a row); the later edit changed the concept, not the index,
+    // and git records only what changed.
+    const created = readRevision("acme", "desk", log[2].id)!;
+    assert.ok(created.files.some((f) => f.path === "knowledge/index.md"), "the generated index rides along, so a clone's index matches its files");
 
-    // What git has is what the disk has.
-    assert.deepEqual(listTree("acme", "desk").map((t) => t.path).sort(), ["AGENTS.md", "knowledge/index.md", "knowledge/style.md"].filter((p) => fs.existsSync(path.join(process.env.FOLDRUN_DATA!, "acme/workspaces/desk", p))).sort());
+    // What git has is exactly what the disk has — the editable tree, generated
+    // indexes included.
+    assert.deepEqual(listTree("acme", "desk").map((t) => t.path).sort(), listWorkspaceFiles("acme", "desk").sort());
   }));
 
 test("ensureImported gives an untouched workspace a complete first commit, once", { skip: !HAVE_GIT }, () =>
