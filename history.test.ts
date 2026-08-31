@@ -3,6 +3,13 @@
 //   node --test tests/history.test.ts
 
 import { test } from "node:test";
+
+// These tests pin the JOURNAL — the fallback for an install with no git
+// binary. With git present, history.ts delegates to it, and git's answers
+// differ in two honest ways: a first commit has no "before", and a deploy's
+// id is the commit the platform made, not the foreign sha it was told. Those
+// are covered in gitrepo.test.ts. Here, the journal.
+process.env.FOLDRUN_HISTORY = "journal";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
