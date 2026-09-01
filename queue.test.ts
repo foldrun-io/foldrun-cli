@@ -650,3 +650,25 @@ test("a single account is unchanged by fair ordering", async () => {
   const order = fairOrder(names.map((name) => ({ name, tenant: "one" })));
   assert.deepEqual(order, names, "the common case is exactly FIFO");
 });
+
+test("a wait: hands the job back BEFORE the claim is released, and it survives that", async () =>
+  await withWorkspace(async () => {
+    // The worker's real order: park → hand back with the deadline → finally
+    // releases the claim. The older test released first and then
+    // re-enqueued, which is not the order the loop runs in — and on the
+    // table store that order was the bug: enqueue's "already lined up" guard
+    // saw the worker's own claim, did nothing, and release deleted the row.
+    const run = await enqueueFlowRun("acme", "desk", [{ ...STEP, waitSecs: 3600 }], "drip", null);
+    const claim = (await claimNext())!;
+    await driveRun("acme", "desk", readRun("acme", "desk", run.id)!, null, [], { parkOnApproval: true });
+    const parked = readRun("acme", "desk", run.id)!;
+    assert.equal(parked.status, "queued");
+
+    await enqueueResume("acme", "desk", run.id); // hand back, claim still held
+    await claim.release(); //                       then the finally lets go
+    const pending = fs.readdirSync(pendingDir()).filter((f) => f.includes(run.id));
+    assert.equal(pending.length, 1, "exactly one pending job remains after the release");
+    const claimedDir = path.join(process.env.FOLDRUN_DATA!, "queue/claimed");
+    const claimed = fs.existsSync(claimedDir) ? fs.readdirSync(claimedDir).filter((f) => f.includes(run.id)) : [];
+    assert.equal(claimed.length, 0, "and no claimed one");
+  }));
