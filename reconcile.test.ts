@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { reconcileRuns, reconcileAllRuns } from "../packages/core/src/runner.ts";
+import { reconcileRuns, reconcileAllRuns, drivingRuns } from "../packages/core/src/runner.ts";
 import { listTenants } from "../packages/core/src/store.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -372,4 +372,30 @@ test("approving records that it happened, not just its effect", () => {
     "utf8",
   );
   assert.match(src, /s\.approvedAt = /, "approving must stamp approvedAt");
+});
+
+test("a run this process is driving is never abandoned, however quiet its step", () => {
+  // A 40-minute script is work, not a fault. Reconcile asks who is driving,
+  // not how long since the last event — the platform sets no clock on work.
+  const started = Date.now() - 3 * HOUR;
+  const id = "run-driving-1";
+  drivingRuns.add(id);
+  try {
+    withRun(
+      {
+        id,
+        flow: "publish",
+        status: "running",
+        startedAt: new Date(started).toISOString(),
+        finishedAt: null,
+        steps: [step("enricher", "running", started)], // silent for three hours
+      },
+      (now) => {
+        assert.deepEqual(reconcileRuns("acme", now), []);
+        assert.equal(read(id).status, "running");
+      },
+    );
+  } finally {
+    drivingRuns.delete(id);
+  }
 });
