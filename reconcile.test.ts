@@ -359,16 +359,12 @@ test("the approval gate skips a step a person already approved", () => {
   assert.match(gate[1], /!s\.approvedAt/, "the gate must exclude steps already approved");
 });
 
-// And the route that writes it. Status alone cannot carry the decision:
-// approving flips the step to `pending`, which is indistinguishable from
-// never having been asked.
+// And the code that writes it — shared by the dashboard route and the
+// emailed link. Status alone cannot carry the decision: approving flips the
+// step to `pending`, which is indistinguishable from never having been asked.
 test("approving records that it happened, not just its effect", () => {
   const src = fs.readFileSync(
-    path.join(
-      import.meta.dirname,
-      "..",
-      "web/app/api/workspaces/[workspace]/runs/[runId]/approve/route.ts",
-    ),
+    path.join(import.meta.dirname, "..", "packages/core/src/approvals.ts"),
     "utf8",
   );
   assert.match(src, /s\.approvedAt = /, "approving must stamp approvedAt");
