@@ -343,3 +343,20 @@ test("adoption never overwrites an existing storage/, and is a no-op when there 
   fs.rmSync(root, { recursive: true, force: true });
   fs.rmSync(fresh, { recursive: true, force: true });
 });
+
+test("a mirror the same size as the record is re-fetched when its bytes differ", async () => {
+  // A date bumped by one day is the same length as the date before it. The
+  // mirror check used to trust size alone, so an upload like that never
+  // reached the pod — and the harvest then wrote the stale copy back over it.
+  await putFile(TENANT, WS, "draft/post.md", Buffer.from("lastUpdated: 2026-08-31"), "user:me");
+  await materializeFiles(TENANT, WS);
+  await putFile(TENANT, WS, "draft/post.md", Buffer.from("lastUpdated: 2026-09-01"), "api-key");
+  const brought = await materializeFiles(TENANT, WS);
+  assert.deepEqual(brought, ["draft/post.md"]);
+  assert.equal(
+    fs.readFileSync(path.join(workspaceDir(TENANT, WS), "storage", "draft/post.md"), "utf8"),
+    "lastUpdated: 2026-09-01",
+  );
+  // And an unchanged mirror still costs nothing.
+  assert.deepEqual(await materializeFiles(TENANT, WS), []);
+});
