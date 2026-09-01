@@ -367,6 +367,42 @@ async function check(workspace) {
 
   for (const a of agents) {
     if (!a.description) note("warn", `agents/${a.name}`, "no description — other agents and people read it");
+
+    // What the author wrote that the runtime already writes, or writes better.
+    // Every trap here was one somebody hit while the answer sat in the source:
+    // check reads the whole folder anyway, so it may as well teach.
+    try {
+      const body = fs.readFileSync(path.join(workspace, "agents", a.name, "agent.md"), "utf8");
+
+      // The runtime appends a "# Where you are" section to every prompt saying
+      // the working directory is agents/<name>/ and ../../ is the workspace
+      // root. An agent that says it again spends its opening paragraph on
+      // something the platform guarantees.
+      if (/your working directory is|two levels up|\.\.\/\.\.\/` is the workspace/i.test(body)) {
+        note(
+          "warn",
+          `agents/${a.name}`,
+          'explains where it is — the runtime already appends a "Where you are" section saying this; the paragraph is safe to delete',
+        );
+      }
+
+      // `[[link]]` what you READ, spell out what you WRITE. A path that exists
+      // is something to read, and a link to it cannot rot when the file is
+      // renamed; a path that does not exist yet is an output destination and
+      // is correctly literal. So the test is simply whether the file is there.
+      const said = new Set(); // one path, one lesson, however often it appears
+      for (const m of body.matchAll(/\.\.\/\.\.\/(state|knowledge|memory|storage)\/([^\s`'")]+)/g)) {
+        const rel = `${m[1]}/${m[2]}`;
+        if (said.has(rel)) continue;
+        said.add(rel);
+        if (!fs.existsSync(path.join(workspace, rel))) continue; // a destination, not a reference
+        const bare = path.basename(m[2]).replace(/\.md$/, "");
+        note("warn", `agents/${a.name}`, `reads \`../../${rel}\` — \`[[${bare}]]\` resolves to it and survives a rename`);
+      }
+    } catch {
+      // an unreadable agent.md is already reported by the loader
+    }
+
     for (const t of a.use) {
       if (!usable[t]) {
         note(
