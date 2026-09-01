@@ -78,3 +78,31 @@ test("no brackets, no work", () =>
     const text = "Plain prose with `knowledge/x.md` stays plain.";
     assert.equal(resolveDocLinks(text, root), text);
   }));
+
+test("state/ files resolve individually, not just the folder", () =>
+  withWorkspace((root) => {
+    fs.mkdirSync(path.join(root, "state"), { recursive: true });
+    fs.writeFileSync(path.join(root, "state", "index-cursor.md"), "position: 0\n");
+    fs.writeFileSync(path.join(root, "state", "dead-ends.csv"), "firm,reason\n");
+
+    // The one directory a recurring flow reads from most. The folder always
+    // resolved; the files in it did not, so every desk hand-wrote ../../state/.
+    const out = resolveDocLinks(
+      "Read [[index-cursor]], then [[state/dead-ends.csv]], and the rest of [[state]].",
+      root,
+    );
+    assert.match(out, /Read `\.\.\/\.\.\/state\/index-cursor\.md`/);
+    assert.match(out, /then `\.\.\/\.\.\/state\/dead-ends\.csv`/);
+    assert.match(out, /rest of `\.\.\/\.\.\/state\/`/, "the folder still resolves");
+    assert.doesNotMatch(out, /\[\[/);
+  }));
+
+test("a state file matches hyphen- and case-blind, like every other link", () =>
+  withWorkspace((root) => {
+    fs.mkdirSync(path.join(root, "state"), { recursive: true });
+    fs.writeFileSync(path.join(root, "state", "index-cursor.md"), "position: 0\n");
+    assert.match(
+      resolveDocLinks("Read [[Index_Cursor]].", root),
+      /`\.\.\/\.\.\/state\/index-cursor\.md`/,
+    );
+  }));
