@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PROVIDERS, providerPreset, looksOpenAiShaped } from "../packages/core/src/providers.ts";
+import { PROVIDERS, providerPreset, looksOpenAiShaped, PROTECTED_PARAMS } from "../packages/core/src/providers.ts";
 import { parseProvider, providerEnvFor } from "../packages/core/src/store.ts";
 import { translatorSpecFor } from "../packages/core/src/translator.ts";
 
@@ -119,4 +119,42 @@ test("every preset is in docs/providers.md and the spec names the three keys", a
   for (const key of ["name:", "format: anthropic | openai", "auth: bearer | x-api-key"]) {
     assert.ok(spec.includes(key), `SPEC.md does not document provider ${key}`);
   }
+});
+
+// ---------------------------------------------------------------- params
+
+test("params: is read as written, and only reaches a translated endpoint", () => {
+  const p = parseProvider({
+    name: "groq",
+    token: "t",
+    params: { temperature: 0.2, seed: 7, provider: { order: ["Groq"] }, service_tier: "auto" },
+  })!;
+  assert.deepEqual(p.params, { temperature: 0.2, seed: 7, provider: { order: ["Groq"] }, service_tier: "auto" });
+  assert.deepEqual(p.warnings, []);
+
+  // On an Anthropic-shaped block the SDK talks to the provider directly, so
+  // there is nothing for us to merge into — say so rather than pretend.
+  const direct = parseProvider({ name: "openrouter", token: "t", params: { temperature: 0.2 } })!;
+  assert.ok(direct.warnings.some((w) => /format: openai/.test(w)));
+
+  assert.deepEqual(parseProvider({ base_url: "https://x.test", token: "t" })!.params, {});
+  const notMap = parseProvider({ base_url: "https://x.test", token: "t", params: "hot" })!;
+  assert.ok(notMap.warnings.some((w) => /map of field/.test(w)));
+});
+
+test("params: cannot overwrite the conversation", () => {
+  const p = parseProvider({
+    name: "openai",
+    token: "t",
+    params: { messages: [], tools: [], stream: false, stream_options: {}, model: "sneaky", temperature: 0.5 },
+  })!;
+  assert.deepEqual(Object.keys(p.params), ["temperature"]);
+  for (const key of PROTECTED_PARAMS) {
+    assert.ok(p.warnings.some((w) => w.startsWith(`provider.params.${key}:`)), `no warning for ${key}`);
+  }
+});
+
+test("fallback: carries its own params", () => {
+  const p = parseProvider({ name: "openrouter", token: "a", fallback: { name: "groq", token: "b", params: { temperature: 0 } } })!;
+  assert.deepEqual(p.fallback?.params, { temperature: 0 });
 });

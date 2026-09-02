@@ -280,3 +280,44 @@ test("end to end: the provider's status and message cross back unchanged, and th
     up.close();
   }
 });
+
+// ---------------------------------------------------------------- params
+
+test("params: merge in last, so the file wins; null removes a field", () => {
+  const out = toChatCompletions(
+    { model: "m", max_tokens: 100, temperature: 0.9, messages: [{ role: "user", content: "hi" }] },
+    {
+      stream: false,
+      reasoningEffort: true,
+      params: { temperature: 0.1, seed: 42, provider: { order: ["Groq"] }, top_p: null },
+    },
+  );
+  assert.equal(out.temperature, 0.1, "the file beats what the loop sent");
+  assert.equal(out.seed, 42);
+  assert.deepEqual(out.provider, { order: ["Groq"] });
+  assert.equal("top_p" in out, false, "null removes it");
+  assert.equal((out.messages as unknown[]).length, 1, "the conversation is untouched");
+});
+
+test("params: an endpoint that rejects a field can be told to stop sending it", async () => {
+  const up = await fakeUpstream(() => ({ json: { choices: [{ finish_reason: "stop", message: { content: "ok" } }] } }));
+  const t = await startTranslator({
+    upstreamBase: up.base,
+    upstreamKey: "k",
+    params: { temperature: null, reasoning_effort: "low", extra_body: { anything: true } },
+  });
+  try {
+    await fetch(`${t.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": t.key },
+      body: JSON.stringify({ model: "m", max_tokens: 10, temperature: 0.7, messages: [{ role: "user", content: "x" }] }),
+    });
+    const sent = up.seen[0].body;
+    assert.equal("temperature" in sent, false);
+    assert.equal(sent.reasoning_effort, "low");
+    assert.deepEqual(sent.extra_body, { anything: true });
+  } finally {
+    await t.close();
+    up.close();
+  }
+});
