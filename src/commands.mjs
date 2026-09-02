@@ -205,7 +205,7 @@ function importedAgentNames(workspace, nativeNames) {
  * file beside it: `tools/x.md` becomes `tools/x/tool.md` + `tools/x/run.py`.
  *
  * The tool's NAME does not change, which is the property that makes this
- * safe to run against a live workspace: `use: [x]` in an agent still names
+ * safe to run against a live workspace: `tools: [x]` in an agent still names
  * the same tool, so no agent, flow or schedule has to be edited alongside.
  * Only where the bytes live changes.
  *
@@ -345,7 +345,7 @@ async function check(workspace) {
   const flows = listFlows(T, P);
   const evals = listEvals(T, P);
   const tools = workspaceTools(T, P);
-  // What `use:` can actually name. The runtime resolves nearest-wins across
+  // What `tools:` can actually name of your own. The runtime resolves nearest-wins across
   // both scopes, so a checker that only looked at the workspace called a
   // working agent broken — an error, in CI, for an account library tool that
   // runs fine. Mirror the runtime exactly; the summary still counts what this
@@ -404,14 +404,23 @@ async function check(workspace) {
       // an unreadable agent.md is already reported by the loader
     }
 
-    for (const t of a.use) {
+    for (const t of a.ownTools) {
       if (!usable[t]) {
         note(
           "error",
           `agents/${a.name}`,
-          `use: [${t}] — no tools/${t}/tool.md or tools/${t}.md in this workspace or the account library`,
+          `tools: [${t}] — no tools/${t}/tool.md or tools/${t}.md in this workspace or the account library`,
         );
       }
+    }
+    // `use:` is gone. Nothing under it is granted, so say the exact line to
+    // write rather than letting the run discover the missing tool.
+    if (a.legacyUse.length) {
+      note(
+        "error",
+        `agents/${a.name}`,
+        `\`use: [${a.legacyUse.join(", ")}]\` is no longer read — move these into \`tools:\` (node scripts/migrate-use-to-tools.mjs . rewrites every agent)`,
+      );
     }
   }
 

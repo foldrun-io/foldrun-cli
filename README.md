@@ -79,7 +79,7 @@ tools/wordcount/
 
 The agent calls it by name with typed arguments and never composes a shell
 command. Arguments arrive as `--flags`, stdout comes back, a non-zero exit is a
-failure. An agent opts in with `use: [wordcount]`.
+failure. An agent grants it with `tools: [wordcount]`.
 
 An **HTTP tool** is one markdown file declaring a base URL, allowed methods and
 headers, with `${SECRET}` placeholders the platform resolves at call time — so
