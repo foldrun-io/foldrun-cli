@@ -37,7 +37,7 @@ function withAccount(files: Record<string, string>, run: () => void) {
 }
 
 const agent = (name: string, use?: string) =>
-  `---\nkind: Agent\nname: ${name}\ndescription: t\n${use ? `use: [${use}]\n` : ""}---\n\nwork.\n`;
+  `---\nkind: Agent\nname: ${name}\ndescription: t\n${use ? `tools: [${use}]\n` : ""}---\n\nwork.\n`;
 
 const tool = (name: string) =>
   `---\nkind: Tool\ntransport: http\nname: ${name}\ndescription: t\nbase: https://example.com\nmethods: [GET]\n---\n`;
@@ -243,7 +243,7 @@ test("a single-file script tool runs its fenced code block", () => {
         "Usage example (must never be mistaken for the program):",
         "",
         "```yaml",
-        "use: [echoer]",
+        "tools: [echoer]",
         "```",
         "",
         "```js",
@@ -258,7 +258,7 @@ test("a single-file script tool runs its fenced code block", () => {
       assert.equal(def.kind, "script");
       const spec = def.spec as { code?: string };
       assert.match(spec.code!, /from-the-fence/);
-      assert.doesNotMatch(spec.code!, /use: \[echoer\]/);
+      assert.doesNotMatch(spec.code!, /tools: \[echoer\]/);
     },
   );
 });

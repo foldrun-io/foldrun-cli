@@ -72,7 +72,7 @@ test("sql ships as a folder tool: a definition, and stdlib Python beside it", ()
   assert.ok(sql, "sql tool exists");
   assert.equal(sql.kind, "tools");
   assert.equal(sql.file, "sql/tool.md");
-  assert.equal(sql.snippet, "use: [sql]");
+  assert.equal(sql.snippet, "tools: [sql]");
   assert.equal(sql.wrapper?.file, "sql/run.py");
 
   const { data, content } = matter(sql.content);
@@ -109,7 +109,7 @@ test("starting from sql seeds a renamed folder", () => {
   const seed = galleryTemplate("tools", "sql", "my-sql")!;
   assert.deepEqual(seed.map((f) => f.file), ["my-sql/tool.md", "my-sql/run.py"]);
   assert.equal(matter(seed[0].content).data.run, "run.py");
-  assert.match(seed[0].content, /use: \[my-sql\]/);
+  assert.match(seed[0].content, /tools: \[my-sql\]/);
 });
 
 test("sql: two files become two tables, and a JOIN with an aggregate runs across them", () =>

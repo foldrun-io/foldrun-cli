@@ -58,7 +58,7 @@ The program is beside this file.
 const AGENT = `---
 name: keeper
 description: Grants the tool under test.
-use: [rows]
+tools: [rows]
 ---
 
 work.

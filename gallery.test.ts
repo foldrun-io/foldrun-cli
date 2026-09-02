@@ -34,7 +34,7 @@ test("the browser ships as a folder: a definition, and the program beside it", (
   assert.ok(browser, "browser tool exists");
   assert.equal(browser!.kind, "tools");
   assert.equal(browser!.file, "browser/tool.md");
-  assert.equal(browser!.snippet, "use: [browser]");
+  assert.equal(browser!.snippet, "tools: [browser]");
   assert.equal(browser!.wrapper?.file, "browser/run.mjs", "the program is a file");
 
   const { data, content } = matter(browser!.content);
@@ -99,7 +99,7 @@ test("every API tool in the gallery parses into a working http tool", () => {
     assert.ok(def, `${t.name} parses`);
     assert.equal(def!.kind, "http", `${t.name} is an http tool`);
     assert.ok((def!.spec as { base: string }).base.startsWith("https://"), `${t.name} is https`);
-    assert.equal(t.snippet, `use: [${t.name}]`, `${t.name} snippet is the opt-in`);
+    assert.equal(t.snippet, `tools: [${t.name}]`, `${t.name} snippet is the grant`);
   }
 });
 
@@ -130,8 +130,8 @@ test("starting from a gallery entry renames it everywhere the name appears", () 
   assert.equal(data.name, "my-mailer");
   // The body's opt-in line would otherwise tell a reader to grant a tool
   // that does not exist under that name.
-  assert.match(seed.content, /use: \[my-mailer\]/);
-  assert.doesNotMatch(seed.content, /use: \[email\]/);
+  assert.match(seed.content, /tools: \[my-mailer\]/);
+  assert.doesNotMatch(seed.content, /\[email\]/);
   // Still a working definition, not just renamed text.
   assert.equal(parseToolDef(data as Record<string, unknown>, "my-mailer")!.kind, "http");
 });
@@ -154,7 +154,7 @@ test("starting from a folder gallery entry seeds both of its files", () => {
   // run: still names the file beside it — the folder was renamed, not the
   // program, and neither travels without the other.
   assert.equal(data.run, "run.mjs");
-  assert.match(seed[0].content, /use: \[my-browser\]/);
+  assert.match(seed[0].content, /tools: \[my-browser\]/);
   assert.match(seed[1].content, /chromium\.launch/);
 });
 

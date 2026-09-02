@@ -1,4 +1,4 @@
-// `use: [site_repo, ` must complete like `use:\n  - ` — the inline and
+// `tools: [site_repo, ` must complete like `tools:\n  - ` — the inline and
 // block spellings of a list are one field.
 //
 //   node --test tests/inline-list-completions.test.ts
@@ -19,9 +19,9 @@ const VOCAB: Vocabulary = {
 
 const at = (text: string) => completionsAt("agents/dev/agent.md", text, text.length, VOCAB);
 
-test("use: [ offers the workspace's own tools, minus ones already chosen", () => {
-  const ctx = at("---\nuse: [site_repo, ")!;
-  assert.ok(ctx, "inline use: completes");
+test("tools: [ offers the workspace's own tools, minus ones already chosen", () => {
+  const ctx = at("---\ntools: [site_repo, ")!;
+  assert.ok(ctx, "inline tools: completes");
   const labels = ctx.items.map((i) => i.label);
   assert.ok(labels.includes("site_run"), "remaining tools offered");
   assert.ok(labels.includes("cf_deploy"));
