@@ -677,6 +677,7 @@ async function probeCmd(modelArg) {
         baseUrl: spec.baseUrl,
         token,
         headers,
+        params: spec.params,
         name: spec.name,
         maxTokensParam: preset?.maxTokensParam,
         reasoningEffort: preset?.reasoningEffort,
