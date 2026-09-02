@@ -9,6 +9,7 @@ const c = {
   bold: (s) => `\x1b[1m${s}\x1b[0m`,
   green: (s) => `\x1b[32m${s}\x1b[0m`,
   red: (s) => `\x1b[31m${s}\x1b[0m`,
+  yellow: (s) => `\x1b[33m${s}\x1b[0m`,
   amber: (s) => `\x1b[33m${s}\x1b[0m`,
 };
 
@@ -651,29 +652,41 @@ async function runTarget(target, flags) {
 async function probeCmd(modelArg) {
   if (!modelArg) throw new Error("which model? try `foldrun probe openai/gpt-oss-120b` (or a tier: fast, default, max)");
   assertCredentials();
-  const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort } = await core();
+  const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort, translatorSpecFor, startTranslator, providerPreset } = await core();
 
   // The workspace's provider block, resolved the way a run resolves it —
   // ${SECRET} values come from the process env here: the CLI's vault is the
-  // shell, which is where a laptop keeps its keys anyway.
+  // shell, which is where a laptop keeps its keys anyway. A Chat-Completions
+  // provider gets the same translator a run would, on loopback, for the
+  // length of the probe — so what passes here passes there.
   let env = { ...process.env };
+  let translator = null;
   try {
     const matter = (await import("gray-matter")).default;
     const fm = matter(fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")).data;
     const spec = parseProvider(fm.provider);
+    for (const w of spec?.warnings ?? []) console.log(`  ${c.yellow("!")} ${w}`);
     if (spec?.baseUrl) {
       const substitute = (t) => t.replace(/\$\{([A-Z][A-Z0-9_]*)\}/g, (whole, name) => process.env[name] ?? whole);
-      env = {
-        ...env,
-        ...providerEnvFor({
-          baseUrl: spec.baseUrl,
-          token: substitute(spec.token),
-          models: spec.models,
-          headers: Object.fromEntries(Object.entries(spec.headers).map(([k, v]) => [k, substitute(v)])),
-        }),
-      };
+      const token = substitute(spec.token);
+      const headers = Object.fromEntries(Object.entries(spec.headers).map(([k, v]) => [k, substitute(v)]));
+      env = { ...env, ...providerEnvFor({ baseUrl: spec.baseUrl, token, auth: spec.auth, models: spec.models, headers }) };
+      const preset = providerPreset(spec.name);
+      const tSpec = translatorSpecFor({
+        format: spec.format,
+        baseUrl: spec.baseUrl,
+        token,
+        headers,
+        name: spec.name,
+        maxTokensParam: preset?.maxTokensParam,
+        reasoningEffort: preset?.reasoningEffort,
+      });
+      if (tSpec) {
+        translator = await startTranslator(tSpec);
+        env = { ...env, ...translator.env };
+      }
       console.log(`
-  ${c.dim(`via ${spec.baseUrl}`)}`);
+  ${c.dim(`via ${spec.name ? `${spec.name} ` : ""}${spec.baseUrl}${tSpec ? " (through the translator)" : ""}`)}`);
     }
   } catch {
     // no AGENTS.md, or no provider block — Anthropic direct, like a run
@@ -681,7 +694,15 @@ async function probeCmd(modelArg) {
 
   const model = resolveModel(modelArg);
   process.stdout.write(`  probing ${c.bold(model)} ${c.dim("(one tool call, one echo)")} … `);
-  const report = await probeModel(model, env, resolveEffort(null));
+  let report;
+  try {
+    report = await probeModel(model, env, resolveEffort(null));
+  } finally {
+    if (translator) {
+      for (const line of translator.drainLog()) console.log(`    ${c.dim(line)}`);
+      await translator.close();
+    }
+  }
   console.log(report.ok ? c.green("✓") : c.red("✗"));
   console.log(`    tool call made      ${report.calledTool ? c.green("yes") : c.red("no")}`);
   console.log(`    result read back    ${report.echoedNonce ? c.green("yes") : c.red("no")}`);
