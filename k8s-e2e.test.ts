@@ -17,11 +17,35 @@ import { spawnSync } from "node:child_process";
 import { runStepInK8s } from "../packages/core/src/run-k8s.ts";
 
 const enabled = process.env.FOLDRUN_K8S_E2E === "1";
+
+/**
+ * The runner image to launch, asked of the cluster when nobody said.
+ *
+ * Requiring it by hand is how this test stayed unrun: the tag changes every
+ * deploy, so the only correct value is whatever the worker is configured with
+ * right now — which the cluster already knows. Falling back to asking it
+ * turns `npm run k8s` into something that works with no arguments.
+ */
+function runnerImage(): string | null {
+  if (process.env.FOLDRUN_RUNNER_IMAGE) return process.env.FOLDRUN_RUNNER_IMAGE;
+  const kubectl = process.env.FOLDRUN_KUBECTL ?? "kubectl";
+  const got = spawnSync(
+    kubectl,
+    ["-n", "foldrun", "get", "deploy", "foldrun-worker", "-o",
+     'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="FOLDRUN_RUNNER_IMAGE")].value}'],
+    { encoding: "utf8" },
+  );
+  const tag = (got.stdout ?? "").trim();
+  return got.status === 0 && tag ? tag : null;
+}
+
+const image = enabled ? runnerImage() : null;
+if (image) process.env.FOLDRUN_RUNNER_IMAGE = image;
 const opts = {
   skip: enabled
-    ? process.env.FOLDRUN_RUNNER_IMAGE
+    ? image
       ? false
-      : "set FOLDRUN_RUNNER_IMAGE to an image the cluster holds"
+      : "set FOLDRUN_RUNNER_IMAGE — no foldrun-worker deployment to ask"
     : "set FOLDRUN_K8S_E2E=1 to run (needs kubectl + a cluster)",
 };
 
@@ -35,6 +59,21 @@ test("a step runs as a pod, and the pod is gone afterwards", opts, async () => {
   );
 
   const events: { type: string; text: string }[] = [];
+  // Which run pods exist BEFORE this test. The assertion below used to be
+  // "the namespace is empty", which is only true on an idle cluster — run it
+  // on the box while a scheduled flow is working and it failed, blaming the
+  // executor for somebody else's pod. What this test can honestly claim is
+  // that IT left nothing behind.
+  const runPods = () => {
+    const ns = process.env.FOLDRUN_K8S_NAMESPACE ?? "foldrun-runs";
+    const got = spawnSync(process.env.FOLDRUN_KUBECTL ?? "kubectl",
+      ["get", "pods", "-n", ns, "-l", "app=foldrun-run", "--no-headers"], { encoding: "utf8" });
+    return (got.stdout ?? "")
+      .split("\n")
+      .filter((l) => l.trim() && !l.includes("Terminating"))
+      .map((l) => l.split(/\s+/)[0]);
+  };
+  const before = new Set(runPods());
   try {
     const outcome = await runStepInK8s({
       workspaceRoot: ws,
@@ -61,15 +100,10 @@ test("a step runs as a pod, and the pod is gone afterwards", opts, async () => {
     assert.equal(outcome.status, "failed", JSON.stringify(events.slice(-3)));
     assert.ok(events.length > 0, "the failure arrived as streamed events");
 
-    // Nothing left behind.
-    const ns = process.env.FOLDRUN_K8S_NAMESPACE ?? "foldrun-runs";
-    const pods = spawnSync("kubectl", ["get", "pods", "-n", ns, "-l", "app=foldrun-run", "--no-headers"], {
-      encoding: "utf8",
-    });
-    const lingering = (pods.stdout ?? "")
-      .split("\n")
-      .filter((l) => l.trim() && !l.includes("Terminating"));
-    assert.equal(lingering.length, 0, `pods left behind:\n${pods.stdout}`);
+    // Nothing left behind — by this test. A pod that was already running when
+    // it started belongs to somebody else and is not evidence of a leak.
+    const leaked = runPods().filter((name) => !before.has(name));
+    assert.deepEqual(leaked, [], `pods left behind: ${leaked.join(", ")}`);
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
