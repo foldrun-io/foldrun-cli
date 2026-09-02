@@ -331,7 +331,8 @@ async function extract(workspace, flags) {
 async function check(workspace) {
   const {
     listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
-    workspaceTools, libraryTools, checkFormatVersion, missingToolPrograms,
+    workspaceTools, libraryTools, checkFormatVersion, missingToolPrograms, discoverSkills,
+    libraryDir,
   } = await core();
   const T = "default";
   const P = "workspace";
@@ -355,6 +356,19 @@ async function check(workspace) {
   const imported = importedAgentNames(workspace, agentNames);
   for (const n of imported) agentNames.add(n);
   const flowNames = new Set(flows.map((f) => f.name));
+  // Every skill name in scope, found the way the runtime finds them — the
+  // agent's own, the workspace's, the cross-client .agents/skills/, and the
+  // account library. Discovery comes from core so this cannot drift from
+  // what a run actually loads.
+  const skillNames = new Set();
+  for (const base of [workspace, libraryDir(T)]) {
+    for (const sub of ["skills", ".agents/skills"]) {
+      for (const s of discoverSkills(base, sub)) skillNames.add(s.name);
+    }
+  }
+  for (const a of agents) {
+    for (const s of discoverSkills(path.join(workspace, "agents", a.name))) skillNames.add(s.name);
+  }
 
   if (agentNames.size === 0) note("error", "agents/", "no agents — a workspace needs at least one");
 
@@ -413,6 +427,31 @@ async function check(workspace) {
         );
       }
     }
+    // A colleague that does not exist is not a consult tool the agent is
+    // missing — it is one it will never be told about, on a run that looks
+    // fine. Same shape as a tool that names nothing.
+    for (const c of a.consults) {
+      if (!agentNames.has(c)) {
+        note("error", `agents/${a.name}`, `agents: [${c}] — no such agent in this workspace`);
+      } else if (c === a.name) {
+        note("warn", `agents/${a.name}`, `agents: [${c}] — an agent consulting itself; the call is refused at run time`);
+      }
+    }
+
+    // `skills:` present is an allowlist. A name that matches nothing silently
+    // withholds a skill the author believed was loaded — and an empty list
+    // withholds every one of them, which is legal but worth saying out loud.
+    if (a.skills !== null) {
+      if (a.skills.length === 0) {
+        note("warn", `agents/${a.name}`, "skills: [] withholds every skill — omit the field to inherit them");
+      }
+      for (const s of a.skills) {
+        if (!skillNames.has(s)) {
+          note("error", `agents/${a.name}`, `skills: [${s}] — no skill of that name in this agent, the workspace or the library`);
+        }
+      }
+    }
+
     // `use:` is gone. Nothing under it is granted, so say the exact line to
     // write rather than letting the run discover the missing tool.
     if (a.legacyUse.length) {
@@ -448,7 +487,7 @@ async function check(workspace) {
         note("error", `flows/${f.file}`, `[[${s.subflow ? "flow:" : ""}${target}]] does not exist`, s.line);
       }
     }
-    for (const w of lintFlow(f)) note("warn", `flows/${f.file}`, w.message, w.line);
+    for (const w of lintFlow(f, { agents: [...agentNames] })) note("warn", `flows/${f.file}`, w.message, w.line);
   }
 
   for (const e of evals) {
