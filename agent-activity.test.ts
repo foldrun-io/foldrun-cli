@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { headlineOf, listAgentSteps, writeRun, type RunRecord } from "../packages/core/src/store.ts";
+import { headlineOf, listAgentSteps, runSummary, stepHeadline, writeRun, type RunRecord } from "../packages/core/src/store.ts";
 
 test("a headline is the first line a person would recognise as the point", () => {
   assert.equal(headlineOf("## Done: 4 findings\n\nDetail follows."), "Done: 4 findings");
@@ -109,4 +109,34 @@ test("the runtime asks for the sentence the summary reads", () => {
     "utf8",
   );
   assert.match(src, /Open your reply with one sentence/);
+});
+
+test("a summary reads the model's answer, not the narration it opened with", () => {
+  // `result` is every text block joined, so a model that says "Now let me read
+  // the outputs…" before calling a tool puts that at the top of it. Reading
+  // the joined text reported the plan of every step that used a tool — which
+  // is most of them. The last block is the answer.
+  const step = {
+    agent: "reporter",
+    instruction: "go",
+    group: 1,
+    optional: false,
+    status: "completed" as const,
+    events: [],
+    result: "Now let me read the auditor outputs:\nI'll write the report.\n115 indexed, 5 missing — the report is at storage/index-report.md.",
+    conclusion: "115 indexed, 5 missing — the report is at storage/index-report.md.",
+    costUsd: 0.01,
+  };
+  assert.equal(stepHeadline(step), "115 indexed, 5 missing — the report is at storage/index-report.md.");
+  assert.equal(
+    runSummary({ steps: [step] } as unknown as RunRecord),
+    "115 indexed, 5 missing — the report is at storage/index-report.md.",
+  );
+  // A step recorded before `conclusion` existed reads exactly as it always
+  // did — the fallback is what keeps old runs rendering.
+  const { conclusion: _drop, ...legacy } = step;
+  assert.equal(stepHeadline(legacy), "Now let me read the auditor outputs:");
+  // An answer that is only a JSON fence has no sentence in it; fall back to
+  // the whole reply rather than showing nothing.
+  assert.equal(stepHeadline({ ...step, conclusion: "```json\n{}\n```" }), "Now let me read the auditor outputs:");
 });

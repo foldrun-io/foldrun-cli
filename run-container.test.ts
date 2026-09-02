@@ -72,7 +72,16 @@ test("driver lines: events and the done marker parse, noise does not", () => {
     text: "hi",
   });
   const done = parseDriverLine('{"e":"done","status":"completed","result":"out","costUsd":0.01}');
-  assert.deepEqual(done, { e: "done", status: "completed", result: "out", costUsd: 0.01, usage: null, res: null });
+  // `conclusion` is null when the driver sends none — an older driver, or a
+  // step that produced no text at all.
+  assert.deepEqual(done, { e: "done", status: "completed", result: "out", conclusion: null, costUsd: 0.01, usage: null, res: null });
+
+  // The model's final block crosses the boundary beside the joined reply, so
+  // the host can report what a step concluded rather than how it opened.
+  const withConclusion = parseDriverLine(
+    '{"e":"done","status":"completed","result":"first\\nlast","conclusion":"last","costUsd":0.01}',
+  );
+  assert.equal((withConclusion as { conclusion?: string }).conclusion, "last");
   // Token counts survive the boundary when the driver sends them — they are
   // what lets the host reprice a routed model from the gateway's catalogue.
   const withUsage = parseDriverLine(
