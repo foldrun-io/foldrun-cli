@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runPodManifest, envFileShell } from "../packages/core/src/run-k8s.ts";
+import { k8sMemory } from "../packages/core/src/run-container.ts";
 
 test("the pod carries the same hardening as the docker flags", () => {
   const pod = runPodManifest("foldrun-run-x", "foldrun-runner:abc") as {
@@ -169,4 +170,23 @@ test("no tenant (an embedder with no tenancy) simply gets no cache", () => {
     const pod = runPodManifest("x", "img") as Pod;
     assert.equal(pod.spec.volumes, undefined);
   });
+});
+
+test("a Docker memory figure becomes one Kubernetes accepts", () => {
+  // sizeLimits speaks Docker — `--memory 2g` — and its default is exactly
+  // that. Kubernetes rejects the lowercase form with a message naming neither
+  // the field nor the value, so every default-size step failed to create a pod
+  // on any install that had not overridden FOLDRUN_RUNNER_MEMORY. These
+  // manifests do, which is why it broke only for self-hosters.
+  assert.equal(k8sMemory("2g"), "2Gi", "the default size, and the bug");
+  assert.equal(k8sMemory("512m"), "512Mi", "docker's m is mebibytes, not millibytes");
+  // `k` is a legal Kubernetes decimal suffix and Docker's kibibytes; case
+  // decides, and everything here comes from sizeLimits, which speaks Docker.
+  assert.equal(k8sMemory("1024k"), "1024Ki");
+  assert.equal(k8sMemory("2t"), "2Ti");
+  assert.equal(k8sMemory("2048b"), "2048");
+  // Already a quantity: untouched, including what production actually sets.
+  for (const q of ["6Gi", "8Gi", "1Gi", "500M", "2G", "1024"]) assert.equal(k8sMemory(q), q);
+  // Anything else is handed over so the cluster's own error is the one read.
+  assert.equal(k8sMemory("lots"), "lots");
 });
