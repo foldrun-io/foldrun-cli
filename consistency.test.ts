@@ -622,6 +622,10 @@ test("every step option the parser accepts is documented", () => {
 
   const spec = read("SPEC.md");
   const help = read("web/app/dashboard/help/page.tsx");
+  // docs/flows.md is the reference both lenses render — the dashboard for
+  // people who signed up, site/ for people who have not. An option missing
+  // there is missing from the only page someone reads to learn the format.
+  const reference = read("docs/flows.md");
 
   for (const key of options) {
     assert.ok(
@@ -631,6 +635,28 @@ test("every step option the parser accepts is documented", () => {
     assert.ok(
       help.includes(`${key}:`),
       `step option "${key}:" is parsed but absent from the in-app help page`,
+    );
+    assert.ok(
+      reference.includes(`${key}:`),
+      `step option "${key}:" is parsed but absent from docs/flows.md — the published reference`,
+    );
+  }
+});
+
+/** Every agent.md field the runner reads. */
+function agentFields(): string[] {
+  const src = read("packages/core/src/runner.ts");
+  return [...new Set([...src.matchAll(/front\.([a-zA-Z_]+)/g)].map((m) => m[1]))].filter(Boolean);
+}
+
+test("every agent field the runner reads is documented", () => {
+  const fields = agentFields();
+  assert.ok(fields.length >= 12, `expected the agent field set, found ${fields.length}`);
+  const reference = read("docs/agents.md");
+  for (const key of fields) {
+    assert.ok(
+      reference.includes(`\`${key}\``) || reference.includes(`${key}:`),
+      `agent field "${key}:" is read by the runner but absent from docs/agents.md`,
     );
   }
 });
