@@ -4,6 +4,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { mergeRuntimes, parseRuntime, fingerprint } from "../packages/core/src/runtime.ts";
 
 test("nothing declared anywhere is no runtime", () => {
@@ -49,4 +52,27 @@ test("a rejected requirement from any tool is still reported", () => {
   const bad = parseRuntime({ packages: ["--index-url", "requests"] });
   const merged = mergeRuntimes(parseRuntime({ packages: ["pandas"] }), bad)!;
   assert.deepEqual(merged.rejected, ["--index-url"]);
+});
+
+test("a runtime that cannot be built says why, even when the installer printed nothing", () => {
+  // `spawnSync` reports three different failures and only one of them writes
+  // to a stream: a command that cannot be spawned sets `error` and leaves
+  // stdout and stderr null. Reporting the streams alone gave the least useful
+  // message a build can produce — "npm install failed: " with nothing after
+  // it — which is exactly the case that is hardest to diagnose remotely.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-runtime-why-"));
+  try {
+    const spec = parseRuntime({ node: true, npm: ["sharp"] })!;
+    assert.deepEqual(spec.npm, ["sharp"], "npm packages belong under npm:, not packages:");
+    assert.deepEqual(spec.packages, [], "sharp must not land in the pip list");
+
+    // The pip list is where `sharp` used to be declared, and pip would try to
+    // compile a Node module. Keeping the two lists apart is the fix; this
+    // pins that they are read from different keys.
+    const wrong = parseRuntime({ packages: ["sharp"] })!;
+    assert.deepEqual(wrong.packages, ["sharp"]);
+    assert.deepEqual(wrong.npm, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
