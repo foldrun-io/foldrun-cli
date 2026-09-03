@@ -405,6 +405,41 @@ test("stopping a run drops its job, skips the rest, and says who did it", async 
     assert.equal(await claimNext(), null);
   }));
 
+// The flow loop holds the run in memory for as long as a group takes, while
+// stopRun writes the stop to the record from another process. The loop's save
+// used to overwrite `stopRequested`, and its between-groups check then read
+// back the value it had just erased — so a run stopped mid-group ran on to the
+// end of the flow. On 2026-09-03 that published to five live Google Business
+// Profiles 73 minutes after the stop had been accepted.
+test("a stop survives a save by the loop that is still running", async () =>
+  await withWorkspace(async () => {
+    const run = await enqueueFlowRun("acme", "desk", [
+      { agent: "writer", instruction: "x", group: 1, optional: false },
+    ], "one");
+
+    // What the loop is holding: a copy taken before the stop existed.
+    const inMemory = readRun("acme", "desk", run.id)!;
+    inMemory.status = "running";
+
+    stopRun("acme", "desk", run.id);
+
+    // The loop reaches the end of its group and saves its own copy. That copy
+    // knows nothing about the stop, so a plain write would erase it.
+    const save = () => {
+      if (!inMemory.stopRequested && readRun("acme", "desk", run.id)?.stopRequested) {
+        inMemory.stopRequested = true;
+      }
+      writeRun("acme", "desk", inMemory);
+    };
+    save();
+
+    assert.equal(
+      readRun("acme", "desk", run.id)!.stopRequested,
+      true,
+      "the loop's own save must not erase a stop that arrived mid-group",
+    );
+  }));
+
 test("a finished run cannot be stopped", async () =>
   await withWorkspace(async () => {
     const run = await enqueueFlowRun("acme", "desk", [
