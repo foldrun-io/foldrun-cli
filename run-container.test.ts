@@ -71,6 +71,22 @@ test("driver lines: events and the done marker parse, noise does not", () => {
     type: "text",
     text: "hi",
   });
+  // A tool call's pairing fields cross the boundary — the id on the call,
+  // the duration and error flag on its completion — and nothing else does.
+  assert.deepEqual(parseDriverLine('{"e":"event","type":"tool","text":"read","call":"toolu_1","junk":1}'), {
+    e: "event",
+    type: "tool",
+    text: "read",
+    call: "toolu_1",
+  });
+  assert.deepEqual(parseDriverLine('{"e":"event","type":"tool","text":"read","call":"toolu_1","ms":840,"err":true}'), {
+    e: "event",
+    type: "tool",
+    text: "read",
+    call: "toolu_1",
+    ms: 840,
+    err: true,
+  });
   const done = parseDriverLine('{"e":"done","status":"completed","result":"out","costUsd":0.01}');
   // `conclusion` is null when the driver sends none — an older driver, or a
   // step that produced no text at all.
