@@ -76,11 +76,22 @@ if (!command || command === "--help" || command === "-h") {
 
 // Flags first, so the workspace is known before anything loads the core:
 // single-workspace mode is an environment decision, read at import time.
+// Flags that take no value. Without the list, `--account --value X` read
+// `--value` as the account's argument and stored an empty secret; `--force
+// ./dir` swallowed the directory. A flag followed by another flag is also
+// boolean, so an unlisted switch at least does not eat its neighbour.
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "dry-run", "help"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
-  if (rest[i].startsWith("--")) flags[rest[i].slice(2)] = rest[++i] ?? true;
-  else positional.push(rest[i]);
+  if (!rest[i].startsWith("--")) {
+    positional.push(rest[i]);
+    continue;
+  }
+  const name = rest[i].slice(2);
+  const next = rest[i + 1];
+  if (BOOLEAN_FLAGS.has(name) || next === undefined || next.startsWith("--")) flags[name] = true;
+  else flags[name] = rest[++i];
 }
 
 // `deploy` is the one command that is not about a single folder: it reads a

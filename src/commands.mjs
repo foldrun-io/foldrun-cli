@@ -1014,12 +1014,17 @@ async function remoteCall(url, flags, apiPath, init = {}) {
 async function secretsCmd(positional, flags) {
   const [verb, name] = positional;
   const url = remoteUrl(flags);
-  const scope = flags.account === true ? undefined : flags.to ?? "workspace";
+  // Local scope is the workspace's own store, named the way the runner names
+  // it — the folder's basename. It was the literal string "workspace", so a
+  // secret set from the terminal landed under workspaces/workspace/ and every
+  // run, reading under workspaces/<name>/, reported it missing.
+  const localWorkspace = path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+  const scope = flags.account === true ? undefined : flags.to ?? localWorkspace;
 
   if (verb === "ls" || verb === undefined) {
     const entries = url
       ? (await remoteCall(url, flags, `/api/secrets${flags.to ? `?workspace=${flags.to}` : ""}`)).secrets
-      : (await core()).listSecrets("default", "workspace");
+      : (await core()).listSecrets("default", scope);
     if (!entries.length) {
       console.log(`\n  ${c.dim("no secrets yet — foldrun secrets set NAME")}\n`);
       return 0;
@@ -1053,7 +1058,7 @@ async function secretsCmd(positional, flags) {
           body: JSON.stringify({ name, oauth2: config, workspace: flags.to }),
         });
       } else {
-        (await core()).setOAuth2Secret("default", name, config, scope === undefined ? undefined : "workspace");
+        (await core()).setOAuth2Secret("default", name, config, scope);
       }
       console.log(`\n  ${c.green("✓")} ${name} stored as an auto-refreshing oauth2 credential\n`);
       return 0;
@@ -1068,7 +1073,7 @@ async function secretsCmd(positional, flags) {
         body: JSON.stringify({ name, value, workspace: flags.to }),
       });
     } else {
-      (await core()).setSecret("default", name, value, scope === undefined ? undefined : "workspace");
+      (await core()).setSecret("default", name, value, scope);
     }
     console.log(`\n  ${c.green("✓")} ${name} stored — declare it in agent.md under \`secrets:\` to use it\n`);
     return 0;
@@ -1081,7 +1086,7 @@ async function secretsCmd(positional, flags) {
         body: JSON.stringify({ name, workspace: flags.to }),
       });
     } else {
-      (await core()).deleteSecret("default", name, scope === undefined ? undefined : "workspace");
+      (await core()).deleteSecret("default", name, scope);
     }
     console.log(`\n  ${c.green("✓")} ${name} removed\n`);
     return 0;
