@@ -20,6 +20,7 @@ import {
   contentTypeFor,
   isLive,
   shareUrl,
+  syncPublicShares,
 } from "../packages/core/src/shares.ts";
 
 /** A throwaway FOLDRUN_DATA holding one workspace with one file in storage/. */
@@ -202,5 +203,83 @@ test("a share URL refuses to be built without a public origin", () => {
   } finally {
     if (previous === undefined) delete process.env.FOLDRUN_PUBLIC_URL;
     else process.env.FOLDRUN_PUBLIC_URL = previous;
+  }
+});
+
+// storage/public/ — the platform mints these, because the agent cannot.
+//
+// A run's sandbox is denied every private network range on purpose, so a step
+// has no route to this platform's API and no way to ask for a URL. Handing
+// sandboxes an API key to fix that would give every step editor rights over
+// the whole account. Instead the platform publishes the directory after the
+// step, and the next step reads a plain JSON file with no network at all.
+test("everything in storage/public/ gets a link, written where the next step can read it", () => {
+  const previous = process.env.FOLDRUN_PUBLIC_URL;
+  process.env.FOLDRUN_PUBLIC_URL = "https://example.test";
+  try {
+    inTempData((root, ws) => {
+      fs.mkdirSync(path.join(ws, "storage", "public", "gbp"), { recursive: true });
+      fs.writeFileSync(path.join(ws, "storage", "public", "gbp", "nsw.jpg"), "IMG");
+
+      const first = syncPublicShares("acct", "desk");
+      assert.deepEqual(first.added, ["storage/public/gbp/nsw.jpg"]);
+      const url = first.urls["storage/public/gbp/nsw.jpg"];
+      assert.match(url, /^https:\/\/example\.test\/s\/.+/);
+
+      const manifest = path.join(ws, "storage", "public-urls.json");
+      assert.ok(fs.existsSync(manifest), "the next step reads this, so it must exist");
+      assert.equal(JSON.parse(fs.readFileSync(manifest, "utf8"))["storage/public/gbp/nsw.jpg"], url);
+
+      // The index of what is public must not itself be inside the public dir.
+      assert.ok(
+        !fs.existsSync(path.join(ws, "storage", "public", "public-urls.json")),
+        "the manifest would otherwise publish the list of every public file",
+      );
+
+      // Running again is not a second publish — the URL has to be stable, or a
+      // link handed out on one step stops matching on the next.
+      const second = syncPublicShares("acct", "desk");
+      assert.deepEqual(second.added, [], "already shared");
+      assert.equal(second.urls["storage/public/gbp/nsw.jpg"], url, "the URL must not churn");
+    });
+  } finally {
+    if (previous === undefined) delete process.env.FOLDRUN_PUBLIC_URL;
+    else process.env.FOLDRUN_PUBLIC_URL = previous;
+  }
+});
+
+test("auto-shared links do not expire — a public asset URL that dies is a silent breakage", () => {
+  const previous = process.env.FOLDRUN_PUBLIC_URL;
+  process.env.FOLDRUN_PUBLIC_URL = "https://example.test";
+  try {
+    inTempData((_root, ws) => {
+      fs.mkdirSync(path.join(ws, "storage", "public"), { recursive: true });
+      fs.writeFileSync(path.join(ws, "storage", "public", "a.jpg"), "IMG");
+      syncPublicShares("acct", "desk");
+      const share = listShares("acct", "desk").find((s) => s.path === "storage/public/a.jpg");
+      assert.ok(share);
+      assert.equal(share!.expiresAt, null);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.FOLDRUN_PUBLIC_URL;
+    else process.env.FOLDRUN_PUBLIC_URL = previous;
+  }
+});
+
+test("with no public origin nothing is minted and no manifest is written", () => {
+  const previous = process.env.FOLDRUN_PUBLIC_URL;
+  delete process.env.FOLDRUN_PUBLIC_URL;
+  try {
+    inTempData((_root, ws) => {
+      fs.mkdirSync(path.join(ws, "storage", "public"), { recursive: true });
+      fs.writeFileSync(path.join(ws, "storage", "public", "a.jpg"), "IMG");
+      assert.deepEqual(syncPublicShares("acct", "desk"), { added: [], urls: {} });
+      assert.ok(
+        !fs.existsSync(path.join(ws, "storage", "public-urls.json")),
+        "a manifest of links that resolve nowhere is worse than none",
+      );
+    });
+  } finally {
+    if (previous !== undefined) process.env.FOLDRUN_PUBLIC_URL = previous;
   }
 });
