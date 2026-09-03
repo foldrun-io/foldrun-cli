@@ -848,7 +848,13 @@ test("every secret key the manifests read is one the scripts write", () => {
 });
 
 test("the scripts restart deployments that exist", () => {
-  const docs = yaml.loadAll(read("infra/production/manifests/platform.yaml")) as any[];
+  // Every manifest, not just platform.yaml: the datastores are Deployments
+  // too, and token-refresh.sh reaches deploy/foldrun-postgres to ask the
+  // queue whether a run is in flight before it restarts the worker.
+  const docs = [
+    "infra/production/manifests/platform.yaml",
+    "infra/production/manifests/datastores.yaml",
+  ].flatMap((f) => yaml.loadAll(read(f)) as any[]);
   const deployments = new Set(
     docs.filter((d) => d?.kind === "Deployment").map((d) => d.metadata.name as string),
   );
