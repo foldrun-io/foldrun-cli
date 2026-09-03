@@ -124,3 +124,60 @@ test("durations and axis ticks read the way a person says them", () => {
   assert.equal(tickEvery(30_000), 5_000);
   assert.ok(tickEvery(10 * 3600_000) >= 3600_000);
 });
+
+// ---------- the window ----------
+
+import { clampWindow, windowEdges, zoomWindow, panWindow, placeSpan, MIN_WINDOW } from "../web/components/run-timeline-model.ts";
+
+test("a window that covers the whole run is no window", () => {
+  assert.equal(clampWindow(0, 60_000, 60_000), null);
+  assert.equal(clampWindow(-5, 70_000, 60_000), null); // over-reach clamps, then collapses
+});
+
+test("a window that reaches the end follows the moving end", () => {
+  const w = clampWindow(20_000, 60_000, 60_000);
+  assert.deepEqual(w, { from: 20_000, to: null });
+  // The run grows: the window's right edge is still the end, its left edge
+  // where it was — "the last 40s" is not what it means; "from 20s on" is.
+  assert.deepEqual(windowEdges(w, 90_000), { from: 20_000, to: 90_000 });
+});
+
+test("a window cannot be thinner than MIN_WINDOW", () => {
+  const w = clampWindow(10_000, 10_100, 60_000)!;
+  const { from, to } = windowEdges(w, 60_000);
+  assert.equal(to - from, MIN_WINDOW);
+  assert.ok(from < 10_000 && to > 10_100, "widened about its centre");
+  // At the very start there is no room to the left: it widens rightward.
+  assert.deepEqual(windowEdges(clampWindow(0, 100, 60_000), 60_000), { from: 0, to: MIN_WINDOW });
+});
+
+test("zooming keeps the anchor where it was", () => {
+  const total = 100_000;
+  const w = zoomWindow(null, total, 4, 25_000)!; // zoom 4× about the 25s mark, a quarter of the way in
+  const { from, to } = windowEdges(w, total);
+  assert.equal(to - from, 25_000);
+  assert.equal((25_000 - from) / (to - from), 0.25); // still a quarter of the way in
+  // Zooming out past the whole run lands on the whole run, not beyond it.
+  assert.equal(zoomWindow(w, total, 1 / 10, 25_000), null);
+});
+
+test("panning keeps the length and stops at the ends", () => {
+  const total = 100_000;
+  const w = clampWindow(40_000, 60_000, total);
+  assert.deepEqual(windowEdges(panWindow(w, total, 10_000), total), { from: 50_000, to: 70_000 });
+  assert.deepEqual(windowEdges(panWindow(w, total, -90_000), total), { from: 0, to: 20_000 });
+  // Pushed against the end, the window pins to the moving end.
+  assert.deepEqual(panWindow(w, total, 90_000), { from: 80_000, to: null });
+});
+
+test("a span is clipped to the window and never leaves the chart", () => {
+  const win = { from: 20_000, to: 60_000 };
+  assert.equal(placeSpan(0, 10_000, win, 0.35), null, "wholly before");
+  assert.equal(placeSpan(70_000, 80_000, win, 0.35), null, "wholly after");
+  assert.deepEqual(placeSpan(10_000, 30_000, win, 0), { left: 0, width: 25 }, "clipped on the left");
+  assert.deepEqual(placeSpan(50_000, 70_000, win, 0), { left: 75, width: 25 }, "clipped on the right");
+  // The floor: a sliver at the very end is widened, and moved left to fit.
+  const sliver = placeSpan(59_990, 60_000, win, 0.35)!;
+  assert.equal(sliver.width, 0.35);
+  assert.ok(sliver.left + sliver.width <= 100, "does not overhang the right edge");
+});
