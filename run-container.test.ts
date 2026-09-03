@@ -113,3 +113,47 @@ test("the driver's resource reading survives the boundary, nulls intact", () => 
     txBytes: null,
   });
 });
+
+test("a file the step never touched is not written back over a concurrent edit", () => {
+  // The copy-back compared the container against the HOST, which is a
+  // different question with a worse answer: a file the step never opened,
+  // edited on the host while the step ran, differs — so it was written back
+  // from the container's stale copy and the edit vanished. On 2026-09-03 a
+  // tool.md fixed mid-run was reverted eight minutes later by a step that had
+  // never read it.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-back-"));
+  const host = path.join(base, "host");
+  const handed = path.join(base, "in");
+  const out = path.join(base, "out");
+  for (const d of [host, handed, out]) fs.mkdirSync(path.join(d, "tools"), { recursive: true });
+
+  // Handed to the container, and returned unchanged by the step.
+  fs.writeFileSync(path.join(handed, "tools/a.md"), "original\n");
+  fs.writeFileSync(path.join(out, "tools/a.md"), "original\n");
+  // Meanwhile a person fixed it on the host.
+  fs.writeFileSync(path.join(host, "tools/a.md"), "the fix\n");
+
+  // And a file the step genuinely wrote.
+  fs.writeFileSync(path.join(handed, "tools/b.md"), "before\n");
+  fs.writeFileSync(path.join(out, "tools/b.md"), "after the step\n");
+  fs.writeFileSync(path.join(host, "tools/b.md"), "before\n");
+
+  const applied = applyContainerChanges(host, out, handed);
+
+  assert.equal(fs.readFileSync(path.join(host, "tools/a.md"), "utf8"), "the fix\n",
+    "the concurrent edit was overwritten by the container's stale copy");
+  assert.equal(fs.readFileSync(path.join(host, "tools/b.md"), "utf8"), "after the step\n",
+    "a file the step really changed must still come back");
+  assert.deepEqual(applied, ["tools/b.md"]);
+
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test("node_modules never comes back", () => {
+  // A dependency tree is not workspace content: nothing authored lives there,
+  // it is enormous, and a runtime linked beside a tool so ESM can resolve it
+  // would otherwise be copied back file by file.
+  assert.equal(allowedBack("tools/x/node_modules/sharp/package.json"), false);
+  assert.equal(allowedBack("node_modules/left-pad/index.js"), false);
+  assert.equal(allowedBack("tools/x/index.mjs"), true);
+});
