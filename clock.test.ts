@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { parseCron, cronMatches } from "../packages/core/src/scheduler.ts";
 import { resolveTimezone, localDate } from "../packages/core/src/runner.ts";
 
 // 2026-08-31T23:30Z is already 1 September in Sydney (UTC+10).
@@ -34,4 +35,26 @@ test("timezone: in AGENTS.md wins; unset is UTC; an unknown name falls back to U
     if (prior === undefined) delete process.env.FOLDRUN_TIMEZONE;
     else process.env.FOLDRUN_TIMEZONE = prior;
   }
+});
+
+test("the zone formatter is reused, so a long cron walk stays cheap", () => {
+  // The settings page previews the next fire by walking forty days a minute
+  // at a time. `zoned` built a fresh Intl.DateTimeFormat for every one of
+  // those 57,600 minutes — and formatter construction, not formatting, is
+  // what costs. Eight scheduled flows took tens of seconds of blocked event
+  // loop, long enough for a pooled database connection to time out
+  // underneath the render, which is how a settings page 500s.
+  const cron = parseCron("0 7 * * 2,4,6")!;
+  const start = Date.UTC(2026, 8, 1);
+  const began = performance.now();
+  let hits = 0;
+  for (let i = 0; i < 60 * 24 * 40; i++) {
+    if (cronMatches(cron, new Date(start + i * 60_000), "Australia/Sydney")) hits++;
+  }
+  const ms = performance.now() - began;
+  assert.equal(hits, 17, "three mornings a week over forty days");
+  // Uncached this was ~1.6s on a fast laptop and far worse on the box. The
+  // bar is deliberately loose — it is here to catch the cache being removed,
+  // not to measure the machine.
+  assert.ok(ms < 600, `a 40-day walk took ${ms.toFixed(0)}ms — is the formatter cache gone?`);
 });
