@@ -186,3 +186,37 @@ test("what was rejected does not change the cache key", () => {
   const noisy = parseRuntime({ packages: ["pandas", "--index-url"] })!;
   assert.equal(fingerprint(clean), fingerprint(noisy));
 });
+
+// A `.ready` marker and the packages it promises can disagree — a build that
+// was interrupted, a cache volume restored without its contents, an entry
+// written when npm could not reach its own cache. The old wire() said
+// "cached", wired nothing, and returned error: null; the step then failed
+// hundreds of lines later inside a tool with "Cannot find package 'sharp'",
+// which reads as a broken tool rather than a broken runtime. Found in
+// production: gbp-desk's post_image reported sharp missing for two runs while
+// the runtime line above it said the entry was cached.
+test("a ready entry that cannot satisfy the declaration is an error, not a hit", () => {
+  const spec = parseRuntime({ node: true, npm: ["sharp"] })!;
+  const fp = fingerprint(spec);
+  inTempData((root) => {
+    const dir = path.join(root, "acct", ".runtimes", fp);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, ".ready"), ""); // ready, but nothing installed
+    const hit = prepareRuntime("acct", spec);
+    assert.ok(hit.error, "an entry promising sharp with no node_modules must not pass as a hit");
+    assert.match(hit.error!, /node_modules/);
+    assert.ok(!hit.env.NODE_PATH, "nothing to point NODE_PATH at");
+  });
+});
+
+test("`node: true` alone installs nothing, so a bare ready entry is still a hit", () => {
+  const spec = parseRuntime({ node: true })!;
+  const fp = fingerprint(spec);
+  inTempData((root) => {
+    const dir = path.join(root, "acct", ".runtimes", fp);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, ".ready"), "");
+    const hit = prepareRuntime("acct", spec);
+    assert.equal(hit.error, null, "no packages were asked for, so none can be missing");
+  });
+});

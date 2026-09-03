@@ -76,3 +76,28 @@ test("a runtime that cannot be built says why, even when the installer printed n
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// The merge above is only worth anything if the merged result is what actually
+// crosses into the sandbox. It was not: the isolated path serialised
+// `parseRuntime(front.runtime)` — the agent's own frontmatter, before the
+// merge — so a tool's `runtime:` was honoured on the host and dropped under
+// k8s. gbp-desk's post_image declares `npm: [sharp]` and its agent declares no
+// runtime at all, so inside the container sharp was never installed and the
+// tool failed with "Cannot find package 'sharp'" on every run, while the step
+// log one line above said the runtime was cached — the host's entry, built
+// from the correct merged spec.
+test("the runtime that crosses into the sandbox is the merged one", () => {
+  const src = fs.readFileSync(
+    path.join(import.meta.dirname, "..", "packages/core/src/runner.ts"),
+    "utf8",
+  );
+
+  const inputs = [...src.matchAll(/^\s*runtime: (.+),$/gm)].map((m) => m[1].trim());
+  assert.ok(inputs.length > 0, "expected a runtime: field on the isolated input");
+  for (const value of inputs) {
+    assert.ok(
+      !/^parseRuntime\(front\.runtime\)$/.test(value),
+      `the isolated input must carry the merged spec, not \`${value}\` — a tool's own runtime: is part of what the step needs`,
+    );
+  }
+});
