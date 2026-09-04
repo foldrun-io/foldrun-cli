@@ -1,7 +1,7 @@
 {
   "name": "foldrun",
   "version": "0.1.0",
-  "description": "Agents are folders. Write them, check them, run them \u2014 on your machine.",
+  "description": "Agents are folders. Write them, check them, run them — on your machine.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -11,11 +11,15 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@foldrun/core": "0.1.0"
+    "@foldrun/core": "file:../foldrun-core"
   },
   "files": [
     "bin",
     "src",
     "README.md"
-  ]
+  ],
+  "scripts": {
+    "e2e": "FOLDRUN_E2E=1 FOLDRUN_DATA=$(mktemp -d /tmp/foldrun-e2e-XXXXXX) node --test --test-timeout=300000 tests/e2e.test.ts",
+    "test": "FOLDRUN_DATA=$(mktemp -d /tmp/foldrun-test-XXXXXX) node --test tests/cli-secrets.test.ts"
+  }
 }

@@ -27,10 +27,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import matter from "gray-matter";
-import { conformanceIssues, readBundle, provenanceMarks, PRODUCER } from "../packages/core/src/okf.ts";
+import { conformanceIssues, readBundle, provenanceMarks, PRODUCER } from "../../foldrun-core/src/okf.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
-const CLI = path.join(ROOT, "packages/cli/bin/foldrun.mjs");
+const CLI = path.join(ROOT, "bin/foldrun.mjs");
 
 // Opt-in: `npm test` must stay free and offline.
 const enabled = process.env.FOLDRUN_E2E === "1";
@@ -42,7 +42,7 @@ const foldrun = (...args: string[]) =>
 test("a template runs, and leaves a conformant workspace behind", opts, () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-e2e-"));
   try {
-    const created = foldrun("init", ws, "--from", "templates/hello");
+    const created = foldrun("init", ws, "--from", "../foldrun-core/templates/hello");
     assert.equal(created.status, 0, `init failed:\n${created.stderr}`);
 
     const run = foldrun("run", "note", "--workspace", ws);

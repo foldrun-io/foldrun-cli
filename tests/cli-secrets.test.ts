@@ -14,7 +14,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ROOT = path.join(import.meta.dirname, "..");
-const CLI = path.join(ROOT, "packages/cli/bin/foldrun.mjs");
+const CLI = path.join(ROOT, "bin/foldrun.mjs");
 const foldrun = (...args: string[]) =>
   spawnSync(process.execPath, [CLI, ...args], {
     encoding: "utf8",
