@@ -355,12 +355,12 @@ test("content pages share one width; only editors and file trees go wide", () =>
     const src = fs.readFileSync(page, "utf8");
     const widths = [...src.matchAll(/mx-auto (max-w-\w+)/g)].map((m) => m[1]);
     for (const w of widths) {
-      if (w !== "max-w-5xl" && !wideAllowed.some((a) => rel.includes(a))) {
+      if (w !== "max-w-7xl" && !wideAllowed.some((a) => rel.includes(a))) {
         offenders.push(`${rel}: ${w}`);
       }
     }
   }
-  assert.deepEqual(offenders, [], "pages jumped width — max-w-5xl is the standard");
+  assert.deepEqual(offenders, [], "pages jumped width — max-w-7xl is the standard");
 });
 
 test("no component rolls its own dark primary button", () => {
