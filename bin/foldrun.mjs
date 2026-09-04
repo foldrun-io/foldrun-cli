@@ -15,6 +15,7 @@
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun deploy [dir]    push a workspace into an installation
 //   foldrun invoke <flow>   start a flow on a running platform
+//   foldrun open  [page]    the dashboard for this workspace
 //
 // `check` is the one to run in CI: it catches the mistakes that otherwise only
 // show up as a confidently wrong answer at 3am.
@@ -44,16 +45,19 @@ const HELP = `foldrun — agents are folders
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm
   foldrun deploy [dir]      push a workspace into an installation
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
+  foldrun open [page]       the dashboard for this workspace, in the browser
   foldrun --help
 
 Options
   --workspace <dir>         the workspace folder (default: .)
   --from <template>         start from a shipped template, e.g. templates/hello
   --task "<text>"           the instruction for a manual run
-  --follow                  logs: keep tailing a live run
+  --follow                  logs: keep tailing a live run (with --url: on the platform)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke: hold on and print the result
+  --watch                   invoke: follow the run's trace here as it happens
+  --print                   open: print the URL only
   --from <n>                invoke: start at step n; earlier steps are skipped
 
 Platform options (deploy, invoke, secrets)
@@ -80,7 +84,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "dry-run", "help"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {

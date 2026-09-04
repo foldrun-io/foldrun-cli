@@ -1003,6 +1003,94 @@ async function remoteCall(url, flags, apiPath, init = {}) {
   return body;
 }
 
+/** Print a run's events as they arrive: one line per event, once each. */
+function printNew(run, seen) {
+  run.steps.forEach((step, i) => {
+    const from = seen.get(i) ?? 0;
+    for (const e of step.events.slice(from)) {
+      const mark = e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
+      console.log(`  ${mark} ${c.dim(step.agent)}  ${e.text.split("\n")[0].slice(0, 140)}`);
+    }
+    seen.set(i, step.events.length);
+  });
+}
+
+function finishLine(run) {
+  const cost = run.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+  const ok = run.status === "completed";
+  console.log(`\n  ${ok ? c.green("✓") : run.status === "awaiting-approval" ? c.amber("⏸") : c.red("✗")} ${run.status} · $${cost.toFixed(4)}\n`);
+  return ok ? 0 : run.status === "awaiting-approval" ? 2 : 1;
+}
+
+/**
+ * Follow a run on a platform: the same server-sent events the dashboard's
+ * run page reads, printed as they land. Resolves with the finished run.
+ */
+async function followRemote(url, flags, ws, runId, seen = new Map()) {
+  const token = flags.token ?? process.env.FOLDRUN_TOKEN;
+  if (!token) throw new Error("no API key — pass --token or set FOLDRUN_TOKEN");
+  const res = await fetch(new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url), {
+    headers: { authorization: `Bearer ${token}`, accept: "text/event-stream" },
+  });
+  if (!res.ok || !res.body) throw new Error(`stream → HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let last = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      const event = frame.match(/^event: (.*)$/m)?.[1];
+      const data = frame.match(/^data: (.*)$/m)?.[1];
+      if (!event || !data) continue;
+      if (event === "run") {
+        try {
+          last = JSON.parse(data);
+          printNew(last, seen);
+        } catch {
+          // a partial frame; the next one supersedes it
+        }
+      } else if (event === "done") {
+        try {
+          await reader.cancel();
+        } catch {
+          // the server ended it first
+        }
+        return last;
+      }
+    }
+  }
+  return last;
+}
+
+/**
+ * `foldrun open [page]` — the dashboard, from the terminal: this
+ * workspace's overview, or one of its pages (runs, agents, flows, graph,
+ * repo…). Prints the URL and opens it, or only prints with --print.
+ */
+async function openCmd(positional, flags) {
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("open needs a platform — pass --url or set FOLDRUN_URL");
+  const ws = flags.to ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+  const page = positional[0] ? `/${positional[0].replace(/^\/+/, "")}` : "";
+  const target = new URL(`/dashboard/${ws}${page}`, url).toString();
+  console.log(target);
+  if (flags.print === true) return 0;
+  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    const { spawn } = await import("node:child_process");
+    spawn(opener, [target], { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    // printed above; that is enough
+  }
+  return 0;
+}
+
 /**
  * `foldrun secrets set|ls|rm` — the vault, from the terminal.
  *
@@ -1105,6 +1193,11 @@ const EVENT_MARK = (e) =>
  * run's whole event log. `--follow` keeps tailing a live run.
  */
 async function logsCmd(positional, flags) {
+  // With a platform named, the same verbs read the server's runs: the list,
+  // one run's trail, or a live one followed to the end.
+  const url = remoteUrl(flags);
+  if (url) return remoteLogs(url, positional, flags);
+
   const { listRuns, readRun } = await core();
   const T = "default";
   const P = "workspace";
@@ -1162,6 +1255,33 @@ async function logsCmd(positional, flags) {
 
 // ---------------------------------------------------------------- invoke
 
+async function remoteLogs(url, positional, flags) {
+  const ws = flags.to ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+  const runId = positional[0];
+  if (!runId) {
+    const { runs } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=20`);
+    if (!runs?.length) {
+      console.log(`\n  ${c.dim(`no runs in ${ws} on ${url}`)}\n`);
+      return 0;
+    }
+    console.log();
+    for (const r of runs) {
+      const cost = r.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+      const mark = r.status === "completed" ? c.green("✓") : r.status === "failed" ? c.red("✗") : c.amber("…");
+      console.log(`  ${mark} ${c.bold(r.id)}  ${r.flow}  ${c.dim(`${r.status} · $${cost.toFixed(4)} · ${r.startedAt}`)}${r.summary ? `\n      ${c.dim(r.summary)}` : ""}`);
+    }
+    console.log(`\n  ${c.dim("foldrun logs <run-id> --to " + ws + " for the full trail; --follow tails a live one")}\n`);
+    return 0;
+  }
+  let run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
+  const seen = new Map();
+  printNew(run, seen);
+  const live = run.status === "queued" || run.status === "running" || run.status === "awaiting-approval";
+  if (flags.follow === true && live) run = (await followRemote(url, flags, ws, runId, seen)) ?? run;
+  return finishLine(run);
+}
+
 /**
  * `foldrun invoke <flow>` — start a flow on a running platform. The remote
  * sibling of `foldrun run`: same task flag, but the run continues on the
@@ -1192,8 +1312,19 @@ async function invoke(target, flags) {
     }),
   });
 
+  if (flags.watch === true && body.runId) {
+    // Queued, then followed: the trace lands here line by line, the way the
+    // run page draws it, and the exit code is the run's.
+    console.log(`\n  ${c.bold(target)}  ${c.dim(body.runId)}\n`);
+    const run = await followRemote(url, flags, ws, body.runId);
+    if (!run) {
+      console.log(`  ${c.dim("the stream ended before the run did — foldrun logs " + body.runId + " --to " + ws)}\n`);
+      return 0;
+    }
+    return finishLine(run);
+  }
   if (!flags.wait) {
-    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)} — ${c.dim(`foldrun logs on the server, or ${url}/dashboard`)}\n`);
+    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${url}/dashboard/${ws}/runs?run=${body.runId}`)}\n`);
     return 0;
   }
   const run = body.run ?? body;
@@ -1225,6 +1356,8 @@ export async function run(command, positional, flags, workspace) {
       return logsCmd(positional, flags);
     case "invoke":
       return invoke(positional[0], flags);
+    case "open":
+      return openCmd(positional, flags);
     default:
       throw new Error(`unknown command "${command}" — try \`foldrun --help\``);
   }

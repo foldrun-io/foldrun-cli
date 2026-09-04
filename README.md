@@ -99,7 +99,8 @@ declared the same way.
 | `foldrun logs [run-id]` | recent runs, or one run's full event trail |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
 | `foldrun deploy [dir]` | push a workspace into an installation |
-| `foldrun invoke <flow>` | start a flow on a running platform |
+| `foldrun invoke <flow>` | start a flow on a running platform (`--watch` streams its trace) |
+| `foldrun open [page]` | the dashboard for this workspace, in the browser |
 
 `foldrun --help` lists every flag.
 
