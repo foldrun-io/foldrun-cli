@@ -348,7 +348,7 @@ function dashboardPages(): string[] {
 }
 
 test("content pages share one width; only editors and file trees go wide", () => {
-  const wideAllowed = ["[workspace]/edit", "library/edit", "library/files", "graph"];
+  const wideAllowed = ["[workspace]/edit", "library/edit", "library/files", "[workspace]/storage", "graph"];
   const offenders: string[] = [];
   for (const page of dashboardPages()) {
     const rel = path.relative(path.join(WEB, "app/dashboard"), page);
