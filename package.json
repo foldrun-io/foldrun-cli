@@ -21,5 +21,23 @@
   "scripts": {
     "e2e": "FOLDRUN_E2E=1 FOLDRUN_DATA=$(mktemp -d /tmp/foldrun-e2e-XXXXXX) node --test --test-timeout=300000 tests/e2e.test.ts",
     "test": "FOLDRUN_DATA=$(mktemp -d /tmp/foldrun-test-XXXXXX) node --test tests/cli-secrets.test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/foldrun-io/foldrun-cli.git"
+  },
+  "homepage": "https://foldrun.io",
+  "bugs": {
+    "url": "https://github.com/foldrun-io/foldrun-cli/issues"
+  },
+  "keywords": [
+    "agents",
+    "llm",
+    "markdown",
+    "workflows",
+    "claude"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
