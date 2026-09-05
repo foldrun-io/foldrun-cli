@@ -1,6 +1,6 @@
 # foldrun
 
-**Agents are folders.** An agent is a markdown file with frontmatter. A flow is
+**Agents are just folders.** An agent is a folder with a markdown file in it. A flow is
 a numbered list naming agents. You write them, read them, diff them in a pull
 request, and run them from this CLI.
 

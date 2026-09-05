@@ -36,7 +36,7 @@ process.on("warning", () => {});
 
 const [, , command, ...rest] = process.argv;
 
-const HELP = `foldrun — agents are folders
+const HELP = `foldrun — agents are just folders
 
   foldrun init [dir]        create a workspace you can run immediately
   foldrun check [dir]       validate agents, flows, tools, evals and knowledge
