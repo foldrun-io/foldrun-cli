@@ -101,6 +101,9 @@ declared the same way.
 | `foldrun deploy [dir]` | push a workspace into an installation |
 | `foldrun invoke <flow>` | start a flow on a running platform (`--watch` streams its trace) |
 | `foldrun open [page]` | the dashboard for this workspace, in the browser |
+| `foldrun login` | sign this machine in from the browser — no key to copy |
+| `foldrun whoami` | who you are on the platform: account, role, workspaces |
+| `foldrun keys ls` | the account's API keys — also `create <label>`, `revoke <id>` |
 
 `foldrun --help` lists every flag.
 
@@ -132,9 +135,14 @@ the result. A deploy never touches run history, state, secrets, or memory an
 agent wrote: those belong to the installation, not to your git repo.
 
 ```sh
-foldrun deploy --url https://your-platform --token $FOLDRUN_TOKEN
+foldrun login                    # approve it in the browser, once per machine
+foldrun deploy
 foldrun invoke publish --wait
 ```
+
+`foldrun login --url https://your-platform` signs in to your own installation.
+In CI, set `FOLDRUN_URL` and `FOLDRUN_TOKEN` instead — the environment always
+wins over the credentials file, so a job never reads one from disk.
 
 ## License
 
