@@ -16,6 +16,9 @@
 //   foldrun deploy [dir]    push a workspace into an installation
 //   foldrun invoke <flow>   start a flow on a running platform
 //   foldrun open  [page]    the dashboard for this workspace
+//   foldrun login           sign this machine in from the browser
+//   foldrun whoami          who the platform thinks this terminal is
+//   foldrun keys  <verb>    ls / create / revoke — the account's API keys
 //
 // `check` is the one to run in CI: it catches the mistakes that otherwise only
 // show up as a confidently wrong answer at 3am.
@@ -46,6 +49,12 @@ const HELP = `foldrun — agents are folders
   foldrun deploy [dir]      push a workspace into an installation
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
+
+Signing in
+  foldrun login             sign this machine in from the browser (--token <key> to skip it)
+  foldrun logout            forget this machine's key, and revoke it where allowed
+  foldrun whoami            who you are on the platform: account, role, workspaces
+  foldrun keys ls           the account's API keys — also create <label>, revoke <id>
   foldrun --help
 
 Options
@@ -59,19 +68,23 @@ Options
   --watch                   invoke: follow the run's trace here as it happens
   --print                   open: print the URL only
   --from <n>                invoke: start at step n; earlier steps are skipped
+  --no-browser              login: print the address instead of opening it
+  --role <r>                keys create: viewer, editor (default) or admin
+  --for <workspace>         keys create: a deploy key for one workspace (--access read|write)
 
-Platform options (deploy, invoke, secrets)
+Platform options (deploy, invoke, secrets, logs, keys)
   --to <workspace>          workspace on the platform (deploy default: folder name)
   --tenant <name>           account to deploy into (default: default, local only)
   --data <dir>              the installation's data directory
-  --url <url>               a running platform (or FOLDRUN_URL)
-  --token <key>             API key for --url (or FOLDRUN_TOKEN)
+  --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
+  --token <key>             API key for --url (or FOLDRUN_TOKEN, or the one from foldrun login)
+  --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --dry-run                 deploy: check and report, change nothing
   --force                   deploy: deploy even while runs are in flight
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
-work without one.`;
+work without one. \`foldrun login\` is for the hosted platform, or your own.`;
 
 if (!command || command === "--help" || command === "-h") {
   console.log(HELP);
@@ -84,7 +97,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {

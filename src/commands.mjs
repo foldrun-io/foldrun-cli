@@ -2,7 +2,9 @@
 // core is imported — single-workspace mode is read at module load.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { credentialFor, defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl } from "./credentials.mjs";
 
 const c = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
@@ -818,13 +820,7 @@ async function runEvals(name) {
  * read exactly like one refused on disk.
  */
 async function deployOverHttp(url, workspace, files, flags) {
-  const token = flags.token ?? process.env.FOLDRUN_TOKEN;
-  if (!token) {
-    throw new Error(
-      "deploying to a server needs an API key — set FOLDRUN_TOKEN, or pass --token.\n" +
-        "  Create one in the dashboard under Settings → API keys.",
-    );
-  }
+  const token = tokenFor(url, flags);
   const endpoint = `${url.replace(/\/+$/, "")}/api/workspaces/${encodeURIComponent(workspace)}/deploy`;
 
   let res;
@@ -844,7 +840,7 @@ async function deployOverHttp(url, workspace, files, flags) {
   }
 
   const body = await res.json().catch(() => ({}));
-  if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — check FOLDRUN_TOKEN`);
+  if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — run \`foldrun login\` again, or check FOLDRUN_TOKEN`);
   // 422 is a refusal the caller has to read, not a transport failure: the
   // issues are in the body and reported like any other refused deploy.
   if (!res.ok && res.status !== 422) {
@@ -871,10 +867,11 @@ async function deploy(source, flags) {
 
   const files = readTree(source);
 
-  // Two destinations, one command. Without --url the workspace is written
-  // straight to the installation on this machine; with one it is POSTed to a
-  // running platform, which is what a laptop or a CI job does.
-  const url = flags.url ?? process.env.FOLDRUN_URL;
+  // Two destinations, one command. With a platform named — by --url, by
+  // FOLDRUN_URL, or by having signed in — the workspace is POSTed to it,
+  // which is what a laptop or a CI job does. Without one, or with --local,
+  // it is written straight into the installation on this machine.
+  const url = flags.local === true ? undefined : remoteUrl(flags);
   const plan = url
     ? await deployOverHttp(url, workspace, files, flags)
     : flags["dry-run"]
@@ -985,11 +982,31 @@ function promptVisible(question) {
   });
 }
 
-const remoteUrl = (flags) => flags.url ?? process.env.FOLDRUN_URL;
+/**
+ * Which platform, and with what.
+ *
+ * URL: --url, then FOLDRUN_URL, then whatever `foldrun login` last signed in
+ * to. Token: --token, then FOLDRUN_TOKEN, then the key stored for that URL.
+ * The environment beats the file on purpose — a CI job with FOLDRUN_TOKEN
+ * set never reads a laptop's credentials, and a person who exports a token
+ * to test as someone else gets exactly that.
+ */
+// An empty variable is an unset one: `export FOLDRUN_TOKEN=` in a profile
+// should not shadow the credentials file with nothing.
+const env = (name) => process.env[name] || undefined;
+
+const remoteUrl = (flags) => flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? undefined;
+
+const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOKEN / pass --token";
+
+function tokenFor(url, flags) {
+  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? credentialFor(url)?.token;
+  if (!token) throw new Error(NOT_SIGNED_IN);
+  return token;
+}
 
 async function remoteCall(url, flags, apiPath, init = {}) {
-  const token = flags.token ?? process.env.FOLDRUN_TOKEN;
-  if (!token) throw new Error("no API key — pass --token or set FOLDRUN_TOKEN");
+  const token = tokenFor(url, flags);
   const res = await fetch(new URL(apiPath, url), {
     ...init,
     headers: {
@@ -1027,8 +1044,7 @@ function finishLine(run) {
  * run page reads, printed as they land. Resolves with the finished run.
  */
 async function followRemote(url, flags, ws, runId, seen = new Map()) {
-  const token = flags.token ?? process.env.FOLDRUN_TOKEN;
-  if (!token) throw new Error("no API key — pass --token or set FOLDRUN_TOKEN");
+  const token = tokenFor(url, flags);
   const res = await fetch(new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url), {
     headers: { authorization: `Bearer ${token}`, accept: "text/event-stream" },
   });
@@ -1334,8 +1350,205 @@ async function invoke(target, flags) {
   return ok ? 0 : 1;
 }
 
+// ---------------------------------------------------------------- login
+
+const DEFAULT_PLATFORM = "https://app.foldrun.io";
+
+function openInBrowser(target) {
+  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  return import("node:child_process")
+    .then(({ spawn }) => {
+      const child = spawn(opener, [target], { detached: true, stdio: "ignore" });
+      child.on("error", () => {});
+      child.unref();
+      return true;
+    })
+    .catch(() => false);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * `foldrun login [--url]` — sign this machine in from the browser.
+ *
+ * The platform hands back a short code; the browser opens on the page that
+ * asks "is this your terminal?"; the person says yes; the key that makes
+ * lands here and is kept in ~/.foldrun/credentials.json. No key to copy,
+ * nothing pasted into a shell history. `--token` skips the browser and
+ * stores a key made in the dashboard — for a machine with no browser, or a
+ * deploy key for one workspace.
+ */
+async function login(flags) {
+  const url = normaliseUrl(flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? DEFAULT_PLATFORM);
+
+  if (typeof flags.token === "string") {
+    // Verify before storing: a wrong key stored is a wrong key on every
+    // later command, each failing one step further from the cause.
+    const me = await remoteCall(url, { token: flags.token }, "/api/me");
+    saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role });
+    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}\n`);
+    return 0;
+  }
+
+  let start;
+  try {
+    const res = await fetch(new URL("/api/cli/login", url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostname: os.hostname() }),
+    });
+    start = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(start.error ?? `HTTP ${res.status}`);
+  } catch (err) {
+    throw new Error(`could not start a sign-in with ${url} — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  console.log(`\n  Confirm this code in your browser:  ${c.bold(start.code)}\n`);
+  console.log(`  ${c.dim(start.verifyUrl)}\n`);
+  const opened = flags["no-browser"] === true ? false : await openInBrowser(start.verifyUrl);
+  console.log(`  ${c.dim(opened ? "Opening the browser… waiting for you to approve." : "Open that address on any device and enter the code. Waiting…")}`);
+
+  const interval = Math.max(1, Number(start.interval) || 3) * 1000;
+  const deadline = Date.parse(start.expiresAt) || Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await sleep(interval);
+    let poll;
+    try {
+      const res = await fetch(new URL(`/api/cli/login/${start.id}`, url));
+      poll = await res.json().catch(() => ({}));
+    } catch {
+      continue; // a blip; the next poll asks again
+    }
+    if (poll.status === "pending") continue;
+    if (poll.status === "denied") throw new Error("the sign-in was denied in the browser");
+    if (poll.status === "expired") break;
+    if (poll.status === "approved" && poll.token) {
+      // `minted`: this key exists because of this login, so logout may end
+      // it. A key stored with --token was made elsewhere and may be in use
+      // elsewhere; logout only forgets it.
+      saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true });
+      console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}\n`);
+      console.log(`  ${c.dim("Stored in ~/.foldrun/credentials.json. `foldrun whoami` shows it; `foldrun logout` removes it.")}\n`);
+      return 0;
+    }
+  }
+  throw new Error("the code expired before it was approved — run `foldrun login` again");
+}
+
+/**
+ * `foldrun logout [--url]` — forget this machine's key, and, when `login`
+ * minted it, revoke it on the platform too (an editor's key cannot revoke
+ * keys; it is still forgotten here, and the Settings page can revoke it). A
+ * key given with --token is only forgotten: it was made elsewhere and may
+ * be in use elsewhere.
+ */
+async function logout(flags) {
+  const url = remoteUrl(flags);
+  if (!url) {
+    console.log(`\n  ${c.dim("not signed in anywhere")}\n`);
+    return 0;
+  }
+  const entry = credentialFor(url);
+  if (!entry) {
+    console.log(`\n  ${c.dim(`not signed in to ${url}`)}\n`);
+    return 0;
+  }
+  let revoked = false;
+  if (entry.minted) {
+    try {
+      const me = await remoteCall(url, { token: entry.token }, "/api/me");
+      if (me.actor?.kind === "key" && me.actor.id) {
+        await remoteCall(url, { token: entry.token }, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: me.actor.id }) });
+        revoked = true;
+      }
+    } catch {
+      // Not allowed, or unreachable. The local copy still goes.
+    }
+  }
+  removeCredential(url);
+  const note = revoked ? "" : entry.minted ? "  (the key is forgotten here; revoke it on Settings → API keys to be sure)" : "  (the key is forgotten here, not revoked — it was not made by `foldrun login`)";
+  console.log(`\n  ${c.green("✓")} signed out of ${c.bold(url)}${c.dim(note)}\n`);
+  return 0;
+}
+
+/** `foldrun whoami` — who the platform thinks this terminal is. */
+async function whoami(flags) {
+  const url = remoteUrl(flags);
+  if (!url) throw new Error(NOT_SIGNED_IN);
+  const me = await remoteCall(url, flags, "/api/me");
+  const who = me.actor.kind === "user" ? me.actor.email : `API key ${me.actor.prefix ?? ""}… ${c.dim(`"${me.actor.label ?? ""}"${me.actor.createdBy ? ` by ${me.actor.createdBy}` : ""}`)}`;
+  console.log(`\n  ${c.bold(who)}`);
+  console.log(`  platform    ${url}`);
+  console.log(`  account     ${me.account}${me.owner ? c.dim(`  (owner ${me.owner})`) : ""}`);
+  console.log(`  role        ${me.role}`);
+  console.log(`  workspaces  ${me.workspaces === null ? "all" : me.workspaces.join(", ") || "none"}`);
+  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : "~/.foldrun/credentials.json";
+  console.log(`  ${c.dim(`credential from ${source}`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun keys ls|create|revoke` — the account's API keys, from the terminal.
+ *
+ *   keys ls                          every key, live and revoked
+ *   keys create <label> [--role r]   an account key (editor unless said)
+ *   keys create <label> --for <ws> [--access read|write]
+ *                                    a deploy key: git clone/push for one workspace
+ *   keys revoke <id>
+ *
+ * Minting and revoking need admin, the same as the Settings page.
+ */
+async function keysCmd(positional, flags) {
+  const [verb, arg] = positional;
+  const url = remoteUrl(flags);
+  if (!url) throw new Error(NOT_SIGNED_IN);
+
+  if (verb === "ls" || verb === "list" || verb === undefined) {
+    const { keys } = await remoteCall(url, flags, "/api/keys");
+    if (!keys.length) {
+      console.log(`\n  ${c.dim("no API keys — foldrun keys create <label>")}\n`);
+      return 0;
+    }
+    console.log("");
+    for (const k of keys) {
+      const what = k.scope ? `deploy · ${k.scope.workspace} (${k.scope.access})` : k.role ?? "admin";
+      const state = k.revokedAt ? c.red("revoked") : c.green("live");
+      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}  ${c.dim(k.createdAt.slice(0, 10))}`);
+    }
+    console.log("");
+    return 0;
+  }
+  if (verb === "create" || verb === "new") {
+    if (!arg) throw new Error("what is the key for? foldrun keys create <label>");
+    const body = { label: arg };
+    if (typeof flags.for === "string") body.workspace = flags.for;
+    if (typeof flags.access === "string") body.access = flags.access;
+    if (typeof flags.role === "string") body.role = flags.role;
+    const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}\n`);
+    console.log(`  ${made.key}\n`);
+    console.log(`  ${c.dim("Shown once. FOLDRUN_TOKEN=<key> uses it; `foldrun keys revoke " + made.id + "` ends it.")}\n`);
+    return 0;
+  }
+  if (verb === "revoke" || verb === "rm") {
+    if (!arg) throw new Error("which key? foldrun keys revoke <id> — ids are in `foldrun keys ls`");
+    await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: arg }) });
+    console.log(`\n  ${c.green("✓")} revoked ${arg}\n`);
+    return 0;
+  }
+  throw new Error(`keys: unknown verb "${verb}" — ls, create, revoke`);
+}
+
 export async function run(command, positional, flags, workspace) {
   switch (command) {
+    case "login":
+      return login(flags);
+    case "logout":
+      return logout(flags);
+    case "whoami":
+      return whoami(flags);
+    case "keys":
+      return keysCmd(positional, flags);
     case "init":
       return init(workspace, flags.from);
     case "check":
