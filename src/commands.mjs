@@ -1166,17 +1166,22 @@ async function openCmd(positional, flags) {
  */
 async function secretsCmd(positional, flags) {
   const [verb, name] = positional;
-  const url = remoteUrl(flags);
-  // Local scope is the workspace's own store, named the way the runner names
+  // --local: this machine's store even when signed in, the same escape
+  // hatch deploy and keys have. Without it, a signed-in laptop sent every
+  // secret to the platform and the local store could not be reached at all.
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  // The scope is the workspace's own store, named the way the runner names
   // it — the folder's basename. It was the literal string "workspace", so a
   // secret set from the terminal landed under workspaces/workspace/ and every
-  // run, reading under workspaces/<name>/, reported it missing.
+  // run, reading under workspaces/<name>/, reported it missing. The same
+  // scope goes to the platform: it used to take only --to there, so
+  // `--workspace .` was silently an account-wide secret.
   const localWorkspace = path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
   const scope = flags.account === true ? undefined : flags.to ?? localWorkspace;
 
   if (verb === "ls" || verb === undefined) {
     const entries = url
-      ? (await remoteCall(url, flags, `/api/secrets${flags.to ? `?workspace=${flags.to}` : ""}`)).secrets
+      ? (await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
       : (await core()).listSecrets("default", scope);
     if (!entries.length) {
       console.log(`\n  ${c.dim("no secrets yet — foldrun secrets set NAME")}\n`);
@@ -1208,7 +1213,7 @@ async function secretsCmd(positional, flags) {
       if (url) {
         await remoteCall(url, flags, "/api/secrets", {
           method: "PUT",
-          body: JSON.stringify({ name, oauth2: config, workspace: flags.to }),
+          body: JSON.stringify({ name, oauth2: config, workspace: scope }),
         });
       } else {
         (await core()).setOAuth2Secret("default", name, config, scope);
@@ -1223,7 +1228,7 @@ async function secretsCmd(positional, flags) {
     if (url) {
       await remoteCall(url, flags, "/api/secrets", {
         method: "PUT",
-        body: JSON.stringify({ name, value, workspace: flags.to }),
+        body: JSON.stringify({ name, value, workspace: scope }),
       });
     } else {
       (await core()).setSecret("default", name, value, scope);
@@ -1236,7 +1241,7 @@ async function secretsCmd(positional, flags) {
     if (url) {
       await remoteCall(url, flags, "/api/secrets", {
         method: "DELETE",
-        body: JSON.stringify({ name, workspace: flags.to }),
+        body: JSON.stringify({ name, workspace: scope }),
       });
     } else {
       (await core()).deleteSecret("default", name, scope);

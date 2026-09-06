@@ -28,25 +28,27 @@ test("secrets set --workspace lands under the folder's name, --account under the
   const ws = path.join(root, "acme");
   fs.mkdirSync(path.join(ws, "agents"), { recursive: true });
   try {
-    const set = foldrun("secrets", "set", "API_KEY", "--value", "s3cret", "--workspace", ws);
+    // --local: the store on this machine, whether or not the developer
+    // running the tests happens to be signed in to a platform.
+    const set = foldrun("secrets", "set", "API_KEY", "--value", "s3cret", "--workspace", ws, "--local");
     assert.equal(set.status, 0, set.stdout + set.stderr);
     assert.ok(fs.existsSync(path.join(ws, ".foldrun/default/workspaces/acme/secrets.json")), "workspace-scoped store");
     assert.ok(!fs.existsSync(path.join(ws, ".foldrun/default/workspaces/workspace")), "no literal 'workspace' store");
 
     // The boolean flag no longer swallows the value that follows it.
-    const acct = foldrun("secrets", "set", "SHARED", "--account", "--value", "acct", "--workspace", ws);
+    const acct = foldrun("secrets", "set", "SHARED", "--account", "--value", "acct", "--workspace", ws, "--local");
     assert.equal(acct.status, 0, acct.stdout + acct.stderr);
     assert.ok(fs.existsSync(path.join(ws, ".foldrun/default/secrets.json")), "account store");
 
-    const ls = foldrun("secrets", "ls", "--workspace", ws);
+    const ls = foldrun("secrets", "ls", "--workspace", ws, "--local");
     assert.equal(ls.status, 0, ls.stdout + ls.stderr);
     assert.match(ls.stdout, /API_KEY/);
     assert.match(ls.stdout, /SHARED/);
     assert.doesNotMatch(ls.stdout, /s3cret|acct/, "values are never printed");
 
-    const rm = foldrun("secrets", "rm", "API_KEY", "--workspace", ws);
+    const rm = foldrun("secrets", "rm", "API_KEY", "--workspace", ws, "--local");
     assert.equal(rm.status, 0, rm.stdout + rm.stderr);
-    assert.doesNotMatch(foldrun("secrets", "ls", "--workspace", ws).stdout, /API_KEY/);
+    assert.doesNotMatch(foldrun("secrets", "ls", "--workspace", ws, "--local").stdout, /API_KEY/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
