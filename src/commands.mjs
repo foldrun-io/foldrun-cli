@@ -747,7 +747,7 @@ async function runTarget(target, flags) {
 async function probeCmd(modelArg) {
   if (!modelArg) throw new Error("which model? try `foldrun probe openai/gpt-oss-120b` (or a tier: fast, default, max)");
   assertCredentials();
-  const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort, translatorSpecFor, startTranslator, providerPreset } = await core();
+  const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort, translatorSpecFor, startTranslator, providerPreset, readFrontmatter } = await core();
 
   // The workspace's provider block, resolved the way a run resolves it —
   // ${SECRET} values come from the process env here: the CLI's vault is the
@@ -756,10 +756,14 @@ async function probeCmd(modelArg) {
   // length of the probe — so what passes here passes there.
   let env = { ...process.env };
   let translator = null;
+  // No AGENTS.md, or no provider block, means Anthropic direct — like a run.
+  // Anything else that goes wrong here is said, not swallowed: a provider
+  // block that is silently ignored sends the probe to the wrong endpoint
+  // and reports a model that "may not exist".
+  const agentsFile = path.join(process.cwd(), "AGENTS.md");
   try {
-    const matter = (await import("gray-matter")).default;
-    const fm = matter(fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")).data;
-    const spec = parseProvider(fm.provider);
+    const fm = fs.existsSync(agentsFile) ? readFrontmatter(agentsFile) : {};
+    const spec = fm.provider ? parseProvider(fm.provider) : null;
     for (const w of spec?.warnings ?? []) console.log(`  ${c.yellow("!")} ${w}`);
     if (spec?.baseUrl) {
       const substitute = (t) => t.replace(/\$\{([A-Z][A-Z0-9_]*)\}/g, (whole, name) => process.env[name] ?? whole);
@@ -784,8 +788,8 @@ async function probeCmd(modelArg) {
       console.log(`
   ${c.dim(`via ${spec.name ? `${spec.name} ` : ""}${spec.baseUrl}${tSpec ? " (through the translator)" : ""}`)}`);
     }
-  } catch {
-    // no AGENTS.md, or no provider block — Anthropic direct, like a run
+  } catch (err) {
+    console.log(`  ${c.yellow("!")} provider block not applied: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const model = resolveModel(modelArg);
