@@ -1,7 +1,7 @@
 {
   "name": "foldrun",
-  "version": "0.2.1",
-  "description": "Agents are just folders. Write them, check them, run them \u2014 on your machine.",
+  "version": "0.2.3",
+  "description": "Agents are just folders. Write them, check them, run them — on your machine.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
