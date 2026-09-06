@@ -1395,6 +1395,138 @@ async function invoke(target, flags) {
   return ok ? 0 : 1;
 }
 
+// ---------------------------------------------------------------- connect
+
+/**
+ * `foldrun connect NAME --provider linkedin` — the OAuth consent from the
+ * terminal, the way `gh auth login` and `gcloud auth login` do it: open the
+ * provider's screen, catch the redirect on a loopback port on this machine,
+ * trade the code for tokens, and store the result on the platform (or in the
+ * local vault) as the auto-refreshing secret an agent's `secrets:` names.
+ *
+ * Why loopback and not the dashboard's callback: every provider requires the
+ * redirect to be registered in advance and most refuse plain http anywhere
+ * but localhost. A developer's laptop always has localhost; a box behind a
+ * tunnel or a LAN address does not have a name a provider will accept. So the
+ * callback is `http://localhost:<port>/callback`, printed before the browser
+ * opens so it can be registered first, and the port is fixed (--port) because
+ * providers match it exactly.
+ *
+ * Nothing secret is printed. The refresh token goes straight into the vault;
+ * a provider that issues none (GitHub, most LinkedIn apps) gets its access
+ * token stored as a static value and the expiry is said out loud.
+ */
+async function connect(positional, flags) {
+  const name = positional[0];
+  if (!name) throw new Error("usage: foldrun connect NAME --provider <google|github|microsoft|linkedin> [--workspace <name>]");
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error(`secret name "${name}" must be UPPER_SNAKE_CASE`);
+  const { OAUTH_PRESETS } = await core();
+
+  const providerName = flags.provider;
+  const preset = providerName ? OAUTH_PRESETS[providerName] : undefined;
+  if (providerName && !preset) {
+    throw new Error(`unknown provider "${providerName}" — one of ${Object.keys(OAUTH_PRESETS).join(", ")}, or pass --authorize-url and --token-url`);
+  }
+  const authorizeUrl = flags["authorize-url"] ?? preset?.authorize_url;
+  const tokenUrl = flags["token-url"] ?? preset?.token_url;
+  if (!authorizeUrl || !tokenUrl) throw new Error("--provider, or both --authorize-url and --token-url");
+  if (!/^https:\/\//.test(tokenUrl) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tokenUrl)) {
+    throw new Error("token URL must be https — a refresh token over http is a leaked one");
+  }
+
+  // Where the result goes: the platform when one is named or signed in,
+  // this machine's vault otherwise. Decided before the browser opens, so a
+  // consent is never spent on a store that then refuses it.
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  const token = url ? tokenFor(url, flags) : null;
+  const workspaceName = flags.to ?? (flags.workspace ? path.basename(path.resolve(flags.workspace)) : undefined);
+
+  const clientId = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
+  const clientSecret = flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden("  client_secret: "));
+  if (!clientId || !clientSecret) throw new Error("client_id and client_secret are required");
+  const scopes = flags.scopes ?? preset?.scopes_example ?? "";
+
+  const port = Number(flags.port ?? 3000);
+  const redirectUri = `http://localhost:${port}/callback`;
+  if (preset?.hint) console.log(`\n  ${c.dim(preset.hint)}`);
+  console.log(`\n  Redirect URL this login uses — it must be registered on the ${providerName ?? "provider"} app:\n    ${c.bold(redirectUri)}\n`);
+
+  const crypto = await import("node:crypto");
+  const http = await import("node:http");
+  const state = crypto.randomBytes(24).toString("hex");
+  const authorize = new URL(authorizeUrl);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("client_id", clientId);
+  authorize.searchParams.set("redirect_uri", redirectUri);
+  authorize.searchParams.set("state", state);
+  if (scopes) authorize.searchParams.set("scope", scopes);
+  for (const [k, v] of Object.entries(preset?.authorize_extra ?? {})) authorize.searchParams.set(k, v);
+
+  // One request, then the listener closes. The state is the whole authority:
+  // a callback with any other value is answered and ignored.
+  const code = await new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      const u = new URL(req.url ?? "/", redirectUri);
+      if (u.pathname !== "/callback") { res.statusCode = 404; res.end(); return; }
+      if (u.searchParams.get("state") !== state) { res.statusCode = 400; res.end("state mismatch — start again"); return; }
+      const err = u.searchParams.get("error");
+      if (err) {
+        res.end(`${err}: ${u.searchParams.get("error_description") ?? ""}. You can close this tab.`);
+        server.close();
+        reject(new Error(`${providerName ?? "provider"} refused: ${err} ${u.searchParams.get("error_description") ?? ""}`.trim()));
+        return;
+      }
+      res.end("Connected. You can close this tab and return to the terminal.");
+      server.close();
+      resolve(u.searchParams.get("code"));
+    });
+    server.on("error", (e) => reject(e.code === "EADDRINUSE"
+      ? new Error(`port ${port} is in use — pass --port <n> and register http://localhost:<n>/callback on the app`)
+      : e));
+    server.listen(port, "127.0.0.1", async () => {
+      const opened = flags["no-browser"] === true ? false : await openInBrowser(authorize.toString());
+      console.log(opened
+        ? `  Opened your browser. Approve as the account that owns the ${providerName ?? "provider"} resource.\n`
+        : `  Open this address in your browser:\n\n    ${authorize.toString()}\n`);
+      console.log(`  ${c.dim("Waiting for the redirect…")}`);
+    });
+  });
+  if (!code) throw new Error("the redirect carried no code");
+
+  const exchange = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, client_id: clientId, client_secret: clientSecret }).toString(),
+  });
+  const payload = await exchange.json().catch(() => ({}));
+  if (!exchange.ok || (!payload.refresh_token && !payload.access_token)) {
+    throw new Error(`token exchange failed (${exchange.status}): ${payload.error_description ?? payload.error ?? "no token in the reply"}`);
+  }
+
+  // Store: the refresh recipe when there is one, the bare token otherwise.
+  const body = payload.refresh_token
+    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, client_secret: clientSecret, refresh_token: payload.refresh_token }, workspace: workspaceName }
+    : { name, value: payload.access_token, workspace: workspaceName };
+  if (url) {
+    await remoteCall(url, flags, "/api/secrets", { method: "POST", body: JSON.stringify(body) });
+  } else {
+    const { setSecret, setOAuth2Secret } = await core();
+    if (body.oauth2) setOAuth2Secret("default", name, body.oauth2, workspaceName);
+    else setSecret("default", name, body.value, workspaceName);
+  }
+
+  const where = `${url ?? "this machine"}${workspaceName ? ` · ${workspaceName}` : " · account"}`;
+  if (payload.refresh_token) {
+    console.log(`\n  ${c.green("✓")} ${name} stored as an auto-refreshing oauth2 credential on ${where}\n`);
+  } else {
+    const days = payload.expires_in ? Math.round(payload.expires_in / 86400) : null;
+    console.log(`\n  ${c.green("✓")} ${name} stored on ${where}`);
+    console.log(`  ${c.amber("!")} ${providerName ?? "the provider"} issued no refresh token — this access token expires${days ? ` in about ${days} days` : ""}; run this command again then.\n`);
+  }
+  if (payload.scope) console.log(`  ${c.dim(`granted scopes: ${payload.scope}`)}\n`);
+  return 0;
+}
+
 // ---------------------------------------------------------------- login
 
 const DEFAULT_PLATFORM = "https://app.foldrun.io";
@@ -1608,6 +1740,8 @@ export async function run(command, positional, flags, workspace) {
       return runEvals(positional[0]);
     case "probe":
       return probeCmd(positional[0]);
+    case "connect":
+      return connect(positional, flags);
     case "secrets":
       return secretsCmd(positional, flags);
     case "logs":

@@ -46,6 +46,7 @@ const HELP = `foldrun — agents are just folders
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs, or one run's full event trail
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm
+  foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push a workspace into an installation
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
@@ -68,7 +69,12 @@ Options
   --watch                   invoke: follow the run's trace here as it happens
   --print                   open: print the URL only
   --from <n>                invoke: start at step n; earlier steps are skipped
-  --no-browser              login: print the address instead of opening it
+  --no-browser              login, connect: print the address instead of opening it
+  --provider <name>         connect: google, github, microsoft or linkedin (fills the URLs)
+  --scopes "<a b c>"        connect: space-separated scopes (default: the provider's example)
+  --client-id / --client-secret  connect: the OAuth app (prompted if omitted; secret never echoed)
+  --port <n>                connect: loopback port for the redirect, default 3000
+  --authorize-url / --token-url  connect: a provider with no preset
   --role <r>                keys create: viewer, editor (default) or admin
   --for <workspace>         keys create: a deploy key for one workspace (--access read|write)
 
