@@ -71,7 +71,9 @@ test("connect: consent → exchange → refresh recipe stored on the platform, n
     } else { res.statusCode = 404; res.end(); }
   });
   const platform = await serve(async (req, res) => {
-    if (req.url === "/api/secrets" && req.method === "POST") {
+    // PUT, exactly as the real route and `secrets set` — a fake that took
+    // POST let the first version of this command ship a 405.
+    if (req.url === "/api/secrets" && req.method === "PUT") {
       stored.push({ auth: req.headers.authorization, body: JSON.parse(await readBody(req)) });
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ ok: true }));

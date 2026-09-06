@@ -1516,7 +1516,14 @@ async function connect(positional, flags) {
     ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, client_secret: clientSecret, refresh_token: payload.refresh_token }, workspace: workspaceName }
     : { name, value: payload.access_token, workspace: workspaceName };
   if (url) {
-    await remoteCall(url, flags, "/api/secrets", { method: "POST", body: JSON.stringify(body) });
+    // The same PUT `secrets set` makes. A store that fails here has spent the
+    // consent — the code is single-use and nothing secret is kept locally —
+    // so say that rather than leave "HTTP 405" to explain itself.
+    try {
+      await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify(body) });
+    } catch (err) {
+      throw new Error(`${providerName ?? "the provider"} approved, but storing ${name} on ${url} failed: ${err instanceof Error ? err.message : err}. The consent is spent; fix the platform side and run this again.`);
+    }
   } else {
     const { setSecret, setOAuth2Secret } = await core();
     if (body.oauth2) setOAuth2Secret("default", name, body.oauth2, workspaceName);
