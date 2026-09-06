@@ -98,7 +98,12 @@ async function init(workspace, from) {
 
   console.log(`\n  ${c.green("created")} ${workspace}\n`);
   for (const { path: rel } of files) console.log(`    ${c.dim(rel)}`);
-  for (const rel of accountWritten) console.log(`    ${c.dim(rel)}`);
+  // Not part of the workspace: say so on the line, not in a comment nobody
+  // reads. A developer who ran `foldrun init ~/projects/desk` finds an
+  // AGENTS.md in ~/projects and should know it was this, and why.
+  for (const rel of accountWritten) {
+    console.log(`    ${c.dim(rel)}  ${c.dim("← account scope, shared by every workspace beside this one")}`);
+  }
   const flow = files
     .map((f) => f.path.match(/^flows\/(.+)\.md$/)?.[1])
     .find(Boolean);
@@ -330,7 +335,40 @@ async function extract(workspace, flags) {
   return failed.length ? 1 : 0;
 }
 
-async function check(workspace) {
+/**
+ * The library a signed-in developer's workspace will actually resolve
+ * against lives on the platform, not on this laptop. Without this, check
+ * reported `tools: [site_repo]` missing for a tool that runs fine on every
+ * deploy — the first red result a developer saw on a working desk. Read only
+ * the names; an unreachable platform is a warning, not a failed check.
+ */
+async function platformLibrary(flags) {
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  if (!url) return { url: undefined, tools: new Set(), skills: new Set(), warning: null };
+  let token;
+  try {
+    token = tokenFor(url, flags);
+  } catch {
+    return { url, tools: new Set(), skills: new Set(), warning: `${url} is the platform but this machine is not signed in — library tools there cannot be seen` };
+  }
+  const names = async (kind) => {
+    const res = await fetch(new URL(`/api/library/${kind}`, url), {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`/api/library/${kind} → HTTP ${res.status}`);
+    const body = await res.json();
+    return new Set((body.entries ?? []).map((e) => e.name).filter(Boolean));
+  };
+  try {
+    const [tools, skills] = await Promise.all([names("tools"), names("skills")]);
+    return { url, tools, skills, warning: null };
+  } catch (err) {
+    return { url, tools: new Set(), skills: new Set(), warning: `could not read the library on ${url} (${err instanceof Error ? err.message : err}) — tools defined there will be reported missing` };
+  }
+}
+
+async function check(workspace, flags = {}) {
   const {
     listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
     workspaceTools, libraryTools, checkFormatVersion, missingToolPrograms, discoverSkills,
@@ -354,6 +392,8 @@ async function check(workspace) {
   // runs fine. Mirror the runtime exactly; the summary still counts what this
   // workspace itself defines.
   const usable = { ...libraryTools(T), ...tools };
+  const platform = await platformLibrary(flags);
+  if (platform.warning) note("warn", "library", platform.warning);
   const agentNames = new Set(agents.map((a) => a.name));
   const imported = importedAgentNames(workspace, agentNames);
   for (const n of imported) agentNames.add(n);
@@ -371,6 +411,7 @@ async function check(workspace) {
   for (const a of agents) {
     for (const s of discoverSkills(path.join(workspace, "agents", a.name))) skillNames.add(s.name);
   }
+  for (const s of platform.skills) skillNames.add(s);
 
   if (agentNames.size === 0) note("error", "agents/", "no agents — a workspace needs at least one");
 
@@ -421,13 +462,17 @@ async function check(workspace) {
     }
 
     for (const t of a.ownTools) {
-      if (!usable[t]) {
-        note(
-          "error",
-          `agents/${a.name}`,
-          `tools: [${t}] — no tools/${t}/tool.md or tools/${t}.md in this workspace or the account library`,
-        );
+      if (usable[t]) continue;
+      if (platform.tools.has(t)) {
+        // Resolves on the platform's library and nowhere on this machine:
+        // fine at run time, worth one line so nobody looks for the file.
+        note("info", `agents/${a.name}`, `tools: [${t}] — from the library on ${platform.url}`);
+        continue;
       }
+      const hint = platform.url
+        ? `in this workspace, the local account library, or the library on ${platform.url}`
+        : "in this workspace or the account library (a library on a platform is seen when signed in: `foldrun login`, or --url)";
+      note("error", `agents/${a.name}`, `tools: [${t}] — no tools/${t}/tool.md or tools/${t}.md ${hint}`);
     }
     // A colleague that does not exist is not a consult tool the agent is
     // missing — it is one it will never be told about, on a run that looks
@@ -556,12 +601,12 @@ async function check(workspace) {
 
   console.log("");
   for (const p of problems) {
-    const tag = p.level === "error" ? c.red("error") : c.amber(" warn");
+    const tag = p.level === "error" ? c.red("error") : p.level === "warn" ? c.amber(" warn") : c.dim(" info");
     console.log(`  ${tag}  ${c.bold(p.where)}  ${p.message}`);
   }
   const summary = `${agentNames.size} agents · ${flows.length} flows · ${evals.length} evals · ${Object.keys(tools).length} tools`;
   console.log(
-    problems.length === 0
+    errors.length === 0 && warnings.length === 0
       ? `  ${c.green("✓")} ${summary} — no problems\n`
       : `\n  ${summary} · ${errors.length} error${errors.length === 1 ? "" : "s"}, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}\n`,
   );
@@ -1552,7 +1597,7 @@ export async function run(command, positional, flags, workspace) {
     case "init":
       return init(workspace, flags.from);
     case "check":
-      return check(workspace);
+      return check(workspace, flags);
     case "extract":
       return extract(workspace, flags);
     case "deploy":
