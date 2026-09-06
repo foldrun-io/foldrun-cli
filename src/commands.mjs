@@ -1397,6 +1397,9 @@ async function invoke(target, flags) {
 
 // ---------------------------------------------------------------- connect
 
+/** The loopback port `foldrun connect` listens on. Documented; do not change casually. */
+const CONNECT_PORT = 8642;
+
 /**
  * `foldrun connect NAME --provider linkedin` — the OAuth consent from the
  * terminal, the way `gh auth login` and `gcloud auth login` do it: open the
@@ -1446,10 +1449,15 @@ async function connect(positional, flags) {
   if (!clientId || !clientSecret) throw new Error("client_id and client_secret are required");
   const scopes = flags.scopes ?? preset?.scopes_example ?? "";
 
-  const port = Number(flags.port ?? 3000);
+  // One fixed loopback address, the same on every developer's machine, so an
+  // OAuth app is set up once — `http://localhost:8642/callback` — and never
+  // per person. Fixed because most providers match the port exactly; 8642
+  // because 3000 is every dev server. --port / FOLDRUN_CONNECT_PORT override
+  // it, and then the app needs that value registered too.
+  const port = Number(flags.port ?? env("FOLDRUN_CONNECT_PORT") ?? CONNECT_PORT);
   const redirectUri = `http://localhost:${port}/callback`;
   if (preset?.hint) console.log(`\n  ${c.dim(preset.hint)}`);
-  console.log(`\n  Redirect URL this login uses — it must be registered on the ${providerName ?? "provider"} app:\n    ${c.bold(redirectUri)}\n`);
+  console.log(`\n  Register this redirect URL on the ${providerName ?? "provider"} app once — it is the same for every developer:\n    ${c.bold(redirectUri)}\n`);
 
   const crypto = await import("node:crypto");
   const http = await import("node:http");

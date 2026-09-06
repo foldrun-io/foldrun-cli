@@ -98,7 +98,7 @@ test("connect: consent → exchange → refresh recipe stored on the platform, n
     assert.equal(s.body.oauth2.refresh_token, "r3fresh");
     assert.doesNotMatch(r.out, /r3fresh|acc3ss|csec/, "nothing secret reaches the terminal");
     assert.match(r.out, /auto-refreshing/);
-    assert.match(r.out, /register/i, "the redirect URL is announced before the browser opens");
+    assert.match(r.out, /Register this redirect URL/, "the redirect URL is announced before the browser opens");
   } finally {
     provider.close();
     platform.close();

@@ -73,7 +73,7 @@ Options
   --provider <name>         connect: google, github, microsoft or linkedin (fills the URLs)
   --scopes "<a b c>"        connect: space-separated scopes (default: the provider's example)
   --client-id / --client-secret  connect: the OAuth app (prompted if omitted; secret never echoed)
-  --port <n>                connect: loopback port for the redirect, default 3000
+  --port <n>                connect: loopback port for the redirect (default 8642 — register http://localhost:8642/callback on the app)
   --authorize-url / --token-url  connect: a provider with no preset
   --role <r>                keys create: viewer, editor (default) or admin
   --for <workspace>         keys create: a deploy key for one workspace (--access read|write)
