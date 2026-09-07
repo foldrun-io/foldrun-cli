@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { credentialFor, defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl } from "./credentials.mjs";
 
 const c = {
@@ -47,6 +48,22 @@ function templateFilesFrom(dir) {
   return out;
 }
 
+/** The root of the installed @foldrun/core package — dist/index.js is two levels down. */
+function coreRoot() {
+  const entry = fileURLToPath(import.meta.resolve("@foldrun/core"));
+  return path.resolve(path.dirname(entry), "..");
+}
+function shippedTemplate(rel) {
+  if (path.isAbsolute(rel)) return null;
+  const abs = path.join(coreRoot(), rel);
+  return fs.existsSync(abs) && fs.statSync(abs).isDirectory() ? abs : null;
+}
+function shippedTemplates() {
+  const dir = path.join(coreRoot(), "templates");
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((n) => fs.statSync(path.join(dir, n)).isDirectory()).map((n) => `templates/${n}`);
+}
+
 async function init(workspace, from) {
   // The same definition the dashboard's "+ New workspace" uses — see
   // core/src/starter.ts for why it is not two lists.
@@ -55,11 +72,16 @@ async function init(workspace, from) {
   // A template is a source, a workspace is a destination. Keeping the two
   // words apart is the whole reason `templates/` is not called `examples/`:
   // there is one place a workspace lives, and it is wherever you make one.
-  if (from && !fs.existsSync(from)) {
-    throw new Error(`no template at ${from} — pass a directory, e.g. --from templates/hello`);
+  // A relative --from is first a directory here, then the same path inside
+  // the installed @foldrun/core package, which is where the shipped
+  // templates/ live — `--from templates/hello` must work from any directory
+  // after `npm i foldrun`, not only from a checkout of the repo.
+  const source = from && !fs.existsSync(from) ? shippedTemplate(from) : from;
+  if (from && !source) {
+    throw new Error(`no template at ${from} — pass a directory, or one that ships with foldrun: ${shippedTemplates().join(", ") || "none found"}`);
   }
-  const files = from
-    ? templateFilesFrom(from)
+  const files = source
+    ? templateFilesFrom(source)
     : starterFiles(path.basename(path.resolve(workspace)));
 
   // Whatever the source, the new workspace must ignore the key that decrypts
