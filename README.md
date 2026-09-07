@@ -1,5 +1,9 @@
 # foldrun
 
+[![ci](https://github.com/foldrun-io/foldrun-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/foldrun-io/foldrun-cli/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/foldrun)](https://www.npmjs.com/package/foldrun)
+[![licence](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
+
 **Agents are just folders.** An agent is a folder with a markdown file in it. A flow is
 a numbered list naming agents. You write them, read them, diff them in a pull
 request, and run them from this CLI.
