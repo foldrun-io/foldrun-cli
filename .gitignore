@@ -2,4 +2,3 @@ node_modules/
 .foldrun/
 *.log
 .DS_Store
-package-lock.json
