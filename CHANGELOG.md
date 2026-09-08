@@ -10,6 +10,23 @@ edited by a person.
 
 <!-- releases -->
 
+## [0.4.0] — 2026-09-08
+
+- depends on @foldrun/core 0.3.0 ([e544799](https://github.com/foldrun-io/foldrun-cli/commit/e544799))
+
+### ignore the lockfile
+
+- this package is installed, not deployed ([43eb1c0](https://github.com/foldrun-io/foldrun-cli/commit/43eb1c0))
+
+### release
+
+- only stage the lockfile when git tracks it ([dfd7689](https://github.com/foldrun-io/foldrun-cli/commit/dfd7689))
+- publish by trusted publishing, not a stored token ([cf4807e](https://github.com/foldrun-io/foldrun-cli/commit/cf4807e))
+
+### release engineering
+
+- changelog, tagged releases, CI, and the community files ([1979795](https://github.com/foldrun-io/foldrun-cli/commit/1979795))
+
 ## [0.3.1] — 2026-09-07
 
 - `init --from templates/<name>` resolves inside the installed
