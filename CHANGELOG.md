@@ -10,6 +10,35 @@ edited by a person.
 
 <!-- releases -->
 
+## [0.5.0] — 2026-09-09
+
+### Added
+
+- **`foldrun source`** — one workspace file on a platform, from the terminal:
+  `ls [dir]`, `cat <path>`, `put <path>` (from `--file`, else stdin, with
+  `--message` recorded on the revision), `mv`, `rm`. The same door the
+  dashboard's editor uses, so every write is a revision with who and why.
+  For a whole tree, `deploy`.
+- **Named accounts.** A profile is one signed-in account on one platform.
+  `foldrun accounts` lists every account signed in on this machine with the
+  active one marked, `foldrun use <name>` switches, and `--profile <name>`
+  acts as one for a single command. Two customers on the *same* platform
+  used to overwrite each other, which made looking after several of them a
+  matter of pasting `--token` every time.
+
+### Changed
+
+- **Credentials are an API key, and only that.** A claude.ai login sitting on
+  the machine is no longer accepted as one: Anthropic does not allow products
+  built on its Agent SDK to run on claude.ai subscriptions. Set
+  `ANTHROPIC_API_KEY`, or give the agent its own `provider:`.
+
+### Compatibility
+
+- A credentials file written by 0.4.0 is read as it was and migrated on the
+  next write, and the old per-URL map goes on being written — a machine that
+  moves between versions is not signed out by the move.
+
 ## [0.4.0] — 2026-09-08
 
 - depends on @foldrun/core 0.3.0 ([e544799](https://github.com/foldrun-io/foldrun-cli/commit/e544799))
