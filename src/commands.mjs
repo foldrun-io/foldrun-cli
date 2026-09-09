@@ -689,18 +689,16 @@ function bundleDirs(workspace, kind) {
 
 // ---------------------------------------------------------------- run
 
-/**
- * Credentials come from ANTHROPIC_API_KEY or, more often on a laptop, from an
- * existing Claude Code login. Requiring the key outright would lock out anyone
- * already authenticated — a bad first run for the most likely user.
- */
+// An API key, and only that. A claude.ai login on this machine is not a
+// credential foldrun may run on: Anthropic does not allow products built on
+// its Agent SDK to use claude.ai subscriptions, so the CLI neither looks
+// for one nor suggests it. An agent that names its own `provider:` needs
+// no Anthropic key at all — that is checked where the agent is read.
 function assertCredentials() {
   if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return;
-  const home = process.env.HOME ?? "";
-  if (home && fs.existsSync(path.join(home, ".claude"))) return; // Claude Code login
   throw new Error(
-    "no credentials — set ANTHROPIC_API_KEY, or log in with Claude Code.\n" +
-      "  `foldrun check` works without either.",
+    "no credentials — set ANTHROPIC_API_KEY (an API key from console.anthropic.com),\n" +
+      "  or give the agent its own `provider:`. `foldrun check` works without either.",
   );
 }
 
