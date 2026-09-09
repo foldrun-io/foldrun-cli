@@ -19,6 +19,7 @@
 //   foldrun open  [page]    the dashboard for this workspace
 //   foldrun login           sign this machine in from the browser
 //   foldrun whoami          who the platform thinks this terminal is
+//   foldrun accounts        every account signed in here; `use <name>` switches
 //   foldrun keys  <verb>    ls / create / revoke — the account's API keys
 //
 // `check` is the one to run in CI: it catches the mistakes that otherwise only
@@ -57,6 +58,8 @@ Signing in
   foldrun login             sign this machine in from the browser (--token <key> to skip it)
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
+  foldrun accounts          every account signed in on this machine, and which one is active
+  foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys — also create <label>, revoke <id>
   foldrun --help
 
@@ -88,6 +91,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --data <dir>              the installation's data directory
   --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
   --token <key>             API key for --url (or FOLDRUN_TOKEN, or the one from foldrun login)
+  --profile <name>          act as one stored account for this command (see foldrun accounts)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --dry-run                 deploy: check and report, change nothing

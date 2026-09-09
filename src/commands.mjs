@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { credentialFor, defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl } from "./credentials.mjs";
+import { credentialFor, defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
 
 const c = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
@@ -1064,12 +1064,32 @@ function promptVisible(question) {
 // should not shadow the credentials file with nothing.
 const env = (name) => process.env[name] || undefined;
 
-const remoteUrl = (flags) => flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? undefined;
+/** The profile a command acts as: --profile by name, else the one whose URL
+ *  was asked for, else the current one. */
+function chosenProfile(flags) {
+  if (typeof flags.profile === "string") {
+    const p = profileByName(flags.profile);
+    if (!p) {
+      const names = listProfiles().map((x) => x.name);
+      throw new Error(`no profile called "${flags.profile}"${names.length ? ` — try ${names.join(", ")}` : " — sign in with `foldrun login`"}`);
+    }
+    return p;
+  }
+  const url = flags.url ?? env("FOLDRUN_URL");
+  if (url) return credentialFor(url);
+  return currentProfile();
+}
+
+const remoteUrl = (flags) =>
+  (typeof flags.profile === "string" ? chosenProfile(flags)?.url : undefined) ??
+  flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? undefined;
 
 const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOKEN / pass --token";
 
 function tokenFor(url, flags) {
-  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? credentialFor(url)?.token;
+  // --token and the environment win, always: a CI job with a key in the
+  // environment must never read a file, whatever is stored in it.
+  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token ?? credentialFor(url)?.token;
   if (!token) throw new Error(NOT_SIGNED_IN);
   return token;
 }
@@ -1606,8 +1626,9 @@ async function login(flags) {
     // Verify before storing: a wrong key stored is a wrong key on every
     // later command, each failing one step further from the cause.
     const me = await remoteCall(url, { token: flags.token }, "/api/me");
-    saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role });
-    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}\n`);
+    const name = saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
+    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
+    console.log(`  ${c.dim(`stored as the account "${name}" — \`foldrun accounts\` lists them, \`foldrun use ${name}\` switches`)}\n`);
     return 0;
   }
 
@@ -1647,9 +1668,9 @@ async function login(flags) {
       // `minted`: this key exists because of this login, so logout may end
       // it. A key stored with --token was made elsewhere and may be in use
       // elsewhere; logout only forgets it.
-      saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true });
+      const name = saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
       console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}\n`);
-      console.log(`  ${c.dim("Stored in ~/.foldrun/credentials.json. `foldrun whoami` shows it; `foldrun logout` removes it.")}\n`);
+      console.log(`  ${c.dim(`Stored as the account "${name}" in ~/.foldrun/credentials.json. \`foldrun accounts\` lists every account signed in here; \`foldrun use ${name}\` switches.`)}\n`);
       return 0;
     }
   }
@@ -1664,16 +1685,15 @@ async function login(flags) {
  * be in use elsewhere.
  */
 async function logout(flags) {
-  const url = remoteUrl(flags);
-  if (!url) {
+  // One account, not one machine: --profile names which, else the one this
+  // shell is acting as. Signing out of a customer must not sign you out of
+  // the other three.
+  const entry = chosenProfile(flags);
+  if (!entry) {
     console.log(`\n  ${c.dim("not signed in anywhere")}\n`);
     return 0;
   }
-  const entry = credentialFor(url);
-  if (!entry) {
-    console.log(`\n  ${c.dim(`not signed in to ${url}`)}\n`);
-    return 0;
-  }
+  const url = entry.url;
   let revoked = false;
   if (entry.minted) {
     try {
@@ -1686,9 +1706,11 @@ async function logout(flags) {
       // Not allowed, or unreachable. The local copy still goes.
     }
   }
-  removeCredential(url);
+  removeCredential(entry.name ?? url);
   const note = revoked ? "" : entry.minted ? "  (the key is forgotten here; revoke it on Settings → API keys to be sure)" : "  (the key is forgotten here, not revoked — it was not made by `foldrun login`)";
-  console.log(`\n  ${c.green("✓")} signed out of ${c.bold(url)}${c.dim(note)}\n`);
+  console.log(`\n  ${c.green("✓")} signed out of ${c.bold(entry.name ?? url)} ${c.dim(`(${entry.account} · ${url})`)}${c.dim(note)}`);
+  const left = listProfiles();
+  console.log(left.length ? `  ${c.dim(`still signed in as: ${left.map((p) => p.name).join(", ")}`)}\n` : "");
   return 0;
 }
 
@@ -1703,8 +1725,11 @@ async function whoami(flags) {
   console.log(`  account     ${me.account}${me.owner ? c.dim(`  (owner ${me.owner})`) : ""}`);
   console.log(`  role        ${me.role}`);
   console.log(`  workspaces  ${me.workspaces === null ? "all" : me.workspaces.join(", ") || "none"}`);
-  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : "~/.foldrun/credentials.json";
-  console.log(`  ${c.dim(`credential from ${source}`)}\n`);
+  const profile = flags.token || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
+  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : `~/.foldrun/credentials.json as "${profile?.name ?? "?"}"`;
+  console.log(`  ${c.dim(`credential from ${source}`)}`);
+  const others = listProfiles().filter((p) => p.name !== profile?.name);
+  console.log(others.length ? `  ${c.dim(`also signed in as: ${others.map((p) => p.name).join(", ")} — \`foldrun accounts\``)}\n` : "\n");
   return 0;
 }
 
@@ -1827,6 +1852,48 @@ async function sourceCmd(positional, flags) {
   throw new Error(`source: unknown verb "${verb}" — ls, cat, put, mv, rm`);
 }
 
+/**
+ * `foldrun accounts` — every account this machine is signed in to, and
+ * which one a bare command talks as. `foldrun use <name>` switches.
+ *
+ * The list is the point: someone looking after four customers on one
+ * platform could see only the last one they signed in as, and had to paste
+ * --token to reach the others.
+ */
+function accountsCmd(positional) {
+  const profiles = listProfiles();
+  if (!profiles.length) {
+    console.log(`\n  ${c.dim("not signed in anywhere — `foldrun login`")}\n`);
+    return 0;
+  }
+  const verb = positional[0];
+  if (verb && verb !== "ls" && verb !== "list") throw new Error(`accounts: unknown verb "${verb}" — it takes none; \`foldrun use <name>\` switches`);
+  const width = Math.max(...profiles.map((p) => p.name.length));
+  console.log("");
+  for (const p of profiles) {
+    const mark = p.current ? c.green("●") : " ";
+    const who = p.email ?? c.dim("api key");
+    console.log(`  ${mark} ${c.bold(p.name.padEnd(width))}  ${p.account}  ${c.dim(`${p.role ?? "?"} · ${who} · ${p.url}`)}`);
+  }
+  console.log(`\n  ${c.dim("● is the one a bare command talks as. `foldrun use <name>` switches; --profile <name> is one command.")}\n`);
+  return 0;
+}
+
+function useCmd(positional) {
+  const name = positional[0];
+  if (!name) {
+    const names = listProfiles().map((p) => p.name);
+    throw new Error(`which account? ${names.length ? names.join(", ") : "none stored — `foldrun login` first"}`);
+  }
+  const p = useProfile(name);
+  if (!p) {
+    const names = listProfiles().map((x) => x.name);
+    throw new Error(`no account called "${name}"${names.length ? ` — try ${names.join(", ")}` : ""}`);
+  }
+  console.log(`\n  ${c.green("✓")} now acting as ${c.bold(p.name)} ${c.dim(`(${p.account}, ${p.role} · ${p.url})`)}\n`);
+  return 0;
+}
+
 export async function run(command, positional, flags, workspace) {
   switch (command) {
     case "login":
@@ -1837,6 +1904,12 @@ export async function run(command, positional, flags, workspace) {
       return whoami(flags);
     case "keys":
       return keysCmd(positional, flags);
+    case "accounts":
+    case "profiles":
+      return accountsCmd(positional);
+    case "use":
+    case "switch":
+      return useCmd(positional);
     case "init":
       return init(workspace, flags.from);
     case "check":
