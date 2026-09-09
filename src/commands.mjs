@@ -1762,6 +1762,73 @@ async function keysCmd(positional, flags) {
   throw new Error(`keys: unknown verb "${verb}" — ls, create, revoke`);
 }
 
+/**
+ * `foldrun source` — the files themselves, on the platform, one at a time.
+ *
+ *   source ls [dir]                 the workspace's tree (or one folder of it)
+ *   source cat <path>               one file, to stdout
+ *   source put <path> [--file f]    write a file: from --file, else from stdin
+ *                                   (--message "why" goes on the revision)
+ *   source mv <from> <to>
+ *   source rm <path>
+ *
+ * The same door the dashboard's editor uses, so every write is a revision
+ * with who and why, and the workspace's history shows it. For a whole
+ * tree, `foldrun deploy`; for what agents PRODUCE (storage/), the
+ * dashboard's Storage page — source is what you wrote, storage is what
+ * they wrote.
+ */
+async function sourceCmd(positional, flags) {
+  const [verb, a, b] = positional;
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("source reads a workspace on a platform — pass --url, or `foldrun login` first");
+  const ws = flags.to;
+  if (!ws) throw new Error("which workspace? pass --to <workspace>");
+  const base = `/api/workspaces/${encodeURIComponent(ws)}/source`;
+
+  if (verb === "ls" || verb === "list" || verb === undefined) {
+    const { files } = await remoteCall(url, flags, base);
+    const prefix = a ? a.replace(/\/+$/, "") + "/" : "";
+    const shown = files.filter((f) => !prefix || f.startsWith(prefix));
+    if (!shown.length) {
+      console.log(`\n  ${c.dim(prefix ? `nothing under ${prefix}` : "an empty workspace")}\n`);
+      return 0;
+    }
+    console.log("");
+    for (const f of shown) console.log(`  ${f}`);
+    console.log(`\n  ${c.dim(`${shown.length} file${shown.length === 1 ? "" : "s"} · ${ws} · ${url}`)}\n`);
+    return 0;
+  }
+  if (verb === "cat" || verb === "read" || verb === "get") {
+    if (!a) throw new Error("which file? foldrun source cat flows/daily.md --to <workspace>");
+    const { content } = await remoteCall(url, flags, `${base}?path=${encodeURIComponent(a)}`);
+    process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
+    return 0;
+  }
+  if (verb === "put" || verb === "write") {
+    if (!a) throw new Error("which file? foldrun source put flows/daily.md --file ./daily.md --to <workspace>");
+    const content = typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : fs.readFileSync(0, "utf8");
+    if (!content.trim()) throw new Error("refusing to write an empty file — `foldrun source rm` is the deliberate way to remove one");
+    const body = { path: a, content, ...(typeof flags.message === "string" ? { message: flags.message } : {}) };
+    await remoteCall(url, flags, base, { method: "PUT", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} ${ws}/${a}  ${c.dim(`${content.length} chars · revision recorded${flags.message ? ` · "${flags.message}"` : ""}`)}\n`);
+    return 0;
+  }
+  if (verb === "mv" || verb === "move") {
+    if (!a || !b) throw new Error("foldrun source mv <from> <to> --to <workspace>");
+    await remoteCall(url, flags, base, { method: "PATCH", body: JSON.stringify({ from: a, to: b }) });
+    console.log(`\n  ${c.green("✓")} ${a} → ${b}\n`);
+    return 0;
+  }
+  if (verb === "rm" || verb === "delete") {
+    if (!a) throw new Error("foldrun source rm <path> --to <workspace>");
+    await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: a }) });
+    console.log(`\n  ${c.green("✓")} removed ${a}\n`);
+    return 0;
+  }
+  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, mv, rm`);
+}
+
 export async function run(command, positional, flags, workspace) {
   switch (command) {
     case "login":
@@ -1794,6 +1861,8 @@ export async function run(command, positional, flags, workspace) {
       return logsCmd(positional, flags);
     case "invoke":
       return invoke(positional[0], flags);
+    case "source":
+      return sourceCmd(positional, flags);
     case "open":
       return openCmd(positional, flags);
     default:

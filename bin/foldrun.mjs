@@ -15,6 +15,7 @@
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun deploy [dir]    push a workspace into an installation
 //   foldrun invoke <flow>   start a flow on a running platform
+//   foldrun source <verb>   ls / cat / put / mv / rm one workspace file on a platform
 //   foldrun open  [page]    the dashboard for this workspace
 //   foldrun login           sign this machine in from the browser
 //   foldrun whoami          who the platform thinks this terminal is
@@ -49,6 +50,7 @@ const HELP = `foldrun — agents are just folders
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push a workspace into an installation
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
+  foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
 
 Signing in
@@ -64,6 +66,8 @@ Options
   --task "<text>"           the instruction for a manual run
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
+  --file <path>             source put: the local file to send (default: stdin)
+  --message "<why>"         source put: recorded on the file's revision
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke: hold on and print the result
   --watch                   invoke: follow the run's trace here as it happens
