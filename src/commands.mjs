@@ -1105,7 +1105,17 @@ async function remoteCall(url, flags, apiPath, init = {}) {
     },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `${apiPath} → HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(body.error ?? `${apiPath} → HTTP ${res.status}`);
+    // The body is the useful half of a failure and throwing it away is how a
+    // failed RUN comes to look like a broken PLATFORM. `?wait=true` answers a
+    // run that failed with 500 and a full record of why — status, steps, the
+    // agent's last words — and a caller that prints only "HTTP 500" sends the
+    // reader hunting for an outage that never happened.
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
   return body;
 }
 
@@ -1410,17 +1420,40 @@ async function invoke(target, flags) {
   if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
 
   const wait = flags.wait === true ? "?wait=true" : "";
+  // A waited run that FAILS is answered with 500 and a full record (see
+  // server/wait.ts). That is not an error in the call, it is the answer to
+  // it, so it is reported as a failed run rather than thrown as a transport
+  // fault — the difference between "your flow failed" and "the platform is
+  // down", which is the first thing anyone reading this needs to know.
+  const reportFailedRun = (body, ws) => {
+    if (body?.result) console.log(`\n${body.result}\n`);
+    for (const st of body?.steps ?? []) {
+      const mark = st.status === "completed" ? c.green("✓") : st.status === "skipped" ? c.dim("–") : c.red("✗");
+      console.log(`  ${mark} ${c.dim(st.agent ?? "?")}  ${st.status}${st.skipReason ? c.dim(` (${st.skipReason})`) : ""}`);
+    }
+    console.log(
+      `\n  ${c.red("✗")} ${body?.status ?? "failed"}${body?.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}` +
+        `${body?.runId ? c.dim(` — foldrun logs ${body.runId} --to ${ws}`) : ""}\n`,
+    );
+    return 1;
+  };
   // --from N starts at step N of the flow as its file numbers them; the
   // earlier steps are recorded as skipped. Mutually exclusive with --task
   // server-side (the task goes to step 1, which --from skips).
   const from = flags.from !== undefined ? Number(flags.from) : undefined;
-  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
-    method: "POST",
-    body: JSON.stringify({
-      task: typeof flags.task === "string" ? flags.task : "",
-      ...(from !== undefined ? { from } : {}),
-    }),
-  });
+  let body;
+  try {
+    body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
+      method: "POST",
+      body: JSON.stringify({
+        task: typeof flags.task === "string" ? flags.task : "",
+        ...(from !== undefined ? { from } : {}),
+      }),
+    });
+  } catch (err) {
+    if (flags.wait === true && err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
+    throw err;
+  }
 
   if (flags.watch === true && body.runId) {
     // Queued, then followed: the trace lands here line by line, the way the
