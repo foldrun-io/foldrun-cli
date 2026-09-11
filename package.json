@@ -1,6 +1,6 @@
 {
   "name": "foldrun",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Agents are just folders. Write them, check them, run them — on your machine.",
   "license": "Apache-2.0",
   "type": "module",
@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "e2e": "FOLDRUN_E2E=1 FOLDRUN_DATA=$(mktemp -d /tmp/foldrun-e2e-XXXXXX) node --test --test-timeout=300000 tests/e2e.test.ts",
-    "test": "FOLDRUN_DATA=$(mktemp -d /tmp/foldrun-test-XXXXXX) node --test tests/cli-secrets.test.ts tests/cli-check-library.test.ts tests/cli-connect.test.ts",
+    "test": "FOLDRUN_DATA=$(mktemp -d /tmp/foldrun-test-XXXXXX) node --test tests/cli-secrets.test.ts tests/cli-check-library.test.ts tests/cli-connect.test.ts tests/cli-accounts.test.ts",
     "release": "node scripts/release.mjs"
   },
   "repository": {

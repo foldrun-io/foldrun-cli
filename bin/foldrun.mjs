@@ -15,9 +15,11 @@
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun deploy [dir]    push a workspace into an installation
 //   foldrun invoke <flow>   start a flow on a running platform
+//   foldrun source <verb>   ls / cat / put / mv / rm one workspace file on a platform
 //   foldrun open  [page]    the dashboard for this workspace
 //   foldrun login           sign this machine in from the browser
 //   foldrun whoami          who the platform thinks this terminal is
+//   foldrun accounts        every account signed in here; `use <name>` switches
 //   foldrun keys  <verb>    ls / create / revoke — the account's API keys
 //
 // `check` is the one to run in CI: it catches the mistakes that otherwise only
@@ -49,12 +51,15 @@ const HELP = `foldrun — agents are just folders
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push a workspace into an installation
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
+  foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
 
 Signing in
   foldrun login             sign this machine in from the browser (--token <key> to skip it)
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
+  foldrun accounts          every account signed in on this machine, and which one is active
+  foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys — also create <label>, revoke <id>
   foldrun --help
 
@@ -64,6 +69,8 @@ Options
   --task "<text>"           the instruction for a manual run
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
+  --file <path>             source put: the local file to send (default: stdin)
+  --message "<why>"         source put: recorded on the file's revision
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke: hold on and print the result
   --watch                   invoke: follow the run's trace here as it happens
@@ -84,6 +91,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --data <dir>              the installation's data directory
   --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
   --token <key>             API key for --url (or FOLDRUN_TOKEN, or the one from foldrun login)
+  --profile <name>          act as one stored account for this command (see foldrun accounts)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --dry-run                 deploy: check and report, change nothing

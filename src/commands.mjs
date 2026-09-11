@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { credentialFor, defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl } from "./credentials.mjs";
+import { credentialFor, defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
 
 const c = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
@@ -689,18 +689,16 @@ function bundleDirs(workspace, kind) {
 
 // ---------------------------------------------------------------- run
 
-/**
- * Credentials come from ANTHROPIC_API_KEY or, more often on a laptop, from an
- * existing Claude Code login. Requiring the key outright would lock out anyone
- * already authenticated — a bad first run for the most likely user.
- */
+// An API key, and only that. A claude.ai login on this machine is not a
+// credential foldrun may run on: Anthropic does not allow products built on
+// its Agent SDK to use claude.ai subscriptions, so the CLI neither looks
+// for one nor suggests it. An agent that names its own `provider:` needs
+// no Anthropic key at all — that is checked where the agent is read.
 function assertCredentials() {
   if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return;
-  const home = process.env.HOME ?? "";
-  if (home && fs.existsSync(path.join(home, ".claude"))) return; // Claude Code login
   throw new Error(
-    "no credentials — set ANTHROPIC_API_KEY, or log in with Claude Code.\n" +
-      "  `foldrun check` works without either.",
+    "no credentials — set ANTHROPIC_API_KEY (an API key from console.anthropic.com),\n" +
+      "  or give the agent its own `provider:`. `foldrun check` works without either.",
   );
 }
 
@@ -1066,12 +1064,32 @@ function promptVisible(question) {
 // should not shadow the credentials file with nothing.
 const env = (name) => process.env[name] || undefined;
 
-const remoteUrl = (flags) => flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? undefined;
+/** The profile a command acts as: --profile by name, else the one whose URL
+ *  was asked for, else the current one. */
+function chosenProfile(flags) {
+  if (typeof flags.profile === "string") {
+    const p = profileByName(flags.profile);
+    if (!p) {
+      const names = listProfiles().map((x) => x.name);
+      throw new Error(`no profile called "${flags.profile}"${names.length ? ` — try ${names.join(", ")}` : " — sign in with `foldrun login`"}`);
+    }
+    return p;
+  }
+  const url = flags.url ?? env("FOLDRUN_URL");
+  if (url) return credentialFor(url);
+  return currentProfile();
+}
+
+const remoteUrl = (flags) =>
+  (typeof flags.profile === "string" ? chosenProfile(flags)?.url : undefined) ??
+  flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? undefined;
 
 const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOKEN / pass --token";
 
 function tokenFor(url, flags) {
-  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? credentialFor(url)?.token;
+  // --token and the environment win, always: a CI job with a key in the
+  // environment must never read a file, whatever is stored in it.
+  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token ?? credentialFor(url)?.token;
   if (!token) throw new Error(NOT_SIGNED_IN);
   return token;
 }
@@ -1087,7 +1105,17 @@ async function remoteCall(url, flags, apiPath, init = {}) {
     },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `${apiPath} → HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(body.error ?? `${apiPath} → HTTP ${res.status}`);
+    // The body is the useful half of a failure and throwing it away is how a
+    // failed RUN comes to look like a broken PLATFORM. `?wait=true` answers a
+    // run that failed with 500 and a full record of why — status, steps, the
+    // agent's last words — and a caller that prints only "HTTP 500" sends the
+    // reader hunting for an outage that never happened.
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
   return body;
 }
 
@@ -1392,17 +1420,40 @@ async function invoke(target, flags) {
   if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
 
   const wait = flags.wait === true ? "?wait=true" : "";
+  // A waited run that FAILS is answered with 500 and a full record (see
+  // server/wait.ts). That is not an error in the call, it is the answer to
+  // it, so it is reported as a failed run rather than thrown as a transport
+  // fault — the difference between "your flow failed" and "the platform is
+  // down", which is the first thing anyone reading this needs to know.
+  const reportFailedRun = (body, ws) => {
+    if (body?.result) console.log(`\n${body.result}\n`);
+    for (const st of body?.steps ?? []) {
+      const mark = st.status === "completed" ? c.green("✓") : st.status === "skipped" ? c.dim("–") : c.red("✗");
+      console.log(`  ${mark} ${c.dim(st.agent ?? "?")}  ${st.status}${st.skipReason ? c.dim(` (${st.skipReason})`) : ""}`);
+    }
+    console.log(
+      `\n  ${c.red("✗")} ${body?.status ?? "failed"}${body?.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}` +
+        `${body?.runId ? c.dim(` — foldrun logs ${body.runId} --to ${ws}`) : ""}\n`,
+    );
+    return 1;
+  };
   // --from N starts at step N of the flow as its file numbers them; the
   // earlier steps are recorded as skipped. Mutually exclusive with --task
   // server-side (the task goes to step 1, which --from skips).
   const from = flags.from !== undefined ? Number(flags.from) : undefined;
-  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
-    method: "POST",
-    body: JSON.stringify({
-      task: typeof flags.task === "string" ? flags.task : "",
-      ...(from !== undefined ? { from } : {}),
-    }),
-  });
+  let body;
+  try {
+    body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
+      method: "POST",
+      body: JSON.stringify({
+        task: typeof flags.task === "string" ? flags.task : "",
+        ...(from !== undefined ? { from } : {}),
+      }),
+    });
+  } catch (err) {
+    if (flags.wait === true && err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
+    throw err;
+  }
 
   if (flags.watch === true && body.runId) {
     // Queued, then followed: the trace lands here line by line, the way the
@@ -1608,8 +1659,9 @@ async function login(flags) {
     // Verify before storing: a wrong key stored is a wrong key on every
     // later command, each failing one step further from the cause.
     const me = await remoteCall(url, { token: flags.token }, "/api/me");
-    saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role });
-    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}\n`);
+    const name = saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
+    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
+    console.log(`  ${c.dim(`stored as the account "${name}" — \`foldrun accounts\` lists them, \`foldrun use ${name}\` switches`)}\n`);
     return 0;
   }
 
@@ -1649,9 +1701,9 @@ async function login(flags) {
       // `minted`: this key exists because of this login, so logout may end
       // it. A key stored with --token was made elsewhere and may be in use
       // elsewhere; logout only forgets it.
-      saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true });
+      const name = saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
       console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}\n`);
-      console.log(`  ${c.dim("Stored in ~/.foldrun/credentials.json. `foldrun whoami` shows it; `foldrun logout` removes it.")}\n`);
+      console.log(`  ${c.dim(`Stored as the account "${name}" in ~/.foldrun/credentials.json. \`foldrun accounts\` lists every account signed in here; \`foldrun use ${name}\` switches.`)}\n`);
       return 0;
     }
   }
@@ -1666,16 +1718,15 @@ async function login(flags) {
  * be in use elsewhere.
  */
 async function logout(flags) {
-  const url = remoteUrl(flags);
-  if (!url) {
+  // One account, not one machine: --profile names which, else the one this
+  // shell is acting as. Signing out of a customer must not sign you out of
+  // the other three.
+  const entry = chosenProfile(flags);
+  if (!entry) {
     console.log(`\n  ${c.dim("not signed in anywhere")}\n`);
     return 0;
   }
-  const entry = credentialFor(url);
-  if (!entry) {
-    console.log(`\n  ${c.dim(`not signed in to ${url}`)}\n`);
-    return 0;
-  }
+  const url = entry.url;
   let revoked = false;
   if (entry.minted) {
     try {
@@ -1688,9 +1739,11 @@ async function logout(flags) {
       // Not allowed, or unreachable. The local copy still goes.
     }
   }
-  removeCredential(url);
+  removeCredential(entry.name ?? url);
   const note = revoked ? "" : entry.minted ? "  (the key is forgotten here; revoke it on Settings → API keys to be sure)" : "  (the key is forgotten here, not revoked — it was not made by `foldrun login`)";
-  console.log(`\n  ${c.green("✓")} signed out of ${c.bold(url)}${c.dim(note)}\n`);
+  console.log(`\n  ${c.green("✓")} signed out of ${c.bold(entry.name ?? url)} ${c.dim(`(${entry.account} · ${url})`)}${c.dim(note)}`);
+  const left = listProfiles();
+  console.log(left.length ? `  ${c.dim(`still signed in as: ${left.map((p) => p.name).join(", ")}`)}\n` : "");
   return 0;
 }
 
@@ -1705,8 +1758,11 @@ async function whoami(flags) {
   console.log(`  account     ${me.account}${me.owner ? c.dim(`  (owner ${me.owner})`) : ""}`);
   console.log(`  role        ${me.role}`);
   console.log(`  workspaces  ${me.workspaces === null ? "all" : me.workspaces.join(", ") || "none"}`);
-  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : "~/.foldrun/credentials.json";
-  console.log(`  ${c.dim(`credential from ${source}`)}\n`);
+  const profile = flags.token || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
+  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : `~/.foldrun/credentials.json as "${profile?.name ?? "?"}"`;
+  console.log(`  ${c.dim(`credential from ${source}`)}`);
+  const others = listProfiles().filter((p) => p.name !== profile?.name);
+  console.log(others.length ? `  ${c.dim(`also signed in as: ${others.map((p) => p.name).join(", ")} — \`foldrun accounts\``)}\n` : "\n");
   return 0;
 }
 
@@ -1762,6 +1818,115 @@ async function keysCmd(positional, flags) {
   throw new Error(`keys: unknown verb "${verb}" — ls, create, revoke`);
 }
 
+/**
+ * `foldrun source` — the files themselves, on the platform, one at a time.
+ *
+ *   source ls [dir]                 the workspace's tree (or one folder of it)
+ *   source cat <path>               one file, to stdout
+ *   source put <path> [--file f]    write a file: from --file, else from stdin
+ *                                   (--message "why" goes on the revision)
+ *   source mv <from> <to>
+ *   source rm <path>
+ *
+ * The same door the dashboard's editor uses, so every write is a revision
+ * with who and why, and the workspace's history shows it. For a whole
+ * tree, `foldrun deploy`; for what agents PRODUCE (storage/), the
+ * dashboard's Storage page — source is what you wrote, storage is what
+ * they wrote.
+ */
+async function sourceCmd(positional, flags) {
+  const [verb, a, b] = positional;
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("source reads a workspace on a platform — pass --url, or `foldrun login` first");
+  const ws = flags.to;
+  if (!ws) throw new Error("which workspace? pass --to <workspace>");
+  const base = `/api/workspaces/${encodeURIComponent(ws)}/source`;
+
+  if (verb === "ls" || verb === "list" || verb === undefined) {
+    const { files } = await remoteCall(url, flags, base);
+    const prefix = a ? a.replace(/\/+$/, "") + "/" : "";
+    const shown = files.filter((f) => !prefix || f.startsWith(prefix));
+    if (!shown.length) {
+      console.log(`\n  ${c.dim(prefix ? `nothing under ${prefix}` : "an empty workspace")}\n`);
+      return 0;
+    }
+    console.log("");
+    for (const f of shown) console.log(`  ${f}`);
+    console.log(`\n  ${c.dim(`${shown.length} file${shown.length === 1 ? "" : "s"} · ${ws} · ${url}`)}\n`);
+    return 0;
+  }
+  if (verb === "cat" || verb === "read" || verb === "get") {
+    if (!a) throw new Error("which file? foldrun source cat flows/daily.md --to <workspace>");
+    const { content } = await remoteCall(url, flags, `${base}?path=${encodeURIComponent(a)}`);
+    process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
+    return 0;
+  }
+  if (verb === "put" || verb === "write") {
+    if (!a) throw new Error("which file? foldrun source put flows/daily.md --file ./daily.md --to <workspace>");
+    const content = typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : fs.readFileSync(0, "utf8");
+    if (!content.trim()) throw new Error("refusing to write an empty file — `foldrun source rm` is the deliberate way to remove one");
+    const body = { path: a, content, ...(typeof flags.message === "string" ? { message: flags.message } : {}) };
+    await remoteCall(url, flags, base, { method: "PUT", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} ${ws}/${a}  ${c.dim(`${content.length} chars · revision recorded${flags.message ? ` · "${flags.message}"` : ""}`)}\n`);
+    return 0;
+  }
+  if (verb === "mv" || verb === "move") {
+    if (!a || !b) throw new Error("foldrun source mv <from> <to> --to <workspace>");
+    await remoteCall(url, flags, base, { method: "PATCH", body: JSON.stringify({ from: a, to: b }) });
+    console.log(`\n  ${c.green("✓")} ${a} → ${b}\n`);
+    return 0;
+  }
+  if (verb === "rm" || verb === "delete") {
+    if (!a) throw new Error("foldrun source rm <path> --to <workspace>");
+    await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: a }) });
+    console.log(`\n  ${c.green("✓")} removed ${a}\n`);
+    return 0;
+  }
+  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, mv, rm`);
+}
+
+/**
+ * `foldrun accounts` — every account this machine is signed in to, and
+ * which one a bare command talks as. `foldrun use <name>` switches.
+ *
+ * The list is the point: someone looking after four customers on one
+ * platform could see only the last one they signed in as, and had to paste
+ * --token to reach the others.
+ */
+function accountsCmd(positional) {
+  const profiles = listProfiles();
+  if (!profiles.length) {
+    console.log(`\n  ${c.dim("not signed in anywhere — `foldrun login`")}\n`);
+    return 0;
+  }
+  const verb = positional[0];
+  if (verb && verb !== "ls" && verb !== "list") throw new Error(`accounts: unknown verb "${verb}" — it takes none; \`foldrun use <name>\` switches`);
+  const width = Math.max(...profiles.map((p) => p.name.length));
+  console.log("");
+  for (const p of profiles) {
+    const mark = p.current ? c.green("●") : " ";
+    const who = p.email ?? c.dim("api key");
+    console.log(`  ${mark} ${c.bold(p.name.padEnd(width))}  ${p.account}  ${c.dim(`${p.role ?? "?"} · ${who} · ${p.url}`)}`);
+  }
+  console.log(`\n  ${c.dim("● is the one a bare command talks as. `foldrun use <name>` switches; --profile <name> is one command.")}\n`);
+  return 0;
+}
+
+function useCmd(positional) {
+  const name = positional[0];
+  if (!name) {
+    const names = listProfiles().map((p) => p.name);
+    throw new Error(`which account? ${names.length ? names.join(", ") : "none stored — `foldrun login` first"}`);
+  }
+  const p = useProfile(name);
+  if (!p) {
+    const names = listProfiles().map((x) => x.name);
+    throw new Error(`no account called "${name}"${names.length ? ` — try ${names.join(", ")}` : ""}`);
+  }
+  console.log(`\n  ${c.green("✓")} now acting as ${c.bold(p.name)} ${c.dim(`(${p.account}, ${p.role} · ${p.url})`)}\n`);
+  return 0;
+}
+
 export async function run(command, positional, flags, workspace) {
   switch (command) {
     case "login":
@@ -1772,6 +1937,12 @@ export async function run(command, positional, flags, workspace) {
       return whoami(flags);
     case "keys":
       return keysCmd(positional, flags);
+    case "accounts":
+    case "profiles":
+      return accountsCmd(positional);
+    case "use":
+    case "switch":
+      return useCmd(positional);
     case "init":
       return init(workspace, flags.from);
     case "check":
@@ -1794,6 +1965,8 @@ export async function run(command, positional, flags, workspace) {
       return logsCmd(positional, flags);
     case "invoke":
       return invoke(positional[0], flags);
+    case "source":
+      return sourceCmd(positional, flags);
     case "open":
       return openCmd(positional, flags);
     default:
