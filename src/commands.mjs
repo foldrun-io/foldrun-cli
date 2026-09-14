@@ -1247,6 +1247,32 @@ async function secretsCmd(positional, flags) {
     return 0;
   }
 
+  if (verb === "status") {
+    // OAuth grants only: which still refresh, which are failing or about to
+    // expire, and whether a no-prompt reconnect exists for each.
+    if (!url) throw new Error("secrets status reads the platform's connection health — sign in first (foldrun login)");
+    const { connections } = await remoteCall(url, flags, "/api/oauth/connections");
+    if (!connections.length) {
+      console.log(`\n  ${c.dim("no OAuth connections")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const s of connections) {
+      const where = s.workspace ? `workspace ${s.workspace}` : "account";
+      const state =
+        s.status === "ok" ? c.green(`ok${s.daysLeft !== null ? ` · ${s.daysLeft} days left` : ""}`)
+        : s.status === "expiring" ? c.amber(`expires in ${s.daysLeft} days`)
+        : s.status === "no-client" ? c.dim("ok · no saved client (reconnect will ask for it once)")
+        : c.red(`${s.status}${s.lastError ? ` — ${s.lastError}` : ""}`);
+      console.log(`  ${c.bold(s.name)}  ${c.dim(where)}  ${state}`);
+      if (s.status !== "ok" && s.status !== "no-client") {
+        console.log(`    ${c.dim(`reconnect: foldrun connect ${s.name}${s.workspace ? ` --to ${s.workspace}` : ""}   or ${s.reconnectUrl}`)}`);
+      }
+    }
+    console.log();
+    return 0;
+  }
+
   if (!name) throw new Error(`which secret? try \`foldrun secrets ${verb} NAME\``);
 
   if (verb === "set") {
@@ -1503,7 +1529,7 @@ const CONNECT_PORT = 8642;
  */
 async function connect(positional, flags) {
   const name = positional[0];
-  if (!name) throw new Error("usage: foldrun connect NAME --provider <google|github|microsoft|linkedin> [--workspace <name>]");
+  if (!name) throw new Error("usage: foldrun connect NAME [--provider <google|github|microsoft|linkedin>] [--workspace <name>] [--new-client]");
   if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error(`secret name "${name}" must be UPPER_SNAKE_CASE`);
   const { OAUTH_PRESETS } = await core();
 
@@ -1514,10 +1540,6 @@ async function connect(positional, flags) {
   }
   const authorizeUrl = flags["authorize-url"] ?? preset?.authorize_url;
   const tokenUrl = flags["token-url"] ?? preset?.token_url;
-  if (!authorizeUrl || !tokenUrl) throw new Error("--provider, or both --authorize-url and --token-url");
-  if (!/^https:\/\//.test(tokenUrl) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tokenUrl)) {
-    throw new Error("token URL must be https — a refresh token over http is a leaked one");
-  }
 
   // Where the result goes: the platform when one is named or signed in,
   // this machine's vault otherwise. Decided before the browser opens, so a
@@ -1525,6 +1547,49 @@ async function connect(positional, flags) {
   const url = flags.local === true ? undefined : remoteUrl(flags);
   const token = url ? tokenFor(url, flags) : null;
   const workspaceName = flags.to ?? (flags.workspace ? path.basename(path.resolve(flags.workspace)) : undefined);
+
+  // Reconnecting: the platform already holds the client this secret (or this
+  // provider) was connected with, so run its consent flow — no client id, no
+  // secret, nothing typed. The redirect is the platform's own callback, which
+  // rewrites the same secret at the same scope; we wait for it to land.
+  if (url && !flags["client-id"] && !env("OAUTH_CLIENT_ID") && flags["new-client"] !== true) {
+    let started = null;
+    try {
+      started = await remoteCall(url, flags, "/api/oauth/reconnect", {
+        method: "POST",
+        body: JSON.stringify({ secret: name, workspace: workspaceName, provider: providerName }),
+      });
+    } catch (err) {
+      if (err.status !== 404) throw err;
+    }
+    if (started?.url) {
+      const before = (await remoteCall(url, flags, "/api/oauth/connections")).connections
+        .find((s) => s.name === name && (s.workspace ?? undefined) === workspaceName)?.connectedAt ?? null;
+      console.log(`\n  Reusing the saved ${c.bold(started.client)} client — nothing to type.`);
+      console.log(`  ${c.dim(`consent returns to ${started.redirectUri} (it must be registered on the app)`)}`);
+      const opened = flags["no-browser"] === true ? false : await openInBrowser(started.url);
+      console.log(opened
+        ? `  Opened your browser. Approve as the account that owns the ${providerName ?? started.client} resource.\n`
+        : `  Open this address in your browser:\n\n    ${started.url}\n`);
+      console.log(`  ${c.dim("Waiting for the platform to store it…")}`);
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const row = (await remoteCall(url, flags, "/api/oauth/connections")).connections
+          .find((s) => s.name === name && (s.workspace ?? undefined) === workspaceName);
+        if (row?.connectedAt && row.connectedAt !== before) {
+          console.log(`\n  ${c.green("✓")} ${name} reconnected on ${url}${workspaceName ? ` · ${workspaceName}` : " · account"}\n`);
+          return 0;
+        }
+      }
+      throw new Error("no consent arrived within 10 minutes — run it again, or pass --new-client to enter a client id and secret");
+    }
+  }
+
+  if (!authorizeUrl || !tokenUrl) throw new Error("--provider, or both --authorize-url and --token-url");
+  if (!/^https:\/\//.test(tokenUrl) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tokenUrl)) {
+    throw new Error("token URL must be https — a refresh token over http is a leaked one");
+  }
 
   const clientId = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
   const clientSecret = flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden("  client_secret: "));
@@ -1595,7 +1660,7 @@ async function connect(positional, flags) {
 
   // Store: the refresh recipe when there is one, the bare token otherwise.
   const body = payload.refresh_token
-    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, client_secret: clientSecret, refresh_token: payload.refresh_token }, workspace: workspaceName }
+    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, client_secret: clientSecret, refresh_token: payload.refresh_token }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
     : { name, value: payload.access_token, workspace: workspaceName };
   if (url) {
     // The same PUT `secrets set` makes. A store that fails here has spent the

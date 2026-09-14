@@ -129,3 +129,41 @@ test("connect: a provider with no refresh token stores the access token and says
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("connect: a secret with a saved client reconnects through the platform — no client id prompt, no typing", async () => {
+  const calls: string[] = [];
+  let reconnected = false;
+  const platform = await serve(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    calls.push(`${req.method} ${req.url}`);
+    if (req.url === "/api/oauth/reconnect" && req.method === "POST") {
+      const body = JSON.parse(await readBody(req));
+      assert.deepEqual({ secret: body.secret, workspace: body.workspace }, { secret: "LINKEDIN_OAUTH", workspace: "linkedin-desk" });
+      reconnected = true;
+      res.end(JSON.stringify({ ok: true, url: "https://www.linkedin.com/oauth/v2/authorization?state=abc", client: "linkedin", redirectUri: "https://dev.example/api/oauth/callback" }));
+    } else if (req.url === "/api/oauth/connections") {
+      // The callback lands on the platform; the CLI sees connectedAt move.
+      res.end(JSON.stringify({ connections: [{ name: "LINKEDIN_OAUTH", workspace: "linkedin-desk", client: "linkedin", status: "ok", daysLeft: null, connectedAt: reconnected && calls.filter((c) => c.endsWith("/connections")).length > 1 ? "2026-09-14T01:00:00.000Z" : "2026-09-06T05:56:03.681Z" }] }));
+    } else { res.statusCode = 404; res.end("{}"); }
+  });
+  try {
+    const child = spawn(process.execPath, [CLI, "connect", "LINKEDIN_OAUTH", "--provider", "linkedin", "--workspace", "linkedin-desk", "--url", platform.url, "--token", "ptok", "--no-browser"], {
+      cwd: ROOT,
+      env: { ...process.env, FOLDRUN_DATA: undefined, FOLDRUN_URL: undefined, FOLDRUN_TOKEN: undefined, OAUTH_CLIENT_ID: undefined, OAUTH_CLIENT_SECRET: undefined, NO_COLOR: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    const status = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+    assert.equal(status, 0, out);
+    out = out.replace(/\x1b\[[0-9;]*m/g, "");
+    assert.doesNotMatch(out, /client_id:/, "never asks for the client id");
+    assert.match(out, /Reusing the saved linkedin client/);
+    assert.match(out, /LINKEDIN_OAUTH reconnected/);
+    assert.ok(calls.includes("POST /api/oauth/reconnect"));
+    assert.ok(!calls.some((c) => c.startsWith("PUT /api/secrets")), "the platform callback stores it, not the CLI");
+  } finally {
+    platform.close();
+  }
+});
