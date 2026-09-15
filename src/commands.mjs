@@ -1450,7 +1450,14 @@ async function invoke(target, flags) {
   const ws = flags.to;
   if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
 
-  const wait = flags.wait === true ? "?wait=true" : "";
+  // --wait asks in short pieces, not one long request: whatever sits in
+  // front of the platform cuts a request that stays silent too long
+  // (Cloudflare at 100 s, an ALB at 60 s), and a flow can run for many
+  // minutes. The server answers 202 { timedOut: true } when a piece runs out
+  // and the same question is asked again of the run itself. The 524 that
+  // used to land here after 100 s while the run carried on was the trigger.
+  const WAIT_PIECE_S = 25;
+  const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
   // A waited run that FAILS is answered with 500 and a full record (see
   // server/wait.ts). That is not an error in the call, it is the answer to
   // it, so it is reported as a failed run rather than thrown as a transport
@@ -1488,6 +1495,14 @@ async function invoke(target, flags) {
     if (flags.wait === true && err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
     throw err;
   }
+  while (flags.wait === true && body?.timedOut === true && body.runId) {
+    try {
+      body = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${body.runId}${wait}`);
+    } catch (err) {
+      if (err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
+      throw err;
+    }
+  }
 
   if (flags.watch === true && body.runId) {
     // Queued, then followed: the trace lands here line by line, the way the
@@ -1505,10 +1520,12 @@ async function invoke(target, flags) {
     return 0;
   }
   const run = body.run ?? body;
-  const ok = (run.status ?? body.status) === "completed";
+  const status = run.status ?? body.status ?? "finished";
+  const ok = status === "completed";
   if (body.result) console.log(`\n${body.result}\n`);
-  console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${run.status ?? body.status ?? "finished"}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}\n`);
-  return ok ? 0 : 1;
+  const mark = ok ? c.green("✓") : status === "awaiting-approval" ? c.amber("⏸") : c.red("✗");
+  console.log(`  ${mark} ${status}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}${status === "awaiting-approval" ? c.dim(` — ${url}/dashboard/${ws}/runs?run=${body.runId}`) : ""}\n`);
+  return ok ? 0 : status === "awaiting-approval" ? 2 : 1;
 }
 
 // ---------------------------------------------------------------- connect
