@@ -1115,15 +1115,26 @@ let announced = false;
 function announce(url, flags) {
   if (announced || flags.quiet === true) return;
   announced = true;
-  let line;
-  if (typeof flags.token === "string") line = `acting with --token · ${url}`;
-  else if (env("FOLDRUN_TOKEN")) line = `acting with FOLDRUN_TOKEN · ${url}`;
-  else {
-    const p = chosenProfile(flags);
-    if (!p) return;
-    line = `acting as ${p.name}  ${p.account} · ${p.role ?? "?"} · ${p.email ?? "api key"} · ${p.url}`;
-  }
-  console.error(`  ${c.dim(line)}`);
+  const line = actingAs(url, flags);
+  if (line) console.error(`  ${c.dim(line)}`);
+}
+
+/** "acting as <name>  <account> · <role> · <email> · <url>", or the --token / FOLDRUN_TOKEN form. */
+function actingAs(url, flags) {
+  if (typeof flags.token === "string") return `acting with --token · ${url}`;
+  if (env("FOLDRUN_TOKEN")) return `acting with FOLDRUN_TOKEN · ${url}`;
+  const p = chosenProfile(flags);
+  return p ? `acting as ${p.name}  ${p.account} · ${p.role ?? "?"} · ${p.email ?? "api key"} · ${p.url}` : null;
+}
+
+/**
+ * What to add to a 401/403: which credential was refused. Without it a
+ * `logs --url` that fails on a machine with three accounts says
+ * "forbidden" and leaves the reader to guess which key was sent.
+ */
+function refusedHint(url, flags) {
+  const who = actingAs(url, flags);
+  return who ? ` — ${who}; \`foldrun accounts\` lists the others, --profile <name> picks one` : " — `foldrun login` signs this machine in";
 }
 
 const remoteUrl = (flags) =>
@@ -1272,7 +1283,8 @@ async function remoteCall(url, flags, apiPath, init = {}) {
     // run that failed with 500 and a full record of why — status, steps, the
     // agent's last words — and a caller that prints only "HTTP 500" sends the
     // reader hunting for an outage that never happened.
-    throw new HttpError(body.error ?? `${apiPath} → HTTP ${res.status}`, res.status, body);
+    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : "";
+    throw new HttpError(`${body.error ?? `${apiPath} → HTTP ${res.status}`}${hint}`, res.status, body);
   }
   return body;
 }
@@ -1296,49 +1308,125 @@ function finishLine(run) {
   return ok ? 0 : run.status === "awaiting-approval" ? 2 : 1;
 }
 
+/** A run that has not finished: the stream is worth following. */
+const isLive = (run) => run.status === "queued" || run.status === "running" || run.status === "awaiting-approval";
+
+/** How long a run stream may stay silent before it is reconnected: four request timeouts, 120 s by default. */
+const streamIdleSeconds = () => timeoutSeconds() * 4;
+
+/** The stream said nothing for this long. Not a failure yet; a reason to reconnect. */
+class StreamIdle extends Error {
+  /** @param {number} seconds */
+  constructor(seconds) {
+    super(`the run stream went quiet for ${seconds}s`);
+    this.seconds = seconds;
+  }
+}
+
+/**
+ * One connection to a run's stream, printed as frames land. Resolves with
+ * the finished run on `done`, with the last run seen if the server ends it
+ * first, and throws StreamIdle when nothing arrives for streamIdleSeconds.
+ */
+async function streamOnce(url, flags, ws, runId, seen) {
+  const token = tokenFor(url, flags);
+  const idle = streamIdleSeconds();
+  const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
+  const ctrl = new AbortController();
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(new StreamIdle(idle)), idle * 1000);
+  };
+  arm();
+  try {
+    let res;
+    try {
+      res = await fetch(target, {
+        headers: { authorization: `Bearer ${token}`, accept: "text/event-stream", "user-agent": USER_AGENT },
+        signal: ctrl.signal,
+      });
+    } catch (err) {
+      if (ctrl.signal.aborted) throw ctrl.signal.reason;
+      throw new Error(`could not reach ${target.origin}`, { cause: err });
+    }
+    if (!res.ok || !res.body) {
+      const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : "";
+      throw new HttpError(`stream → HTTP ${res.status}${hint}`, res.status, {});
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let last = null;
+    for (;;) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        if (ctrl.signal.aborted) throw ctrl.signal.reason;
+        throw err;
+      }
+      if (chunk.done) break;
+      arm();
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        const event = frame.match(/^event: (.*)$/m)?.[1];
+        const data = frame.match(/^data: (.*)$/m)?.[1];
+        if (!event || !data) continue;
+        if (event === "run") {
+          try {
+            last = JSON.parse(data);
+            printNew(last, seen);
+          } catch {
+            // a partial frame; the next one supersedes it
+          }
+        } else if (event === "done") {
+          try {
+            await reader.cancel();
+          } catch {
+            // the server ended it first
+          }
+          return last;
+        }
+      }
+    }
+    return last;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Follow a run on a platform: the same server-sent events the dashboard's
  * run page reads, printed as they land. Resolves with the finished run.
+ *
+ * A stream that goes quiet is reconnected, up to three times, as long as
+ * the run is still live — every `run` frame carries the whole run, so a
+ * fresh connection IS the resume; `seen` keeps the lines already printed
+ * from printing twice. It used to block `invoke --watch` and `logs
+ * --follow` for as long as a stalled tunnel cared to keep the socket.
  */
 async function followRemote(url, flags, ws, runId, seen = new Map()) {
-  const token = tokenFor(url, flags);
-  const res = await fetch(new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url), {
-    headers: { authorization: `Bearer ${token}`, accept: "text/event-stream" },
-  });
-  if (!res.ok || !res.body) throw new Error(`stream → HTTP ${res.status}`);
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let last = null;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let cut;
-    while ((cut = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, cut);
-      buffer = buffer.slice(cut + 2);
-      const event = frame.match(/^event: (.*)$/m)?.[1];
-      const data = frame.match(/^data: (.*)$/m)?.[1];
-      if (!event || !data) continue;
-      if (event === "run") {
-        try {
-          last = JSON.parse(data);
-          printNew(last, seen);
-        } catch {
-          // a partial frame; the next one supersedes it
-        }
-      } else if (event === "done") {
-        try {
-          await reader.cancel();
-        } catch {
-          // the server ended it first
-        }
-        return last;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await streamOnce(url, flags, ws, runId, seen);
+    } catch (err) {
+      if (!(err instanceof StreamIdle)) throw err;
+      const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+      printNew(run, seen);
+      if (!isLive(run)) return run;
+      if (attempt >= 3) {
+        throw new Error(
+          `${err.message} three times while ${runId} is still ${run.status} — \`foldrun logs ${runId} --to ${ws} --follow\` picks it up again, or ${url}/dashboard/${ws}/runs?run=${runId}`,
+        );
       }
+      console.error(`  ${c.dim(`… ${err.message}; reconnecting (${attempt}/3)`)}`);
     }
   }
-  return last;
 }
 
 /**
@@ -1581,8 +1669,7 @@ async function remoteLogs(url, positional, flags) {
   console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
   const seen = new Map();
   printNew(run, seen);
-  const live = run.status === "queued" || run.status === "running" || run.status === "awaiting-approval";
-  if (flags.follow === true && live) run = (await followRemote(url, flags, ws, runId, seen)) ?? run;
+  if (flags.follow === true && isLive(run)) run = (await followRemote(url, flags, ws, runId, seen)) ?? run;
   return finishLine(run);
 }
 
@@ -1910,7 +1997,7 @@ async function login(flags) {
 
   let start;
   try {
-    const res = await fetch(new URL("/api/cli/login", url), {
+    const res = await remoteFetch(url, "/api/cli/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ hostname: os.hostname() }),
@@ -1932,7 +2019,9 @@ async function login(flags) {
     await sleep(interval);
     let poll;
     try {
-      const res = await fetch(new URL(`/api/cli/login/${start.id}`, url));
+      // Through the shared client: a poll that hangs used to hang the
+      // sign-in; now it is cut at FOLDRUN_TIMEOUT and asked again.
+      const res = await remoteFetch(url, `/api/cli/login/${start.id}`);
       poll = await res.json().catch(() => ({}));
     } catch {
       continue; // a blip; the next poll asks again
