@@ -7,13 +7,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
 
+// NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
+// job, or a test that wants to match what a person reads. The tests had
+// been setting it all along, to no effect.
+const paint = (code) => (s) => (process.env.NO_COLOR ? String(s) : `\x1b[${code}m${s}\x1b[0m`);
 const c = {
-  dim: (s) => `\x1b[2m${s}\x1b[0m`,
-  bold: (s) => `\x1b[1m${s}\x1b[0m`,
-  green: (s) => `\x1b[32m${s}\x1b[0m`,
-  red: (s) => `\x1b[31m${s}\x1b[0m`,
-  yellow: (s) => `\x1b[33m${s}\x1b[0m`,
-  amber: (s) => `\x1b[33m${s}\x1b[0m`,
+  dim: paint(2),
+  bold: paint(1),
+  green: paint(32),
+  red: paint(31),
+  yellow: paint(33),
+  amber: paint(33),
 };
 
 // The published runtime, not a relative reach into a sibling directory. It was
