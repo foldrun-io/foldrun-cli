@@ -19,6 +19,7 @@
 //   foldrun open  [page]    the dashboard for this workspace
 //   foldrun login           sign this machine in from the browser
 //   foldrun whoami          who the platform thinks this terminal is
+//   foldrun doctor          what is between this terminal and the platform, checked
 //   foldrun accounts        every account signed in here; `use <name>` switches
 //   foldrun keys  <verb>    ls / create / revoke — the account's API keys
 //
@@ -58,6 +59,7 @@ Signing in
   foldrun login             sign this machine in from the browser (--token <key> to skip it)
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
+  foldrun doctor            check the path to the platform: node, CLI, account, DNS, a timed /api/healthz
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys — also create <label>, revoke <id>

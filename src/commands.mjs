@@ -1,7 +1,9 @@
 // CLI commands. Kept separate from bin/ so the environment is set before the
 // core is imported — single-workspace mode is read at module load.
 
+import dns from "node:dns";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2103,6 +2105,102 @@ async function whoami(flags) {
 }
 
 /**
+ * `foldrun doctor [--url]` — one line per thing that can be wrong between
+ * this terminal and a platform, ✓ or ✗, in the order a person would check
+ * them by hand: node, this CLI, its runtime, the environment, the account
+ * a command would act as, the name, and a timed request through the same
+ * client every other command uses. Exit 1 if any line is ✗.
+ *
+ * It exists because "fetch failed" was the whole diagnosis, and the fix
+ * was in a different place each time: a tunnel, a stale profile, a proxy
+ * variable, a box that was down.
+ */
+async function doctor(flags) {
+  const results = [];
+  const line = (ok, label, detail) => {
+    results.push(ok);
+    console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${label.padEnd(9)} ${detail}`);
+  };
+  console.log();
+
+  const major = Number(process.versions.node.split(".")[0]);
+  line(major >= 22, "node", `${process.version}${major >= 22 ? "" : " — foldrun needs 22 or newer"}  ${c.dim(process.execPath)}`);
+  line(true, "cli", `foldrun ${CLI_VERSION}  ${c.dim(fileURLToPath(new URL("..", import.meta.url)))}`);
+  try {
+    const root = coreRoot();
+    const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+    line(true, "core", `@foldrun/core ${version}  ${c.dim(root)}`);
+  } catch (err) {
+    line(false, "core", `@foldrun/core cannot be resolved — ${explain(err)}`);
+  }
+  // Set or unset, never the value: two of these are a key and a proxy URL
+  // that may carry one.
+  line(true, "env", ["FOLDRUN_URL", "FOLDRUN_TOKEN", "FOLDRUN_TIMEOUT", "HTTPS_PROXY"].map((v) => (env(v) ? `${v} set` : c.dim(`${v} unset`))).join(" · "));
+
+  let url;
+  let token;
+  try {
+    url = remoteUrl(flags);
+    if (typeof flags.token === "string" || env("FOLDRUN_TOKEN")) {
+      token = flags.token ?? env("FOLDRUN_TOKEN");
+      line(true, "account", `${typeof flags.token === "string" ? "--token" : "FOLDRUN_TOKEN"} ${token.slice(0, 8)}…  ${c.dim(url ?? "no platform")}`);
+    } else {
+      const p = chosenProfile(flags);
+      if (p) {
+        token = p.token;
+        line(true, "account", `${p.name}  ${p.account} · ${p.role ?? "?"} · ${p.email ?? "api key"} · key ${String(p.token).slice(0, 8)}…  ${c.dim(p.url)}`);
+      } else {
+        line(false, "account", url ? `no account stored for ${url} — \`foldrun login --url ${url}\`, or --token` : "not signed in — `foldrun login`, or --url with --token");
+      }
+    }
+  } catch (err) {
+    line(false, "account", explain(err));
+  }
+
+  if (!url) {
+    line(false, "dns", "no platform — pass --url, or sign in");
+    line(false, "healthz", "no platform — pass --url, or sign in");
+  } else {
+    const host = new URL(url).hostname;
+    if (net.isIP(host)) line(true, "dns", `${host} is an address, nothing to resolve`);
+    else {
+      const [a, aaaa] = await Promise.allSettled([dns.promises.resolve4(host), dns.promises.resolve6(host)]);
+      const list = (r) => (r.status === "fulfilled" ? r.value.join(", ") : "none");
+      if (a.status === "fulfilled" || aaaa.status === "fulfilled") line(true, "dns", `${host} → A ${list(a)} · AAAA ${list(aaaa)}`);
+      else {
+        // Not in DNS; /etc/hosts still counts, and is where a dev box lives.
+        try {
+          const found = await dns.promises.lookup(host, { all: true });
+          line(true, "dns", `${host} → ${found.map((f) => f.address).join(", ")} ${c.dim("(hosts file, not DNS)")}`);
+        } catch (err) {
+          line(false, "dns", `${host} — ${explain(a.status === "rejected" ? a.reason : err)}`);
+        }
+      }
+    }
+    const t0 = performance.now();
+    const took = () => `${Math.round(performance.now() - t0)} ms`;
+    try {
+      const res = await remoteFetch(url, "/api/healthz", {}, { token });
+      const text = await res.text();
+      let body = {};
+      try {
+        body = JSON.parse(text);
+      } catch {
+        // not JSON; the first line is shown below
+      }
+      const fields = ["version", "role"].filter((k) => body[k] != null).map((k) => `${k} ${body[k]}`).join(" · ");
+      const firstLine = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+      line(res.ok, "healthz", `GET /api/healthz ${res.status} in ${took()}${fields ? ` · ${fields}` : ""}${res.ok ? "" : ` — ${(res.headers.get("content-type") ?? "?").split(";")[0]}: ${firstLine.slice(0, 120)}`}`);
+    } catch (err) {
+      line(false, "healthz", `${explain(err)} ${c.dim(`(${took()})`)}`);
+    }
+  }
+
+  console.log();
+  return results.every(Boolean) ? 0 : 1;
+}
+
+/**
  * `foldrun keys ls|create|revoke` — the account's API keys, from the terminal.
  *
  *   keys ls                          every key, live and revoked
@@ -2271,6 +2369,8 @@ export async function run(command, positional, flags, workspace) {
       return logout(flags);
     case "whoami":
       return whoami(flags);
+    case "doctor":
+      return doctor(flags);
     case "keys":
       return keysCmd(positional, flags);
     case "accounts":
