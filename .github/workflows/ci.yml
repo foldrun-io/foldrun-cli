@@ -19,14 +19,36 @@ jobs:
       matrix:
         node: ["22", "24"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: foldrun-cli
+      # The sibling: the CLI is developed against foldrun-core's source
+      # (`../foldrun-core`, the layout is the wiring), and its e2e test
+      # reaches core's src directly. Public, so no token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: foldrun-io/foldrun-core
+          path: foldrun-core
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+          cache-dependency-path: |
+            foldrun-cli/package-lock.json
+            foldrun-core/package-lock.json
+      - run: npm ci --include=dev
+        working-directory: foldrun-core
       - run: npm install
+        working-directory: foldrun-cli
+      # Link the sibling over the registry copy, the way a developer's
+      # checkout has it. A release of the CLI still needs the core version
+      # it was written against to be published first.
+      - run: npm install --no-save ../foldrun-core
+        working-directory: foldrun-cli
       - run: npm test
+        working-directory: foldrun-cli
       # The .mjs sources checked from their JSDoc (tsconfig.json says what
       # is and is not enforced, and why). Cheap, and it catches the null
       # that a test would only find by running the one path that hits it.
       - run: npm run typecheck
+        working-directory: foldrun-cli
