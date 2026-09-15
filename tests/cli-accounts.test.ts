@@ -213,3 +213,65 @@ test("an unknown profile is refused before anything is called, and names the one
       p.close();
     }
   }));
+
+test("--url acts as the current account when it is on that URL, not the newest login there", async () =>
+  withHome(async (home) => {
+    const p = await fakePlatform({
+      key_acme: { account: "acme", email: "a@acme.test", role: "admin" },
+      key_beta: { account: "beta", email: "b@beta.test", role: "editor" },
+    });
+    try {
+      await run(home, ["login", "--url", p.url, "--token", "key_acme"]);
+      await run(home, ["login", "--url", p.url, "--token", "key_beta"]);
+      await run(home, ["use", "acme"]);
+      const bare = await run(home, ["whoami"]);
+      const named = await run(home, ["whoami", "--url", p.url]);
+      assert.match(bare.out, /account\s+acme/);
+      assert.match(named.out, /account\s+acme/, "the same command with --url is the same account");
+      assert.match(named.out, /acting as acme {2}acme · admin · a@acme\.test · http/, "and it says so, once");
+      assert.equal((named.out.match(/acting as/g) ?? []).length, 1);
+    } finally {
+      p.close();
+    }
+  }));
+
+test("--url with several accounts there and none current refuses and lists them; one account there is simply used", async () =>
+  withHome(async (home) => {
+    const p = await fakePlatform({
+      key_acme: { account: "acme", email: "a@acme.test", role: "admin" },
+      key_beta: { account: "beta", email: "b@beta.test", role: "editor" },
+    });
+    const q = await fakePlatform({ key_solo: { account: "solo", email: "s@solo.test", role: "admin" } });
+    try {
+      await run(home, ["login", "--url", p.url, "--token", "key_acme"]);
+      await run(home, ["login", "--url", p.url, "--token", "key_beta"]);
+      await run(home, ["login", "--url", q.url, "--token", "key_solo"]);
+      // solo is current, on q. Asking for p is ambiguous.
+      const r = await run(home, ["whoami", "--url", p.url]);
+      assert.notEqual(r.code, 0);
+      assert.match(r.out, /2 accounts are signed in to .*\(acme, beta\)/);
+      assert.match(r.out, /--profile <name>/, "it says how to pick one");
+      // …and --profile picks one.
+      assert.match((await run(home, ["whoami", "--url", p.url, "--profile", "beta"])).out, /account\s+beta/);
+      // q has one account: no ambiguity, even when it is not current.
+      await run(home, ["use", "acme"]);
+      const one = await run(home, ["whoami", "--url", q.url]);
+      assert.equal(one.code, 0, one.out);
+      assert.match(one.out, /account\s+solo/);
+      assert.match(one.out, /acting as solo/);
+    } finally {
+      p.close();
+      q.close();
+    }
+  }));
+
+test("a key from --token or FOLDRUN_TOKEN is announced as such, not as a stored account", async () =>
+  withHome(async (home) => {
+    const p = await fakePlatform({ key_ci: { account: "beta", email: "ci@beta.test", role: "editor" } });
+    try {
+      assert.match((await run(home, ["whoami", "--url", p.url, "--token", "key_ci"])).out, /acting with --token · http/);
+      assert.match((await run(home, ["whoami", "--url", p.url], { FOLDRUN_TOKEN: "key_ci" })).out, /acting with FOLDRUN_TOKEN · http/);
+    } finally {
+      p.close();
+    }
+  }));

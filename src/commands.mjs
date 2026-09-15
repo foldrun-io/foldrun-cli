@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { credentialFor, defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
+import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
 
 const c = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
@@ -369,7 +369,7 @@ async function platformLibrary(flags) {
   if (!url) return { url: undefined, tools: new Set(), skills: new Set(), warning: null };
   let token;
   try {
-    token = tokenFor(url, flags);
+    token = tokenFor(url, { ...flags, quiet: true });
   } catch {
     return { url, tools: new Set(), skills: new Set(), warning: `${url} is the platform but this machine is not signed in — library tools there cannot be seen` };
   }
@@ -1069,8 +1069,17 @@ function promptVisible(question) {
 // should not shadow the credentials file with nothing.
 const env = (name) => process.env[name] || undefined;
 
-/** The profile a command acts as: --profile by name, else the one whose URL
- *  was asked for, else the current one. */
+/**
+ * The profile a command acts as. In order: --profile by name; else, when a
+ * URL is named (--url, FOLDRUN_URL), the current profile if it is on that
+ * URL, else the one profile there, else a refusal that lists them; else the
+ * current profile.
+ *
+ * It was "the newest login on that URL", which meant `foldrun whoami --url
+ * https://dev.foldrun.io` acted as a different account from the bare
+ * `foldrun whoami` on a machine with two customers on one platform — the
+ * same command, two accounts, and nothing on screen to say so.
+ */
 function chosenProfile(flags) {
   if (typeof flags.profile === "string") {
     const p = profileByName(flags.profile);
@@ -1080,9 +1089,41 @@ function chosenProfile(flags) {
     }
     return p;
   }
-  const url = flags.url ?? env("FOLDRUN_URL");
-  if (url) return credentialFor(url);
-  return currentProfile();
+  const current = currentProfile();
+  const url = typeof flags.url === "string" ? flags.url : env("FOLDRUN_URL");
+  if (!url) return current;
+  let key;
+  try {
+    key = normaliseUrl(url);
+  } catch {
+    return null;
+  }
+  if (current && normaliseUrl(current.url) === key) return current;
+  const here = listProfiles().filter((p) => normaliseUrl(p.url) === key);
+  if (here.length <= 1) return here[0] ?? null;
+  throw new Error(
+    `${here.length} accounts are signed in to ${key} (${here.map((p) => p.name).join(", ")}) and none of them is the current one — say which: --profile <name> for this command, or \`foldrun use <name>\``,
+  );
+}
+
+/**
+ * Which account this command is acting as, said once, dim, on stderr —
+ * stderr so `foldrun source cat … > file` stays a file. The same shape as
+ * a row of `foldrun accounts`, so the two read as one thing.
+ */
+let announced = false;
+function announce(url, flags) {
+  if (announced || flags.quiet === true) return;
+  announced = true;
+  let line;
+  if (typeof flags.token === "string") line = `acting with --token · ${url}`;
+  else if (env("FOLDRUN_TOKEN")) line = `acting with FOLDRUN_TOKEN · ${url}`;
+  else {
+    const p = chosenProfile(flags);
+    if (!p) return;
+    line = `acting as ${p.name}  ${p.account} · ${p.role ?? "?"} · ${p.email ?? "api key"} · ${p.url}`;
+  }
+  console.error(`  ${c.dim(line)}`);
 }
 
 const remoteUrl = (flags) =>
@@ -1094,8 +1135,9 @@ const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOK
 function tokenFor(url, flags) {
   // --token and the environment win, always: a CI job with a key in the
   // environment must never read a file, whatever is stored in it.
-  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token ?? credentialFor(url)?.token;
+  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token;
   if (!token) throw new Error(NOT_SIGNED_IN);
+  announce(url, flags);
   return token;
 }
 
@@ -1859,7 +1901,7 @@ async function login(flags) {
   if (typeof flags.token === "string") {
     // Verify before storing: a wrong key stored is a wrong key on every
     // later command, each failing one step further from the cause.
-    const me = await remoteCall(url, { token: flags.token }, "/api/me");
+    const me = await remoteCall(url, { token: flags.token, quiet: true }, "/api/me");
     const name = saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
     console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
     console.log(`  ${c.dim(`stored as the account "${name}" — \`foldrun accounts\` lists them, \`foldrun use ${name}\` switches`)}\n`);
@@ -1931,9 +1973,9 @@ async function logout(flags) {
   let revoked = false;
   if (entry.minted) {
     try {
-      const me = await remoteCall(url, { token: entry.token }, "/api/me");
+      const me = await remoteCall(url, { token: entry.token, quiet: true }, "/api/me");
       if (me.actor?.kind === "key" && me.actor.id) {
-        await remoteCall(url, { token: entry.token }, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: me.actor.id }) });
+        await remoteCall(url, { token: entry.token, quiet: true }, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: me.actor.id }) });
         revoked = true;
       }
     } catch {
