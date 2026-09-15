@@ -92,6 +92,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --data <dir>              the installation's data directory
   --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
   --token <key>             API key for --url (or FOLDRUN_TOKEN, or the one from foldrun login)
+  FOLDRUN_TIMEOUT=<s>       seconds one request to the platform may take (default 30)
   --profile <name>          act as one stored account for this command (see foldrun accounts)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
@@ -163,12 +164,14 @@ if (isDeploy) {
   process.env.FOLDRUN_DATA ??= installationRoot ?? path.join(workspace, ".foldrun");
 }
 
-const { run } = await import(path.join(HERE, "../src/commands.mjs"));
+const { run, explain } = await import(path.join(HERE, "../src/commands.mjs"));
 
 try {
   const code = await run(command, positional, flags, workspace);
   process.exit(code ?? 0);
 } catch (err) {
-  console.error(`\n  ${err instanceof Error ? err.message : String(err)}\n`);
+  // The whole chain, not the top: "fetch failed" is the top, and the
+  // ECONNREFUSED underneath it is the part that says what to do.
+  console.error(`\n  ${explain(err)}\n`);
   process.exit(1);
 }

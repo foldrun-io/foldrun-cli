@@ -901,7 +901,7 @@ async function deployOverHttp(url, workspace, files, flags) {
   try {
     res = await fetch(endpoint, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "user-agent": USER_AGENT },
       body: JSON.stringify({
         files,
         commit: flags.commit ?? null,
@@ -1099,27 +1099,138 @@ function tokenFor(url, flags) {
   return token;
 }
 
+// ---------------------------------------------------------------- the HTTP client
+
+/** This CLI's version, so a platform's logs can tell which CLI called. */
+const CLI_VERSION = (() => {
+  try {
+    return String(JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "0");
+  } catch {
+    return "0";
+  }
+})();
+const USER_AGENT = `foldrun-cli/${CLI_VERSION}`;
+
+/** How long one request may take, in seconds: FOLDRUN_TIMEOUT, else 30. */
+function timeoutSeconds() {
+  const n = Number(env("FOLDRUN_TIMEOUT"));
+  return Number.isFinite(n) && n > 0 ? n : 30;
+}
+
+/**
+ * Every message on the way down, joined. "fetch failed" on its own says
+ * nothing; the ECONNREFUSED / ENOTFOUND / connect timeout that explains it
+ * sits in err.cause, where undici puts it and where nothing printed from —
+ * so `foldrun whoami` against a stopped box said "fetch failed" and no more.
+ * @param {unknown} err
+ */
+export function explain(err) {
+  const parts = [];
+  const seen = new Set();
+  for (let e = /** @type {any} */ (err); e != null && !seen.has(e); e = e.cause) {
+    seen.add(e);
+    // undici tries every address and hands back an AggregateError with an
+    // empty message; the first member is the one worth reading.
+    if (e instanceof AggregateError && !e.message && e.errors?.length) {
+      parts.push(explain(e.errors[0]));
+      continue;
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    const code = typeof e.code === "string" && !msg.includes(e.code) ? ` (${e.code})` : "";
+    parts.push(`${msg}${code}`);
+  }
+  return parts.join(": ");
+}
+
+/** A failed call: the status and whatever the platform said, kept on the error. */
+export class HttpError extends Error {
+  /** @param {string} message @param {number} status @param {any} body */
+  constructor(message, status, body) {
+    super(message);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+const RETRY_STATUS = new Set([429, 502, 503, 504]);
+
+/** Retry-After as milliseconds — seconds or an HTTP date — else one second, never past the timeout. */
+function retryAfterMs(res, seconds) {
+  const h = res.headers.get("retry-after");
+  let ms = 1000;
+  if (h && /^\d+$/.test(h.trim())) ms = Number(h) * 1000;
+  else if (h && !Number.isNaN(Date.parse(h))) ms = Date.parse(h) - Date.now();
+  return Math.min(Math.max(ms, 0), seconds * 1000);
+}
+
+/**
+ * One request to a platform: the auth header, a User-Agent, and a clock.
+ *
+ * Without the clock a box that accepts the TCP connection and never answers
+ * held the terminal for as long as the kernel allowed. A GET that meets a
+ * 429/502/503/504 is asked once more, after Retry-After when the server
+ * names one — a rolling deploy or a rate limit deserves the nudge. Nothing
+ * else is retried: a second POST could be a second run.
+ * @param {string} url @param {string} apiPath @param {RequestInit} [init]
+ * @param {{ token?: string }} [opts]
+ */
+async function remoteFetch(url, apiPath, init = {}, { token } = {}) {
+  const target = new URL(apiPath, url);
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = {
+    "user-agent": USER_AGENT,
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(init.headers ?? {}),
+  };
+  const seconds = timeoutSeconds();
+  const attempt = async () => {
+    try {
+      return await fetch(target, { ...init, headers, signal: AbortSignal.timeout(seconds * 1000) });
+    } catch (err) {
+      const name = /** @type {any} */ (err)?.name;
+      if (name === "TimeoutError" || name === "AbortError") {
+        throw new Error(`${target.host} did not answer ${method} ${target.pathname} within ${seconds}s — FOLDRUN_TIMEOUT=<seconds> allows longer`);
+      }
+      throw new Error(`could not reach ${target.origin}`, { cause: err });
+    }
+  };
+  let res = await attempt();
+  if (method === "GET" && RETRY_STATUS.has(res.status)) {
+    await sleep(retryAfterMs(res, seconds));
+    res = await attempt();
+  }
+  return res;
+}
+
+/**
+ * A call to the platform's API, as JSON. A body that is not JSON is not the
+ * platform talking — a Cloudflare challenge, a proxy's error page, a tunnel
+ * that is down — and used to be read as {} and reported as a bare "HTTP
+ * 403". Now the status, the content-type and the first line say so.
+ * @param {string} url @param {Record<string, any>} flags @param {string} apiPath @param {RequestInit} [init]
+ * @returns {Promise<any>}
+ */
 async function remoteCall(url, flags, apiPath, init = {}) {
   const token = tokenFor(url, flags);
-  const res = await fetch(new URL(apiPath, url), {
-    ...init,
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      ...(init.headers ?? {}),
-    },
-  });
-  const body = await res.json().catch(() => ({}));
+  const res = await remoteFetch(url, apiPath, { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) } }, { token });
+  const text = await res.text();
+  let body;
+  try {
+    body = text.trim() ? JSON.parse(text) : {};
+  } catch {
+    if (res.ok) return {};
+    const type = (res.headers.get("content-type") ?? "unknown type").split(";")[0].trim();
+    const title = text.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim();
+    const line = title || text.split("\n").map((l) => l.trim()).find(Boolean) || "";
+    throw new HttpError(`${apiPath} → HTTP ${res.status} (${type})${line ? `: ${line.slice(0, 160)}` : ""} — not the platform's answer; is ${new URL(url).host} the right address, and is it up?`, res.status, {});
+  }
   if (!res.ok) {
-    const err = new Error(body.error ?? `${apiPath} → HTTP ${res.status}`);
     // The body is the useful half of a failure and throwing it away is how a
     // failed RUN comes to look like a broken PLATFORM. `?wait=true` answers a
     // run that failed with 500 and a full record of why — status, steps, the
     // agent's last words — and a caller that prints only "HTTP 500" sends the
     // reader hunting for an outage that never happened.
-    err.status = res.status;
-    err.body = body;
-    throw err;
+    throw new HttpError(body.error ?? `${apiPath} → HTTP ${res.status}`, res.status, body);
   }
   return body;
 }
