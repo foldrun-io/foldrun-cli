@@ -26,3 +26,7 @@ jobs:
           cache: npm
       - run: npm install
       - run: npm test
+      # The .mjs sources checked from their JSDoc (tsconfig.json says what
+      # is and is not enforced, and why). Cheap, and it catches the null
+      # that a test would only find by running the one path that hits it.
+      - run: npm run typecheck

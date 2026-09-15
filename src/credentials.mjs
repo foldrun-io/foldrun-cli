@@ -99,6 +99,9 @@ function write(current, profiles) {
  * Remember a signed-in account. A second login to the same URL for the same
  * ACCOUNT replaces that profile rather than making a near-duplicate; a
  * different account on the same URL is a new one.
+ * @param {string} url
+ * @param {Record<string, any>} entry
+ * @param {{ makeDefault?: boolean, name?: string }} [opts]
  */
 export function saveCredential(url, entry, { makeDefault = true, name } = {}) {
   const key = normaliseUrl(url);

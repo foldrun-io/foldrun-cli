@@ -329,12 +329,14 @@ async function extract(workspace, flags) {
     // Prove it before deleting anything. parseToolDef is what the runtime
     // uses, so "it loads" here means it loads there.
     const check = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(manifest);
+    if (!check) throw new Error(`${name}: the manifest has no frontmatter — nothing to extract from`);
     const data = Object.fromEntries(
       check[1]
         .split("\n")
-        .map((l) => /^([a-z_-]+):\s*(.*)$/.exec(l))
-        .filter(Boolean)
-        .map((m) => [m[1], m[2]]),
+        .flatMap((l) => {
+          const m = /^([a-z_-]+):\s*(.*)$/.exec(l);
+          return m ? [[m[1], m[2]]] : [];
+        }),
     );
     const def = parseToolDef(data, name, manifest.slice(check[0].length));
     const ok =
@@ -385,7 +387,7 @@ async function platformLibrary(flags) {
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`/api/library/${kind} → HTTP ${res.status}`);
-    const body = await res.json();
+    const body = /** @type {any} */ (await res.json());
     return new Set((body.entries ?? []).map((e) => e.name).filter(Boolean));
   };
   try {
@@ -919,7 +921,7 @@ async function deployOverHttp(url, workspace, files, flags) {
     throw new Error(`could not reach ${url} — ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const body = await res.json().catch(() => ({}));
+  const body = /** @type {any} */ (await res.json().catch(() => ({})));
   if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — run \`foldrun login\` again, or check FOLDRUN_TOKEN`);
   // 422 is a refusal the caller has to read, not a transport failure: the
   // issues are in the body and reported like any other refused deploy.
@@ -952,6 +954,7 @@ async function deploy(source, flags) {
   // which is what a laptop or a CI job does. Without one, or with --local,
   // it is written straight into the installation on this machine.
   const url = flags.local === true ? undefined : remoteUrl(flags);
+  /** @type {any} */
   const plan = url
     ? await deployOverHttp(url, workspace, files, flags)
     : flags["dry-run"]
@@ -1906,7 +1909,7 @@ async function connect(positional, flags) {
       server.close();
       resolve(u.searchParams.get("code"));
     });
-    server.on("error", (e) => reject(e.code === "EADDRINUSE"
+    server.on("error", (/** @type {any} */ e) => reject(e.code === "EADDRINUSE"
       ? new Error(`port ${port} is in use — pass --port <n> and register http://localhost:<n>/callback on the app`)
       : e));
     server.listen(port, "127.0.0.1", async () => {
@@ -1924,12 +1927,13 @@ async function connect(positional, flags) {
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
     body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, client_id: clientId, client_secret: clientSecret }).toString(),
   });
-  const payload = await exchange.json().catch(() => ({}));
+  const payload = /** @type {any} */ (await exchange.json().catch(() => ({})));
   if (!exchange.ok || (!payload.refresh_token && !payload.access_token)) {
     throw new Error(`token exchange failed (${exchange.status}): ${payload.error_description ?? payload.error ?? "no token in the reply"}`);
   }
 
   // Store: the refresh recipe when there is one, the bare token otherwise.
+  /** @type {any} */
   const body = payload.refresh_token
     ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, client_secret: clientSecret, refresh_token: payload.refresh_token }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
     : { name, value: payload.access_token, workspace: workspaceName };
@@ -2001,6 +2005,7 @@ async function login(flags) {
     return 0;
   }
 
+  /** @type {any} */
   let start;
   try {
     const res = await remoteFetch(url, "/api/cli/login", {
@@ -2023,6 +2028,7 @@ async function login(flags) {
   const deadline = Date.parse(start.expiresAt) || Date.now() + 10 * 60 * 1000;
   while (Date.now() < deadline) {
     await sleep(interval);
+    /** @type {any} */
     let poll;
     try {
       // Through the shared client: a poll that hangs used to hang the

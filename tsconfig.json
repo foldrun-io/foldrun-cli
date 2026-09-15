@@ -1,0 +1,30 @@
+{
+  // `npm run typecheck` — the .mjs sources checked from their JSDoc, no
+  // emit. The tests are .ts already and run under Node's type stripping,
+  // so they are checked here too.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    // Two of strict's parts are off, on purpose. The .mjs sources are
+    // ~2,400 lines of JS whose parameters are documented in prose, not
+    // JSDoc: noImplicitAny would want 140 `@param {any}` lines that add
+    // nothing a reader needs. And every catch here reads err.message or
+    // err.status after an instanceof or optional chain; unknown-in-catch
+    // would want 44 casts to say the same. Both stay off until the
+    // sources carry real types. Everything else strict says holds.
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": false,
+    "erasableSyntaxOnly": true
+  },
+  "include": ["bin/**/*.mjs", "src/**/*.mjs", "tests/**/*.ts", "scripts/**/*.mjs"]
+}
