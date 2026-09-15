@@ -10,6 +10,40 @@ edited by a person.
 
 <!-- releases -->
 
+## [0.6.0] — 2026-09-15
+
+- The CLI asks for the core it was written against ([5151460](https://github.com/foldrun-io/foldrun-cli/commit/5151460))
+- gray-matter as a dev dependency: the e2e test reads frontmatter itself ([270deda](https://github.com/foldrun-io/foldrun-cli/commit/270deda))
+- ci checks out the sibling core and links it, the way a checkout has it ([6993084](https://github.com/foldrun-io/foldrun-cli/commit/6993084))
+- check fails on a flow option core refuses, not just warns ([63c0545](https://github.com/foldrun-io/foldrun-cli/commit/63c0545))
+- NO_COLOR turns the escapes off ([9ffa571](https://github.com/foldrun-io/foldrun-cli/commit/9ffa571))
+- a quiet run stream is reconnected, then given up on; a refused key says whose ([387564c](https://github.com/foldrun-io/foldrun-cli/commit/387564c))
+- --url acts as the current account, and every remote command says which ([f080b60](https://github.com/foldrun-io/foldrun-cli/commit/f080b60))
+- invoke --wait asks in 25-second pieces ([794880e](https://github.com/foldrun-io/foldrun-cli/commit/794880e))
+- --test on run and invoke ([4f75235](https://github.com/foldrun-io/foldrun-cli/commit/4f75235))
+- connect reuses the saved client; secrets status ([2262bd6](https://github.com/foldrun-io/foldrun-cli/commit/2262bd6))
+- Bump the actions group with 3 updates (#1) ([e766085](https://github.com/foldrun-io/foldrun-cli/commit/e766085))
+
+### foldrun doctor
+
+- the path to the platform, one line per check ([f5d1dc8](https://github.com/foldrun-io/foldrun-cli/commit/f5d1dc8))
+
+### invoke --wait
+
+- report a failed run, not "HTTP 500" (#7) ([2d96b11](https://github.com/foldrun-io/foldrun-cli/commit/2d96b11))
+
+### npm run typecheck
+
+- the .mjs sources checked from their JSDoc ([1ec2b99](https://github.com/foldrun-io/foldrun-cli/commit/1ec2b99))
+
+### README
+
+- doctor in the command table ([8d1a489](https://github.com/foldrun-io/foldrun-cli/commit/8d1a489))
+
+### the HTTP client
+
+- a clock, the cause, a User-Agent, one retry ([19c510e](https://github.com/foldrun-io/foldrun-cli/commit/19c510e))
+
 ## [0.5.0] — 2026-09-09
 
 ### Added
