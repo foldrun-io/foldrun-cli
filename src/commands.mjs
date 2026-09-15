@@ -564,7 +564,7 @@ async function check(workspace, flags = {}) {
         note("error", `flows/${f.file}`, `[[${s.subflow ? "flow:" : ""}${target}]] does not exist`, s.line);
       }
     }
-    for (const w of lintFlow(f, { agents: [...agentNames] })) note("warn", `flows/${f.file}`, w.message, w.line);
+    for (const w of lintFlow(f, { agents: [...agentNames] })) note(w.level ?? "warn", `flows/${f.file}`, w.message, w.line);
   }
 
   for (const e of evals) {
