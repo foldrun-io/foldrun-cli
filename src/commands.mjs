@@ -711,6 +711,11 @@ async function runTarget(target, flags) {
   const name = target.replace(/^flow:/, "");
   const asFlow = target.startsWith("flow:") || !listAgents(T, P).some((a) => a.name === name);
 
+  // --test: a test run. Locally there is no egress proxy, so what holds is
+  // the runner's own half of it — send-capable secrets are withheld from
+  // scripts, FOLDRUN_TEST_MODE=1 is set, and state/ and storage/ writes
+  // are moved under runs/<id>/test-writes/ after each step.
+  const opts = flags.test === true ? { test: true } : {};
   let run;
   if (asFlow) {
     const flow = loadFlow(T, P, name);
@@ -720,12 +725,12 @@ async function runTarget(target, flags) {
           i === 0 ? { ...s, instruction: `${s.instruction}\n\n<run_task>\n${flags.task}\n</run_task>` } : s,
         )
       : flow.steps;
-    run = startFlowRun(T, P, steps, flow.name, flow.model);
+    run = startFlowRun(T, P, steps, flow.name, flow.model, [], null, null, opts);
   } else {
-    run = startFlowRun(T, P, [{ agent: name, instruction: flags.task ?? "", group: 1, optional: false }], `cli:${name}`);
+    run = startFlowRun(T, P, [{ agent: name, instruction: flags.task ?? "", group: 1, optional: false }], `cli:${name}`, null, [], null, null, opts);
   }
 
-  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}\n`);
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}${run.test ? `  ${c.amber("TEST")}` : ""}\n`);
   const seen = new Map();
   for (;;) {
     const current = readRun(T, P, run.id);
@@ -1474,6 +1479,9 @@ async function invoke(target, flags) {
       body: JSON.stringify({
         task: typeof flags.task === "string" ? flags.task : "",
         ...(from !== undefined ? { from } : {}),
+        // --test: the platform marks the run a test run — sends refused or
+        // sunk at the proxy, send-capable secrets withheld, state/ kept.
+        ...(flags.test === true ? { test: true } : {}),
       }),
     });
   } catch (err) {
@@ -1493,7 +1501,7 @@ async function invoke(target, flags) {
     return finishLine(run);
   }
   if (!flags.wait) {
-    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${url}/dashboard/${ws}/runs?run=${body.runId}`)}\n`);
+    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)}${body.test ? ` ${c.amber("TEST")}` : ""} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${url}/dashboard/${ws}/runs?run=${body.runId}`)}\n`);
     return 0;
   }
   const run = body.run ?? body;

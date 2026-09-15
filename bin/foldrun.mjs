@@ -67,6 +67,7 @@ Options
   --workspace <dir>         the workspace folder (default: .)
   --from <template>         start from a shipped template, e.g. templates/hello
   --task "<text>"           the instruction for a manual run
+  --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --file <path>             source put: the local file to send (default: stdin)
@@ -111,7 +112,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
