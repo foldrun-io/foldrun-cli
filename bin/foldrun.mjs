@@ -23,6 +23,7 @@
 //   foldrun storage <verb>  ls / cat / get — what the agents produced, as opposed to what you wrote
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
+//   foldrun agent new <name>  one more agent in this workspace — also flow new, tool new
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
 //   foldrun pull            bring the platform's account down into this folder
 //   foldrun status          what differs here from what is deployed
@@ -57,6 +58,9 @@ const HELP = `foldrun — agents are just folders
 
   foldrun init [dir]        create an account folder: AGENTS.md, library/ and workspaces/<name>
   foldrun new <name>        another workspace in this account
+  foldrun agent new <name>  one more agent in this workspace (--to <workspace> in an account)
+  foldrun flow new <name>   one more flow — its first step names an agent you already have
+  foldrun tool new <name>   one more tool: a folder with its program beside it (--transport, --language)
   foldrun check [dir]       validate every workspace here, and the shared library
   foldrun extract [dir]     move single-file script tools into folders (tool.md + run.*)
   foldrun run <target>      run an agent or flow (target: name, or flow:name)
@@ -97,6 +101,8 @@ Options
   --workspace <dir>         the workspace folder (default: .) — on init, the first workspace's name
   --flat                    init: the old single-folder shape, no account around it
   --from <template>         start from a shipped template, e.g. templates/hello
+  --transport <k>           tool new: script (default), http or mcp
+  --language <l>            tool new: the script's language — javascript, python, bash
   --task "<text>"           the instruction for a manual run
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)

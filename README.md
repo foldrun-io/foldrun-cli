@@ -114,6 +114,7 @@ declared the same way.
 |---|---|
 | `foldrun init [dir]` | create an account folder with one workspace in it (`--flat` for the old shape) |
 | `foldrun new <name>` | another workspace in this account |
+| `foldrun agent new <name>` | one more agent in this workspace — also `flow new <name>` and `tool new <name>` |
 | `foldrun check [dir]` | validate every workspace here, and the shared library |
 | `foldrun run <target>` | run an agent or a flow |
 | `foldrun eval [name]` | run one eval, or all of them |

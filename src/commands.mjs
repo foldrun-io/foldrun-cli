@@ -227,6 +227,137 @@ async function newWorkspace(name, flags, layout) {
   return 0;
 }
 
+// ------------------------------------------------- agent, flow, tool: new
+
+/**
+ * Which workspace folder a scaffolding command writes into.
+ *
+ * `init` makes an account, `new` makes a workspace; these make one document
+ * INSIDE a workspace, so the question is the same one every workspace-scoped
+ * command asks and the answer is the same: the folder you are standing in,
+ * the only one in this account, or the one `--to` names.
+ */
+function workspaceDirFor(flags, layout) {
+  if (typeof flags.to === "string") {
+    if (!layout.workspacesDir || !layout.workspaces.includes(flags.to)) {
+      throw new Error(
+        `no workspace called "${flags.to}" here — this ${layout.kind === "flat" ? "is a single workspace" : `account has ${layout.workspaces.join(", ") || "none"}`}`,
+      );
+    }
+    return path.join(layout.workspacesDir, flags.to);
+  }
+  if (layout.workspaceDir && layout.kind !== "empty") return layout.workspaceDir;
+  if (layout.workspacesDir && layout.workspaces.length === 1) return path.join(layout.workspacesDir, layout.workspaces[0]);
+  if (layout.kind === "account") {
+    throw new Error(`which workspace? --to <name> — this account has ${layout.workspaces.join(", ") || "none"}`);
+  }
+  throw new Error("this is not a workspace — `foldrun init <dir>` makes one, or cd into an existing one");
+}
+
+/**
+ * What each key in a scaffolded file is for, said once where it is useful.
+ *
+ * Not written INTO the template: the templates are core's, shared with the
+ * dashboard's New button and checked by the same validator, and a commented
+ * copy here would be a second list to keep in step. Printed instead, beside
+ * the file it describes.
+ */
+const KEY_NOTES = {
+  agents: [
+    ["name", "how flows address it — [[name]]; matches the folder"],
+    ["description", "one line; what this role is for"],
+    ["model", "fast | default | max — tier the work, not the desk"],
+    ["effort", "low | high — how hard to think about it"],
+    ["tools", "the one grant list: built-ins and your own tools/"],
+  ],
+  flows: [
+    ["name", "how it is run: foldrun run <name>"],
+    ["description", "one line; what it accomplishes end to end"],
+    ["trigger", "manual | schedule | webhook — schedule: needs schedule: and timezone:"],
+    ["1. [[agent]]", "the NUMBER is the group: same number runs in parallel, and the flow waits"],
+  ],
+  tools: [
+    ["transport", "script | http | mcp — script is a program in this folder"],
+    ["name", "what an agent puts in its tools: list"],
+    ["description", "the model reads this to decide when to call it"],
+    ["run", "the program, relative to this folder"],
+  ],
+};
+
+/** An agent already in this workspace, so a new flow names a real one. */
+function anyAgentIn(dir) {
+  try {
+    return fs.readdirSync(path.join(dir, "agents"), { withFileTypes: true }).find((e) => e.isDirectory())?.name;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `foldrun agent new <name>`, `flow new`, `tool new` — one document inside a
+ * workspace, with the frontmatter its format requires.
+ *
+ * The dashboard's New button has written these templates since kinds.ts
+ * existed; the terminal's only scaffolding was `init` and `new`, which make a
+ * whole workspace. So the author who wanted a fourth agent wrote the
+ * frontmatter from memory, which is how `use:` survived a year after it was
+ * replaced by `tools:`.
+ *
+ * The templates are core's, not a second copy: a list of required keys in two
+ * places is the bug this codebase keeps producing, and a scaffold that drifts
+ * from the validator writes files `foldrun check` then rejects.
+ *
+ * A new tool is a `transport: script` folder by default — its program in a
+ * file beside it, because a tool whose code is a fenced block gets no linter,
+ * no formatter and no way to run it except through a run.
+ */
+async function scaffoldCmd(kind, positional, flags, layout) {
+  const { KINDS, toolStarter, SCRIPT_LANGUAGES } = await import("@foldrun/core/kinds");
+  const one = KINDS[kind].one;
+
+  const verb = positional[0];
+  if (verb !== "new") {
+    throw new Error(`\`foldrun ${one} new <name>\` — "new" is the only verb${verb ? `, not "${verb}"` : ""}`);
+  }
+  const name = positional[1];
+  if (!name) throw new Error(`which ${one}? \`foldrun ${one} new <name>\` — e.g. ${KINDS[kind].placeholder}`);
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`"${name}" is not a ${one} name — kebab-case only, e.g. ${KINDS[kind].placeholder}`);
+  }
+
+  const dir = workspaceDirFor(flags, layout);
+  let files;
+  if (kind === "tools") {
+    const transport = typeof flags.transport === "string" ? flags.transport : "script";
+    if (!["script", "http", "mcp"].includes(transport)) {
+      throw new Error(`--transport takes script, http or mcp — not "${transport}"`);
+    }
+    const language = typeof flags.language === "string" ? flags.language : "javascript";
+    if (!SCRIPT_LANGUAGES.some((l) => l.value === language)) {
+      throw new Error(`--language takes ${SCRIPT_LANGUAGES.map((l) => l.value).join(", ")} — not "${language}"`);
+    }
+    files = toolStarter(name, transport, language).map((f) => ({ path: f.file, content: f.content }));
+  } else {
+    files = [{ path: KINDS[kind].file(name), content: KINDS[kind].template(name, { firstAgent: anyAgentIn(dir) }) }];
+  }
+
+  writeFiles(dir, files, path.basename(dir));
+
+  const where = path.relative(process.cwd(), dir) || ".";
+  console.log(`\n  ${c.green("created")} ${one} ${c.bold(name)} in ${where}\n`);
+  for (const f of files) console.log(`    ${c.dim(f.path)}`);
+  console.log(`\n  ${c.dim(KINDS[kind].hint)}\n`);
+  // What each key in the file it just wrote is FOR. The templates come from
+  // core so they cannot drift from the validator, and they carry no comments
+  // — a second, commented copy here would be exactly the two-lists bug. So
+  // the explanation is printed once, next to the file it explains.
+  for (const [key, what] of KEY_NOTES[kind]) console.log(`    ${c.bold(pad(key, 12))} ${c.dim(what)}`);
+  console.log(`\n  ${c.bold("Next")}
+    edit ${path.join(where, files[0].path)}
+    foldrun check${where === "." ? "" : ` ${where}`}${" ".repeat(4)}${c.dim("validate it — offline, costs nothing")}\n`);
+  return 0;
+}
+
 // ---------------------------------------------------------------- check
 
 // The Agent Skills spec constrains the `name` field and requires a non-empty
@@ -3825,6 +3956,12 @@ export async function run(command, positional, flags, workspace, layout) {
       return billingCmd(flags);
     case "storage":
       return storageCmd(positional, flags, layout);
+    case "agent":
+      return scaffoldCmd("agents", positional, flags, layout);
+    case "flow":
+      return scaffoldCmd("flows", positional, flags, layout);
+    case "tool":
+      return scaffoldCmd("tools", positional, flags, layout);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":
