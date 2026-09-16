@@ -3744,12 +3744,17 @@ async function runsCmd(flags, layout) {
   const wanted =
     typeof flags.status === "string" ? new Set(flags.status.split(",").map((s) => s.trim()).filter(Boolean)) : null;
 
-  // Each desk is asked for its own newest `limit` before the merge, so one
-  // busy workspace cannot crowd every quiet one out of the answer.
+  // Each desk is asked for its own newest rows before the merge, so one
+  // busy workspace cannot crowd every quiet one out of the answer. With a
+  // status or a window in play the ask is the API's ceiling, not `limit`:
+  // the filter runs here, after the fetch, and a desk with twenty recent
+  // successes was hiding its older failures from `--status failed` because
+  // only its newest twenty of any status ever arrived.
+  const perWorkspace = wanted || cutoff !== null ? 500 : limit;
   const unreachable = [];
   const lists = await pool(names, 8, async (ws) => {
     try {
-      const { runs = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=${limit}`);
+      const { runs = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=${perWorkspace}`);
       return runs.map((r) => ({ ...r, workspace: ws }));
     } catch (err) {
       unreachable.push([ws, explain(err)]);
