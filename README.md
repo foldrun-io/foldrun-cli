@@ -25,17 +25,35 @@ Requires Node 22 or newer. `init` and `check` need no API key.
 
 ## What `init` gives you
 
+An **account folder** — the same shape the platform keeps, so what you reason
+about locally is what runs there:
+
 ```
-competitor-watch/
-├── AGENTS.md                    what every agent here shares
-├── agents/
-│   ├── researcher/agent.md
-│   └── writer/agent.md
-├── flows/publish.md             the steps, in order
-├── knowledge/house-style.md     given to them; they may read, never write
-├── memory/what-worked.md        what they learned; they write here
-└── evals/writer-quality.md      what "good" means, as a test
+competitor-watch/                 the account
+├── AGENTS.md                     config and context every workspace inherits
+├── library/                      skills, tools, scripts, knowledge shared by all of them
+│   ├── skills/  tools/  scripts/
+│   └── knowledge/  memory/
+└── workspaces/
+    └── main/                     the first workspace, ready to run
+        ├── AGENTS.md             what every agent HERE shares
+        ├── agents/
+        │   ├── researcher/agent.md
+        │   └── writer/agent.md
+        ├── flows/publish.md      the steps, in order
+        ├── knowledge/house-style.md  given to them; they may read, never write
+        ├── memory/what-worked.md     what they learned; they write here
+        └── evals/writer-quality.md   what "good" means, as a test
 ```
+
+`--workspace <name>` names that first workspace (default `main`), and
+`foldrun new <name>` adds another beside it. Every workspace in the account
+resolves `skills:`, `tools:` and `scripts:` against the shared `library/`,
+nearest-wins — its own file first, the library second.
+
+`foldrun init --flat <dir>` makes the older single-folder shape instead: no
+account around it, `agents/` and `flows/` at the root. **Every command still
+reads that shape**, unchanged, so a folder made before today keeps working.
 
 An agent is frontmatter for the machine and prose for the model:
 
@@ -94,15 +112,19 @@ declared the same way.
 
 | | |
 |---|---|
-| `foldrun init [dir]` | create a workspace you can run immediately |
-| `foldrun check [dir]` | validate agents, flows, tools, evals and knowledge |
+| `foldrun init [dir]` | create an account folder with one workspace in it (`--flat` for the old shape) |
+| `foldrun new <name>` | another workspace in this account |
+| `foldrun check [dir]` | validate every workspace here, and the shared library |
 | `foldrun run <target>` | run an agent or a flow |
 | `foldrun eval [name]` | run one eval, or all of them |
 | `foldrun extract [dir]` | move single-file script tools into folders |
 | `foldrun probe <model>` | live check: can this model hold a tool loop here? |
 | `foldrun logs [run-id]` | recent runs, or one run's full event trail |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
-| `foldrun deploy [dir]` | push a workspace into an installation |
+| `foldrun deploy [dir]` | push the whole account — or `deploy <workspace>` for one of them |
+| `foldrun pull` | bring the platform's account down here (refuses to clobber local edits) |
+| `foldrun status` | per workspace: added, changed, and what moved on the platform since your last deploy |
+| `foldrun workspaces` | what exists here and there — also `rm <name>` (`--platform --yes` to delete it there) |
 | `foldrun invoke <flow>` | start a flow on a running platform (`--watch` streams its trace) |
 | `foldrun open [page]` | the dashboard for this workspace, in the browser |
 | `foldrun login` | sign this machine in from the browser — no key to copy |
@@ -134,10 +156,21 @@ an API and never reach the model.
 
 ## Running it somewhere else
 
-`foldrun deploy` pushes a workspace into an installation — your own, or a
+`foldrun deploy` pushes this account into an installation — your own, or a
 hosted one — and `foldrun invoke <flow> --wait` starts a flow there and prints
 the result. A deploy never touches run history, state, secrets, or memory an
-agent wrote: those belong to the installation, not to your git repo.
+agent wrote: those belong to the installation, not to your git repo. It never
+removes a workspace either: one that exists on the platform and not in your
+folder is left exactly as it is, and `foldrun workspaces rm <name> --platform
+--yes` is the deliberate way to delete one.
+
+Inside an account folder the workspace-scoped commands take the workspace as a
+positional — `foldrun secrets blog-desk set TOKEN`, `foldrun runs blog-desk` —
+or need nothing at all when there is only one.
+
+One gap worth knowing: the platform has no account-file endpoint, so the
+account's own `AGENTS.md` is not pushed or pulled. `deploy` and `pull` say so
+rather than dropping it quietly; edit it in Settings on the platform.
 
 ```sh
 foldrun login                    # approve it in the browser, once per machine

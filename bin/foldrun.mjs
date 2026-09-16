@@ -6,14 +6,18 @@
 // point. A framework whose free version is a crippled demo gets no adoption,
 // and adoption is the only reason a hosted version has customers.
 //
-//   foldrun init  [dir]     scaffold a working workspace
+//   foldrun init  [dir]     scaffold an account: a library, and a workspace in it
 //   foldrun check [dir]     validate it — no model calls, no cost
 //   foldrun run   <target>  run an agent or a flow
 //   foldrun eval  [name]    run evals
 //   foldrun probe <model>   can this model hold a tool loop? (live check)
 //   foldrun logs  [run-id]  recent runs, or one run's full event trail
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
-//   foldrun deploy [dir]    push a workspace into an installation
+//   foldrun new   <name>    another workspace in this account
+//   foldrun deploy [dir]    push this account — or one workspace — into an installation
+//   foldrun pull            bring the platform's account down into this folder
+//   foldrun status          what differs here from what is deployed
+//   foldrun workspaces      what exists here, and there
 //   foldrun invoke <flow>   start a flow on a running platform
 //   foldrun source <verb>   ls / cat / put / mv / rm one workspace file on a platform
 //   foldrun open  [page]    the dashboard for this workspace
@@ -27,6 +31,7 @@
 // show up as a confidently wrong answer at 3am.
 
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -41,8 +46,9 @@ const [, , command, ...rest] = process.argv;
 
 const HELP = `foldrun — agents are just folders
 
-  foldrun init [dir]        create a workspace you can run immediately
-  foldrun check [dir]       validate agents, flows, tools, evals and knowledge
+  foldrun init [dir]        create an account folder: AGENTS.md, library/ and workspaces/<name>
+  foldrun new <name>        another workspace in this account
+  foldrun check [dir]       validate every workspace here, and the shared library
   foldrun extract [dir]     move single-file script tools into folders (tool.md + run.*)
   foldrun run <target>      run an agent or flow (target: name, or flow:name)
   foldrun eval [name]       run one eval, or all of them
@@ -50,7 +56,10 @@ const HELP = `foldrun — agents are just folders
   foldrun logs [run-id]     recent runs, or one run's full event trail
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
-  foldrun deploy [dir]      push a workspace into an installation
+  foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
+  foldrun pull              bring the platform's account down here (refuses to clobber; --force overrides)
+  foldrun status            per workspace: what is added, changed or gone since the last deploy
+  foldrun workspaces        what exists here and on the platform — also rm <name> (--platform --yes)
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
@@ -66,7 +75,8 @@ Signing in
   foldrun --help
 
 Options
-  --workspace <dir>         the workspace folder (default: .)
+  --workspace <dir>         the workspace folder (default: .) — on init, the first workspace's name
+  --flat                    init: the old single-folder shape, no account around it
   --from <template>         start from a shipped template, e.g. templates/hello
   --task "<text>"           the instruction for a manual run
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
@@ -99,7 +109,9 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --dry-run                 deploy: check and report, change nothing
-  --force                   deploy: deploy even while runs are in flight
+  --force                   deploy: deploy even while runs are in flight; pull: overwrite local edits
+  --all                     status, pull: every workspace, not just this one
+  --platform --yes          workspaces rm: delete it on the platform, deliberately
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
 work without one. \`foldrun login\` is for the hosted platform, or your own.`;
@@ -115,7 +127,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "all"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
@@ -129,47 +141,90 @@ for (let i = 0; i < rest.length; i++) {
   else flags[name] = rest[++i];
 }
 
-// `deploy` is the one command that is not about a single folder: it reads a
-// source directory and writes into an installation, which has accounts and
-// many workspaces. Pinning FOLDRUN_WORKSPACE would collapse that layout to one
-// folder and send every deploy to the same place.
-const isDeploy = command === "deploy";
+// Commands that are about an ACCOUNT, not one folder: they read or write the
+// account AGENTS.md, the shared library and several workspaces at once, so
+// pinning FOLDRUN_WORKSPACE would collapse the layout to one of them.
+// `deploy` has always been in this set — it writes into an installation,
+// which has accounts and many workspaces.
+const ACCOUNT_WIDE = new Set(["deploy", "pull", "status", "workspaces", "new"]);
 
 // `init` and `check` take a directory; `run` and `eval` take the name of a
 // thing to run, so a directory there would be ambiguous — use --workspace.
 const takesDir = command === "init" || command === "check" || command === "extract";
-const workspace = path.resolve(
-  flags.workspace ?? (takesDir ? positional.shift() ?? "." : "."),
+// For `init` the flag names the first WORKSPACE, not a directory — the
+// directory it makes is the account. A value that looks like a path is still
+// read as one, so `foldrun init --workspace ./desk` keeps working.
+const flagIsName =
+  command === "init" &&
+  typeof flags.workspace === "string" &&
+  !flags.workspace.includes(path.sep) &&
+  !flags.workspace.includes("/") &&
+  !fs.existsSync(flags.workspace);
+const here = path.resolve(
+  (flagIsName ? undefined : flags.workspace) ?? (takesDir ? positional.shift() ?? "." : "."),
 );
-if (!isDeploy) process.env.FOLDRUN_WORKSPACE = workspace;
+
+// Which shape is this? One helper in the core answers, so `check`, `deploy`,
+// `status` and the runtime's own account scope cannot drift apart.
+const { detectLayout, installationDataRoot } = await import("@foldrun/core/layout");
+const layout = detectLayout(here);
+
+/**
+ * The workspace directory this command should act on.
+ *
+ * At an account root with exactly one workspace there is nothing to ask about
+ * — that is the one. With several, a command that needs one says so itself,
+ * by name, rather than picking.
+ */
+function pinned() {
+  if (layout.workspaceDir && layout.kind !== "empty") return layout.workspaceDir;
+  if (layout.kind === "account" && layout.workspacesDir && layout.workspaces.length === 1) {
+    return path.join(layout.workspacesDir, layout.workspaces[0]);
+  }
+  if (layout.kind === "empty") return here;
+  return null;
+}
+
+const workspace = pinned() ?? here;
+if (!ACCOUNT_WIDE.has(command)) process.env.FOLDRUN_WORKSPACE = workspace;
+// The account scope, decided once here and honoured by the core's
+// singleAccountRoot — so `library/` beside `workspaces/` is what an agent's
+// skills:, tools: and scripts: resolve against, exactly as it is on the
+// platform.
+process.env.FOLDRUN_ACCOUNT ??= layout.accountRoot;
 
 // Where the secrets, keys and run store live.
 //
-// A workspace on a laptop keeps them inside itself, in `.foldrun/`. But a
-// workspace that belongs to an installation sits at
+// An account on a laptop keeps them at its own root, in `.foldrun/`, so every
+// workspace under it shares one vault — the way workspaces in an account share
+// one vault on the platform. A flat workspace keeps them inside itself, which
+// is where they have always been.
+//
+// A workspace that belongs to an INSTALLATION is a third case: it sits at
 // `<data>/<tenant>/workspaces/<name>`, and its secrets belong to the tenant,
 // two levels up — so pointing --workspace at one and defaulting to `.foldrun/`
 // opened an empty store beside it. Every declared secret came back missing,
-// and the error told you to add secrets that were already there.
-//
-// The layout says which case this is: a parent directory named `workspaces`
-// only happens in an installation.
-const parent = path.basename(path.dirname(workspace));
-const installationRoot =
-  parent === "workspaces" ? path.resolve(workspace, "..", "..", "..") : null;
+// and the error told you to add secrets that were already there. The shape
+// alone cannot tell an installation from an account folder (they are the same
+// shape); the installation's key file at the data root can.
+const installationRoot = installationDataRoot(layout.accountRoot);
 
-if (isDeploy) {
+if (command === "deploy") {
   // The destination is an installation, so --data names it outright. Without
   // one, dataRoot()'s own default applies: data/ at the project root.
   if (flags.data) process.env.FOLDRUN_DATA = path.resolve(flags.data);
 } else {
-  process.env.FOLDRUN_DATA ??= installationRoot ?? path.join(workspace, ".foldrun");
+  process.env.FOLDRUN_DATA ??=
+    installationRoot ??
+    (layout.kind === "flat" || layout.kind === "empty"
+      ? path.join(workspace, ".foldrun")
+      : path.join(layout.accountRoot, ".foldrun"));
 }
 
 const { run, explain } = await import(path.join(HERE, "../src/commands.mjs"));
 
 try {
-  const code = await run(command, positional, flags, workspace);
+  const code = await run(command, positional, flags, workspace, layout);
   process.exit(code ?? 0);
 } catch (err) {
   // The whole chain, not the top: "fetch failed" is the top, and the

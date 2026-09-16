@@ -3,6 +3,7 @@
 
 import dns from "node:dns";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -70,11 +71,9 @@ function shippedTemplates() {
   return fs.readdirSync(dir).filter((n) => fs.statSync(path.join(dir, n)).isDirectory()).map((n) => `templates/${n}`);
 }
 
-async function init(workspace, from) {
-  // The same definition the dashboard's "+ New workspace" uses — see
-  // core/src/starter.ts for why it is not two lists.
-  const { starterFiles, syncWorkspaceBundles, ensureAccountFiles } = await core();
-
+/** The files of one workspace: a template if asked for, else the starter. */
+async function workspaceFiles(name, from) {
+  const { starterFiles } = await core();
   // A template is a source, a workspace is a destination. Keeping the two
   // words apart is the whole reason `templates/` is not called `examples/`:
   // there is one place a workspace lives, and it is wherever you make one.
@@ -86,9 +85,7 @@ async function init(workspace, from) {
   if (from && !source) {
     throw new Error(`no template at ${from} — pass a directory, or one that ships with foldrun: ${shippedTemplates().join(", ") || "none found"}`);
   }
-  const files = source
-    ? templateFilesFrom(source)
-    : starterFiles(path.basename(path.resolve(workspace)));
+  const files = source ? templateFilesFrom(source) : starterFiles(name);
 
   // Whatever the source, the new workspace must ignore the key that decrypts
   // its secrets. A template does not carry one — it is a source, not a
@@ -98,48 +95,135 @@ async function init(workspace, from) {
     const guard = starterFiles("x").find((f) => f.path === ".gitignore");
     if (guard) files.unshift(guard);
   }
+  return files;
+}
 
-  if (fs.existsSync(workspace) && fs.readdirSync(workspace).length > 0) {
-    const clashes = files.filter((f) => fs.existsSync(path.join(workspace, f.path)));
-    if (clashes.length) {
-      throw new Error(`${workspace} already has ${clashes[0].path} — refusing to overwrite`);
-    }
+/** Write a {path, content} list into `dir`, refusing to overwrite anything. */
+function writeFiles(dir, files, what) {
+  if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
+    const clash = files.find((f) => fs.existsSync(path.join(dir, f.path)));
+    if (clash) throw new Error(`${what ?? dir} already has ${clash.path} — refusing to overwrite`);
   }
   for (const { path: rel, content } of files) {
-    const file = path.join(workspace, rel);
+    const file = path.join(dir, rel);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content);
   }
-  // knowledge/ and memory/ are OKF bundles, and a bundle without its root
-  // index.md declares no okf_version — so `foldrun init` produced a directory
-  // of valid concepts that no consumer could tell the version of.
-  syncWorkspaceBundles(workspace);
+}
 
-  // The account scope, one directory up — the same place libraryDir points on
-  // a laptop, so `my-desk/` ends up beside the `AGENTS.md` and `library/` that
-  // cover it. accountDir cannot answer here: nothing has pinned this process
-  // to the new workspace yet, so it is passed explicitly. Listed below with a
-  // `../` prefix because init writing outside its target should be visible,
-  // not discovered later.
-  const account = path.resolve(workspace, "..");
-  const accountWritten = ensureAccountFiles("default", account).map((rel) => `../${rel}`);
+/** kebab-case, the same rule the platform applies to a workspace name. */
+function assertName(name) {
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`"${name}" is not a workspace name — kebab-case only, e.g. blog-desk`);
+  }
+  return name;
+}
 
-  console.log(`\n  ${c.green("created")} ${workspace}\n`);
-  for (const { path: rel } of files) console.log(`    ${c.dim(rel)}`);
-  // Not part of the workspace: say so on the line, not in a comment nobody
-  // reads. A developer who ran `foldrun init ~/projects/desk` finds an
-  // AGENTS.md in ~/projects and should know it was this, and why.
-  for (const rel of accountWritten) {
+/**
+ * `foldrun init [dir]` — an account folder, the same shape the platform keeps.
+ *
+ *   my-account/
+ *   ├── AGENTS.md          config and context every workspace here inherits
+ *   ├── library/           skills, tools, scripts, knowledge shared by all of them
+ *   └── workspaces/<name>/ the first one, ready to run
+ *
+ * It used to make the workspace alone, flat, with the account AGENTS.md
+ * dropped in the parent directory as a surprise. That was a different shape
+ * from the platform's, so a folder that worked on a laptop had to be
+ * rearranged in your head to reason about what a deploy would do. `--flat`
+ * still makes the old one, and every command still reads it.
+ */
+async function init(root, from, flags = {}) {
+  const { syncWorkspaceBundles, ensureAccountFiles, accountGitignore, LIBRARY_KINDS } = await core();
+
+  if (flags.flat === true) {
+    const files = await workspaceFiles(path.basename(path.resolve(root)), from);
+    writeFiles(root, files);
+    syncWorkspaceBundles(root);
+    // The account scope, one directory up — the same place libraryDir points
+    // for a flat workspace, so `my-desk/` ends up beside the `AGENTS.md` that
+    // covers it. accountDir cannot answer here: nothing has pinned this
+    // process to the new workspace yet, so it is passed explicitly.
+    const written = ensureAccountFiles("default", path.resolve(root, "..")).map((rel) => `../${rel}`);
+    report(root, files.map((f) => f.path), written, root, files);
+    return 0;
+  }
+
+  const name = assertName(typeof flags.workspace === "string" ? flags.workspace : "main");
+  const account = path.resolve(root);
+  const wsDir = path.join(account, "workspaces", name);
+  const files = await workspaceFiles(name, from);
+
+  // Everything is checked before anything is written: a half-made account is
+  // worse than none, because the refusal to overwrite then blocks the retry.
+  const accountLevel = [accountGitignore(), ...(await core()).accountFiles(path.basename(account))];
+  // A library that exists as empty directories is a library someone can put a
+  // file in. `.gitkeep` is what makes git carry them.
+  for (const kind of LIBRARY_KINDS) {
+    accountLevel.push({ path: `library/${kind}/.gitkeep`, content: "" });
+  }
+  const existing = [...accountLevel.map((f) => f.path), ...files.map((f) => `workspaces/${name}/${f.path}`)]
+    .filter((rel) => fs.existsSync(path.join(account, rel)));
+  if (existing.length) throw new Error(`${account} already has ${existing[0]} — refusing to overwrite`);
+
+  writeFiles(account, accountLevel);
+  writeFiles(wsDir, files);
+  syncWorkspaceBundles(wsDir);
+
+  report(
+    account,
+    [...accountLevel.map((f) => f.path), ...files.map((f) => `workspaces/${name}/${f.path}`)],
+    [],
+    wsDir,
+    files,
+  );
+  return 0;
+}
+
+/** What init and new both print: the tree they wrote, then the two next moves. */
+function report(where, written, outside, wsDir, files) {
+  console.log(`\n  ${c.green("created")} ${where}\n`);
+  for (const rel of written) console.log(`    ${c.dim(rel)}`);
+  // Not part of what was asked for: say so on the line, not in a comment
+  // nobody reads. A developer who ran `foldrun init ~/projects/desk --flat`
+  // finds an AGENTS.md in ~/projects and should know it was this, and why.
+  for (const rel of outside) {
     console.log(`    ${c.dim(rel)}  ${c.dim("← account scope, shared by every workspace beside this one")}`);
   }
-  const flow = files
-    .map((f) => f.path.match(/^flows\/(.+)\.md$/)?.[1])
-    .find(Boolean);
+  const flow = files.map((f) => f.path.match(/^flows\/(.+)\.md$/)?.[1]).find(Boolean);
+  const rel = path.relative(process.cwd(), where) || ".";
   console.log(`
   ${c.bold("Next")}
-    foldrun check ${workspace}${" ".repeat(Math.max(1, 16 - workspace.length))}${c.dim("validate it — costs nothing")}
-    foldrun run ${flow ?? "publish"} --workspace ${workspace}   ${c.dim("run the flow")}
+    foldrun check ${rel}${" ".repeat(Math.max(1, 16 - rel.length))}${c.dim("validate it — costs nothing")}
+    foldrun run ${flow ?? "publish"} --workspace ${path.relative(process.cwd(), wsDir) || "."}   ${c.dim("run the flow")}
 `);
+}
+
+/**
+ * `foldrun new <name>` — another workspace in this account.
+ *
+ * Refuses outside an account folder rather than quietly making one: a flat
+ * workspace has nowhere to put a second one, and inventing a `workspaces/`
+ * directory beside somebody's agents/ would change the shape of a folder they
+ * did not ask to change.
+ */
+async function newWorkspace(name, flags, layout) {
+  const { syncWorkspaceBundles } = await core();
+  if (!name) throw new Error("which workspace? `foldrun new <name>`");
+  assertName(name);
+  if (!layout.workspacesDir) {
+    throw new Error(
+      layout.kind === "flat"
+        ? `${layout.workspaceDir} is a single workspace, not an account — \`foldrun init <dir>\` makes an account folder that can hold several`
+        : "not in an account folder — `foldrun init <dir>` makes one",
+    );
+  }
+  const dir = path.join(layout.workspacesDir, name);
+  if (fs.existsSync(dir)) throw new Error(`${dir} already exists`);
+  const files = await workspaceFiles(name, flags.from);
+  writeFiles(dir, files);
+  syncWorkspaceBundles(dir);
+  report(dir, files.map((f) => f.path), [], dir, files);
   return 0;
 }
 
@@ -396,6 +480,43 @@ async function platformLibrary(flags) {
   } catch (err) {
     return { url, tools: new Set(), skills: new Set(), warning: `could not read the library on ${url} (${err instanceof Error ? err.message : err}) — tools defined there will be reported missing` };
   }
+}
+
+/**
+ * `foldrun check` at an account root: every workspace under it, then the
+ * library they all share.
+ *
+ * One workspace at a time, with FOLDRUN_WORKSPACE repointed between them —
+ * the core resolves every path late, on purpose, so this works and a cached
+ * module cannot make the second workspace read the first one's files.
+ */
+async function checkAccount(layout, flags) {
+  const { readLibraryTree, LIBRARY_KINDS } = await core();
+  let worst = 0;
+  if (!layout.workspaces.length) {
+    console.log(`\n  ${c.amber("!")} no workspaces in ${layout.accountRoot} — \`foldrun new <name>\` makes one\n`);
+    return 1;
+  }
+  for (const name of layout.workspaces) {
+    const dir = path.join(layout.workspacesDir, name);
+    process.env.FOLDRUN_WORKSPACE = dir;
+    console.log(`\n  ${c.bold(name)}  ${c.dim(path.relative(layout.accountRoot, dir))}`);
+    worst = Math.max(worst, (await check(dir, flags)) ?? 0);
+  }
+
+  // The library, once — it is one thing however many workspaces read it.
+  const files = readLibraryTree(layout.accountRoot);
+  const problems = [];
+  const note = (level, where, message) => problems.push({ level, where, message });
+  validateSkills(path.join(layout.accountRoot, "library"), note);
+  const counts = LIBRARY_KINDS.map((k) => ({ kind: k, n: files.filter((f) => f.kind === k).length })).filter((x) => x.n > 0);
+  console.log(`\n  ${c.bold("library")}  ${c.dim(counts.length ? counts.map((x) => `${x.n} ${x.kind}`).join(" · ") : "empty")}`);
+  for (const p of problems) {
+    console.log(`    ${p.level === "error" ? c.red("✗") : c.amber("!")} ${c.bold(`library/${p.where}`)}  ${p.message}`);
+  }
+  if (problems.some((p) => p.level === "error")) worst = 1;
+  console.log();
+  return worst;
 }
 
 async function check(workspace, flags = {}) {
@@ -940,72 +1061,24 @@ async function deployOverHttp(url, workspace, files, flags) {
   };
 }
 
-async function deploy(source, flags) {
-  const { readTree, planDeploy, deployWorkspace, deployedCommit } = await core();
-
-  if (!fs.existsSync(source)) throw new Error(`no such directory: ${source}`);
-  const workspace = flags.to ?? path.basename(path.resolve(source));
-  const tenant = flags.tenant ?? "default";
-
-  const files = readTree(source);
-
-  // Two destinations, one command. With a platform named — by --url, by
-  // FOLDRUN_URL, or by having signed in — the workspace is POSTed to it,
-  // which is what a laptop or a CI job does. Without one, or with --local,
-  // it is written straight into the installation on this machine.
-  const url = flags.local === true ? undefined : remoteUrl(flags);
-  /** @type {any} */
-  const plan = url
-    ? await deployOverHttp(url, workspace, files, flags)
-    : flags["dry-run"]
-      ? planDeploy(tenant, workspace, files)
-      : deployWorkspace(tenant, workspace, files, {
-          commit: flags.commit ?? null,
-          force: flags.force === true,
-        });
-
-  console.log(
-    `\n  ${c.bold(url ? `${url} ${workspace}` : `${tenant}/${workspace}`)} ` +
-      `${c.dim(`← ${path.resolve(source)}`)}`,
-  );
-  console.log(
-    `  ${c.dim(`${files.length} files · +${plan.added.length} ~${plan.updated.length} -${plan.removed.length}`)}\n`,
-  );
-
-  const show = (label, list, colour) => {
-    for (const f of list.slice(0, 20)) console.log(`    ${colour(label)} ${f}`);
-    if (list.length > 20) console.log(`    ${c.dim(`… and ${list.length - 20} more`)}`);
-  };
-  show("+", plan.added, c.green);
-  show("~", plan.updated, c.dim);
-  show("-", plan.removed, c.red);
-
-  if (plan.issues.length) {
-    console.log(`\n  ${c.red(`${plan.issues.length} problem${plan.issues.length === 1 ? "" : "s"}`)} — nothing was deployed\n`);
-    for (const i of plan.issues) console.log(`    ${c.red("✗")} ${c.bold(i.where)}  ${i.message}`);
-    console.log();
-    return 1;
+/**
+ * `foldrun deploy [dir|workspace]`.
+ *
+ * At an account root that is the whole account: every workspace under it and
+ * the shared library. Named a workspace, it is that one. Given a directory, it
+ * is whatever that directory turns out to be — which is how a flat workspace,
+ * the only shape that existed until today, still deploys exactly as it did.
+ */
+async function deploy(source, flags, layout) {
+  const { detectLayout } = await core();
+  let only;
+  if (source && source !== "." && !fs.existsSync(source)) {
+    if (layout.workspaces.includes(source)) only = source;
+    else throw new Error(`no such directory: ${source}`);
+  } else if (source && source !== "." && fs.existsSync(source)) {
+    layout = detectLayout(path.resolve(source));
   }
-
-  if (plan.blockedBy.length && !flags.force) {
-    console.log(
-      `\n  ${c.amber("⏸")} ${plan.blockedBy.length} run${plan.blockedBy.length === 1 ? " is" : "s are"} still using these files: ` +
-        `${plan.blockedBy.join(", ")}\n    ${c.dim("wait for them to finish, or --force to deploy anyway")}\n`,
-    );
-    return 1;
-  }
-
-  if (flags["dry-run"]) {
-    console.log(`\n  ${c.dim("checks out — run without --dry-run to deploy")}\n`);
-    return 0;
-  }
-
-  const at = url ? { commit: plan.commit } : deployedCommit(tenant, workspace);
-  console.log(
-    `\n  ${c.green("✓")} deployed${at?.commit ? ` ${c.dim(at.commit.slice(0, 8))}` : ""}` +
-      `${plan.preserved ? c.dim(` · kept ${plan.preserved} file${plan.preserved === 1 ? "" : "s"} the agents own`) : ""}\n`,
-  );
-  return 0;
+  return deployAccount(layout, flags, only);
 }
 
 // ---------------------------------------------------------------- secrets
@@ -1469,8 +1542,31 @@ async function openCmd(positional, flags) {
  * platform. Values are prompted without echo unless piped or passed with
  * --value, and are never printed back by any verb.
  */
-async function secretsCmd(positional, flags) {
-  const [verb, name] = positional;
+/**
+ * A leading positional that names a workspace in this account, pulled off the
+ * front of the arguments.
+ *
+ * `foldrun secrets blog ls` and `foldrun logs blog r-2026-09-16-1` read the
+ * way they should inside an account folder, and mean nothing ambiguous: the
+ * word is only taken as a workspace when it IS one of this account's
+ * workspaces, so a run id or a verb can never be mistaken for one. With
+ * exactly one workspace there is nothing to say, and nothing has to be.
+ */
+function takeWorkspace(positional, layout) {
+  if (layout && layout.workspaces.includes(positional[0])) return positional.shift();
+  if (layout && layout.workspaceDir) return path.basename(layout.workspaceDir);
+  if (layout && layout.workspaces.length === 1) return layout.workspaces[0];
+  return null;
+}
+
+/** …and the error when there are several and none was named. */
+function whichWorkspace(layout, what) {
+  return new Error(
+    `which workspace? ${layout.workspaces.length ? `\`foldrun ${what} <workspace> …\` — this account has ${layout.workspaces.join(", ")}` : "there are none here"}`,
+  );
+}
+
+async function secretsCmd(positional, flags, layout) {
   // --local: this machine's store even when signed in, the same escape
   // hatch deploy and keys have. Without it, a signed-in laptop sent every
   // secret to the platform and the local store could not be reached at all.
@@ -1481,8 +1577,13 @@ async function secretsCmd(positional, flags) {
   // run, reading under workspaces/<name>/, reported it missing. The same
   // scope goes to the platform: it used to take only --to there, so
   // `--workspace .` was silently an account-wide secret.
-  const localWorkspace = path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+  // Inside an account folder the workspace is a positional — or the only one
+  // there is. Outside, it is the folder's own basename, as it always was.
+  const named = takeWorkspace(positional, layout);
+  if (flags.account !== true && !named && !flags.to && layout?.kind === "account") throw whichWorkspace(layout, "secrets");
+  const localWorkspace = named ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
   const scope = flags.account === true ? undefined : flags.to ?? localWorkspace;
+  const [verb, name] = positional;
 
   if (verb === "ls" || verb === undefined) {
     const entries = url
@@ -1593,11 +1694,20 @@ const EVENT_MARK = (e) =>
  * `foldrun logs [run-id]` — without an id, the recent runs; with one, that
  * run's whole event log. `--follow` keeps tailing a live run.
  */
-async function logsCmd(positional, flags) {
+async function logsCmd(positional, flags, layout) {
+  // Inside an account folder the workspace comes first, the way it does on
+  // every other workspace-scoped command — or is the only one there is.
+  const named = takeWorkspace(positional, layout);
+  if (!named && !flags.to && layout?.kind === "account") throw whichWorkspace(layout, "logs");
+  if (named && layout?.workspacesDir && layout.workspaces.includes(named)) {
+    process.env.FOLDRUN_WORKSPACE = path.join(layout.workspacesDir, named);
+  }
   // With a platform named, the same verbs read the server's runs: the list,
-  // one run's trail, or a live one followed to the end.
-  const url = remoteUrl(flags);
-  if (url) return remoteLogs(url, positional, flags);
+  // one run's trail, or a live one followed to the end. --local reads this
+  // machine's store even when signed in — the same escape hatch deploy,
+  // secrets and keys have, and the one thing `logs` was missing.
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  if (url) return remoteLogs(url, positional, { ...flags, to: flags.to ?? named ?? undefined });
 
   const { listRuns, readRun } = await core();
   const T = "default";
@@ -2325,6 +2435,392 @@ async function sourceCmd(positional, flags) {
   throw new Error(`source: unknown verb "${verb}" — ls, cat, put, mv, rm`);
 }
 
+// ------------------------------------------------- the account, as a whole
+
+/**
+ * Where this folder records what it last pushed, and to which platform.
+ *
+ * `status` needs a third fact beyond "local" and "live": whether the live copy
+ * moved since you last deployed. Nothing on the wire carries that — a file's
+ * revision on the platform is the platform's own history, not this laptop's —
+ * so the laptop keeps a stamp of the bytes it sent. Under `.foldrun/`, which
+ * every scaffold already ignores.
+ */
+function stampFile(layout) {
+  return path.join(layout.accountRoot, ".foldrun", "deployed.json");
+}
+function readStamps(layout) {
+  try {
+    return JSON.parse(fs.readFileSync(stampFile(layout), "utf8"));
+  } catch {
+    return {};
+  }
+}
+function writeStamp(layout, url, workspace, files) {
+  const all = readStamps(layout);
+  const key = url ?? "local";
+  all[key] ??= {};
+  all[key][workspace] = {
+    at: new Date().toISOString(),
+    files: Object.fromEntries(files.map((f) => [f.path, digest(f.content)])),
+  };
+  try {
+    fs.mkdirSync(path.dirname(stampFile(layout)), { recursive: true });
+    fs.writeFileSync(stampFile(layout), JSON.stringify(all, null, 2));
+  } catch {
+    /* an unwritable folder costs a "changed since" column, not the deploy */
+  }
+}
+const digest = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(0, 16);
+
+/** Every source file of one workspace on the platform, by path. */
+async function remoteWorkspaceFiles(url, flags, ws, isSourcePath) {
+  const { files } = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/source`);
+  const wanted = (files ?? []).filter(isSourcePath);
+  const out = new Map();
+  for (const rel of wanted) {
+    const { content } = await remoteCall(
+      url,
+      flags,
+      `/api/workspaces/${encodeURIComponent(ws)}/source?path=${encodeURIComponent(rel)}`,
+    );
+    out.set(rel, content);
+  }
+  return out;
+}
+
+/** Every library file on the platform, as {kind, path, content}. */
+async function remoteLibrary(url, flags, kinds) {
+  const out = [];
+  for (const kind of kinds) {
+    let entries;
+    try {
+      ({ entries } = await remoteCall(url, flags, `/api/library/${kind}`));
+    } catch {
+      continue; // an older platform without this kind
+    }
+    for (const e of entries ?? []) {
+      const rel = e.path ?? (e.name ? `${e.name}.md` : null);
+      if (!rel) continue;
+      const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${encodeURIComponent(rel)}`);
+      out.push({ kind, path: rel, content });
+    }
+  }
+  return out;
+}
+
+/** The workspaces the platform holds, by name. */
+async function remoteWorkspaceNames(url, flags) {
+  const { workspaces } = await remoteCall(url, flags, "/api/workspaces");
+  return (workspaces ?? []).map((w) => w.name).filter(Boolean).sort();
+}
+
+/**
+ * The account AGENTS.md has no write endpoint.
+ *
+ * `/api/account` reads and PATCHes a handful of known frontmatter keys — a
+ * timezone, a notify target, a cap — and nothing reads or writes the file
+ * itself. So a deploy cannot ship the account's prose, and a pull cannot
+ * fetch it. Said out loud, once, rather than silently dropped: a scope that
+ * vanishes without a word is the failure this codebase keeps producing.
+ */
+const NO_ACCOUNT_FILE_API =
+  "the platform has no account-file endpoint — /api/account only PATCHes known frontmatter keys, so AGENTS.md at account scope is not synced. Edit it in Settings, or on the box.";
+
+/**
+ * `foldrun deploy` — the whole account, or one workspace of it.
+ *
+ * Nothing is ever deleted on the platform: a workspace that exists there and
+ * not here is left exactly as it is. A deploy is a push, and a push that
+ * quietly removed a colleague's desk because it was not on your laptop would
+ * be the worst bug this tool could have. `foldrun workspaces rm <name>
+ * --platform --yes` is the deliberate way.
+ */
+async function deployAccount(layout, flags, only) {
+  const { accountTreeFrom, LIBRARY_KINDS } = await core();
+  // Ask from the workspace, not the account root, unless this IS an account
+  // root: for a flat folder the account root is its parent, and reading the
+  // tree from there would find a directory that is not a workspace at all.
+  const { tree } = accountTreeFrom(layout.kind === "account" ? layout.accountRoot : layout.workspaceDir, only);
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  const tenant = flags.tenant ?? "default";
+  const dry = flags["dry-run"] === true;
+
+  console.log(`\n  ${c.bold(url ? url : tenant)} ${c.dim(`← ${tree.root}`)}`);
+
+  let worst = 0;
+  for (const ws of tree.workspaces) {
+    // --to renames the destination. Only when there is one thing to name: a
+    // whole account cannot be squeezed into one workspace on the other side.
+    const dest = tree.workspaces.length === 1 && typeof flags.to === "string" ? flags.to : ws.name;
+    const code = await deployOne(url, tenant, dest, ws.files, flags, layout, ws.dir);
+    worst = Math.max(worst, code);
+  }
+
+  // The library, file by file: /api/library/<kind> writes one path at a time,
+  // which is the only endpoint there is. Locally it goes straight through the
+  // same writer the dashboard uses, so a revision is recorded either way.
+  if (tree.library.length) {
+    if (dry) {
+      console.log(`  ${c.dim(`library · ${tree.library.length} files (not sent — dry run)`)}`);
+    } else if (url) {
+      for (const f of tree.library) {
+        await remoteCall(url, flags, `/api/library/${f.kind}`, {
+          method: "PUT",
+          body: JSON.stringify({ path: f.path, content: f.content }),
+        });
+      }
+      console.log(`  ${c.green("✓")} library ${c.dim(`${tree.library.length} files`)}`);
+    } else {
+      const { writeLibraryFile } = await core();
+      for (const f of tree.library) writeLibraryFile(tenant, f.kind, f.path, f.content);
+      console.log(`  ${c.green("✓")} library ${c.dim(`${tree.library.length} files`)}`);
+    }
+  }
+
+  if (tree.agentsMd !== null) {
+    if (url) {
+      console.log(`  ${c.amber("·")} AGENTS.md ${c.dim(`not sent — ${NO_ACCOUNT_FILE_API}`)}`);
+    } else if (!dry) {
+      const { accountDir } = await core();
+      fs.mkdirSync(accountDir(tenant), { recursive: true });
+      fs.writeFileSync(path.join(accountDir(tenant), "AGENTS.md"), tree.agentsMd);
+      console.log(`  ${c.green("✓")} AGENTS.md ${c.dim("account scope")}`);
+    }
+  }
+  console.log();
+  return worst;
+}
+
+/** One workspace, pushed and reported. Extracted so the account loop and the
+ *  single-workspace path print the same four lines. */
+async function deployOne(url, tenant, workspace, files, flags, layout, from) {
+  const { planDeploy, deployWorkspace, deployedCommit } = await core();
+  /** @type {any} */
+  const plan = url
+    ? await deployOverHttp(url, workspace, files, flags)
+    : flags["dry-run"]
+      ? planDeploy(tenant, workspace, files)
+      : deployWorkspace(tenant, workspace, files, {
+          commit: flags.commit ?? null,
+          force: flags.force === true,
+        });
+
+  console.log(
+    `\n  ${c.bold(workspace)} ${c.dim(`${files.length} files · +${plan.added.length} ~${plan.updated.length} -${plan.removed.length}`)}${from ? ` ${c.dim(`← ${from}`)}` : ""}`,
+  );
+  const show = (label, list, colour) => {
+    for (const f of list.slice(0, 20)) console.log(`    ${colour(label)} ${f}`);
+    if (list.length > 20) console.log(`    ${c.dim(`… and ${list.length - 20} more`)}`);
+  };
+  show("+", plan.added, c.green);
+  show("~", plan.updated, c.dim);
+  show("-", plan.removed, c.red);
+
+  if (plan.issues.length) {
+    console.log(`\n  ${c.red(`${plan.issues.length} problem${plan.issues.length === 1 ? "" : "s"}`)} — ${workspace} was not deployed\n`);
+    for (const i of plan.issues) console.log(`    ${c.red("✗")} ${c.bold(i.where)}  ${i.message}`);
+    return 1;
+  }
+  if (plan.blockedBy.length && !flags.force) {
+    console.log(
+      `\n  ${c.amber("⏸")} ${plan.blockedBy.length} run${plan.blockedBy.length === 1 ? " is" : "s are"} still using these files: ` +
+        `${plan.blockedBy.join(", ")}\n    ${c.dim("wait for them to finish, or --force to deploy anyway")}`,
+    );
+    return 1;
+  }
+  if (flags["dry-run"]) {
+    console.log(`    ${c.dim("checks out — run without --dry-run to deploy")}`);
+    return 0;
+  }
+  const at = url ? { commit: plan.commit } : deployedCommit(tenant, workspace);
+  console.log(
+    `    ${c.green("✓")} deployed${at?.commit ? ` ${c.dim(at.commit.slice(0, 8))}` : ""}` +
+      `${plan.preserved ? c.dim(` · kept ${plan.preserved} file${plan.preserved === 1 ? "" : "s"} the agents own`) : ""}`,
+  );
+  if (layout) writeStamp(layout, url, workspace, files);
+  return 0;
+}
+
+/**
+ * `foldrun status` — what differs here from what is deployed.
+ *
+ * Reads only. Three numbers per workspace, plus the one a plain diff cannot
+ * give you: whether the live copy moved since your last deploy, which is how
+ * you find out somebody edited a flow in the dashboard before you overwrite
+ * it.
+ */
+async function statusCmd(layout, flags, only) {
+  const { isSourcePath, accountTreeFrom } = await core();
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("status compares this folder with a platform — pass --url, or `foldrun login` first");
+  const { tree } = accountTreeFrom(layout.kind === "account" ? layout.accountRoot : layout.workspaceDir, only);
+  const live = new Set(await remoteWorkspaceNames(url, flags));
+  const stamps = readStamps(layout)[url] ?? {};
+
+  console.log(`\n  ${c.bold(url)} ${c.dim(`← ${tree.root}`)}\n`);
+  for (const ws of tree.workspaces) {
+    if (!live.has(ws.name)) {
+      console.log(`  ${c.green("+")} ${c.bold(ws.name)}  ${c.dim(`${ws.files.length} files · not on the platform yet`)}`);
+      continue;
+    }
+    const there = await remoteWorkspaceFiles(url, flags, ws.name, isSourcePath);
+    const here = new Map(ws.files.map((f) => [f.path, f.content]));
+    const added = [...here.keys()].filter((p) => !there.has(p));
+    const updated = [...here.keys()].filter((p) => there.has(p) && there.get(p) !== here.get(p));
+    const removed = [...there.keys()].filter((p) => !here.has(p));
+    // Changed on the platform since we last pushed: compare the live bytes
+    // with the stamp of what we sent, not with what is on disk now.
+    const stamp = stamps[ws.name];
+    const drifted = stamp
+      ? [...there.entries()].filter(([p, content]) => stamp.files[p] !== undefined && stamp.files[p] !== digest(content)).map(([p]) => p)
+      : [];
+    const clean = !added.length && !updated.length && !removed.length;
+    console.log(
+      `  ${clean ? c.green("✓") : c.amber("~")} ${c.bold(ws.name)}  ` +
+        c.dim(`+${added.length} ~${updated.length} -${removed.length}`) +
+        (stamp ? c.dim(` · deployed ${stamp.at.slice(0, 16).replace("T", " ")}`) : c.dim(" · never deployed from here")),
+    );
+    for (const p of added.slice(0, 10)) console.log(`      ${c.green("+")} ${p}`);
+    for (const p of updated.slice(0, 10)) console.log(`      ${c.dim("~")} ${p}`);
+    for (const p of removed.slice(0, 10)) console.log(`      ${c.red("-")} ${p}  ${c.dim("(on the platform, not here — a deploy never removes it)")}`);
+    if (drifted.length) {
+      console.log(`      ${c.amber("!")} ${drifted.length} file${drifted.length === 1 ? "" : "s"} changed on the platform since your last deploy: ${drifted.slice(0, 5).join(", ")}`);
+    }
+  }
+
+  const gone = [...live].filter((n) => !tree.workspaces.some((w) => w.name === n));
+  if (gone.length) {
+    console.log(`\n  ${c.dim(`on the platform but not here: ${gone.join(", ")} — \`foldrun pull\` brings them down`)}`);
+  }
+  console.log(`\n  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun pull` — the platform's account, into this folder.
+ *
+ * Safe by default: any local file whose bytes differ from the live ones is
+ * listed and NOTHING is written. `--force` writes them. The rule is blunt on
+ * purpose — a three-way merge needs a base this tool does not have, and a
+ * silent overwrite of an afternoon's work is not worth the convenience.
+ */
+async function pullCmd(layout, flags, only) {
+  const { isSourcePath, LIBRARY_KINDS } = await core();
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("pull brings a platform's account down — pass --url, or `foldrun login` first");
+  const root = layout.accountRoot;
+  const wsRoot = layout.workspacesDir ?? path.join(root, "workspaces");
+
+  const names = (await remoteWorkspaceNames(url, flags)).filter((n) => (only ? n === only : true));
+  if (only && !names.length) throw new Error(`no workspace "${only}" on ${url}`);
+
+  /** @type {{file: string, content: string}[]} */
+  const incoming = [];
+  for (const name of names) {
+    const there = await remoteWorkspaceFiles(url, flags, name, isSourcePath);
+    for (const [rel, content] of there) incoming.push({ file: path.join(wsRoot, name, rel), content });
+  }
+  for (const f of await remoteLibrary(url, flags, LIBRARY_KINDS)) {
+    incoming.push({ file: path.join(root, "library", f.kind, f.path), content: f.content });
+  }
+
+  const clashes = incoming.filter((f) => {
+    try {
+      return fs.readFileSync(f.file, "utf8") !== f.content;
+    } catch {
+      return false; // absent: nothing to clobber
+    }
+  });
+  if (clashes.length && flags.force !== true) {
+    console.log(`\n  ${c.red("✗")} ${clashes.length} local file${clashes.length === 1 ? "" : "s"} would be overwritten\n`);
+    for (const f of clashes.slice(0, 40)) console.log(`    ${c.red("~")} ${path.relative(root, f.file)}`);
+    if (clashes.length > 40) console.log(`    ${c.dim(`… and ${clashes.length - 40} more`)}`);
+    console.log(`\n  ${c.dim("commit them, or pull with --force to take the platform's copy")}\n`);
+    return 1;
+  }
+
+  let written = 0;
+  for (const f of incoming) {
+    let before = null;
+    try {
+      before = fs.readFileSync(f.file, "utf8");
+    } catch {
+      /* new */
+    }
+    if (before === f.content) continue;
+    fs.mkdirSync(path.dirname(f.file), { recursive: true });
+    fs.writeFileSync(f.file, f.content);
+    written++;
+  }
+  console.log(
+    `\n  ${c.green("✓")} pulled ${names.length} workspace${names.length === 1 ? "" : "s"} from ${url}  ` +
+      c.dim(`${written} file${written === 1 ? "" : "s"} written, ${incoming.length - written} already current`),
+  );
+  console.log(`  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun workspaces` — what exists here, what exists there, and which are
+ * both. `rm <name>` removes one; on the platform it needs saying twice.
+ */
+async function workspacesCmd(positional, flags, layout) {
+  const [verb, name] = positional;
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+
+  if (verb === "new" || verb === "add") return newWorkspace(name, flags, layout);
+
+  if (verb === "rm" || verb === "remove" || verb === "delete") {
+    if (!name) throw new Error("which workspace? `foldrun workspaces rm <name>`");
+    if (flags.platform === true) {
+      if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
+      if (flags.yes !== true) {
+        throw new Error(`this deletes ${name} and every run in it on ${url}, for everyone — add --yes if that is what you mean`);
+      }
+      await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(name)}`, { method: "DELETE" });
+      console.log(`\n  ${c.green("✓")} deleted ${c.bold(name)} on ${url}\n`);
+      return 0;
+    }
+    if (!layout.workspacesDir) throw new Error("not in an account folder — there is nothing here to remove");
+    const dir = path.join(layout.workspacesDir, name);
+    if (!fs.existsSync(dir)) throw new Error(`no workspace "${name}" here — have: ${layout.workspaces.join(", ") || "none"}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log(`\n  ${c.green("✓")} removed ${c.dim(dir)}  ${c.dim("(locally — the platform's copy is untouched)")}\n`);
+    return 0;
+  }
+  if (verb && verb !== "ls" && verb !== "list") {
+    throw new Error(`workspaces: unknown verb "${verb}" — ls, new <name>, rm <name>`);
+  }
+
+  const here = layout.workspaces;
+  let there = [];
+  let reach = null;
+  if (url) {
+    try {
+      there = await remoteWorkspaceNames(url, flags);
+    } catch (err) {
+      reach = explain(err);
+    }
+  }
+  const all = [...new Set([...here, ...there])].sort();
+  if (!all.length) {
+    console.log(`\n  ${c.dim("no workspaces — `foldrun new <name>` makes one")}\n`);
+    return 0;
+  }
+  const width = Math.max(...all.map((n) => n.length));
+  console.log("");
+  for (const n of all) {
+    const local = here.includes(n);
+    const live = there.includes(n);
+    const where = local && live ? "here · " + (url ?? "") : local ? "here only" : `${url} only`;
+    console.log(`  ${local && live ? c.green("●") : c.dim("○")} ${c.bold(n.padEnd(width))}  ${c.dim(where)}`);
+  }
+  if (reach) console.log(`\n  ${c.amber("!")} ${c.dim(`could not read the platform: ${reach}`)}`);
+  console.log(`\n  ${c.dim("● is in both. `foldrun pull` brings one down; `foldrun deploy <name>` pushes one up.")}\n`);
+  return 0;
+}
+
 /**
  * `foldrun accounts` — every account this machine is signed in to, and
  * which one a bare command talks as. `foldrun use <name>` switches.
@@ -2367,7 +2863,12 @@ function useCmd(positional) {
   return 0;
 }
 
-export async function run(command, positional, flags, workspace) {
+export async function run(command, positional, flags, workspace, layout) {
+  // Nothing outside the CLI's own entry point passes a layout — the tests
+  // that call run() directly, an embedder. A lone workspace is the safe
+  // reading of "no layout given", and the one every command handled before
+  // account folders existed.
+  layout ??= { kind: "flat", accountRoot: path.resolve(workspace ?? ".", ".."), workspacesDir: null, workspaceDir: path.resolve(workspace ?? "."), workspace: path.basename(path.resolve(workspace ?? ".")), workspaces: [path.basename(path.resolve(workspace ?? "."))] };
   switch (command) {
     case "login":
       return login(flags);
@@ -2386,13 +2887,21 @@ export async function run(command, positional, flags, workspace) {
     case "switch":
       return useCmd(positional);
     case "init":
-      return init(workspace, flags.from);
+      return init(workspace, flags.from, flags);
+    case "new":
+      return newWorkspace(positional[0], flags, layout);
     case "check":
-      return check(workspace, flags);
+      return layout.kind === "account" ? checkAccount(layout, flags) : check(workspace, flags);
+    case "pull":
+      return pullCmd(layout, flags, positional[0]);
+    case "status":
+      return statusCmd(layout, flags, positional[0]);
+    case "workspaces":
+      return workspacesCmd(positional, flags, layout);
     case "extract":
       return extract(workspace, flags);
     case "deploy":
-      return deploy(positional[0] ?? ".", flags);
+      return deploy(positional[0] ?? ".", flags, layout);
     case "run":
       return runTarget(positional[0], flags);
     case "eval":
@@ -2402,9 +2911,10 @@ export async function run(command, positional, flags, workspace) {
     case "connect":
       return connect(positional, flags);
     case "secrets":
-      return secretsCmd(positional, flags);
+      return secretsCmd(positional, flags, layout);
     case "logs":
-      return logsCmd(positional, flags);
+    case "runs":
+      return logsCmd(positional, flags, layout);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":
