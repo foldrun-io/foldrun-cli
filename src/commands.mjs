@@ -721,6 +721,12 @@ async function check(workspace, flags = {}) {
       note("error", `agents/${a.name}`, a.timezoneProblem);
     }
 
+    // A web_search:, web_fetch: or web_browse: value that cannot work —
+    // DeepSeek named for search, a search API named for fetch, a key
+    // written into the file. The run would say so in its trail and carry
+    // on; the deploy refuses it; this is where a person hears it first.
+    for (const w of a.webProblems ?? []) note("error", `agents/${a.name}`, w);
+
     // What the author wrote that the runtime already writes, or writes better.
     // Every trap here was one somebody hit while the answer sat in the source:
     // check reads the whole folder anyway, so it may as well teach.
