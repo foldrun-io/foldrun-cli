@@ -127,6 +127,7 @@ declared the same way.
 | `foldrun reject <run-id>` | refuse one, `--note` being the reason |
 | `foldrun stop <run-id>` | kill a run in flight — it says what it will destroy, then asks (`--yes` means it) |
 | `foldrun schedule` | every flow in the account that fires on a clock, its cron line, and the next few times it fires |
+| `foldrun billing` | the account's balance and its recent ledger entries, with what each was for |
 | `foldrun account` | the account's defaults: timezone, notify, budget, concurrency — also `set <key> <value>` and `clear <key>` |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
 | `foldrun deploy [dir]` | push the whole account — or `deploy <workspace>` for one of them |

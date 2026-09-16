@@ -19,6 +19,7 @@
 //   foldrun stop  <run-id>  kill a run in flight
 //   foldrun account        the account's own defaults — timezone, notify, budget, concurrency
 //   foldrun schedule       every flow in the account that fires on a clock, and when it fires next
+//   foldrun billing        the balance, and what the money went on
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
@@ -68,6 +69,7 @@ const HELP = `foldrun — agents are just folders
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
+  foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
   foldrun account           the account's defaults — also set <key> <value>, clear <key> (singular; accounts lists logins)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
@@ -103,7 +105,7 @@ Options
   --yes                     approve, stop: skip the confirmation, deliberately
   --json                    report: the raw run record instead of the report
   --events <a,b>            account set notify: failed, awaiting-approval, completed
-  --limit <n>               runs: how many, newest first (default 20)
+  --limit <n>               runs, billing: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --file <path>             source put: the local file to send (default: stdin)
   --message "<why>"         source put: recorded on the file's revision

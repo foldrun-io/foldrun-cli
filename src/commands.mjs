@@ -2940,6 +2940,62 @@ async function scheduleCmd(flags) {
   return rows.some((r) => !r.valid) ? 1 : 0;
 }
 
+// --------------------------------------------------------------- billing
+
+/**
+ * `foldrun billing` — what the account has, and what it has been spending on.
+ *
+ * "The wallet is empty" was a thing you could only learn by opening the
+ * dashboard, which means a run that stops paying for models looks like a
+ * broken platform from the terminal. The balance goes first, and a negative
+ * one is said in words.
+ */
+async function billingCmd(flags) {
+  const url = platformFor(flags, "billing");
+  const body = await remoteCall(url, flags, "/api/billing");
+  const balance = Number(body.balanceUsd ?? 0);
+  const entries = body.entries ?? [];
+
+  console.log(`\n  ${balance > 0 ? c.green("✓") : c.red("✗")} balance ${c.bold(`$${balance.toFixed(2)}`)}  ${c.dim(body.enabled ? "billing on" : "billing off — nothing is charged on this install")}`);
+  if (body.enabled && balance <= 0) {
+    console.log(`  ${c.red("the wallet is empty")} ${c.dim("— the account is in overdraft; top it up before anything is expected to run")}`);
+  }
+
+  // What the platform is waiving says more than the balance does: a run
+  // charged $0 with models waived is a run whose model credit is being
+  // absorbed, and that is the state people mistake for "it is working".
+  const waived = [...new Set(entries.flatMap((e) => e.waived ?? []))];
+  if (waived.length) {
+    console.log(`  ${c.amber("⏸")} ${c.dim(`${waived.join(", ")} ${waived.length === 1 ? "is" : "are"} being waived on recent runs — those lines are charged $0`)}`);
+  }
+
+  const limit = Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 15;
+  const recent = entries.slice(0, limit);
+  if (!recent.length) {
+    console.log(`\n  ${c.dim("no ledger entries yet")}\n`);
+    return 0;
+  }
+
+  console.log();
+  const w = {
+    when: Math.max(...recent.map((e) => when(e.t).length)),
+    kind: Math.max(...recent.map((e) => String(e.kind).length)),
+    usd: Math.max(...recent.map((e) => `$${Number(e.usd ?? 0).toFixed(4)}`.length)),
+  };
+  for (const e of recent) {
+    const usd = Number(e.usd ?? 0);
+    // What it was FOR: a run says which flow in which workspace, an
+    // adjustment carries its own note, a top-up is itself.
+    const about = e.flow ? `${e.workspace}/${e.flow}${e.runId ? c.dim(` ${e.runId}`) : ""}` : (e.note ?? "");
+    console.log(
+      `  ${usd < 0 ? c.red("−") : usd > 0 ? c.green("+") : c.dim("·")} ${c.dim(pad(when(e.t), w.when))}  ${pad(e.kind ?? "", w.kind)}  ` +
+        `${pad(`$${Math.abs(usd).toFixed(4)}`, w.usd)}  ${firstLine(about, 70)}`,
+    );
+  }
+  console.log(`\n  ${c.dim(`${entries.length} entr${entries.length === 1 ? "y" : "ies"} on the ledger — --limit <n> shows more of them`)}\n`);
+  return 0;
+}
+
 // --------------------------------------------------------------- account
 
 /** The events a notify block may name, as the platform validates them. */
@@ -3658,6 +3714,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return accountCmd(positional, flags);
     case "schedule":
       return scheduleCmd(flags);
+    case "billing":
+      return billingCmd(flags);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":
