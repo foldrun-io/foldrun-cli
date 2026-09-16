@@ -726,6 +726,8 @@ async function check(workspace, flags = {}) {
     // written into the file. The run would say so in its trail and carry
     // on; the deploy refuses it; this is where a person hears it first.
     for (const w of a.webProblems ?? []) note("error", `agents/${a.name}`, w);
+    // `language:` that is not a tag — "Persian" where `fa` was meant.
+    if (a.languageProblem) note("error", `agents/${a.name}`, a.languageProblem);
 
     // What the author wrote that the runtime already writes, or writes better.
     // Every trap here was one somebody hit while the answer sat in the source:
