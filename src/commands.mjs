@@ -2889,6 +2889,500 @@ function useCmd(positional) {
   return 0;
 }
 
+// ------------------------------------------- approvals, runs and reports
+//
+// What `logs` never answered. `logs` is a trail: it prints what happened,
+// event by event, for one run you already knew the id of. These four are
+// about the other three questions a person actually has — what is waiting
+// for me, let it through or refuse it, what has run lately, and what did
+// this one run actually do — and each of them reads the platform, because
+// that is where the runs are.
+
+/** A span in the shortest honest form: 850ms, 12s, 4m 20s, 2h 5m, 3d 4h. */
+function humanDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  if (h < 24) return rm ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh ? `${d}d ${rh}h` : `${d}d`;
+}
+
+/** How long ago an ISO timestamp was. */
+const ago = (iso) => (iso && !Number.isNaN(Date.parse(iso)) ? humanDuration(Date.now() - Date.parse(iso)) : "—");
+
+/** A local wall-clock stamp short enough for a column: "15 Sep 19:00". */
+function when(iso) {
+  const t = Date.parse(iso ?? "");
+  if (Number.isNaN(t)) return "—";
+  const d = new Date(t);
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())} ${month} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** `--since 24h`, `7d`, `90m`, `2w` — a window, in milliseconds. */
+function parseSince(spec) {
+  const m = /^(\d+(?:\.\d+)?)\s*([smhdw])$/i.exec(String(spec).trim());
+  if (!m) throw new Error(`--since wants a span like 24h, 7d or 90m — not "${spec}"`);
+  return Number(m[1]) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 }[m[2].toLowerCase()];
+}
+
+/** The same mark everywhere a status is printed, so one glance reads alike. */
+const statusMark = (s) =>
+  s === "completed"
+    ? c.green("✓")
+    : s === "failed"
+      ? c.red("✗")
+      : s === "awaiting-approval"
+        ? c.amber("⏸")
+        : s === "skipped" || s === "expanded"
+          ? c.dim("–")
+          : c.amber("…");
+
+/** What a run cost, from its steps — the only place the number exists. */
+const runCost = (run) => (run.steps ?? []).reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
+
+/** How long a run took, or has been going. */
+const runDuration = (run) =>
+  run.startedAt ? humanDuration((run.finishedAt ? Date.parse(run.finishedAt) : Date.now()) - Date.parse(run.startedAt)) : "—";
+
+/** Pad to a column width, counting characters a person sees, not escapes. */
+const pad = (s, width) => String(s) + " ".repeat(Math.max(0, width - String(s).length));
+
+/** One line of a step's or a run's prose — the first line that says anything. */
+const firstLine = (text, width = 120) => {
+  const line = String(text ?? "")
+    .split("\n")
+    .map((l) => l.replace(/^[#>*_\s-]+/, "").trim())
+    .find(Boolean);
+  return line ? (line.length > width ? `${line.slice(0, width - 1)}…` : line) : "";
+};
+
+/** Wrap prose to a width, so a long `ask:` stays inside the terminal. */
+function wrap(text, width) {
+  const out = [];
+  for (const para of String(text ?? "").split("\n")) {
+    let line = "";
+    for (const word of para.trim().split(/\s+/).filter(Boolean)) {
+      if (line && line.length + 1 + word.length > width) {
+        out.push(line);
+        line = word;
+      } else line = line ? `${line} ${word}` : word;
+    }
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+/**
+ * These four commands read a platform and only a platform: a gate waiting
+ * on a person is a thing that exists on a server, and a local `foldrun run`
+ * asks the terminal it is running in. Said plainly rather than failing at
+ * the fetch, which is how `--url` typos used to read.
+ */
+function platformFor(flags, what) {
+  const url = remoteUrl(flags);
+  if (!url) {
+    throw new Error(
+      `\`foldrun ${what}\` reads a running platform — \`foldrun login\`, or pass --url <url> (or set FOLDRUN_URL)`,
+    );
+  }
+  return url;
+}
+
+/** Run at most `width` of these at once — fifteen desks, not fifteen bursts. */
+async function pool(items, width, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i], i);
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker));
+  return out;
+}
+
+/**
+ * Which workspace holds this run.
+ *
+ * `--to` settles it. Otherwise the folder this terminal is standing in is
+ * tried first — from a desk directory the run is almost always that desk's,
+ * and one request beats fifteen — and only then does it fan out.
+ */
+async function workspaceOfRun(url, flags, layout, runId) {
+  if (typeof flags.to === "string") return flags.to;
+  const names = await remoteWorkspaceNames(url, flags);
+  const here = takeWorkspace([], layout);
+  const order = here && names.includes(here) ? [here, ...names.filter((n) => n !== here)] : names;
+  if (!order.length) throw new Error(`no workspaces on ${url} — \`foldrun workspaces\` lists them`);
+
+  const found = await pool(order, 8, async (ws) => {
+    try {
+      await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+      return ws;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
+  });
+  const hit = found.find(Boolean);
+  if (!hit) {
+    throw new Error(
+      `no run "${runId}" in any workspace on ${url} — \`foldrun runs\` lists them, and --to <workspace> looks in one`,
+    );
+  }
+  return hit;
+}
+
+/** The steps of a run that are parked on a PERSON — not on a `wait: event`. */
+const waitingSteps = (run) =>
+  (run.steps ?? [])
+    .map((s, i) => ({ step: s, index: i }))
+    .filter(({ step }) => step.status === "awaiting-approval" && step.waitFor !== "event");
+
+// ------------------------------------------------------------- approvals
+
+/**
+ * `foldrun approvals` — everything across the account that is waiting for a
+ * person to say yes.
+ *
+ * One entry per GATE, the way /api/approvals counts them: a run with two `!`
+ * steps in one group is two decisions, and a list that folded them into one
+ * line named one agent and asked neither question.
+ */
+async function approvalsCmd(flags, layout) {
+  const url = platformFor(flags, "approvals");
+  const only = typeof flags.to === "string" ? flags.to : null;
+  const { approvals = [] } = await remoteCall(url, flags, "/api/approvals");
+  const waiting = only ? approvals.filter((a) => a.workspace === only) : approvals;
+
+  if (!waiting.length) {
+    console.log(`\n  ${c.dim(only ? `nothing is waiting on a person in ${only}` : "nothing is waiting on a person")}\n`);
+    return 0;
+  }
+
+  // What each gate PREVIEWS lives on the run record, not on the index — a
+  // gate that says "approve this" without naming the draft it is about is
+  // a button, not a question. Best effort: a run that cannot be read still
+  // gets its line.
+  const runs = new Map();
+  for (const ws of new Set(waiting.map((a) => a.workspace))) {
+    const ids = [...new Set(waiting.filter((a) => a.workspace === ws).map((a) => a.runId))];
+    await pool(ids, 6, async (id) => {
+      try {
+        runs.set(`${ws}/${id}`, await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${id}`));
+      } catch {
+        /* the index already told us enough to name it */
+      }
+    });
+  }
+
+  console.log();
+  for (const a of waiting) {
+    const record = runs.get(`${a.workspace}/${a.runId}`);
+    const step = record?.steps?.[a.step];
+    console.log(
+      `  ${c.amber("⏸")} ${c.bold(a.runId)}  ${a.workspace} · ${a.flow}  ${c.dim(`waiting ${ago(a.waitingSince)}`)}`,
+    );
+    console.log(`      ${c.dim(`step ${a.step + 1} · ${a.agent}${a.asked ? "" : " · no ask:, so its instruction"}`)}`);
+    for (const line of wrap(a.question, 84)) console.log(`      ${line}`);
+    const preview = step?.previewFiles ?? step?.preview ?? [];
+    if (preview.length) console.log(`      ${c.dim(`previews storage/: ${preview.join(", ")}`)}`);
+    if (record?.approveBy) console.log(`      ${c.dim(`expires ${when(record.approveBy)}`)}`);
+    console.log();
+  }
+  console.log(
+    `  ${c.dim(`${waiting.length} waiting — \`foldrun approve <run-id> --note "…"\` releases one, \`foldrun reject <run-id>\` refuses it`)}\n`,
+  );
+  return 0;
+}
+
+// -------------------------------------------------------- approve, reject
+
+/**
+ * `foldrun approve <run-id>` and `foldrun reject <run-id>`.
+ *
+ * Approving is an OUTWARD action: the step behind the gate is the one that
+ * publishes, sends or posts, which is exactly why a person was asked. So it
+ * says what it is about to release and waits to be told again, unless --yes
+ * was passed deliberately. Nothing here approves implicitly.
+ *
+ * `--note` is not a comment. It rides the record into the step's prompt, so
+ * "approve, but skip the Sydney batch" is an instruction the agent reads.
+ */
+async function decideCmd(decision, runId, flags, layout) {
+  const url = platformFor(flags, decision);
+  if (!runId) {
+    throw new Error(`which run? \`foldrun ${decision} <run-id>\` — \`foldrun approvals\` lists what is waiting`);
+  }
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  const waiting = waitingSteps(run);
+  if (!waiting.length) {
+    throw new Error(
+      `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person. \`foldrun approvals\` lists the ones that are`,
+    );
+  }
+
+  const only = flags.step === undefined ? null : Number(flags.step) - 1;
+  if (only !== null && !waiting.some(({ index }) => index === only)) {
+    throw new Error(
+      `step ${flags.step} of ${runId} is not waiting on a person — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
+    );
+  }
+  const chosen = only === null ? waiting : waiting.filter(({ index }) => index === only);
+  const note = typeof flags.note === "string" ? flags.note : undefined;
+
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(`${ws} · ${runId}`)}`);
+  for (const { step, index } of chosen) {
+    console.log(`  ${c.amber("⏸")} step ${index + 1} · ${c.bold(step.agent)}  ${c.dim(firstLine(step.instruction))}`);
+    for (const line of wrap(step.ask ?? "", 84)) console.log(`      ${line}`);
+    const preview = step.previewFiles ?? step.preview ?? [];
+    if (preview.length) console.log(`      ${c.dim(`previews storage/: ${preview.join(", ")}`)}`);
+  }
+  if (note) console.log(`  ${c.dim(`note the agent will read: ${note}`)}`);
+  console.log(
+    decision === "approve"
+      ? `\n  ${c.yellow("!")} approving lets ${chosen.length === 1 ? "this step" : "these steps"} run — whatever it publishes, sends or posts, it does for real.`
+      : `\n  ${c.dim(`rejecting fails ${chosen.length === 1 ? "this step" : "these steps"}, and the run with ${chosen.length === 1 ? "it" : "them"}.`)}`,
+  );
+
+  if (decision === "approve" && flags.yes !== true) {
+    if (!process.stdin.isTTY) {
+      throw new Error("approving needs a person — this is not a terminal, so pass --yes to mean it");
+    }
+    const answer = (await promptVisible(`  type the run id to approve (${runId}), or anything else to stop: `)).trim();
+    if (answer !== runId) {
+      console.log(`\n  ${c.dim("nothing approved")}\n`);
+      return 1;
+    }
+  }
+
+  const body = { decision, ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}), ...(only === null ? {} : { step: only }) };
+  const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  const count = Array.isArray(answer.steps) ? answer.steps.length : chosen.length;
+  console.log(
+    `\n  ${decision === "approve" ? c.green("✓") : c.red("✗")} ${decision === "approve" ? "approved" : "rejected"} ${count} step${count === 1 ? "" : "s"} of ${runId}` +
+      `\n  ${c.dim(`foldrun report ${runId} --to ${ws} — or logs ${runId} --to ${ws} --follow`)}\n`,
+  );
+  return 0;
+}
+
+// ------------------------------------------------------------------ runs
+
+/**
+ * `foldrun runs` — what has run lately, across the account.
+ *
+ * `logs` without an id lists ONE workspace's runs, which is the wrong unit
+ * for the question people actually ask in the morning: did anything fail
+ * overnight, anywhere. So this one fans out and merges, newest first, and
+ * carries each run's one-line summary — the sentence that says what it
+ * found, not merely that it finished.
+ */
+async function runsCmd(flags, layout) {
+  const url = platformFor(flags, "runs");
+  const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
+  if (!names.length) {
+    console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
+    return 0;
+  }
+  const limit = Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 20;
+  const cutoff = flags.since === undefined ? null : Date.now() - parseSince(flags.since);
+  const wanted =
+    typeof flags.status === "string" ? new Set(flags.status.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+
+  // Each desk is asked for its own newest `limit` before the merge, so one
+  // busy workspace cannot crowd every quiet one out of the answer.
+  const unreachable = [];
+  const lists = await pool(names, 8, async (ws) => {
+    try {
+      const { runs = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=${limit}`);
+      return runs.map((r) => ({ ...r, workspace: ws }));
+    } catch (err) {
+      unreachable.push([ws, explain(err)]);
+      return [];
+    }
+  });
+
+  const rows = lists
+    .flat()
+    .filter((r) => (wanted ? wanted.has(r.status) : true))
+    .filter((r) => (cutoff === null ? true : Date.parse(r.startedAt) >= cutoff))
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
+    .slice(0, limit);
+
+  if (!rows.length) {
+    const how = [wanted ? `status ${[...wanted].join(", ")}` : null, flags.since ? `the last ${flags.since}` : null]
+      .filter(Boolean)
+      .join(" in ");
+    console.log(`\n  ${c.dim(`no runs${how ? ` matching ${how}` : ""}${flags.to ? ` in ${flags.to}` : ""}`)}\n`);
+    for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
+    return 0;
+  }
+
+  const cells = rows.map((r) => {
+    const done = (r.steps ?? []).filter((s) => s.status === "completed" || s.status === "skipped").length;
+    return {
+      mark: statusMark(r.status),
+      when: when(r.startedAt),
+      workspace: r.workspace,
+      flow: r.flow,
+      status: r.status,
+      steps: `${done}/${(r.steps ?? []).length}`,
+      took: runDuration(r),
+      cost: `$${runCost(r).toFixed(2)}`,
+      id: r.id,
+      summary: firstLine(r.summary, 110),
+    };
+  });
+  const widest = (key) => Math.max(...cells.map((x) => x[key].length));
+  const w = {
+    when: widest("when"),
+    workspace: widest("workspace"),
+    flow: widest("flow"),
+    status: widest("status"),
+    steps: widest("steps"),
+    took: widest("took"),
+    cost: widest("cost"),
+  };
+
+  console.log();
+  for (const x of cells) {
+    console.log(
+      `  ${x.mark} ${c.dim(pad(x.when, w.when))}  ${pad(x.workspace, w.workspace)}  ${c.bold(pad(x.flow, w.flow))}  ` +
+        `${pad(x.status, w.status)}  ${c.dim(`${pad(x.steps, w.steps)}  ${pad(x.took, w.took)}  ${pad(x.cost, w.cost)}`)}  ${c.dim(x.id)}`,
+    );
+    if (x.summary) console.log(`      ${c.dim(x.summary)}`);
+  }
+  for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
+  console.log(`\n  ${c.dim("foldrun report <run-id> for the whole story; --status failed --since 24h narrows this")}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------- report
+
+/** Files a run wrote, as its own steps recorded them. */
+function filesWritten(run) {
+  const out = new Set();
+  for (const step of run.steps ?? []) {
+    for (const e of step.events ?? []) {
+      const m = /^files: saved (.+)$/.exec(String(e.text ?? "").trim());
+      if (m) for (const f of m[1].split(",")) out.add(f.trim());
+    }
+  }
+  for (const f of run.memoryWrites ?? []) out.add(f);
+  return [...out].filter(Boolean);
+}
+
+/** Every address a run said it published to, from its summary and conclusions. */
+function published(run) {
+  const text = [run.summary ?? "", ...(run.steps ?? []).map((s) => s.conclusion ?? s.result ?? "")].join("\n");
+  return [...new Set((text.match(/https?:\/\/[^\s)"'<>\]]+/g) ?? []).map((u) => u.replace(/[.,;]+$/, "")))];
+}
+
+/** Whichever error this step recorded — on the step, or on its last try. */
+const stepError = (step) => step.error ?? [...(step.tries ?? [])].reverse().find((t) => t.error)?.error ?? null;
+
+/**
+ * `foldrun report <run-id>` — one run, whole, readable without a browser.
+ *
+ * `logs <run-id>` prints every event of every step, which is the right tool
+ * when you know what you are hunting and the wrong one when you are asking
+ * "what did this do". This is the other half: the header, a line per step
+ * with what it cost and whether its verify held, the first line of each
+ * result, and — for the step that failed — the error and the last events
+ * before it. Then the three things a person goes looking for afterwards:
+ * what it wrote, what it published, and what is still waiting on them.
+ */
+async function reportCmd(runId, flags, layout) {
+  const url = platformFor(flags, "report");
+  if (!runId) throw new Error("which run? `foldrun report <run-id>` — `foldrun runs` lists them");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+
+  if (flags.json === true) {
+    console.log(JSON.stringify(run, null, 2));
+    return run.status === "failed" ? 1 : 0;
+  }
+
+  const tokens = (run.steps ?? []).reduce(
+    (t, s) => ({ input: t.input + (s.tokens?.input ?? 0), output: t.output + (s.tokens?.output ?? 0) }),
+    { input: 0, output: 0 },
+  );
+  const cost = runCost(run);
+
+  console.log(`\n  ${statusMark(run.status)} ${c.bold(run.flow)}  ${c.dim(run.id)}`);
+  console.log(`  ${c.dim(`${ws} · ${run.status}${run.test ? " · test run" : ""}`)}`);
+  console.log(`  ${c.dim(`started ${when(run.startedAt)} (${ago(run.startedAt)} ago) · ${runDuration(run)} · $${cost.toFixed(4)}`)}`);
+  if (tokens.input || tokens.output) {
+    console.log(`  ${c.dim(`${tokens.input.toLocaleString()} in / ${tokens.output.toLocaleString()} out tokens`)}`);
+  }
+  if (run.budgetUsd) console.log(`  ${c.dim(`budget $${Number(run.budgetUsd).toFixed(2)}`)}`);
+  if (run.summary) {
+    console.log();
+    for (const line of wrap(run.summary, 84)) console.log(`  ${line}`);
+  }
+
+  console.log();
+  (run.steps ?? []).forEach((step, i) => {
+    const bits = [
+      step.status,
+      step.attempts > 1 ? `${step.attempts} attempts` : null,
+      step.costUsd ? `$${step.costUsd.toFixed(4)}` : null,
+      step.startedAt && step.finishedAt
+        ? humanDuration(Date.parse(step.finishedAt) - Date.parse(step.startedAt))
+        : null,
+    ].filter(Boolean);
+    console.log(
+      `  ${statusMark(step.status)} ${pad(`${i + 1}.`, 4)}${c.dim(`g${step.group ?? 1}`)} ${c.bold(step.agent)}  ${c.dim(bits.join(" · "))}`,
+    );
+    if (step.verify) {
+      // A step that completed with a verify held it — the runtime fails the
+      // step otherwise, so status IS the verdict, and saying it out loud is
+      // the difference between "completed" and "completed, and checked".
+      const held = step.status === "completed";
+      console.log(`      ${held ? c.green("✓") : c.red("✗")} ${c.dim(`verify: ${firstLine(step.verify, 80)}`)}`);
+    }
+    if (step.approvedAt) {
+      console.log(`      ${c.green("✓")} ${c.dim(`approved ${when(step.approvedAt)}${step.approvalNote ? ` — "${step.approvalNote}"` : ""}`)}`);
+    }
+    if (step.status === "awaiting-approval") {
+      console.log(`      ${c.amber("⏸")} ${c.dim(step.waitFor === "event" ? "waiting on an event" : `waiting on a person: ${firstLine(step.ask ?? step.instruction, 70)}`)}`);
+    }
+    const said = firstLine(step.conclusion ?? step.result, 96);
+    if (said) console.log(`      ${said}`);
+    const err = stepError(step);
+    if (err) {
+      console.log(`      ${c.red(firstLine(err, 96))}`);
+      for (const e of (step.events ?? []).slice(-4)) {
+        console.log(`      ${EVENT_MARK(e)} ${c.dim(firstLine(e.text, 92))}`);
+      }
+    }
+  });
+
+  const files = filesWritten(run);
+  const links = published(run);
+  const waiting = waitingSteps(run);
+  if (files.length || links.length || waiting.length) console.log();
+  if (files.length) console.log(`  ${c.dim(`wrote  ${files.join(", ")}`)}`);
+  for (const link of links) console.log(`  ${c.dim(`published  ${link}`)}`);
+  for (const { step, index } of waiting) {
+    console.log(`  ${c.amber("⏸")} step ${index + 1} · ${step.agent} is waiting on a person — \`foldrun approve ${run.id} --to ${ws}\``);
+  }
+  console.log();
+  return run.status === "failed" ? 1 : 0;
+}
+
 export async function run(command, positional, flags, workspace, layout) {
   // Nothing outside the CLI's own entry point passes a layout — the tests
   // that call run() directly, an embedder. A lone workspace is the safe
@@ -2941,8 +3435,19 @@ export async function run(command, positional, flags, workspace, layout) {
     case "secrets":
       return secretsCmd(positional, flags, layout);
     case "logs":
-    case "runs":
       return logsCmd(positional, flags, layout);
+    case "runs":
+      // `runs` was a second spelling of `logs`, and --local keeps it one:
+      // the local store has no table to draw across workspaces, because a
+      // folder on a laptop is one workspace.
+      return flags.local === true ? logsCmd(positional, flags, layout) : runsCmd(flags, layout);
+    case "approvals":
+      return approvalsCmd(flags, layout);
+    case "approve":
+    case "reject":
+      return decideCmd(command, positional[0], flags, layout);
+    case "report":
+      return reportCmd(positional[0], flags, layout);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":

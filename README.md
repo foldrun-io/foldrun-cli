@@ -120,6 +120,11 @@ declared the same way.
 | `foldrun extract [dir]` | move single-file script tools into folders |
 | `foldrun probe <model>` | live check: can this model hold a tool loop here? |
 | `foldrun logs [run-id]` | recent runs, or one run's full event trail |
+| `foldrun runs` | what has run lately, across the account — `--status`, `--since`, `--to`, `--limit` |
+| `foldrun report <run-id>` | one run, whole: every step, what it cost, what it wrote, what is still waiting (`--json` for the record) |
+| `foldrun approvals` | every gate waiting on a person, with its question and what it previews |
+| `foldrun approve <run-id>` | release a waiting gate — it asks first, `--yes` means it, `--note "…"` steers the step |
+| `foldrun reject <run-id>` | refuse one, `--note` being the reason |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
 | `foldrun deploy [dir]` | push the whole account — or `deploy <workspace>` for one of them |
 | `foldrun pull [workspace]` | bring the platform's account down here (refuses to clobber local edits) |

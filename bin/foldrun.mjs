@@ -12,6 +12,10 @@
 //   foldrun eval  [name]    run evals
 //   foldrun probe <model>   can this model hold a tool loop? (live check)
 //   foldrun logs  [run-id]  recent runs, or one run's full event trail
+//   foldrun runs            what has run lately, across the account
+//   foldrun report <run-id> one run, whole: every step, what it cost, what it wrote
+//   foldrun approvals       what is waiting for a person, anywhere in the account
+//   foldrun approve <run-id>  release a waiting gate (asks first) — reject refuses it
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
@@ -54,6 +58,11 @@ const HELP = `foldrun — agents are just folders
   foldrun eval [name]       run one eval, or all of them
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs, or one run's full event trail
+  foldrun runs              what has run lately, across the account — --status, --since, --to, --limit
+  foldrun report <run-id>   one run, whole: header, every step, what it wrote and what is still waiting
+  foldrun approvals         every gate waiting on a person, with its question (--to <workspace> for one)
+  foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step
+  foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
@@ -81,6 +90,13 @@ Options
   --task "<text>"           the instruction for a manual run
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)
+  --status <s>              runs: only these statuses, comma-separated (failed, completed, awaiting-approval…)
+  --since <span>            runs: only runs started within 24h, 7d, 90m, 2w
+  --limit <n>               runs: how many, newest first (default 20)
+  --step <n>                approve, reject: decide only that step; default is every step that is waiting
+  --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
+  --yes                     approve: skip the confirmation, deliberately
+  --json                    report: the raw run record instead of the report
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --file <path>             source put: the local file to send (default: stdin)
   --message "<why>"         source put: recorded on the file's revision
@@ -126,7 +142,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
