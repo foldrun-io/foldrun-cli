@@ -122,8 +122,8 @@ declared the same way.
 | `foldrun logs [run-id]` | recent runs, or one run's full event trail |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
 | `foldrun deploy [dir]` | push the whole account — or `deploy <workspace>` for one of them |
-| `foldrun pull` | bring the platform's account down here (refuses to clobber local edits) |
-| `foldrun status` | per workspace: added, changed, and what moved on the platform since your last deploy |
+| `foldrun pull [workspace]` | bring the platform's account down here (refuses to clobber local edits) |
+| `foldrun status [workspace]` | per workspace: added, changed, and what moved on the platform since your last deploy |
 | `foldrun workspaces` | what exists here and there — also `rm <name>` (`--platform --yes` to delete it there) |
 | `foldrun invoke <flow>` | start a flow on a running platform (`--watch` streams its trace) |
 | `foldrun open [page]` | the dashboard for this workspace, in the browser |

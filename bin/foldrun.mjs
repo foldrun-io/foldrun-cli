@@ -57,8 +57,8 @@ const HELP = `foldrun — agents are just folders
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
-  foldrun pull              bring the platform's account down here (refuses to clobber; --force overrides)
-  foldrun status            per workspace: what is added, changed or gone since the last deploy
+  foldrun pull [workspace]  bring the platform's account down here (refuses to clobber; --force overrides)
+  foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
   foldrun workspaces        what exists here and on the platform — also rm <name> (--platform --yes)
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
@@ -110,7 +110,6 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --commit <sha>            deploy: record which commit this is
   --dry-run                 deploy: check and report, change nothing
   --force                   deploy: deploy even while runs are in flight; pull: overwrite local edits
-  --all                     status, pull: every workspace, not just this one
   --platform --yes          workspaces rm: delete it on the platform, deliberately
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
@@ -127,7 +126,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "all"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
@@ -168,6 +167,10 @@ const here = path.resolve(
 // `status` and the runtime's own account scope cannot drift apart.
 const { detectLayout, installationDataRoot } = await import("@foldrun/core/layout");
 const layout = detectLayout(here);
+const byName =
+  typeof flags.workspace === "string" && layout.workspacesDir && layout.workspaces.includes(flags.workspace)
+    ? path.join(layout.workspacesDir, flags.workspace)
+    : null;
 
 /**
  * The workspace directory this command should act on.
@@ -177,6 +180,10 @@ const layout = detectLayout(here);
  * by name, rather than picking.
  */
 function pinned() {
+  // `--workspace blog-desk` inside an account names one of its workspaces, not
+  // a directory relative to here. Only when it IS one of them, so a path that
+  // happens to look like a name still resolves as a path.
+  if (byName) return byName;
   if (layout.workspaceDir && layout.kind !== "empty") return layout.workspaceDir;
   if (layout.kind === "account" && layout.workspacesDir && layout.workspaces.length === 1) {
     return path.join(layout.workspacesDir, layout.workspaces[0]);

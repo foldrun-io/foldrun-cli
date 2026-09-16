@@ -1555,8 +1555,27 @@ async function openCmd(positional, flags) {
 function takeWorkspace(positional, layout) {
   if (layout && layout.workspaces.includes(positional[0])) return positional.shift();
   if (layout && layout.workspaceDir) return path.basename(layout.workspaceDir);
+  // `--workspace <name>` already pinned one of this account's workspaces.
+  const pinned = process.env.FOLDRUN_WORKSPACE ? path.basename(process.env.FOLDRUN_WORKSPACE) : null;
+  if (layout && pinned && layout.workspaces.includes(pinned)) return pinned;
   if (layout && layout.workspaces.length === 1) return layout.workspaces[0];
   return null;
+}
+
+/**
+ * Stop a workspace-scoped command that is standing at an account root with
+ * several workspaces under it.
+ *
+ * Without this the runtime was pinned to the account directory, found no
+ * `agents/` in it, and said the workspace had no agents — true of the
+ * directory it was looking at and useless as an answer.
+ */
+function needsOne(layout, what) {
+  if (layout.kind === "account" && !layout.workspaceDir && layout.workspaces.length !== 1) {
+    throw new Error(
+      `which workspace? \`foldrun ${what} <target> --workspace <name>\` — this account has ${layout.workspaces.join(", ") || "none"}`,
+    );
+  }
 }
 
 /** …and the error when there are several and none was named. */
@@ -2903,8 +2922,10 @@ export async function run(command, positional, flags, workspace, layout) {
     case "deploy":
       return deploy(positional[0] ?? ".", flags, layout);
     case "run":
+      needsOne(layout, "run");
       return runTarget(positional[0], flags);
     case "eval":
+      needsOne(layout, "eval");
       return runEvals(positional[0]);
     case "probe":
       return probeCmd(positional[0]);
