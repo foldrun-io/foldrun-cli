@@ -16,6 +16,7 @@
 //   foldrun report <run-id> one run, whole: every step, what it cost, what it wrote
 //   foldrun approvals       what is waiting for a person, anywhere in the account
 //   foldrun approve <run-id>  release a waiting gate (asks first) — reject refuses it
+//   foldrun stop  <run-id>  kill a run in flight
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
@@ -63,6 +64,7 @@ const HELP = `foldrun — agents are just folders
   foldrun approvals         every gate waiting on a person, with its question (--to <workspace> for one)
   foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step
   foldrun reject <run-id>   refuse one, with --note as the reason
+  foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
@@ -95,7 +97,7 @@ Options
   --limit <n>               runs: how many, newest first (default 20)
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
-  --yes                     approve: skip the confirmation, deliberately
+  --yes                     approve, stop: skip the confirmation, deliberately
   --json                    report: the raw run record instead of the report
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --file <path>             source put: the local file to send (default: stdin)

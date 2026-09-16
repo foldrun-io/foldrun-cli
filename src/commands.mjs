@@ -3041,6 +3041,24 @@ async function workspaceOfRun(url, flags, layout, runId) {
   return hit;
 }
 
+/**
+ * A deliberate yes, or nothing happens.
+ *
+ * `expect` is what the person must type back — the run id, for the two
+ * decisions that cannot be taken back: approving something outward, and
+ * killing a run mid-step. --yes is the way to mean it without being asked,
+ * and it is REQUIRED where there is no terminal to ask: a script that pipes
+ * into this must say so, rather than being waved through by an empty read.
+ */
+async function confirmed(flags, verb, question, expect) {
+  if (flags.yes === true) return true;
+  if (!process.stdin.isTTY) {
+    throw new Error(`${verb} needs a person — this is not a terminal, so pass --yes to mean it`);
+  }
+  const answer = (await promptVisible(`  ${question}`)).trim();
+  return expect === undefined ? /^y(es)?$/i.test(answer) : answer === expect;
+}
+
 /** The steps of a run that are parked on a PERSON — not on a `wait: event`. */
 const waitingSteps = (run) =>
   (run.steps ?? [])
@@ -3154,15 +3172,9 @@ async function decideCmd(decision, runId, flags, layout) {
       : `\n  ${c.dim(`rejecting fails ${chosen.length === 1 ? "this step" : "these steps"}, and the run with ${chosen.length === 1 ? "it" : "them"}.`)}`,
   );
 
-  if (decision === "approve" && flags.yes !== true) {
-    if (!process.stdin.isTTY) {
-      throw new Error("approving needs a person — this is not a terminal, so pass --yes to mean it");
-    }
-    const answer = (await promptVisible(`  type the run id to approve (${runId}), or anything else to stop: `)).trim();
-    if (answer !== runId) {
-      console.log(`\n  ${c.dim("nothing approved")}\n`);
-      return 1;
-    }
+  if (decision === "approve" && !(await confirmed(flags, "approving", `type the run id to approve (${runId}): `, runId))) {
+    console.log(`\n  ${c.dim("nothing approved")}\n`);
+    return 1;
   }
 
   const body = { decision, ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}), ...(only === null ? {} : { step: only }) };
@@ -3174,6 +3186,57 @@ async function decideCmd(decision, runId, flags, layout) {
   console.log(
     `\n  ${decision === "approve" ? c.green("✓") : c.red("✗")} ${decision === "approve" ? "approved" : "rejected"} ${count} step${count === 1 ? "" : "s"} of ${runId}` +
       `\n  ${c.dim(`foldrun report ${runId} --to ${ws} — or logs ${runId} --to ${ws} --follow`)}\n`,
+  );
+  return 0;
+}
+
+// ------------------------------------------------------------------ stop
+
+/**
+ * `foldrun stop <run-id>` — kill a run in flight.
+ *
+ * The one thing you want at 3am when a flow is looping on a paid API, and
+ * the one thing that had no command: it was a raw POST with a hand-written
+ * bearer header, which means the workspace had to be remembered too. Here
+ * the run id is enough.
+ *
+ * It says what it is about to destroy first. The step that is running has a
+ * sandbox and has already spent something; stopping throws that work away
+ * and keeps the charge, because the work was really done.
+ */
+async function stopCmd(runId, flags, layout) {
+  const url = platformFor(flags, "stop");
+  if (!runId) throw new Error("which run? `foldrun stop <run-id>` — `foldrun runs --status running` lists them");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+
+  if (run.status === "completed" || run.status === "failed") {
+    // Not an error worth a stack: the thing you wanted — it is not running —
+    // is already true. Said plainly, and exit 0, so a script that stops a
+    // run it is not sure about does not fail on the good case.
+    console.log(`\n  ${statusMark(run.status)} ${runId} in ${ws} already finished ${ago(run.finishedAt)} ago — nothing to stop\n`);
+    return 0;
+  }
+
+  const live = (run.steps ?? []).map((s, i) => ({ step: s, index: i })).filter(({ step }) => step.status === "running");
+  console.log(`\n  ${statusMark(run.status)} ${c.bold(run.flow)}  ${c.dim(`${ws} · ${runId}`)}`);
+  console.log(`  ${c.dim(`${run.status} · started ${ago(run.startedAt)} ago · $${runCost(run).toFixed(4)} spent`)}`);
+  for (const { step, index } of live) {
+    console.log(`  ${c.amber("…")} step ${index + 1} of ${(run.steps ?? []).length} · ${c.bold(step.agent)}  ${c.dim(firstLine(step.instruction, 70))}`);
+  }
+  console.log(
+    `\n  ${c.yellow("!")} stopping destroys the sandbox the running step is spending in and throws its work away. Finished steps keep their results, and every cost already incurred stays on the bill.`,
+  );
+
+  if (!(await confirmed(flags, "stopping a run", `type the run id to stop (${runId}): `, runId))) {
+    console.log(`\n  ${c.dim("nothing stopped")}\n`);
+    return 1;
+  }
+
+  const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/stop`, { method: "POST" });
+  console.log(
+    `\n  ${c.green("✓")} stopped ${runId} in ${ws}${answer.status ? ` — now ${answer.status}` : ""}` +
+      `\n  ${c.dim(`foldrun report ${runId} --to ${ws} for what it got through first`)}\n`,
   );
   return 0;
 }
@@ -3448,6 +3511,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return decideCmd(command, positional[0], flags, layout);
     case "report":
       return reportCmd(positional[0], flags, layout);
+    case "stop":
+      return stopCmd(positional[0], flags, layout);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":

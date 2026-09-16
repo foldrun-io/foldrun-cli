@@ -125,6 +125,7 @@ declared the same way.
 | `foldrun approvals` | every gate waiting on a person, with its question and what it previews |
 | `foldrun approve <run-id>` | release a waiting gate — it asks first, `--yes` means it, `--note "…"` steers the step |
 | `foldrun reject <run-id>` | refuse one, `--note` being the reason |
+| `foldrun stop <run-id>` | kill a run in flight — it says what it will destroy, then asks (`--yes` means it) |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
 | `foldrun deploy [dir]` | push the whole account — or `deploy <workspace>` for one of them |
 | `foldrun pull [workspace]` | bring the platform's account down here (refuses to clobber local edits) |

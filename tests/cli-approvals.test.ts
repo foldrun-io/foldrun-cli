@@ -12,77 +12,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
-
-const ROOT = path.join(import.meta.dirname, "..");
-const CLI = path.join(ROOT, "bin/foldrun.mjs");
-
-type Seen = { method: string; url: string; body: string };
-
-/** A fake platform: the routes these commands call, and a memory of the calls. */
-function serve(routes: Record<string, (body: string) => unknown>) {
-  const seen: Seen[] = [];
-  return new Promise<{ url: string; seen: Seen[]; close: () => void }>((resolve) => {
-    const server = http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (d) => (body += d));
-      req.on("end", () => {
-        const url = (req.url ?? "").split("?")[0];
-        seen.push({ method: req.method ?? "", url, body });
-        const route = routes[`${req.method} ${url}`] ?? routes[url];
-        if (!route) {
-          res.writeHead(404, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: "run not found" }));
-          return;
-        }
-        // `__status` and not `status`: a run record HAS a status, and reading
-        // it as the HTTP one made every fixture a 500-shaped crash.
-        const answer = route(body) as any;
-        const failing = answer && typeof answer === "object" && "__status" in answer;
-        const status = failing ? answer.__status : 200;
-        const payload = failing ? answer.body : answer;
-        res.writeHead(status, { "content-type": "application/json" });
-        res.end(JSON.stringify(payload));
-      });
-    });
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address() as { port: number };
-      resolve({
-        url: `http://127.0.0.1:${port}`,
-        seen,
-        close: () => {
-          server.closeAllConnections();
-          server.close();
-        },
-      });
-    });
-  });
-}
-
-/** Awaited, never spawnSync — the fake platform answers from this process. */
-function cli(args: string[], opts: { cwd?: string; stdin?: string } = {}): Promise<{ out: string; code: number }> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], {
-      cwd: opts.cwd ?? ROOT,
-      env: { ...process.env, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1" },
-    });
-    let out = "";
-    child.stdout.on("data", (d) => (out += d));
-    child.stderr.on("data", (d) => (out += d));
-    if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
-    else child.stdin.end();
-    child.on("close", (code) => resolve({ out, code: code ?? 1 }));
-  });
-}
-
-const at = (url: string, ...args: string[]) => cli([...args, "--url", url, "--token", "k"]);
+import { serve, cli, at, failing, WORKSPACES } from "./fake-platform.ts";
 
 // ------------------------------------------------------------- the fixtures
-
-const WORKSPACES = { workspaces: [{ name: "blog-desk" }, { name: "rank-desk" }] };
 
 const gate = {
   workspace: "blog-desk",
@@ -374,7 +308,7 @@ test("runs --to asks one workspace and --limit caps the list", async () => {
 test("a workspace that will not answer is named, and the rest still print", async () => {
   const s = await serve({
     "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": () => ({ __status: 500, body: { error: "the box is mid-deploy" } }),
+    "/api/workspaces/blog-desk/runs": () => failing(500, { error: "the box is mid-deploy" }),
     "/api/workspaces/rank-desk/runs": () => runsIn([completedRun]),
   });
   const r = await at(s.url, "runs");
