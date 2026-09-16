@@ -577,6 +577,13 @@ async function check(workspace, flags = {}) {
   for (const a of agents) {
     if (!a.description) note("warn", `agents/${a.name}`, "no description — other agents and people read it");
 
+    // A timezone nobody can read. The deploy already refuses it; check has to
+    // refuse it here, or the first anyone hears of it is a push that bounces.
+    if (a.timezoneProblem) {
+      // The sentence already names the value it could not read.
+      note("error", `agents/${a.name}`, a.timezoneProblem);
+    }
+
     // What the author wrote that the runtime already writes, or writes better.
     // Every trap here was one somebody hit while the answer sat in the source:
     // check reads the whole folder anyway, so it may as well teach.
