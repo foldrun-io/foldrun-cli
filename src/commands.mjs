@@ -315,9 +315,15 @@ async function scaffoldCmd(kind, positional, flags, layout) {
   const { KINDS, toolStarter, SCRIPT_LANGUAGES } = await import("@foldrun/core/kinds");
   const one = KINDS[kind].one;
 
+  // The other verbs are dispatched before this — `agent run` and `tool test`
+  // go to the platform — so anything left here should have been `new`.
+  const alsoVerbs = { agents: ["run"], tools: ["test"], flows: [] }[kind] ?? [];
   const verb = positional[0];
   if (verb !== "new") {
-    throw new Error(`\`foldrun ${one} new <name>\` — "new" is the only verb${verb ? `, not "${verb}"` : ""}`);
+    const verbs = ["new", ...alsoVerbs].join(", ");
+    throw new Error(
+      `\`foldrun ${one} new <name>\` — ${alsoVerbs.length ? `${verbs} are the verbs` : `"new" is the only verb`}${verb ? `, not "${verb}"` : ""}`,
+    );
   }
   const name = positional[1];
   if (!name) throw new Error(`which ${one}? \`foldrun ${one} new <name>\` — e.g. ${KINDS[kind].placeholder}`);
@@ -1384,10 +1390,25 @@ const CLI_VERSION = (() => {
 })();
 const USER_AGENT = `foldrun-cli/${CLI_VERSION}`;
 
-/** How long one request may take, in seconds: FOLDRUN_TIMEOUT, else 30. */
-function timeoutSeconds() {
-  const n = Number(env("FOLDRUN_TIMEOUT"));
-  return Number.isFinite(n) && n > 0 ? n : 30;
+/**
+ * A clock the caller asked for, in seconds, or undefined.
+ *
+ * `--timeout` first, then FOLDRUN_TIMEOUT. Separated from the default so a
+ * command that needs a longer one by nature — `tool test`, where the tool
+ * itself may take minutes — can raise its own floor without overriding
+ * somebody who said what they wanted.
+ */
+function explicitTimeout(flags = {}) {
+  for (const raw of [flags.timeout, env("FOLDRUN_TIMEOUT")]) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
+/** How long one request may take, in seconds: --timeout, FOLDRUN_TIMEOUT, else 30. */
+function timeoutSeconds(flags = {}) {
+  return explicitTimeout(flags) ?? 30;
 }
 
 /**
@@ -1445,9 +1466,9 @@ function retryAfterMs(res, seconds) {
  * names one — a rolling deploy or a rate limit deserves the nudge. Nothing
  * else is retried: a second POST could be a second run.
  * @param {string} url @param {string} apiPath @param {RequestInit} [init]
- * @param {{ token?: string }} [opts]
+ * @param {{ token?: string, seconds?: number }} [opts]
  */
-async function remoteFetch(url, apiPath, init = {}, { token } = {}) {
+async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = {}) {
   const target = new URL(apiPath, url);
   const method = (init.method ?? "GET").toUpperCase();
   const headers = {
@@ -1455,7 +1476,7 @@ async function remoteFetch(url, apiPath, init = {}, { token } = {}) {
     ...(token ? { authorization: `Bearer ${token}` } : {}),
     ...(init.headers ?? {}),
   };
-  const seconds = timeoutSeconds();
+  const seconds = given ?? timeoutSeconds();
   const attempt = async () => {
     try {
       return await fetch(target, { ...init, headers, signal: AbortSignal.timeout(seconds * 1000) });
@@ -1481,11 +1502,17 @@ async function remoteFetch(url, apiPath, init = {}, { token } = {}) {
  * that is down — and used to be read as {} and reported as a bare "HTTP
  * 403". Now the status, the content-type and the first line say so.
  * @param {string} url @param {Record<string, any>} flags @param {string} apiPath @param {RequestInit} [init]
+ * @param {{ seconds?: number }} [opts]
  * @returns {Promise<any>}
  */
-async function remoteCall(url, flags, apiPath, init = {}) {
+async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
   const token = tokenFor(url, flags);
-  const res = await remoteFetch(url, apiPath, { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) } }, { token });
+  const res = await remoteFetch(
+    url,
+    apiPath,
+    { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) } },
+    { token, seconds: seconds ?? timeoutSeconds(flags) },
+  );
   const text = await res.text();
   let body;
   try {
@@ -3891,6 +3918,235 @@ async function reportCmd(runId, flags, layout) {
   return run.status === "failed" ? 1 : 0;
 }
 
+// ------------------------------------------------- one tool, one agent, alone
+
+/** Which workspace a platform command is about: --to, else the folder we stand in. */
+function platformWorkspace(flags, layout, what) {
+  // A folder with no agents in it is not a workspace, whatever it is called,
+  // and guessing from its name posts to a workspace that does not exist —
+  // which comes back as the platform's 404 about something else entirely.
+  const guess = layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  const ws = typeof flags.to === "string" ? flags.to : guess;
+  if (!ws) {
+    throw new Error(
+      `which workspace is it in? \`foldrun ${what} --to <workspace>\`${
+        layout?.workspaces?.length ? ` — this account has ${layout.workspaces.join(", ")}` : ""
+      }`,
+    );
+  }
+  return ws;
+}
+
+/**
+ * A tool test runs the tool for real — an HTTP request, a script, an MCP
+ * handshake — and a script that scrapes a site or waits on a slow API takes
+ * as long as it takes. Thirty seconds is right for asking the platform a
+ * question and wrong for asking it to DO something, so this one waits five
+ * minutes unless told otherwise.
+ */
+const TOOL_TEST_SECONDS = 300;
+
+/**
+ * `foldrun tool test <name> [key=value …]` — exercise one tool, alone.
+ *
+ * No model, no run, no flow: the point is to find out whether the tool works
+ * BEFORE a flow depends on it. Otherwise the first anyone hears of a wrong
+ * `base:` or an unset secret is an agent, mid-turn, quietly not using the
+ * tool and saying something plausible instead.
+ *
+ * Arguments are `key=value` pairs because that is what the tool declares in
+ * `args:` — the platform passes them as the same long flags a run would.
+ */
+async function toolTestCmd(positional, flags, layout) {
+  const url = platformFor(flags, "tool test");
+  const name = positional[1];
+  if (!name) {
+    throw new Error("which tool? `foldrun tool test <name> --to <workspace>` — `foldrun tool new <name>` makes one");
+  }
+  const ws = platformWorkspace(flags, layout, `tool test ${name}`);
+
+  const args = {};
+  for (const pair of positional.slice(2)) {
+    const eq = pair.indexOf("=");
+    if (eq < 1) {
+      throw new Error(
+        `"${pair}" is not an argument — \`foldrun tool test ${name} key=value\`, one pair per argument the tool declares`,
+      );
+    }
+    args[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+
+  const seconds = explicitTimeout(flags) ?? TOOL_TEST_SECONDS;
+  let r;
+  try {
+    r = await remoteCall(
+      url,
+      flags,
+      `/api/workspaces/${encodeURIComponent(ws)}/tools/${encodeURIComponent(name)}/test`,
+      {
+        method: "POST",
+        // `path:` is the http transport's probe path, appended to `base:`.
+        body: JSON.stringify({ args, ...(typeof flags.path === "string" ? { path: flags.path } : {}) }),
+      },
+      { seconds },
+    );
+  } catch (err) {
+    if (explain(err).includes("did not answer")) {
+      throw new Error(
+        `${name} was still running ${seconds}s in, so the test was given up on — the tool itself may still be going on the platform. \`--timeout <seconds>\` waits longer.`,
+      );
+    }
+    throw err;
+  }
+
+  const mark = r.ok ? c.green("✓") : c.red("✗");
+  console.log(`\n  ${mark} ${c.bold(name)}  ${c.dim(`${r.transport ?? "?"} · ${ws} · ${humanDuration(r.ms ?? 0)}`)}`);
+  if (r.summary) console.log(`  ${c.dim(r.summary)}`);
+
+  // Names only. The platform never sends a secret's value and neither does
+  // this — "which one did you not set" is the whole of the useful half.
+  if (r.missingSecrets?.length) {
+    console.log();
+    for (const s of r.missingSecrets) {
+      console.log(`  ${c.red("✗")} ${c.bold(s)} ${c.dim(`is not set — foldrun secrets set ${s}`)}`);
+    }
+  }
+
+  // Whatever the tool printed: a script's stdout and stderr together, an
+  // HTTP response body, an MCP server's tool list.
+  if (r.detail) {
+    console.log();
+    for (const line of String(r.detail).split("\n")) console.log(`    ${line}`);
+  }
+
+  console.log(
+    `\n  ${c.dim(
+      r.ok
+        ? "it works — a flow can depend on it"
+        : `not working yet — fix it, \`foldrun deploy\`, and test again${
+            Object.keys(args).length ? "" : "; a tool that takes arguments needs them: key=value"
+          }`,
+    )}\n`,
+  );
+  return r.ok ? 0 : 1;
+}
+
+/**
+ * `foldrun agent run <name> --task "…"` — one agent, once, on the platform.
+ *
+ * A flow of one step, without a flow file: the way to try a desk's agent on
+ * a real task before wiring it into anything, and the way to ask one a
+ * question that does not deserve a schedule.
+ */
+async function agentRunCmd(positional, flags, layout) {
+  const url = platformFor(flags, "agent run");
+  const name = positional[1];
+  if (!name) throw new Error('which agent? `foldrun agent run <name> --to <workspace> --task "…"`');
+  const ws = platformWorkspace(flags, layout, `agent run ${name}`);
+  const task = typeof flags.task === "string" ? flags.task.trim() : "";
+  if (!task) {
+    throw new Error(`what should ${name} do? pass --task "<text>" — an agent run is one instruction and nothing else`);
+  }
+
+  // --wait asks in short pieces, exactly as `invoke` does: whatever sits in
+  // front of the platform cuts a request that stays silent too long, and an
+  // agent can think for many minutes.
+  const WAIT_PIECE_S = 25;
+  const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
+  const base = `/api/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
+
+  // A waited run that FAILS is answered with 500 and a full record — the
+  // answer to the question, not a fault in the call. So the run id is taken
+  // off it and the report is printed like any other.
+  const waited = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (flags.wait === true && err?.body?.runId) return err.body;
+      throw err;
+    }
+  };
+
+  let body = await waited(() =>
+    remoteCall(url, flags, `${base}/run${wait}`, {
+      method: "POST",
+      // --test: the platform marks the run a test run — sends refused or sunk
+      // at the proxy, send-capable secrets withheld, state/ kept.
+      body: JSON.stringify({ task, ...(flags.test === true ? { test: true } : {}) }),
+    }),
+  );
+  const runId = body?.runId;
+  if (!runId) throw new Error(`${url} started no run for ${name} — ${JSON.stringify(body).slice(0, 200)}`);
+
+  if (flags.wait !== true) {
+    console.log(
+      `\n  ${c.green("✓")} queued ${c.bold(runId)}${body.test ? ` ${c.amber("TEST")}` : ""}  ${c.dim(`${name} · ${ws}`)}`,
+    );
+    console.log(`  ${c.dim(`foldrun report ${runId} --to ${ws}`)}`);
+    console.log(`  ${c.dim(`foldrun logs ${runId} --to ${ws} --follow`)}\n`);
+    return 0;
+  }
+
+  while (body?.timedOut === true) {
+    body = await waited(() => remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${runId}${wait}`));
+  }
+  // The same report `foldrun report` prints, from the same code — a summary
+  // written twice is a summary that disagrees with itself by Friday.
+  return reportCmd(runId, { ...flags, to: ws }, layout);
+}
+
+/**
+ * `foldrun check --to <workspace>` — validate the copy that is DEPLOYED.
+ *
+ * Everything else `check` does is about the folder in front of you. But a
+ * workspace can be edited through the API, by an agent or by `foldrun source
+ * put`, and until now the only way to find out whether what landed there was
+ * valid was to spend a run and read the failure.
+ *
+ * The files come down into a temporary folder and the ordinary local check
+ * runs over them, so there is exactly one copy of the rules. The library is
+ * not fetched: `check` already asks the platform what its library holds, by
+ * name, which is the half that matters for `tools:` and `skills:`.
+ */
+async function checkRemote(flags, layout) {
+  const url = platformFor(flags, "check --to <workspace>");
+  const ws = platformWorkspace(flags, layout, "check");
+  const { isSourcePath } = await core();
+
+  const files = await remoteWorkspaceFiles(url, flags, ws, isSourcePath);
+  if (!files.size) {
+    throw new Error(`no source files in "${ws}" on ${url} — \`foldrun workspaces\` lists what is there`);
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-check-"));
+  // Under `workspaces/` so the account root above it is the shape the core
+  // expects — and empty, so nothing on this laptop can be mistaken for part
+  // of what is deployed.
+  const dir = path.join(root, "workspaces", ws);
+  const before = { workspace: process.env.FOLDRUN_WORKSPACE, account: process.env.FOLDRUN_ACCOUNT };
+  try {
+    for (const [rel, content] of files) {
+      const abs = path.join(dir, rel);
+      // A path from the platform is still a path from somewhere else.
+      if (!abs.startsWith(dir + path.sep)) continue;
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    }
+    console.log(`\n  ${c.bold(ws)}  ${c.dim(`the deployed copy on ${url} · ${files.size} file${files.size === 1 ? "" : "s"}`)}`);
+    process.env.FOLDRUN_WORKSPACE = dir;
+    process.env.FOLDRUN_ACCOUNT = root;
+    const code = await check(dir, flags);
+    console.log(`  ${c.dim(`checked what is deployed, not this folder — ${ws} · ${url}`)}\n`);
+    return code;
+  } finally {
+    if (before.workspace === undefined) delete process.env.FOLDRUN_WORKSPACE;
+    else process.env.FOLDRUN_WORKSPACE = before.workspace;
+    if (before.account === undefined) delete process.env.FOLDRUN_ACCOUNT;
+    else process.env.FOLDRUN_ACCOUNT = before.account;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 export async function run(command, positional, flags, workspace, layout) {
   // Nothing outside the CLI's own entry point passes a layout — the tests
   // that call run() directly, an embedder. A lone workspace is the safe
@@ -3919,7 +4175,13 @@ export async function run(command, positional, flags, workspace, layout) {
     case "new":
       return newWorkspace(positional[0], flags, layout);
     case "check":
-      return layout.kind === "account" ? checkAccount(layout, flags) : check(workspace, flags);
+      // --to names a workspace on a PLATFORM, so there is nothing local to
+      // check and the folder this terminal stands in is beside the point.
+      return typeof flags.to === "string"
+        ? checkRemote(flags, layout)
+        : layout.kind === "account"
+          ? checkAccount(layout, flags)
+          : check(workspace, flags);
     case "pull":
       return pullCmd(layout, flags, positional[0]);
     case "status":
@@ -3967,11 +4229,17 @@ export async function run(command, positional, flags, workspace, layout) {
     case "storage":
       return storageCmd(positional, flags, layout);
     case "agent":
-      return scaffoldCmd("agents", positional, flags, layout);
+      // `new` scaffolds one here; `run` runs one there. The noun is the same
+      // thing in both cases, which is why they share a command.
+      return positional[0] === "run"
+        ? agentRunCmd(positional, flags, layout)
+        : scaffoldCmd("agents", positional, flags, layout);
     case "flow":
       return scaffoldCmd("flows", positional, flags, layout);
     case "tool":
-      return scaffoldCmd("tools", positional, flags, layout);
+      return positional[0] === "test"
+        ? toolTestCmd(positional, flags, layout)
+        : scaffoldCmd("tools", positional, flags, layout);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":

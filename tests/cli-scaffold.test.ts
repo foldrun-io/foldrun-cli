@@ -140,7 +140,7 @@ test("new is the only verb, and a missing name says what to type", () => {
   const root = account("main");
   const verb = run(root, "agent", "edit", "checker");
   assert.equal(verb.status, 1);
-  assert.match(verb.stderr, /"new" is the only verb, not "edit"/);
+  assert.match(verb.stderr, /new, run are the verbs, not "edit"/);
 
   const nameless = run(root, "flow", "new");
   assert.equal(nameless.status, 1);

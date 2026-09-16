@@ -24,6 +24,8 @@
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
 //   foldrun agent new <name>  one more agent in this workspace — also flow new, tool new
+//   foldrun agent run <name>  run one agent once on a platform, no flow
+//   foldrun tool test <name>  exercise one tool alone — no model, no run
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
 //   foldrun pull            bring the platform's account down into this folder
 //   foldrun status          what differs here from what is deployed
@@ -62,6 +64,9 @@ const HELP = `foldrun — agents are just folders
   foldrun flow new <name>   one more flow — its first step names an agent you already have
   foldrun tool new <name>   one more tool: a folder with its program beside it (--transport, --language)
   foldrun check [dir]       validate every workspace here, and the shared library
+  foldrun check --to <ws>   validate the DEPLOYED copy instead — fetched from the platform, checked here
+  foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test)
+  foldrun tool test <name>  exercise one tool alone, no model and no run (key=value args, --to)
   foldrun extract [dir]     move single-file script tools into folders (tool.md + run.*)
   foldrun run <target>      run an agent or flow (target: name, or flow:name)
   foldrun eval [name]       run one eval, or all of them
@@ -118,7 +123,8 @@ Options
   --file <path>             source put: the local file to send (default: stdin); storage get: where to write it
   --message "<why>"         source put: recorded on the file's revision
   --account                 secrets: account scope instead of the workspace's
-  --wait                    invoke: hold on and print the result
+  --wait                    invoke, agent run: hold on and print the result
+  --path <p>                tool test: the path an http tool should probe, appended to its base:
   --watch                   invoke: follow the run's trace here as it happens
   --print                   open: print the URL only
   --from <n>                invoke: start at step n; earlier steps are skipped
@@ -137,6 +143,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --data <dir>              the installation's data directory
   --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
   --token <key>             API key for --url (or FOLDRUN_TOKEN, or the one from foldrun login)
+  --timeout <s>             seconds one request may take (or FOLDRUN_TIMEOUT; default 30, tool test 300)
   FOLDRUN_TIMEOUT=<s>       seconds one request to the platform may take (default 30)
   --profile <name>          act as one stored account for this command (see foldrun accounts)
   --local                   deploy: into the installation on this machine, even when signed in

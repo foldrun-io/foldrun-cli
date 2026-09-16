@@ -116,6 +116,9 @@ declared the same way.
 | `foldrun new <name>` | another workspace in this account |
 | `foldrun agent new <name>` | one more agent in this workspace — also `flow new <name>` and `tool new <name>` |
 | `foldrun check [dir]` | validate every workspace here, and the shared library |
+| `foldrun check --to <ws>` | validate the copy that is DEPLOYED — fetched from the platform, checked by the same rules |
+| `foldrun agent run <name>` | run one agent once on a platform, no flow (`--task "…"`, `--wait`, `--test`) |
+| `foldrun tool test <name>` | exercise one tool alone — no model, no run (`key=value` for its args) |
 | `foldrun run <target>` | run an agent or a flow |
 | `foldrun eval [name]` | run one eval, or all of them |
 | `foldrun extract [dir]` | move single-file script tools into folders |
@@ -144,6 +147,17 @@ declared the same way.
 | `foldrun keys ls` | the account's API keys — also `create <label>`, `revoke <id>` |
 
 `foldrun --help` lists every flag.
+
+`foldrun tool test <name> --to <workspace> key=value` is how you find out a
+tool works before a flow depends on it. It runs the real thing — the HTTP
+request, the script, the MCP handshake — and prints what the tool printed, how
+long it took, and any secret it needed by NAME and never by value. It waits
+five minutes by default, because a tool that scrapes or crawls takes as long as
+it takes; `--timeout <seconds>` waits longer.
+
+`foldrun agent run <name> --to <workspace> --task "…"` runs one agent once, as
+a flow of one step with no flow file. It prints the run id and how to follow
+it; `--wait` holds on and prints the same report `foldrun report` would.
 
 **`check` is the one to run in CI.** It costs nothing and catches what
 otherwise surfaces as a confidently wrong answer at 3am: a step naming an agent
