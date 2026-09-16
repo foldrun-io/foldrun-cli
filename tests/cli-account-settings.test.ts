@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { serve, at } from "./fake-platform.ts";
 
-const defaults = {
+const defaults: any = {
   timezone: "Australia/Sydney",
   budget: null,
   concurrency: null,

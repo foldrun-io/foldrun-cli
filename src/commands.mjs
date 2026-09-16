@@ -2889,6 +2889,57 @@ function useCmd(positional) {
   return 0;
 }
 
+// -------------------------------------------------------------- schedule
+
+/**
+ * `foldrun schedule` — every flow in the account that fires on a clock.
+ *
+ * Worth one command of its own because a cron line is the thing nobody
+ * reads twice: `0 5 1-7 * 5` looks monthly and fires eight times in
+ * twenty-eight days, since day-of-month and day-of-week are OR'd. So the
+ * next firing times are printed beside the expression rather than left to
+ * be reasoned about, and an expression the scheduler cannot parse is
+ * marked — an invalid schedule does not error anywhere, it simply never
+ * runs.
+ */
+async function scheduleCmd(flags) {
+  const url = platformFor(flags, "schedule");
+  const { scheduled = [] } = await remoteCall(url, flags, "/api/schedule");
+  const rows = typeof flags.to === "string" ? scheduled.filter((r) => r.workspace === flags.to) : scheduled;
+
+  if (!rows.length) {
+    console.log(`\n  ${c.dim(`nothing is scheduled${flags.to ? ` in ${flags.to}` : ""} — a flow fires on a clock when its frontmatter says trigger: schedule`)}\n`);
+    return 0;
+  }
+
+  // Soonest first: the question is almost always "what happens next".
+  rows.sort((a, b) => ((a.upcoming?.[0] ?? "9") < (b.upcoming?.[0] ?? "9") ? -1 : 1));
+  const w = {
+    workspace: Math.max(...rows.map((r) => r.workspace.length)),
+    flow: Math.max(...rows.map((r) => r.flow.length)),
+    schedule: Math.max(...rows.map((r) => r.schedule.length)),
+  };
+
+  console.log();
+  for (const r of rows) {
+    const next = (r.upcoming ?? [])[0];
+    console.log(
+      `  ${r.valid ? c.green("✓") : c.red("✗")} ${pad(r.workspace, w.workspace)}  ${c.bold(pad(r.flow, w.flow))}  ${pad(r.schedule, w.schedule)}  ` +
+        `${c.dim(`${r.timezone} · ${r.steps} step${r.steps === 1 ? "" : "s"}`)}`,
+    );
+    if (!r.valid) {
+      console.log(`      ${c.red("the scheduler cannot parse this — it will never fire")}`);
+      continue;
+    }
+    console.log(`      ${c.dim(`next ${next ? `${when(next)} (in ${ago(next).replace("—", "")})` : "not in the next 40 days"}`)}`);
+    for (const t of (r.upcoming ?? []).slice(1)) console.log(`      ${c.dim(`then ${when(t)}`)}`);
+  }
+  console.log(
+    `\n  ${c.dim(`${rows.length} scheduled flow${rows.length === 1 ? "" : "s"} — times are this terminal's clock; the cron line is read in the timezone beside it`)}\n`,
+  );
+  return rows.some((r) => !r.valid) ? 1 : 0;
+}
+
 // --------------------------------------------------------------- account
 
 /** The events a notify block may name, as the platform validates them. */
@@ -3605,6 +3656,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return stopCmd(positional[0], flags, layout);
     case "account":
       return accountCmd(positional, flags);
+    case "schedule":
+      return scheduleCmd(flags);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":

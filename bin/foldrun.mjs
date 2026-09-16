@@ -18,6 +18,7 @@
 //   foldrun approve <run-id>  release a waiting gate (asks first) — reject refuses it
 //   foldrun stop  <run-id>  kill a run in flight
 //   foldrun account        the account's own defaults — timezone, notify, budget, concurrency
+//   foldrun schedule       every flow in the account that fires on a clock, and when it fires next
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
@@ -66,7 +67,8 @@ const HELP = `foldrun — agents are just folders
   foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
-  foldrun account           the account's defaults — also set <key> <value>, clear <key> (not `accounts`, which lists logins)
+  foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
+  foldrun account           the account's defaults — also set <key> <value>, clear <key> (singular; accounts lists logins)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
@@ -96,12 +98,12 @@ Options
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs: only these statuses, comma-separated (failed, completed, awaiting-approval…)
   --since <span>            runs: only runs started within 24h, 7d, 90m, 2w
-  --limit <n>               runs: how many, newest first (default 20)
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
   --yes                     approve, stop: skip the confirmation, deliberately
   --json                    report: the raw run record instead of the report
   --events <a,b>            account set notify: failed, awaiting-approval, completed
+  --limit <n>               runs: how many, newest first (default 20)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --file <path>             source put: the local file to send (default: stdin)
   --message "<why>"         source put: recorded on the file's revision
