@@ -20,6 +20,7 @@
 //   foldrun account        the account's own defaults — timezone, notify, budget, concurrency
 //   foldrun schedule       every flow in the account that fires on a clock, and when it fires next
 //   foldrun billing        the balance, and what the money went on
+//   foldrun storage <verb>  ls / cat / get — what the agents produced, as opposed to what you wrote
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
@@ -69,6 +70,7 @@ const HELP = `foldrun — agents are just folders
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
+  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path> (--to <workspace>)
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
   foldrun account           the account's defaults — also set <key> <value>, clear <key> (singular; accounts lists logins)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
@@ -107,7 +109,7 @@ Options
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --limit <n>               runs, billing: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
-  --file <path>             source put: the local file to send (default: stdin)
+  --file <path>             source put: the local file to send (default: stdin); storage get: where to write it
   --message "<why>"         source put: recorded on the file's revision
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke: hold on and print the result
@@ -134,7 +136,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --dry-run                 deploy: check and report, change nothing
-  --force                   deploy: deploy even while runs are in flight; pull: overwrite local edits
+  --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
   --platform --yes          workspaces rm: delete it on the platform, deliberately
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check

@@ -2889,6 +2889,113 @@ function useCmd(positional) {
   return 0;
 }
 
+// --------------------------------------------------------------- storage
+
+/** Bytes as a person reads them: 12.4KB, 3.1MB. */
+function humanBytes(n) {
+  const b = Number(n);
+  if (!Number.isFinite(b)) return "—";
+  if (b < 1024) return `${b}B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)}KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)}MB`;
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)}GB`;
+}
+
+/**
+ * `foldrun storage ls|cat|get` — what a workspace PRODUCED.
+ *
+ * `source` is the other half of this and the distinction is the whole
+ * point: source is what you wrote, storage is what the agents made. A
+ * deliverable nobody looks at is the one that goes stale, so `ls` prints
+ * when each file was written and which run wrote it. A directory whose
+ * newest file is three weeks old and whose run id nobody recognises is the
+ * shape staleness actually has.
+ */
+async function storageCmd(positional, flags, layout) {
+  const url = platformFor(flags, "storage");
+  // A folder that is not a workspace is not a workspace: `logs` and `source`
+  // fall back to the directory's NAME, which from ~/Downloads asks the
+  // platform for a workspace called "Downloads" and reports a 404 as though
+  // the file were missing. --to is the answer from anywhere else.
+  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  if (!ws) throw new Error("which workspace? `foldrun storage ls --to <workspace>` — or run it inside one");
+  const verb = positional[0] ?? "ls";
+
+  if (verb === "ls") {
+    const body = await remoteCall(url, flags, `/api/workspaces/${ws}/storage`);
+    const prefix = positional[1];
+    const files = (body.files ?? []).filter((f) => (prefix ? f.path === prefix || f.path.startsWith(prefix.replace(/\/*$/, "/")) : true));
+    if (!files.length) {
+      console.log(`\n  ${c.dim(`nothing in ${ws}'s storage${prefix ? ` under ${prefix}` : ""}`)}\n`);
+      return 0;
+    }
+    files.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    const w = {
+      size: Math.max(...files.map((f) => humanBytes(f.size).length)),
+      path: Math.max(...files.map((f) => f.path.length)),
+      when: Math.max(...files.map((f) => when(f.updatedAt).length)),
+    };
+    console.log();
+    for (const f of files) {
+      // `by` is "run:<id>" for anything an agent wrote, "user:<email>" for
+      // an upload, "api-key" for a key with no person behind it.
+      const by = String(f.by ?? "");
+      console.log(
+        `  ${c.bold(pad(f.path, w.path))}  ${c.dim(`${pad(humanBytes(f.size), w.size)}  ${pad(when(f.updatedAt), w.when)}  ${ago(f.updatedAt)} ago  ${by}`)}`,
+      );
+    }
+    const used = body.used ?? files.reduce((n, f) => n + (f.size ?? 0), 0);
+    console.log(
+      `\n  ${c.dim(`${files.length} file${files.length === 1 ? "" : "s"} · ${humanBytes(used)}${body.quotaMb ? ` of ${body.quotaMb}MB` : ""}${body.driver ? ` · ${body.driver}` : ""} — \`foldrun storage cat <path> --to ${ws}\``)}\n`,
+    );
+    return 0;
+  }
+
+  if (verb !== "cat" && verb !== "get") {
+    throw new Error(`unknown storage verb "${verb}" — ls, cat or get`);
+  }
+
+  const rel = positional[1];
+  if (!rel) throw new Error(`\`foldrun storage ${verb} <path>\` — \`foldrun storage ls\` names them`);
+
+  // The download route redirects to a signed URL on an object store and
+  // streams the bytes on the fs driver, so this is a plain fetch that
+  // follows redirects — not remoteCall, which parses JSON and would make a
+  // markdown file look like a broken platform.
+  const token = tokenFor(url, flags);
+  const res = await remoteFetch(url, `/api/workspaces/${ws}/storage/download?path=${encodeURIComponent(rel)}`, {}, { token });
+  if (!res.ok) {
+    const said = await res.text();
+    let why = said.slice(0, 200);
+    try {
+      why = JSON.parse(said).error ?? why;
+    } catch {
+      /* not JSON — whatever it said is the message */
+    }
+    throw new HttpError(`${rel} in ${ws}: ${why}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, {});
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+
+  if (verb === "cat") {
+    // A file store holds PDFs and images too, and spraying them at a
+    // terminal is how a shell ends up rendering escape codes it was handed.
+    if (bytes.includes(0)) {
+      throw new Error(`${rel} is not text (${humanBytes(bytes.length)}) — \`foldrun storage get ${rel}\` writes it to a file`);
+    }
+    process.stdout.write(bytes.toString("utf8"));
+    return 0;
+  }
+
+  const to = typeof flags.file === "string" ? flags.file : path.basename(rel);
+  if (fs.existsSync(to) && flags.force !== true) {
+    throw new Error(`${to} already exists — --file <path> puts it somewhere else, --force overwrites`);
+  }
+  fs.mkdirSync(path.dirname(path.resolve(to)), { recursive: true });
+  fs.writeFileSync(to, bytes);
+  console.log(`\n  ${c.green("✓")} ${to}  ${c.dim(`${humanBytes(bytes.length)} from ${ws}/storage/${rel}`)}\n`);
+  return 0;
+}
+
 // -------------------------------------------------------------- schedule
 
 /**
@@ -3716,6 +3823,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return scheduleCmd(flags);
     case "billing":
       return billingCmd(flags);
+    case "storage":
+      return storageCmd(positional, flags, layout);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":
