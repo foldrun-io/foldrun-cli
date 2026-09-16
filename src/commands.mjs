@@ -2659,8 +2659,18 @@ async function remoteLibrary(url, flags, kinds) {
     for (const e of entries ?? []) {
       const rel = e.path ?? (e.name ? `${e.name}.md` : null);
       if (!rel) continue;
-      const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${encodeURIComponent(rel)}`);
-      out.push({ kind, path: rel, content });
+      // The listing is a catalogue of tools and skills, not of files: a
+      // folder tool is deliberately one row, so its code is not a row of its
+      // own. `files` is what that row is actually made of. Without it a pull
+      // brought down tool.md and left run.mjs behind, and the next deploy
+      // would have shipped a library whose every script tool had lost its
+      // program. Older platforms do not send it — then the entry is its own
+      // whole, which is true for every single-file entry anyway.
+      const wanted = Array.isArray(e.files) && e.files.length ? e.files : [rel];
+      for (const one of wanted) {
+        const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${encodeURIComponent(one)}`);
+        out.push({ kind, path: one, content });
+      }
     }
   }
   return out;
