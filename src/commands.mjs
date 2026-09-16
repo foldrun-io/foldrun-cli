@@ -2889,6 +2889,96 @@ function useCmd(positional) {
   return 0;
 }
 
+// --------------------------------------------------------------- account
+
+/** The events a notify block may name, as the platform validates them. */
+const NOTIFY_EVENTS = ["failed", "awaiting-approval", "completed"];
+
+/** The account's defaults, as one readable block. */
+function printDefaults(d) {
+  const notify = d.notify
+    ? [d.notify.email, d.notify.url].filter(Boolean).join(", ") + c.dim(` on ${(d.notify.events ?? []).join(", ") || "nothing"}`)
+    : c.dim("nobody is told anything");
+  console.log(`\n  ${c.bold("account defaults")}  ${c.dim("every workspace here inherits these")}\n`);
+  console.log(`  timezone     ${d.timezone ?? c.dim("unset — schedules read UTC")}`);
+  console.log(`  notify       ${notify}`);
+  console.log(`  budget       ${d.budget ? `$${d.budget.usd} per ${d.budget.period}` : c.dim("no cap")}`);
+  console.log(`  concurrency  ${d.concurrency ?? c.dim("the plan's number")}`);
+}
+
+/**
+ * `foldrun account` — the account's own settings, read and set.
+ *
+ * These four keys live in the account AGENTS.md frontmatter and reach every
+ * workspace under it. The dashboard has had a form for them since they
+ * existed; the terminal had nothing, so setting a timezone meant a raw PATCH
+ * with a hand-built JSON body, which is exactly the door this CLI exists to
+ * replace.
+ *
+ * `set notify` MERGES against what is there. The platform replaces the whole
+ * notify block — that is how frontmatter scopes work — so setting an email
+ * without reading the current events first would silently drop them.
+ */
+async function accountCmd(positional, flags) {
+  const url = platformFor(flags, "account");
+  const verb = positional[0];
+
+  if (!verb) {
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    printDefaults(defaults ?? {});
+    console.log(`\n  ${c.dim("foldrun account set timezone Australia/Sydney · set notify email you@example.com · set budget 60/month · clear budget")}\n`);
+    return 0;
+  }
+  if (verb !== "set" && verb !== "clear") {
+    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one`);
+  }
+
+  const key = positional[1];
+  const KEYS = ["timezone", "notify", "budget", "concurrency"];
+  if (!KEYS.includes(key)) {
+    throw new Error(`which setting? \`foldrun account ${verb} <${KEYS.join("|")}> …\``);
+  }
+
+  let patch;
+  if (verb === "clear") {
+    patch = { [key]: null };
+  } else if (key === "notify") {
+    // `set notify email you@example.com` / `set notify url https://…`, and
+    // --events to change what is notified on.
+    const channel = positional[2];
+    const value = positional[3];
+    if (channel !== "email" && channel !== "url") {
+      throw new Error("`foldrun account set notify email <address>` or `set notify url <https://…>` — and --events failed,awaiting-approval,completed");
+    }
+    if (!value && flags.events === undefined) throw new Error(`\`foldrun account set notify ${channel} <value>\` — or --events alone to change only what is notified on`);
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const current = defaults?.notify ?? {};
+    const events =
+      typeof flags.events === "string"
+        ? flags.events.split(",").map((e) => e.trim()).filter(Boolean)
+        : (current.events ?? ["failed", "awaiting-approval"]);
+    const unknown = events.filter((e) => !NOTIFY_EVENTS.includes(e));
+    if (unknown.length) throw new Error(`--events takes ${NOTIFY_EVENTS.join(", ")} — not ${unknown.join(", ")}`);
+    patch = {
+      notify: {
+        ...(current.url ? { url: current.url } : {}),
+        ...(current.email ? { email: current.email } : {}),
+        ...(value ? { [channel]: value } : {}),
+        events,
+      },
+    };
+  } else {
+    const value = positional[2];
+    if (value === undefined) throw new Error(`\`foldrun account set ${key} <value>\` — or \`clear ${key}\` to unset it`);
+    patch = { [key]: key === "concurrency" ? Number(value) : value };
+  }
+
+  const answer = await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify(patch) });
+  printDefaults(answer.defaults ?? {});
+  console.log(`\n  ${c.green("✓")} ${verb === "clear" ? `${key} cleared` : `${key} set`} — every workspace in this account reads it\n`);
+  return 0;
+}
+
 // ------------------------------------------- approvals, runs and reports
 //
 // What `logs` never answered. `logs` is a trail: it prints what happened,
@@ -3513,6 +3603,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return reportCmd(positional[0], flags, layout);
     case "stop":
       return stopCmd(positional[0], flags, layout);
+    case "account":
+      return accountCmd(positional, flags);
     case "invoke":
       return invoke(positional[0], flags);
     case "source":

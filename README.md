@@ -126,6 +126,7 @@ declared the same way.
 | `foldrun approve <run-id>` | release a waiting gate — it asks first, `--yes` means it, `--note "…"` steers the step |
 | `foldrun reject <run-id>` | refuse one, `--note` being the reason |
 | `foldrun stop <run-id>` | kill a run in flight — it says what it will destroy, then asks (`--yes` means it) |
+| `foldrun account` | the account's defaults: timezone, notify, budget, concurrency — also `set <key> <value>` and `clear <key>` |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
 | `foldrun deploy [dir]` | push the whole account — or `deploy <workspace>` for one of them |
 | `foldrun pull [workspace]` | bring the platform's account down here (refuses to clobber local edits) |
