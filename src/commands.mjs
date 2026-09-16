@@ -728,6 +728,8 @@ async function check(workspace, flags = {}) {
     for (const w of a.webProblems ?? []) note("error", `agents/${a.name}`, w);
     // `language:` that is not a tag — "Persian" where `fa` was meant.
     if (a.languageProblem) note("error", `agents/${a.name}`, a.languageProblem);
+    // `region: Australia` where `au` was meant, `currency: dollars`, `units: both`.
+    for (const w of a.localeProblems ?? []) note("error", `agents/${a.name}`, w);
 
     // What the author wrote that the runtime already writes, or writes better.
     // Every trap here was one somebody hit while the answer sat in the source:
