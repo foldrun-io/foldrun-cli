@@ -1015,18 +1015,13 @@ async function runTarget(target, flags) {
 
   console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}${run.test ? `  ${c.amber("TEST")}` : ""}\n`);
   const seen = new Map();
+  const open = new Map();
   for (;;) {
     const current = readRun(T, P, run.id);
     if (!current) break;
-    current.steps.forEach((step, i) => {
-      const from = seen.get(i) ?? 0;
-      for (const e of step.events.slice(from)) {
-        const mark = e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
-        console.log(`  ${mark} ${c.dim(step.agent)}  ${e.text.split("\n")[0].slice(0, 140)}`);
-      }
-      seen.set(i, step.events.length);
-    });
+    printNew(current, seen, open);
     if (current.finishedAt) {
+      flushCalls(open);
       const cost = current.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
       const ok = current.status === "completed";
       console.log(
@@ -1035,6 +1030,7 @@ async function runTarget(target, flags) {
       return ok ? 0 : 1;
     }
     if (current.status === "awaiting-approval") {
+      flushCalls(open);
       console.log(`\n  ${c.amber("paused")} — this flow needs a human. Approve it in the dashboard.\n`);
       return 2;
     }
@@ -1546,16 +1542,57 @@ async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
   return body;
 }
 
-/** Print a run's events as they arrive: one line per event, once each. */
-function printNew(run, seen) {
+/** The glyph an event leads with: a fault, a tool, or a plain line. */
+const EVENT_MARK = (e) =>
+  e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
+
+/** An event's first physical line, clipped to fit a terminal row. */
+const clipLine = (text) => text.split("\n")[0].slice(0, 140);
+
+/**
+ * One console line for one event — or null when the event is held back.
+ *
+ * A tool call reaches us as two events sharing a `call` id: a start, then a
+ * completion carrying `ms`. Printing both is why every call showed up twice.
+ * So the start is recorded in `open` and prints nothing; the completion
+ * prints the single line, with the duration the start could not yet know.
+ * A start whose completion never lands — the stream ended mid-call — is
+ * printed later by flushCalls. Every other event prints as it arrives.
+ */
+function eventLine(e, agent, open) {
+  if (e.type === "tool" && e.call != null) {
+    if (e.ms == null) {
+      open.set(e.call, { agent, e });
+      return null;
+    }
+    open.delete(e.call);
+    return `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}  ${c.dim(`${e.ms}ms`)}`;
+  }
+  return `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`;
+}
+
+/**
+ * Print a run's new events: one line per event, once each, and — since a
+ * tool call is two events — one line per call, printed when it completes.
+ * `open` carries the calls still in flight across polls and reconnects.
+ */
+function printNew(run, seen, open = new Map()) {
   run.steps.forEach((step, i) => {
     const from = seen.get(i) ?? 0;
     for (const e of step.events.slice(from)) {
-      const mark = e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
-      console.log(`  ${mark} ${c.dim(step.agent)}  ${e.text.split("\n")[0].slice(0, 140)}`);
+      const line = eventLine(e, step.agent, open);
+      if (line !== null) console.log(line);
     }
     seen.set(i, step.events.length);
   });
+}
+
+/** The stream is over: print a start line for each call that never completed. */
+function flushCalls(open) {
+  for (const { agent, e } of open.values()) {
+    console.log(`  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`);
+  }
+  open.clear();
 }
 
 function finishLine(run) {
@@ -1585,7 +1622,7 @@ class StreamIdle extends Error {
  * the finished run on `done`, with the last run seen if the server ends it
  * first, and throws StreamIdle when nothing arrives for streamIdleSeconds.
  */
-async function streamOnce(url, flags, ws, runId, seen) {
+async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
   const token = tokenFor(url, flags);
   const idle = streamIdleSeconds();
   const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
@@ -1637,7 +1674,7 @@ async function streamOnce(url, flags, ws, runId, seen) {
         if (event === "run") {
           try {
             last = JSON.parse(data);
-            printNew(last, seen);
+            printNew(last, seen, open);
           } catch {
             // a partial frame; the next one supersedes it
           }
@@ -1667,15 +1704,20 @@ async function streamOnce(url, flags, ws, runId, seen) {
  * from printing twice. It used to block `invoke --watch` and `logs
  * --follow` for as long as a stalled tunnel cared to keep the socket.
  */
-async function followRemote(url, flags, ws, runId, seen = new Map()) {
+async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map()) {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await streamOnce(url, flags, ws, runId, seen);
+      const run = await streamOnce(url, flags, ws, runId, seen, open);
+      flushCalls(open);
+      return run;
     } catch (err) {
       if (!(err instanceof StreamIdle)) throw err;
       const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
-      printNew(run, seen);
-      if (!isLive(run)) return run;
+      printNew(run, seen, open);
+      if (!isLive(run)) {
+        flushCalls(open);
+        return run;
+      }
       if (attempt >= 3) {
         throw new Error(
           `${err.message} three times while ${runId} is still ${run.status} — \`foldrun logs ${runId} --to ${ws} --follow\` picks it up again, or ${url}/dashboard/${ws}/runs?run=${runId}`,
@@ -1881,9 +1923,6 @@ async function secretsCmd(positional, flags, layout) {
 
 // ---------------------------------------------------------------- logs
 
-const EVENT_MARK = (e) =>
-  e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
-
 /**
  * `foldrun logs [run-id]` — without an id, the recent runs; with one, that
  * run's whole event log. `--follow` keeps tailing a live run.
@@ -1981,8 +2020,10 @@ async function remoteLogs(url, positional, flags) {
   let run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
   console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
   const seen = new Map();
-  printNew(run, seen);
-  if (flags.follow === true && isLive(run)) run = (await followRemote(url, flags, ws, runId, seen)) ?? run;
+  const open = new Map();
+  printNew(run, seen, open);
+  if (flags.follow === true && isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open)) ?? run;
+  flushCalls(open);
   return finishLine(run);
 }
 

@@ -24,13 +24,33 @@ const runRecord = (status: string, n: number) => ({
   steps: [{ agent: "writer", costUsd: 0.01, events: Array.from({ length: n }, (_, i) => ({ type: "text", text: `line ${i + 1}` })) }],
 });
 
+// A run whose one step made two tool calls the way step-exec emits them: a
+// start event, then a completion sharing the `call` id and carrying `ms`.
+// `bash` completes; `grep` is still open when the stream ends.
+const toolRecord = () => ({
+  id: "r1",
+  flow: "daily",
+  status: "completed",
+  steps: [
+    {
+      agent: "writer",
+      costUsd: 0.01,
+      events: [
+        { type: "tool", text: "bash", call: "c1" },
+        { type: "tool", text: "bash", call: "c1", ms: 1200 },
+        { type: "tool", text: "grep", call: "c2" },
+      ],
+    },
+  ],
+});
+
 /**
  * A platform whose stream behaves as `streams` says, one entry per
  * connection: "stall" sends one run frame and then nothing; "finish"
  * sends a frame and `done`. The run itself is live until `liveFor`
  * polls have been answered.
  */
-function fakePlatform(streams: ("stall" | "finish")[], { liveFor = Infinity, refuse = false } = {}) {
+function fakePlatform(streams: ("stall" | "finish" | "tools")[], { liveFor = Infinity, refuse = false } = {}) {
   let connections = 0;
   let polls = 0;
   const sockets = new Set<import("node:stream").Duplex>();
@@ -51,8 +71,9 @@ function fakePlatform(streams: ("stall" | "finish")[], { liveFor = Infinity, ref
       if (url === "/api/workspaces/ws/runs/r1/stream") {
         const mode = streams[connections++] ?? "stall";
         res.writeHead(200, { "content-type": "text/event-stream" });
-        res.write(`event: run\ndata: ${JSON.stringify(runRecord(mode === "finish" ? "completed" : "running", connections))}\n\n`);
-        if (mode === "finish") res.end("event: done\ndata: {}\n\n");
+        const record = mode === "tools" ? toolRecord() : runRecord(mode === "finish" ? "completed" : "running", connections);
+        res.write(`event: run\ndata: ${JSON.stringify(record)}\n\n`);
+        if (mode === "finish" || mode === "tools") res.end("event: done\ndata: {}\n\n");
         return;
       }
       if (url === "/api/workspaces/ws/runs/r1") {
@@ -133,6 +154,26 @@ test("a run that finished while the stream was quiet is reported from the record
     const r = await run(["invoke", "daily", "--to", "ws", "--watch", "--url", p.url, "--token", "k"], QUICK);
     assert.equal(r.code, 0, r.out);
     assert.equal(p.connections(), 1, "no reconnect for a run that is over");
+    assert.match(r.out, /✓.*completed/);
+  } finally {
+    p.close();
+  }
+});
+
+test("a tool call — a start then a completion sharing its id — prints one line, with the duration", async () => {
+  const p = await fakePlatform(["tools"]);
+  try {
+    const r = await run(["invoke", "daily", "--to", "ws", "--watch", "--url", p.url, "--token", "k"], QUICK);
+    assert.equal(r.code, 0, r.out);
+    // The bug printed every call twice, once per event; now the paired
+    // events of `bash` collapse to a single line, and it carries the ms.
+    const bash = (r.out.match(/^.*\bbash\b.*$/gm) ?? []);
+    assert.equal(bash.length, 1, `bash printed once, not per event:\n${r.out}`);
+    assert.match(bash[0], /1200ms/);
+    // `grep` never completed; its start is flushed once, without a duration.
+    const grep = (r.out.match(/^.*\bgrep\b.*$/gm) ?? []);
+    assert.equal(grep.length, 1, `grep start printed once:\n${r.out}`);
+    assert.doesNotMatch(grep[0], /ms/);
     assert.match(r.out, /✓.*completed/);
   } finally {
     p.close();
