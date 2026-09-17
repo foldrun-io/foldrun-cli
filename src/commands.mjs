@@ -3417,6 +3417,20 @@ function parseSince(spec) {
   return Number(m[1]) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 }[m[2].toLowerCase()];
 }
 
+/** What a run's work concluded: the verdict word its summary leads with —
+ *  core's runVerdict, mirrored because the list is drawn without loading
+ *  core. Null for a run whose summary leads with none. */
+const verdictOf = (r) => {
+  if (r.verdict !== undefined) return r.verdict;
+  const m = /^(GOOD|BAD|QUIET|BLOCKED)(?![A-Za-z0-9_])/.exec(String(r.summary ?? "").replace(/^[\s#>*_`\-]+/, ""));
+  return m ? m[1] : null;
+};
+/** A completed run's verdict beside its status: BLOCKED red, BAD amber. */
+const verdictTag = (r) => {
+  const v = r.status === "completed" ? verdictOf(r) : null;
+  return v === "BLOCKED" ? c.red(v) : v === "BAD" ? c.amber(v) : v ? c.dim(v) : "";
+};
+
 /** The same mark everywhere a status is printed, so one glance reads alike. */
 const statusMark = (s) =>
   s === "completed"
@@ -3745,6 +3759,8 @@ async function runsCmd(flags, layout) {
   const cutoff = flags.since === undefined ? null : Date.now() - parseSince(flags.since);
   const wanted =
     typeof flags.status === "string" ? new Set(flags.status.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+  const verdicts =
+    typeof flags.verdict === "string" ? new Set(flags.verdict.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)) : null;
 
   // Each desk is asked for its own newest rows before the merge, so one
   // busy workspace cannot crowd every quiet one out of the answer. With a
@@ -3752,7 +3768,7 @@ async function runsCmd(flags, layout) {
   // the filter runs here, after the fetch, and a desk with twenty recent
   // successes was hiding its older failures from `--status failed` because
   // only its newest twenty of any status ever arrived.
-  const perWorkspace = wanted || cutoff !== null ? 500 : limit;
+  const perWorkspace = wanted || verdicts || cutoff !== null ? 500 : limit;
   const unreachable = [];
   const lists = await pool(names, 8, async (ws) => {
     try {
@@ -3767,12 +3783,13 @@ async function runsCmd(flags, layout) {
   const rows = lists
     .flat()
     .filter((r) => (wanted ? wanted.has(r.status) : true))
+    .filter((r) => (verdicts ? r.status === "completed" && verdicts.has(verdictOf(r)) : true))
     .filter((r) => (cutoff === null ? true : Date.parse(r.startedAt) >= cutoff))
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
     .slice(0, limit);
 
   if (!rows.length) {
-    const how = [wanted ? `status ${[...wanted].join(", ")}` : null, flags.since ? `the last ${flags.since}` : null]
+    const how = [wanted ? `status ${[...wanted].join(", ")}` : null, verdicts ? `verdict ${[...verdicts].join(", ")}` : null, flags.since ? `the last ${flags.since}` : null]
       .filter(Boolean)
       .join(" in ");
     console.log(`\n  ${c.dim(`no runs${how ? ` matching ${how}` : ""}${flags.to ? ` in ${flags.to}` : ""}`)}\n`);
@@ -3783,11 +3800,13 @@ async function runsCmd(flags, layout) {
   const cells = rows.map((r) => {
     const done = (r.steps ?? []).filter((s) => s.status === "completed" || s.status === "skipped").length;
     return {
-      mark: statusMark(r.status),
+      mark: r.status === "completed" && verdictOf(r) === "BLOCKED" ? c.red("⛔") : statusMark(r.status),
       when: when(r.startedAt),
       workspace: r.workspace,
       flow: r.flow,
       status: r.status,
+      verdict: verdictTag(r),
+      verdictWidth: (r.status === "completed" ? verdictOf(r) ?? "" : "").length,
       steps: `${done}/${(r.steps ?? []).length}`,
       took: runDuration(r),
       cost: `$${runCost(r).toFixed(2)}`,
@@ -3810,12 +3829,12 @@ async function runsCmd(flags, layout) {
   for (const x of cells) {
     console.log(
       `  ${x.mark} ${c.dim(pad(x.when, w.when))}  ${pad(x.workspace, w.workspace)}  ${c.bold(pad(x.flow, w.flow))}  ` +
-        `${pad(x.status, w.status)}  ${c.dim(`${pad(x.steps, w.steps)}  ${pad(x.took, w.took)}  ${pad(x.cost, w.cost)}`)}  ${c.dim(x.id)}`,
+        `${pad(x.status, w.status)} ${x.verdict}${" ".repeat(Math.max(...cells.map((y) => y.verdictWidth)) - x.verdictWidth)}  ${c.dim(`${pad(x.steps, w.steps)}  ${pad(x.took, w.took)}  ${pad(x.cost, w.cost)}`)}  ${c.dim(x.id)}`,
     );
     if (x.summary) console.log(`      ${c.dim(x.summary)}`);
   }
   for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
-  console.log(`\n  ${c.dim("foldrun report <run-id> for the whole story; --status failed --since 24h narrows this")}\n`);
+  console.log(`\n  ${c.dim("foldrun report <run-id> for the whole story; --status failed, --verdict blocked, --since 24h narrow this")}\n`);
   return 0;
 }
 
@@ -3871,8 +3890,9 @@ async function reportCmd(runId, flags, layout) {
   );
   const cost = runCost(run);
 
-  console.log(`\n  ${statusMark(run.status)} ${c.bold(run.flow)}  ${c.dim(run.id)}`);
-  console.log(`  ${c.dim(`${ws} · ${run.status}${run.test ? " · test run" : ""}`)}`);
+  const blocked = run.status === "completed" && verdictOf(run) === "BLOCKED";
+  console.log(`\n  ${blocked ? c.red("⛔") : statusMark(run.status)} ${c.bold(run.flow)}  ${c.dim(run.id)}`);
+  console.log(`  ${c.dim(`${ws} · ${run.status}`)}${verdictTag(run) ? ` ${verdictTag(run)}` : ""}${c.dim(run.test ? " · test run" : "")}`);
   console.log(`  ${c.dim(`started ${when(run.startedAt)} (${ago(run.startedAt)} ago) · ${runDuration(run)} · $${cost.toFixed(4)}`)}`);
   if (tokens.input || tokens.output) {
     console.log(`  ${c.dim(`${tokens.input.toLocaleString()} in / ${tokens.output.toLocaleString()} out tokens`)}`);
