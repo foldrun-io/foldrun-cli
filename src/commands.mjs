@@ -686,6 +686,12 @@ async function check(workspace, flags = {}) {
   const imported = importedAgentNames(workspace, agentNames);
   for (const n of imported) agentNames.add(n);
   const flowNames = new Set(flows.map((f) => f.name));
+  // Which agents can act outside this workspace: any that grants a tool whose
+  // definition says `outward: true`. Worked out here, where the grants and the
+  // tool files are already resolved, so the flow lint only needs the answer.
+  const outwardAgents = agents
+    .filter((a) => (a.ownTools ?? []).some((t) => usable[t]?.outward === true))
+    .map((a) => a.name);
   // Every skill name in scope, found the way the runtime finds them — the
   // agent's own, the workspace's, the cross-client .agents/skills/, and the
   // account library. Discovery comes from core so this cannot drift from
@@ -839,7 +845,7 @@ async function check(workspace, flags = {}) {
         note("error", `flows/${f.file}`, `[[${s.subflow ? "flow:" : ""}${target}]] does not exist`, s.line);
       }
     }
-    for (const w of lintFlow(f, { agents: [...agentNames] })) note(w.level ?? "warn", `flows/${f.file}`, w.message, w.line);
+    for (const w of lintFlow(f, { agents: [...agentNames], outwardAgents })) note(w.level ?? "warn", `flows/${f.file}`, w.message, w.line);
   }
 
   for (const e of evals) {
