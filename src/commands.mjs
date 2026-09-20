@@ -8,6 +8,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
@@ -1886,6 +1888,59 @@ export function whenItDies(cookie) {
   return days >= 1 ? `${when} (${days} day${days === 1 ? "" : "s"})` : `${when} (under a day)`;
 }
 
+
+/** Playwright, wherever this machine keeps it. Beside the CLI if someone
+ *  installed it there, and otherwise in the global modules directory — which
+ *  is where `npm i -g playwright` puts it and where a bare `import()` will
+ *  never look, because ESM does not consult global paths (NODE_PATH is
+ *  CJS-only). The tool in the runner image resolves it the same way. */
+async function loadPlaywright() {
+  const tried = [];
+  for (const name of ["playwright", "playwright-core"]) {
+    try {
+      // @ts-ignore - an optional peer, absent until someone installs it
+      return await import(name);
+    } catch (err) {
+      tried.push(`${name}: ${err.code ?? "failed"}`);
+    }
+  }
+  // `npm root -g` is the honest answer on any platform (homebrew, nvm, a
+  // Windows prefix), and it is asked once, only when the plain import failed.
+  let globalRoot;
+  try {
+    globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+  } catch {
+    globalRoot = null;
+  }
+  // Also this folder: a laptop often has Playwright inside a project rather
+  // than globally, and someone standing in that project means it. An explicit
+  // path wins over all of it, for the machine that keeps it somewhere only
+  // its owner knows.
+  const roots = [
+    typeof process.env.FOLDRUN_PLAYWRIGHT === "string" ? process.env.FOLDRUN_PLAYWRIGHT : "",
+    path.join(process.cwd(), "node_modules"),
+    globalRoot ?? "",
+    "/usr/local/lib/node_modules",
+    "/opt/homebrew/lib/node_modules",
+  ].filter((r) => r.length > 0);
+  for (const root of roots) {
+    for (const name of ["playwright", "playwright-core"]) {
+      try {
+        const require = createRequire(path.join(root, "/"));
+        return require(name);
+      } catch (err) {
+        tried.push(`${root}/${name}: ${err.code ?? "failed"}`);
+      }
+    }
+  }
+  throw new Error(
+    "this needs Playwright on your machine: `npm i -g playwright` (the browsers are cached separately, so " +
+      "`npx playwright install chromium` only downloads them once) — or run this from a folder that has " +
+      "playwright in node_modules, or point FOLDRUN_PLAYWRIGHT at one" +
+      (process.env.FOLDRUN_DEBUG ? `\n  looked in — ${tried.join("; ")}` : ""),
+  );
+}
+
 /** The command itself. Playwright drives the window; it is not a dependency of
  *  this CLI because 99% of what the CLI does needs no browser, so it is
  *  imported when asked for and its absence is a sentence, not a stack trace. */
@@ -1904,21 +1959,7 @@ async function siteLogin(positional, flags, layout) {
     throw new Error(`--engine is chromium, firefox or webkit`);
   }
 
-  let pw;
-  try {
-    // @ts-ignore - an optional peer: present on a laptop that signs sites in
-    pw = await import("playwright");
-  } catch {
-    try {
-      // @ts-ignore - an optional peer, absent until someone installs it
-      pw = await import("playwright-core");
-    } catch {
-      throw new Error(
-        "this needs Playwright on your machine, once: `npm i -g playwright && npx playwright install chromium` — " +
-          "the window it opens is the browser you sign in to",
-      );
-    }
-  }
+  const pw = await loadPlaywright();
 
   console.log(`\n  opening ${c.bold(url)} in ${engine}`);
   console.log(`  ${c.dim("sign in by hand — password, MFA, whatever the site asks. foldrun never sees it.")}`);
