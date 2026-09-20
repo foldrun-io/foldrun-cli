@@ -34,6 +34,8 @@
 //   foldrun source <verb>   ls / cat / put / mv / rm one workspace file on a platform
 //   foldrun open  [page]    the dashboard for this workspace
 //   foldrun login           sign this machine in from the browser
+//   foldrun login <site>    a browser window to sign in to a site by hand; the session
+//                           (cookies, storage, identity) is stored for an agent to wear
 //   foldrun whoami          who the platform thinks this terminal is
 //   foldrun doctor          what is between this terminal and the platform, checked
 //   foldrun accounts        every account signed in here; `use <name>` switches
@@ -94,6 +96,9 @@ const HELP = `foldrun — agents are just folders
 
 Signing in
   foldrun login             sign this machine in from the browser (--token <key> to skip it)
+  foldrun login <site> --url <address>
+                            open a browser, sign in to that site by hand, and store the
+                            session: cookies, storage and the browser identity it needs
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
   foldrun doctor            check the path to the platform: node, CLI, account, DNS, a timed /api/healthz

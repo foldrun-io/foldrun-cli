@@ -1808,6 +1808,288 @@ function whichWorkspace(layout, what) {
   );
 }
 
+/* ─────────────────────────────── site login ───────────────────────────────
+ * `foldrun login medium --url https://medium.com` opens a real browser on this
+ * machine, waits while a person signs in by hand, and stores what the session
+ * is made of. It replaces the five-step chore — DevTools, Application,
+ * Cookies, copy the line, `secrets set` — and it stores the parts that chore
+ * always forgot: the storage a cookie jar cannot hold, and the browser
+ * identity the site will check the session against.
+ *
+ * **No password ever reaches foldrun.** The person types it into the site's
+ * own page, does the MFA, closes the window. This command only reads what the
+ * browser was given afterwards, which is the same thing they would have copied
+ * out of DevTools by hand.
+ *
+ * What it captures, and why each part:
+ *   cookies    the session itself (HttpOnly ones included — a console cannot
+ *              read those, which is exactly why the manual route needed the
+ *              Network tab)
+ *   storage    localStorage, sessionStorage and IndexedDB, for the logins that
+ *              are not cookies at all (Firebase writes IndexedDB; MSAL can use
+ *              sessionStorage)
+ *   identity   user agent, locale, timezone — a Cloudflare clearance cookie is
+ *              bound to the user agent that earned it, so a session copied
+ *              without its identity is a challenge waiting to happen
+ *   expiry     when the longest-lived login cookie dies, so "why did it stop
+ *              working" has an answer before it stops working
+ */
+
+/** MEDIUM. The secret's name is the site's name, shouted. */
+export function siteSecretName(name) {
+  const clean = String(name).trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!clean || /^[0-9]/.test(clean)) {
+    throw new Error(`"${name}" does not make a secret name — use letters, like \`foldrun login medium\``);
+  }
+  return clean;
+}
+
+/** `.medium.com` from `https://medium.com/new-story`: the domain the cookies
+ *  belong to, with the leading dot so subdomains are included, and without a
+ *  `www.` that would exclude the apex. */
+export function cookieDomainFor(url) {
+  const host = new URL(url).hostname.replace(/^www\./, "");
+  return "." + host;
+}
+
+/** The block to paste into the agent, printed rather than written: which agent
+ *  wants this session is the person's decision, and a command that edits files
+ *  it was not pointed at is a command nobody trusts twice. */
+export function renderBrowseBlock({ secret, url, identity, hasStorage, engine }) {
+  const lines = [
+    "web_browse:",
+    `  engine: ${engine}`,
+    `  user_agent: "${identity.user_agent}"`,
+    `  cookies: ${secret}_COOKIES`,
+    `  cookie_domain: ${cookieDomainFor(url)}`,
+  ];
+  if (hasStorage) {
+    lines.push(`  storage: ${secret}_STORAGE`, `  storage_origin: ${new URL(url).origin}`);
+  }
+  lines.push(`  locale: ${identity.locale}`, `  timezone: ${identity.timezone}`);
+  return lines.join("\n");
+}
+
+/** The cookie a person would call "the login": the longest-lived one the page
+ *  cannot read. Not a guess we act on — it is printed so they can disagree. */
+export function loginCookieOf(cookies) {
+  const candidates = cookies.filter((c) => c.httpOnly && !/^(__cf_bm|cf_clearance|__cflb|_cfuvid)$/.test(c.name));
+  const pick = (list) => list.slice().sort((a, b) => (b.expires ?? 0) - (a.expires ?? 0))[0];
+  return pick(candidates.length ? candidates : cookies) ?? null;
+}
+
+export function whenItDies(cookie) {
+  if (!cookie || !cookie.expires || cookie.expires < 0) return "when the browser session ends";
+  const ms = cookie.expires * 1000 - Date.now();
+  const days = Math.round(ms / 86_400_000);
+  const when = new Date(cookie.expires * 1000).toISOString().slice(0, 16).replace("T", " ");
+  return days >= 1 ? `${when} (${days} day${days === 1 ? "" : "s"})` : `${when} (under a day)`;
+}
+
+/** The command itself. Playwright drives the window; it is not a dependency of
+ *  this CLI because 99% of what the CLI does needs no browser, so it is
+ *  imported when asked for and its absence is a sentence, not a stack trace. */
+async function siteLogin(positional, flags, layout) {
+  const secret = siteSecretName(positional[0]);
+  const url = typeof flags.url === "string" ? flags.url : undefined;
+  if (!url) throw new Error(`which site? \`foldrun login ${positional[0]} --url https://example.com\``);
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    throw new Error(`--url must be a full address, like https://medium.com`);
+  }
+  const engine = typeof flags.engine === "string" ? flags.engine : "chromium";
+  if (!["chromium", "firefox", "webkit"].includes(engine)) {
+    throw new Error(`--engine is chromium, firefox or webkit`);
+  }
+
+  let pw;
+  try {
+    // @ts-ignore - an optional peer: present on a laptop that signs sites in
+    pw = await import("playwright");
+  } catch {
+    try {
+      // @ts-ignore - an optional peer, absent until someone installs it
+      pw = await import("playwright-core");
+    } catch {
+      throw new Error(
+        "this needs Playwright on your machine, once: `npm i -g playwright && npx playwright install chromium` — " +
+          "the window it opens is the browser you sign in to",
+      );
+    }
+  }
+
+  console.log(`\n  opening ${c.bold(url)} in ${engine}`);
+  console.log(`  ${c.dim("sign in by hand — password, MFA, whatever the site asks. foldrun never sees it.")}`);
+  console.log(`  ${c.dim("then close the window (or press Enter here) and the session is stored.")}\n`);
+
+  const browser = await pw[engine].launch({ headless: false, args: engine === "chromium" ? ["--no-first-run"] : [] });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(url, { waitUntil: "domcontentloaded" }).catch(() => {});
+
+  // Whichever comes first: the window closed, or Enter in this terminal. A
+  // person who signed in and left the window open should not have to guess
+  // which one this command wanted.
+  const closed = new Promise((resolve) => browser.on("disconnected", () => resolve("window")));
+  const entered = new Promise((resolve) => {
+    if (!process.stdin.isTTY) return; // a script has no Enter to press
+    process.stdin.resume();
+    process.stdin.once("data", () => resolve("enter"));
+  });
+  const how = await Promise.race([closed, entered]);
+  if (process.stdin.isTTY) process.stdin.pause();
+
+  // Read it back before the browser goes, and from the page itself so the
+  // identity is what the site actually saw, not what this machine assumed.
+  let cookies = [];
+  let storage = {};
+  let identity = { user_agent: "", locale: "en-US", timezone: "UTC" };
+  if (how === "enter") {
+    cookies = await context.cookies();
+    const live = context.pages().find((p) => !p.isClosed()) ?? page;
+    identity = await live
+      .evaluate(() => ({
+        user_agent: navigator.userAgent,
+        locale: navigator.language,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }))
+      .catch(() => identity);
+    storage = await readStorage(live, origin);
+    await browser.close().catch(() => {});
+  } else {
+    throw new Error(
+      "the window closed before the session could be read — run it again and press Enter in this terminal instead, " +
+        "with the window still open",
+    );
+  }
+
+  cookies = cookies.filter((ck) => {
+    const host = ck.domain.replace(/^\./, "");
+    const site = new URL(url).hostname.replace(/^www\./, "");
+    return host === site || host.endsWith(`.${site}`) || site.endsWith(`.${host}`);
+  });
+  if (!cookies.length && !hasAnyStorage(storage)) {
+    throw new Error(`nothing to store: no cookies or storage for ${origin} — was the sign-in finished?`);
+  }
+
+  const login = loginCookieOf(cookies);
+  const store = async (name, value) => {
+    const remote = flags.local === true ? undefined : remoteUrl(flags);
+    const named = takeWorkspace([], layout);
+    const scope = flags.account === true ? undefined : flags.to ?? named ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+    if (remote) {
+      await remoteCall(remote, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, value, workspace: scope }) });
+    } else {
+      (await core()).setSecret("default", name, value, scope);
+    }
+  };
+
+  const storageJson = hasAnyStorage(storage) ? JSON.stringify(storage) : null;
+  if (flags.print === true) {
+    console.log(`  ${c.dim("--print: nothing stored")}`);
+  } else {
+    await store(`${secret}_COOKIES`, JSON.stringify(cookies));
+    if (storageJson) await store(`${secret}_STORAGE`, storageJson);
+  }
+
+  const httpOnly = cookies.filter((ck) => ck.httpOnly).map((ck) => ck.name);
+  console.log(`  ${c.green("✓")} ${c.bold(`${secret}_COOKIES`)} — ${cookies.length} cookies for ${cookieDomainFor(url)}`);
+  if (httpOnly.length) console.log(`    ${c.dim(`HttpOnly (a console cannot read these): ${httpOnly.join(", ")}`)}`);
+  if (login) console.log(`    ${c.dim(`the login looks like ${login.name}, good until ${whenItDies(login)}`)}`);
+  if (storageJson) {
+    const parts = [];
+    if (Object.keys(storage.localStorage ?? {}).length) parts.push(`localStorage(${Object.keys(storage.localStorage).length})`);
+    if (Object.keys(storage.sessionStorage ?? {}).length) parts.push(`sessionStorage(${Object.keys(storage.sessionStorage).length})`);
+    if (Object.keys(storage.indexedDB ?? {}).length) parts.push(`indexedDB(${Object.keys(storage.indexedDB).join(", ")})`);
+    console.log(`  ${c.green("✓")} ${c.bold(`${secret}_STORAGE`)} — ${parts.join(", ")}`);
+  }
+  console.log(`\n  ${c.dim("paste this into the agent that uses it:")}\n`);
+  console.log(
+    renderBrowseBlock({ secret, url, identity, hasStorage: Boolean(storageJson), engine })
+      .split("\n")
+      .map((l) => "    " + l)
+      .join("\n"),
+  );
+  console.log(`\n  ${c.dim(`and declare the names under secrets: [${secret}_COOKIES${storageJson ? `, ${secret}_STORAGE` : ""}]`)}\n`);
+  return 0;
+}
+
+function hasAnyStorage(s) {
+  return Boolean(
+    Object.keys(s?.localStorage ?? {}).length ||
+      Object.keys(s?.sessionStorage ?? {}).length ||
+      Object.keys(s?.indexedDB ?? {}).length,
+  );
+}
+
+/** Web Storage and IndexedDB for this origin, in the shape `web_browse`'s
+ *  `storage:` seeds back. Read in the page, because that is the only place
+ *  these exist. */
+async function readStorage(page, origin) {
+  const empty = { localStorage: {}, sessionStorage: {}, indexedDB: {} };
+  if (new URL(page.url()).origin !== origin) return empty;
+  return await page
+    // @ts-ignore - this function is serialised and runs in the page, where
+    // indexedDB, localStorage and sessionStorage are the browser's own
+    .evaluate(async () => {
+      const dump = (store) => {
+        const out = {};
+        try {
+          for (let i = 0; i < store.length; i++) {
+            const k = store.key(i);
+            out[k] = store.getItem(k);
+          }
+        } catch {}
+        return out;
+      };
+      const idb = {};
+      try {
+        // The page's own globals; typed as any because this body is
+        // serialised and never runs in Node.
+        const g = /** @type {any} */ (globalThis);
+        const dbs = (await g.indexedDB.databases?.()) ?? [];
+        for (const { name } of dbs) {
+          if (!name) continue;
+          idb[name] = await new Promise((resolve) => {
+            const open = g.indexedDB.open(name);
+            open.onerror = () => resolve({});
+            open.onsuccess = (e) => {
+              const db = e.target.result;
+              const stores = [...db.objectStoreNames];
+              if (!stores.length) {
+                db.close();
+                return resolve({});
+              }
+              const tx = db.transaction(stores, "readonly");
+              const out = {};
+              let left = stores.length;
+              for (const s of stores) {
+                const req = tx.objectStore(s).getAll();
+                req.onsuccess = () => {
+                  out[s] = req.result;
+                  if (--left === 0) {
+                    db.close();
+                    resolve(out);
+                  }
+                };
+                req.onerror = () => {
+                  if (--left === 0) {
+                    db.close();
+                    resolve(out);
+                  }
+                };
+              }
+            };
+          });
+        }
+      } catch {}
+      return { localStorage: dump(localStorage), sessionStorage: dump(sessionStorage), indexedDB: idb };
+    })
+    .catch(() => empty);
+}
+
 async function secretsCmd(positional, flags, layout) {
   // --local: this machine's store even when signed in, the same escape
   // hatch deploy and keys have. Without it, a signed-in laptop sent every
@@ -4237,7 +4519,10 @@ export async function run(command, positional, flags, workspace, layout) {
   layout ??= { kind: "flat", accountRoot: path.resolve(workspace ?? ".", ".."), workspacesDir: null, workspaceDir: path.resolve(workspace ?? "."), workspace: path.basename(path.resolve(workspace ?? ".")), workspaces: [path.basename(path.resolve(workspace ?? "."))] };
   switch (command) {
     case "login":
-      return login(flags);
+      // `foldrun login` signs this machine in to the platform. `foldrun login
+      // <site> --url …` is the other direction: a browser window for a person
+      // to sign in to a site, and the session stored for an agent to wear.
+      return positional.length ? siteLogin(positional, flags, layout) : login(flags);
     case "logout":
       return logout(flags);
     case "whoami":
