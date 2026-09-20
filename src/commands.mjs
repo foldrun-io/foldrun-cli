@@ -1954,14 +1954,16 @@ async function siteLogin(positional, flags, layout) {
   } catch {
     throw new Error(`--url must be a full address, like https://medium.com`);
   }
-  const engine = typeof flags.engine === "string" ? flags.engine : "chromium";
-  if (!["chromium", "firefox", "webkit"].includes(engine)) {
-    throw new Error(`--engine is chromium, firefox or webkit`);
-  }
+  // The names people use, mapped to the ones Playwright answers to. Old
+  // spellings keep working, so a script written before this still runs.
+  const engines = { chrome: "chromium", chromium: "chromium", firefox: "firefox", safari: "webkit", webkit: "webkit" };
+  const asked = typeof flags.engine === "string" ? flags.engine.toLowerCase() : "chrome";
+  const engine = engines[asked];
+  if (!engine) throw new Error(`--engine is chrome, firefox or safari`);
 
   const pw = await loadPlaywright();
 
-  console.log(`\n  opening ${c.bold(url)} in ${engine}`);
+  console.log(`\n  opening ${c.bold(url)} in ${asked}`);
   console.log(`  ${c.dim("sign in by hand — password, MFA, whatever the site asks. foldrun never sees it.")}`);
   console.log(`  ${c.dim("then close the window (or press Enter here) and the session is stored.")}\n`);
 
@@ -2048,7 +2050,7 @@ async function siteLogin(positional, flags, layout) {
   }
   console.log(`\n  ${c.dim("paste this into the agent that uses it:")}\n`);
   console.log(
-    renderBrowseBlock({ secret, url, identity, hasStorage: Boolean(storageJson), engine })
+    renderBrowseBlock({ secret, url, identity, hasStorage: Boolean(storageJson), engine: asked })
       .split("\n")
       .map((l) => "    " + l)
       .join("\n"),

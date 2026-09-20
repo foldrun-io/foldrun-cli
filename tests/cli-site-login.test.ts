@@ -67,6 +67,6 @@ test("a site with no --url is refused before any window opens", async () => {
   await assert.rejects(run("login", ["medium"], {}), /which site\?/);
 });
 
-test("an engine that does not exist is refused the same way", async () => {
-  await assert.rejects(run("login", ["medium"], { url: "https://medium.com", engine: "safari" }), /chromium, firefox or webkit/);
+test("an engine that does not exist is refused by the names people use", async () => {
+  await assert.rejects(run("login", ["medium"], { url: "https://medium.com", engine: "opera" }), /chrome, firefox or safari/);
 });
