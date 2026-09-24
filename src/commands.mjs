@@ -2414,10 +2414,19 @@ async function invoke(target, flags) {
         // --test: the platform marks the run a test run — sends refused or
         // sunk at the proxy, send-capable secrets withheld, state/ kept.
         ...(flags.test === true ? { test: true } : {}),
+        // --once <key>: the same key twice is one run — a CI step that
+        // retries after a dropped response used to start and pay for two.
+        ...(typeof flags.once === "string" && flags.once ? { idempotencyKey: flags.once } : {}),
       }),
     });
   } catch (err) {
     if (flags.wait === true && err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
+    // overlap: skip — a run of this flow is live and the platform refused a
+    // second. Not a fault; the live run's id is the useful half of the answer.
+    if (err?.status === 409 && err?.body?.runId) {
+      console.log(`\n  ${c.amber("·")} ${target} in ${ws} is already running — ${c.dim(`foldrun logs ${err.body.runId} --to ${ws}`)}\n`);
+      return 1;
+    }
     throw err;
   }
   while (flags.wait === true && body?.timedOut === true && body.runId) {
@@ -2919,6 +2928,9 @@ async function keysCmd(positional, flags) {
     if (typeof flags.for === "string") body.workspace = flags.for;
     if (typeof flags.access === "string") body.access = flags.access;
     if (typeof flags.role === "string") body.role = flags.role;
+    // --workspaces a,b narrows the key to those; --workspaces all opens
+    // every one you can. Unsaid, the key inherits your own scope.
+    if (typeof flags.workspaces === "string") body.workspaces = flags.workspaces === "all" ? null : flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
     const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}\n`);
     console.log(`  ${made.key}\n`);
@@ -3548,8 +3560,38 @@ async function storageCmd(positional, flags, layout) {
     return 0;
   }
 
+  if (verb === "put") {
+    const local = positional[1];
+    if (!local) throw new Error("`foldrun storage put <file>` — --as <path> names it differently in storage/");
+    if (!fs.existsSync(local) || !fs.statSync(local).isFile()) throw new Error(`${local} is not a file here`);
+    const rel = typeof flags.as === "string" && flags.as ? flags.as : path.basename(local);
+    const bytes = fs.readFileSync(local);
+    if (!bytes.length) throw new Error(`${local} is empty — the platform refuses an empty file`);
+    const token = tokenFor(url, flags);
+    const res = await remoteFetch(url, `/api/workspaces/${ws}/storage?path=${encodeURIComponent(rel)}`, { method: "PUT", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token });
+    const text = await res.text();
+    if (!res.ok) {
+      let why = text.slice(0, 200);
+      try {
+        why = JSON.parse(text).error ?? why;
+      } catch {
+        /* not JSON */
+      }
+      throw new HttpError(`${rel} in ${ws}: ${why}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, {});
+    }
+    console.log(`\n  ${c.green("✓")} ${ws}/storage/${rel}  ${c.dim(`${humanBytes(bytes.length)} from ${local}`)}\n`);
+    return 0;
+  }
+  if (verb === "rm") {
+    const rel = positional[1];
+    if (!rel) throw new Error("`foldrun storage rm <path>` — `foldrun storage ls` names them");
+    await remoteCall(url, flags, `/api/workspaces/${ws}/storage?path=${encodeURIComponent(rel)}`, { method: "DELETE" });
+    console.log(`\n  ${c.green("✓")} ${ws}/storage/${rel} removed\n`);
+    return 0;
+  }
+
   if (verb !== "cat" && verb !== "get") {
-    throw new Error(`unknown storage verb "${verb}" — ls, cat, get, share, shares or unshare`);
+    throw new Error(`unknown storage verb "${verb}" — ls, cat, get, put, rm, share, shares or unshare`);
   }
 
   const rel = positional[1];
@@ -3591,6 +3633,36 @@ async function storageCmd(positional, flags, layout) {
   fs.writeFileSync(to, bytes);
   console.log(`\n  ${c.green("✓")} ${to}  ${c.dim(`${humanBytes(bytes.length)} from ${ws}/storage/${rel}`)}\n`);
   return 0;
+}
+
+// ----------------------------------------------------------------- rerun
+
+/**
+ * `foldrun rerun <run-id>` — the same flow again, from a step.
+ *
+ * The debug loop is fix the file, deploy, rerun from the step that failed:
+ * `--from <n>` names the step as the flow numbers them, `--agent <name>` the
+ * first step that agent runs. Earlier steps are recorded as skipped, not
+ * invented. `--wait` follows it the way `invoke --wait` does.
+ */
+async function rerunCmd(runId, flags, layout) {
+  const url = platformFor(flags, "rerun");
+  if (!runId) throw new Error("which run? `foldrun rerun <run-id> --from <step>` — `foldrun runs --status failed` lists them");
+  const from = flags.from !== undefined ? Number(flags.from) : undefined;
+  const agent = typeof flags.agent === "string" ? flags.agent : undefined;
+  if ((from === undefined || !Number.isInteger(from) || from < 1) && !agent) {
+    throw new Error("where from? --from <step> (as the flow numbers them) or --agent <name> (the first step that agent runs)");
+  }
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/rerun`, {
+    method: "POST",
+    body: JSON.stringify(agent ? { agent } : { step: from }),
+  });
+  const id = body.runId ?? body.id;
+  console.log(`\n  ${c.green("✓")} ${c.bold(id)}  ${c.dim(`${ws} · again from ${agent ? `agent ${agent}` : `step ${from}`} of ${runId} · ${body.steps ?? "?"} steps`)}`);
+  console.log(`  ${c.dim(`foldrun logs ${id} --to ${ws}${flags.wait === true ? "" : " · --wait follows it"}`)}\n`);
+  if (flags.wait !== true) return 0;
+  return logsCmd([id], { ...flags, follow: true, to: ws }, layout);
 }
 
 // -------------------------------------------------------------- triggers
@@ -4750,6 +4822,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return reportCmd(positional[0], flags, layout);
     case "stop":
       return stopCmd(positional[0], flags, layout);
+    case "rerun":
+      return rerunCmd(positional[0], flags, layout);
     case "account":
       return accountCmd(positional, flags);
     case "schedule":

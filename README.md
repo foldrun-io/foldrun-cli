@@ -130,9 +130,11 @@ declared the same way.
 | `foldrun approve <run-id>` | release a waiting gate — it asks first, `--yes` means it, `--note "…"` steers the step |
 | `foldrun reject <run-id>` | refuse one, `--note` being the reason |
 | `foldrun stop <run-id>` | kill a run in flight — it says what it will destroy, then asks (`--yes` means it) |
+| `foldrun rerun <run-id>` | the same flow again from a step — `--from <n>` as the flow numbers them, or `--agent <name>` for the first step that agent runs; `--wait` follows it |
 | `foldrun schedule` | every flow in the account that fires on a clock, its cron line, and the next few times it fires |
 | `foldrun triggers` | why nothing ran: per flow, how often its trigger fired, how often that became a run, and every reason for the difference (`--since <days>`, `--to`) |
 | `foldrun storage <verb>` | what a workspace produced: `ls [prefix]`, `cat <path>`, `get <path>` — with when each file was written and which run wrote it |
+| `foldrun storage put <file>` | upload a file into a workspace's storage (`--as <path>` names it) — also `rm <path>` |
 | `foldrun storage share <path>` | a public link to one produced file (`--ttl <days>`, default 7; `--forever`) — also `shares` (`--all`) and `unshare <token>` |
 | `foldrun billing` | the account's balance and its recent ledger entries, with what each was for |
 | `foldrun account` | the account's defaults: timezone, notify, budget, concurrency — also `set <key> <value>` and `clear <key>` |
@@ -142,7 +144,7 @@ declared the same way.
 | `foldrun pull [workspace]` | bring the platform's account down here (refuses to clobber local edits) |
 | `foldrun status [workspace]` | per workspace: added, changed, and what moved on the platform since your last deploy |
 | `foldrun workspaces` | what exists here and there — also `rm <name>` (`--platform --yes` to delete it there) |
-| `foldrun invoke <flow>` | start a flow on a running platform (`--watch` streams its trace) |
+| `foldrun invoke <flow>` | start a flow on a running platform (`--watch` streams its trace; `--once <key>` makes a retry a no-op rather than a second run) |
 | `foldrun open [page]` | the dashboard for this workspace, in the browser |
 | `foldrun login` | sign this machine in from the browser — no key to copy |
 | `foldrun whoami` | who you are on the platform: account, role, workspaces |

@@ -81,9 +81,10 @@ const HELP = `foldrun — agents are just folders
   foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
+  foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --wait
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun triggers          why nothing ran: per flow, fired vs started and every reason (--since <days>, --to <workspace>)
-  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
+  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path>, put <file> (--as <path>), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
   foldrun account           the account's defaults — also set <key> <value>, clear <key>, providers (--check) (singular; accounts lists logins)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
@@ -92,7 +93,7 @@ const HELP = `foldrun — agents are just folders
   foldrun pull [workspace]  bring the platform's account down here (refuses to clobber; --force overrides)
   foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
   foldrun workspaces        what exists here and on the platform — also rm <name> (--platform --yes)
-  foldrun invoke <flow>     start a flow on a running platform (--to <workspace>)
+  foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
 
@@ -173,7 +174,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet"]);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {

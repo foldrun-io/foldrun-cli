@@ -165,5 +165,5 @@ test("an unknown verb names the verbs there are", async () => {
   const r = await at(s.url, "storage", "push", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /unknown storage verb "push" — ls, cat, get, share, shares or unshare/);
+  assert.match(r.out, /unknown storage verb "push" — ls, cat, get, put, rm, share, shares or unshare/);
 });
