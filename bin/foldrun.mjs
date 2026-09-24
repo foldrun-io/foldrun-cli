@@ -19,8 +19,9 @@
 //   foldrun stop  <run-id>  kill a run in flight
 //   foldrun account        the account's own defaults — timezone, notify, budget, concurrency
 //   foldrun schedule       every flow in the account that fires on a clock, and when it fires next
+//   foldrun triggers       why nothing ran: fired vs started per flow, and each reason
 //   foldrun billing        the balance, and what the money went on
-//   foldrun storage <verb>  ls / cat / get — what the agents produced, as opposed to what you wrote
+//   foldrun storage <verb>  ls / cat / get / share / shares / unshare — what the agents produced, and public links to it
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
 //   foldrun agent new <name>  one more agent in this workspace — also flow new, tool new
@@ -81,9 +82,10 @@ const HELP = `foldrun — agents are just folders
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
-  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path> (--to <workspace>)
+  foldrun triggers          why nothing ran: per flow, fired vs started and every reason (--since <days>, --to <workspace>)
+  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
-  foldrun account           the account's defaults — also set <key> <value>, clear <key> (singular; accounts lists logins)
+  foldrun account           the account's defaults — also set <key> <value>, clear <key>, providers (--check) (singular; accounts lists logins)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them

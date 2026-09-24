@@ -3452,7 +3452,8 @@ function humanBytes(n) {
 }
 
 /**
- * `foldrun storage ls|cat|get` — what a workspace PRODUCED.
+ * `foldrun storage ls|cat|get|share|shares|unshare` — what a workspace PRODUCED,
+ * and the public links to it.
  *
  * `source` is the other half of this and the distinction is the whole
  * point: source is what you wrote, storage is what the agents made. A
@@ -3501,8 +3502,54 @@ async function storageCmd(positional, flags, layout) {
     return 0;
   }
 
+  // ---- public links. A share is the one thing here reachable without a
+  // credential, so the terminal says exactly what it minted and until when.
+  if (verb === "share") {
+    const rel = positional[1];
+    if (!rel) throw new Error("`foldrun storage share <path>` — a path under storage/, as `foldrun storage ls` names it (--ttl <days>, --forever)");
+    if (flags.forever === true && flags.ttl !== undefined) throw new Error("--forever or --ttl <days>, not both");
+    const ttlDays = flags.forever === true ? null : flags.ttl !== undefined ? Number(flags.ttl) : undefined;
+    if (ttlDays !== undefined && ttlDays !== null && !(Number.isFinite(ttlDays) && ttlDays > 0)) throw new Error("--ttl is a number of days, more than zero");
+    const body = await remoteCall(url, flags, `/api/workspaces/${ws}/shares`, {
+      method: "POST",
+      body: { path: rel.startsWith("storage/") ? rel : `storage/${rel}`, ...(ttlDays !== undefined ? { ttlDays } : {}) },
+    });
+    console.log(`\n  ${c.green("✓")} ${c.bold(body.url)}`);
+    console.log(`  ${c.dim(`${body.path} · ${body.contentType} · ${body.expiresAt ? `until ${when(body.expiresAt)}` : "never expires"} — anyone with the link can fetch it; \`foldrun storage unshare ${body.token} --to ${ws}\` takes it down`)}\n`);
+    return 0;
+  }
+  if (verb === "shares") {
+    const { shares = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares`);
+    const now = Date.now();
+    const live = (x) => !x.revokedAt && (!x.expiresAt || Date.parse(x.expiresAt) > now);
+    const rows = flags.all === true ? shares : shares.filter(live);
+    if (!rows.length) {
+      console.log(`\n  ${c.dim(`no ${flags.all === true ? "" : "live "}links in ${ws} — \`foldrun storage share <path>\` mints one${flags.all === true ? "" : ", --all shows expired and revoked ones too"}`)}\n`);
+      return 0;
+    }
+    const w = { path: Math.max(...rows.map((x) => x.path.length)), token: Math.max(...rows.map((x) => x.token.length)) };
+    console.log();
+    for (const x of rows) {
+      const state = x.revokedAt ? c.red(`revoked ${ago(x.revokedAt)} ago`) : !live(x) ? c.red(`expired ${ago(x.expiresAt)} ago`) : x.expiresAt ? `until ${when(x.expiresAt)}` : "never expires";
+      console.log(`  ${live(x) ? c.green("✓") : c.dim("·")} ${c.bold(pad(x.path, w.path))}  ${c.dim(pad(x.token, w.token))}  ${c.dim(`${state} · by ${x.createdBy ?? "api-key"} · ${ago(x.createdAt)} ago`)}`);
+    }
+    console.log(`\n  ${c.dim(`${rows.length} link${rows.length === 1 ? "" : "s"} · a link is <platform>/s/<token> · \`foldrun storage unshare <token> --to ${ws}\``)}\n`);
+    return 0;
+  }
+  if (verb === "unshare") {
+    const token = positional[1];
+    if (!token) throw new Error("`foldrun storage unshare <token>` — `foldrun storage shares` lists them");
+    const { revoked } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares?token=${encodeURIComponent(token)}`, { method: "DELETE" });
+    if (!revoked) {
+      console.log(`\n  ${c.dim(`nothing revoked — ${token} is not a live link of this account's`)}\n`);
+      return 1;
+    }
+    console.log(`\n  ${c.green("✓")} ${c.dim(`${token} revoked — the link answers 404 from now on, and the token is never reused`)}\n`);
+    return 0;
+  }
+
   if (verb !== "cat" && verb !== "get") {
-    throw new Error(`unknown storage verb "${verb}" — ls, cat or get`);
+    throw new Error(`unknown storage verb "${verb}" — ls, cat, get, share, shares or unshare`);
   }
 
   const rel = positional[1];
@@ -3544,6 +3591,44 @@ async function storageCmd(positional, flags, layout) {
   fs.writeFileSync(to, bytes);
   console.log(`\n  ${c.green("✓")} ${to}  ${c.dim(`${humanBytes(bytes.length)} from ${ws}/storage/${rel}`)}\n`);
   return 0;
+}
+
+// -------------------------------------------------------------- triggers
+
+/**
+ * `foldrun triggers` — why nothing happened.
+ *
+ * One row per flow: how often its trigger fired, how often that became a
+ * run, and what the difference was — a duplicate delivery, a throttled or
+ * debounced burst, a quarantined flow, an overlap skipped, a fire missed
+ * while the platform was down. The gap between fired and started is the
+ * number someone opened a terminal to find.
+ */
+async function triggersCmd(flags, layout) {
+  const url = platformFor(flags, "triggers");
+  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  if (!ws) throw new Error("which workspace? `foldrun triggers --to <workspace>` — or run it inside one");
+  const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
+  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/triggers?since=${days}`);
+  const rows = body.flows ?? [];
+  if (!rows.length) {
+    console.log(`\n  ${c.dim(`no trigger fired in ${ws} in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"} — a flow fires when its frontmatter says trigger: schedule, webhook, watch, storage or email`)}\n`);
+    return 0;
+  }
+  const w = { flow: Math.max(...rows.map((r) => r.flow.length)), trigger: Math.max(...rows.map((r) => r.trigger.length)) };
+  console.log();
+  let held = 0;
+  for (const r of rows) {
+    const quarantined = (r.dropped ?? []).some((d) => d.outcome === "quarantined");
+    if (quarantined) held++;
+    const ratio = `${r.started}/${r.fired} started`;
+    console.log(`  ${quarantined ? c.red("⏹") : r.started === r.fired ? c.green("✓") : c.amber("·")} ${c.bold(pad(r.flow, w.flow))}  ${c.dim(pad(r.trigger, w.trigger))}  ${ratio}  ${c.dim(r.lastStartedAt ? `last run ${ago(r.lastStartedAt)} ago` : "never became a run")}`);
+    for (const d of r.dropped ?? []) {
+      console.log(`      ${quarantined && d.outcome === "quarantined" ? c.red(`${d.count}× ${d.outcome}`) : c.dim(`${d.count}× ${d.outcome}`)}  ${c.dim(firstLine(d.detail ?? "", 90))}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`${rows.length} flow${rows.length === 1 ? "" : "s"} fired in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}${held ? ` · ${held} switched off by disable_after — one successful run clears it` : ""} · --since <days>`)}\n`);
+  return held ? 1 : 0;
 }
 
 // -------------------------------------------------------------- schedule
@@ -3595,6 +3680,40 @@ async function scheduleCmd(flags) {
     `\n  ${c.dim(`${rows.length} scheduled flow${rows.length === 1 ? "" : "s"} — times are this terminal's clock; the cron line is read in the timezone beside it`)}\n`,
   );
   return rows.some((r) => !r.valid) ? 1 : 0;
+}
+
+/**
+ * `foldrun account providers` — which model providers this account's files
+ * use, and whether each key still works.
+ *
+ * A dead key is found by a desk failing at 3am, unless someone asks. The
+ * platform asks once a day; --check asks now, which spends one minimal
+ * request at each distinct endpoint.
+ */
+async function providersCmd(url, flags) {
+  const body = flags.check === true
+    ? { ...(await remoteCall(url, flags, "/api/account/providers")), lastCheck: (await remoteCall(url, flags, "/api/account/providers", { method: "POST", body: {} })).lastCheck }
+    : await remoteCall(url, flags, "/api/account/providers");
+  const configured = body.configured ?? [];
+  const last = body.lastCheck ?? null;
+  if (!configured.length) {
+    console.log(`\n  ${c.dim("no provider of the account's own — every agent here runs on the platform's credential")}\n`);
+    return 0;
+  }
+  const verdict = new Map((last?.results ?? []).map((r) => [`${r.declaredIn}|${r.provider}`, r]));
+  const w = { provider: Math.max(...configured.map((p) => p.provider.length)), where: Math.max(...configured.map((p) => p.declaredIn.length)) };
+  console.log();
+  let broken = 0;
+  for (const p of configured) {
+    const r = verdict.get(`${p.declaredIn}|${p.provider}`);
+    const mark = !r ? c.dim("·") : r.ok ? c.green("✓") : c.red("✗");
+    if (r && !r.ok) broken++;
+    console.log(`  ${mark} ${c.bold(pad(p.provider, w.provider))}  ${c.dim(pad(p.declaredIn, w.where))}  ${c.dim(`${p.model} · ${p.format}`)}${r && !r.ok ? `  ${c.red(r.verdict)} ${c.dim(firstLine(r.detail ?? "", 60))}` : ""}`);
+  }
+  console.log(
+    `\n  ${c.dim(last ? `checked ${ago(last.checkedAt)} ago${broken ? ` — ${broken} not answering` : " — all answering"}` : "never checked yet — the platform checks daily; --check asks now")}\n`,
+  );
+  return broken ? 1 : 0;
 }
 
 // --------------------------------------------------------------- billing
@@ -3693,8 +3812,9 @@ async function accountCmd(positional, flags) {
     console.log(`\n  ${c.dim("foldrun account set timezone Australia/Sydney · set notify email you@example.com · set budget 60/month · clear budget")}\n`);
     return 0;
   }
+  if (verb === "providers") return providersCmd(url, flags);
   if (verb !== "set" && verb !== "clear") {
-    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one`);
+    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one, \`providers\` checks the model keys`);
   }
 
   const key = positional[1];
@@ -4634,6 +4754,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return accountCmd(positional, flags);
     case "schedule":
       return scheduleCmd(flags);
+    case "triggers":
+      return triggersCmd(flags, layout);
     case "billing":
       return billingCmd(flags);
     case "storage":
