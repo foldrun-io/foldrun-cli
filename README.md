@@ -115,6 +115,7 @@ declared the same way.
 | `foldrun init [dir]` | create an account folder with one workspace in it (`--flat` for the old shape) |
 | `foldrun new <name>` | another workspace in this account |
 | `foldrun agent new <name>` | one more agent in this workspace — also `flow new <name>` and `tool new <name>` |
+| `foldrun guide` | install or refresh `CLAUDE.md` in the account folder — the guide a coding agent (Claude Code, Cursor, Codex) reads before touching your agents and flows. `init` writes it, `pull` keeps it current; your own notes outside the marked block are never touched (`--check`, `--print`) |
 | `foldrun check [dir]` | validate every workspace here, and the shared library |
 | `foldrun check --to <ws>` | validate the copy that is DEPLOYED — fetched from the platform, checked by the same rules |
 | `foldrun agent run <name>` | run one agent once on a platform, no flow (`--task "…"`, `--wait`, `--test`) |

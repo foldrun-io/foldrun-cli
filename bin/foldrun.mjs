@@ -83,6 +83,7 @@ const HELP = `foldrun — agents are just folders
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
   foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --wait
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
+  foldrun guide             install or refresh CLAUDE.md, the guide a coding agent reads here (--check, --print)
   foldrun triggers          why nothing ran: per flow, fired vs started and every reason (--since <days>, --to <workspace>)
   foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path>, put <file> (--as <path>), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)

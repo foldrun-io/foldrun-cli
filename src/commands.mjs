@@ -8,6 +8,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { installGuide, guideStatus, guideText, GUIDE_FILE, GUIDE_VERSION } from "./guide.mjs";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
@@ -147,6 +148,7 @@ async function init(root, from, flags = {}) {
     // covers it. accountDir cannot answer here: nothing has pinned this
     // process to the new workspace yet, so it is passed explicitly.
     const written = ensureAccountFiles("default", path.resolve(root, "..")).map((rel) => `../${rel}`);
+    if (installGuide(path.resolve(root, "..")) !== "unchanged") written.push(`../${GUIDE_FILE}`);
     report(root, files.map((f) => f.path), written, root, files);
     return 0;
   }
@@ -171,10 +173,12 @@ async function init(root, from, flags = {}) {
   writeFiles(account, accountLevel);
   writeFiles(wsDir, files);
   syncWorkspaceBundles(wsDir);
-
+  // The guide a coding agent reads (guide.mjs): CLAUDE.md at the account
+  // root, refreshed by pull and by `foldrun guide`, never over your notes.
+  installGuide(account);
   report(
     account,
-    [...accountLevel.map((f) => f.path), ...files.map((f) => `workspaces/${name}/${f.path}`)],
+    [...accountLevel.map((f) => f.path), GUIDE_FILE, ...files.map((f) => `workspaces/${name}/${f.path}`)],
     [],
     wsDir,
     files,
@@ -3345,6 +3349,8 @@ async function pullCmd(layout, flags, only) {
     `\n  ${c.green("✓")} pulled ${names.length} workspace${names.length === 1 ? "" : "s"} from ${url}  ` +
       c.dim(`${written} file${written === 1 ? "" : "s"} written, ${incoming.length - written} already current`),
   );
+  const guide = installGuide(root);
+  if (guide !== "unchanged") console.log(`  ${c.green("✓")} ${GUIDE_FILE} ${c.dim(`${guide} — the guide a coding agent reads, v${GUIDE_VERSION}`)}`);
   console.log(`  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
   return 0;
 }
@@ -3663,6 +3669,32 @@ async function rerunCmd(runId, flags, layout) {
   console.log(`  ${c.dim(`foldrun logs ${id} --to ${ws}${flags.wait === true ? "" : " · --wait follows it"}`)}\n`);
   if (flags.wait !== true) return 0;
   return logsCmd([id], { ...flags, follow: true, to: ws }, layout);
+}
+
+// ----------------------------------------------------------------- guide
+
+/**
+ * `foldrun guide` — the CLAUDE.md a coding agent reads, installed or brought
+ * up to date in this account folder. `--print` writes it to stdout instead;
+ * `--check` only says whether the file carries the current guide (exit 1
+ * when it does not — for a CI step that keeps accounts current).
+ */
+async function guideCmd(flags, layout) {
+  if (flags.print === true) {
+    process.stdout.write(`${guideText()}\n`);
+    return 0;
+  }
+  // An account folder or a flat workspace has an account root; a bare
+  // directory (nothing of foldrun's here yet) is its own root.
+  const root = layout && layout.kind !== "empty" ? layout.accountRoot : process.cwd();
+  if (flags.check === true) {
+    const status = guideStatus(root);
+    console.log(`\n  ${status === "current" ? c.green("✓") : c.amber("·")} ${GUIDE_FILE} ${c.dim(status === "current" ? `carries the current guide (v${GUIDE_VERSION})` : status === "missing" ? "has no guide — `foldrun guide` installs it" : `carries ${status} — \`foldrun guide\` updates it`)}\n`);
+    return status === "current" ? 0 : 1;
+  }
+  const result = installGuide(root);
+  console.log(`\n  ${c.green("✓")} ${path.join(root, GUIDE_FILE)}  ${c.dim(result === "unchanged" ? `already current (v${GUIDE_VERSION})` : `${result} (v${GUIDE_VERSION}) — your own notes outside the marked block are kept`)}\n`);
+  return 0;
 }
 
 // -------------------------------------------------------------- triggers
@@ -4830,6 +4862,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return scheduleCmd(flags);
     case "triggers":
       return triggersCmd(flags, layout);
+    case "guide":
+      return guideCmd(flags, layout);
     case "billing":
       return billingCmd(flags);
     case "storage":
