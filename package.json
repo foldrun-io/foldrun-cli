@@ -46,7 +46,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@types/node": "^22.20.2",
+    "@types/node": "^26.6.2",
     "gray-matter": "^4.0.3",
     "typescript": "^5.9.3"
   }
