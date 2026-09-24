@@ -8,7 +8,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { installGuide, guideStatus, guideText, GUIDE_FILE, GUIDE_VERSION } from "./guide.mjs";
+import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage } from "./guide.mjs";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
@@ -148,7 +148,8 @@ async function init(root, from, flags = {}) {
     // covers it. accountDir cannot answer here: nothing has pinned this
     // process to the new workspace yet, so it is passed explicitly.
     const written = ensureAccountFiles("default", path.resolve(root, "..")).map((rel) => `../${rel}`);
-    if (installGuide(path.resolve(root, "..")) !== "unchanged") written.push(`../${GUIDE_FILE}`);
+    const rules = writeAgentFiles(path.resolve(root, ".."));
+    if (rules.claudeMd === "created") written.push("../CLAUDE.md");
     report(root, files.map((f) => f.path), written, root, files);
     return 0;
   }
@@ -173,12 +174,13 @@ async function init(root, from, flags = {}) {
   writeFiles(account, accountLevel);
   writeFiles(wsDir, files);
   syncWorkspaceBundles(wsDir);
-  // The guide a coding agent reads (guide.mjs): CLAUDE.md at the account
-  // root, refreshed by pull and by `foldrun guide`, never over your notes.
-  installGuide(account);
+  // What a coding agent reads first (guide.mjs): the managed block in
+  // AGENTS.md pointing at the docs that ship with this CLI, and CLAUDE.md
+  // importing it — the arrangement create-next-app makes.
+  writeAgentFiles(account);
   report(
     account,
-    [...accountLevel.map((f) => f.path), GUIDE_FILE, ...files.map((f) => `workspaces/${name}/${f.path}`)],
+    [...accountLevel.map((f) => f.path), "CLAUDE.md", ...files.map((f) => `workspaces/${name}/${f.path}`)],
     [],
     wsDir,
     files,
@@ -3349,8 +3351,10 @@ async function pullCmd(layout, flags, only) {
     `\n  ${c.green("✓")} pulled ${names.length} workspace${names.length === 1 ? "" : "s"} from ${url}  ` +
       c.dim(`${written} file${written === 1 ? "" : "s"} written, ${incoming.length - written} already current`),
   );
-  const guide = installGuide(root);
-  if (guide !== "unchanged") console.log(`  ${c.green("✓")} ${GUIDE_FILE} ${c.dim(`${guide} — the guide a coding agent reads, v${GUIDE_VERSION}`)}`);
+  const rules = writeAgentFiles(root);
+  for (const [file, what] of [["AGENTS.md", rules.agentsMd], ["CLAUDE.md", rules.claudeMd]]) {
+    if (what === "created" || what === "updated") console.log(`  ${c.green("✓")} ${file} ${c.dim(`${what} — the coding-agent rules, pointing at \`foldrun docs\``)}`);
+  }
   console.log(`  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
   return 0;
 }
@@ -3674,26 +3678,61 @@ async function rerunCmd(runId, flags, layout) {
 // ----------------------------------------------------------------- guide
 
 /**
- * `foldrun guide` — the CLAUDE.md a coding agent reads, installed or brought
- * up to date in this account folder. `--print` writes it to stdout instead;
- * `--check` only says whether the file carries the current guide (exit 1
- * when it does not — for a CI step that keeps accounts current).
+ * `foldrun guide` — the coding-agent rules, as Next.js writes them: a short
+ * managed block in AGENTS.md telling a coding agent to read the docs that
+ * ship with this CLI, and CLAUDE.md importing it. Rewrites the block in
+ * place, keeps everything around it. `--check` exits 1 when the block is
+ * missing or old (for CI); `--print` writes the block to stdout.
  */
 async function guideCmd(flags, layout) {
   if (flags.print === true) {
-    process.stdout.write(`${guideText()}\n`);
+    process.stdout.write(`${agentRulesBlock()}\n`);
     return 0;
   }
   // An account folder or a flat workspace has an account root; a bare
   // directory (nothing of foldrun's here yet) is its own root.
   const root = layout && layout.kind !== "empty" ? layout.accountRoot : process.cwd();
   if (flags.check === true) {
-    const status = guideStatus(root);
-    console.log(`\n  ${status === "current" ? c.green("✓") : c.amber("·")} ${GUIDE_FILE} ${c.dim(status === "current" ? `carries the current guide (v${GUIDE_VERSION})` : status === "missing" ? "has no guide — `foldrun guide` installs it" : `carries ${status} — \`foldrun guide\` updates it`)}\n`);
-    return status === "current" ? 0 : 1;
+    const ok = hasCurrentAgentRules(root);
+    console.log(`\n  ${ok ? c.green("✓") : c.amber("·")} ${c.dim(ok ? "AGENTS.md carries the current coding-agent rules" : "the coding-agent rules are missing or old here — `foldrun guide` writes them")}\n`);
+    return ok ? 0 : 1;
   }
-  const result = installGuide(root);
-  console.log(`\n  ${c.green("✓")} ${path.join(root, GUIDE_FILE)}  ${c.dim(result === "unchanged" ? `already current (v${GUIDE_VERSION})` : `${result} (v${GUIDE_VERSION}) — your own notes outside the marked block are kept`)}\n`);
+  const r = writeAgentFiles(root);
+  console.log(`\n  ${c.green("✓")} ${root}`);
+  console.log(`    AGENTS.md  ${c.dim(r.agentsMd)}\n    CLAUDE.md  ${c.dim(r.claudeMd)}`);
+  console.log(`  ${c.dim("a coding agent here now reads `foldrun docs` before it edits; your own text around the block is kept")}\n`);
+  return 0;
+}
+
+// ------------------------------------------------------------------ docs
+
+/**
+ * `foldrun docs [page]` — foldrun's documentation, from the copy that ships
+ * with this CLI (the way node_modules/next/dist/docs does for Next.js), so a
+ * coding agent reads the version it is driving, offline. No page lists
+ * them; `--path` prints where they are on disk.
+ */
+async function docsCmd(positional, flags) {
+  if (flags.path === true) {
+    console.log(docsDir());
+    return 0;
+  }
+  const slug = positional[0];
+  if (!slug) {
+    const pages = docPages();
+    if (!pages.length) throw new Error("this install of the CLI has no bundled docs — reinstall it, or read them at foldrun.io/docs");
+    const w = Math.max(...pages.map((p) => p.slug.length));
+    console.log();
+    for (const p of pages) console.log(`  ${c.bold(p.slug.padEnd(w))}  ${c.dim(p.title)}`);
+    console.log(`\n  ${c.dim(`foldrun docs <page> prints one · on disk at ${docsDir()}`)}\n`);
+    return 0;
+  }
+  const text = docPage(slug);
+  if (text === null) {
+    const near = docPages().filter((p) => p.slug.includes(slug) || p.title.toLowerCase().includes(slug.toLowerCase())).map((p) => p.slug);
+    throw new Error(`no page "${slug}"${near.length ? ` — did you mean ${near.join(", ")}?` : ""} — \`foldrun docs\` lists them`);
+  }
+  process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
   return 0;
 }
 
@@ -4809,6 +4848,12 @@ export async function run(command, positional, flags, workspace, layout) {
     case "new":
       return newWorkspace(positional[0], flags, layout);
     case "check":
+      // A coding agent is running `check` in a folder without the current
+      // rules: write them, once, and say so — what `next dev` does.
+      if (layout.kind !== "empty" && codingAgent() && !hasCurrentAgentRules(layout.accountRoot)) {
+        const r = writeAgentFiles(layout.accountRoot);
+        console.log(`  ${c.dim(`coding-agent rules written for ${codingAgent()} — AGENTS.md ${r.agentsMd}, CLAUDE.md ${r.claudeMd}; read \`foldrun docs\` before editing`)}`);
+      }
       // --to names a workspace on a PLATFORM, so there is nothing local to
       // check and the folder this terminal stands in is beside the point.
       return typeof flags.to === "string"
@@ -4864,6 +4909,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return triggersCmd(flags, layout);
     case "guide":
       return guideCmd(flags, layout);
+    case "docs":
+      return docsCmd(positional, flags);
     case "billing":
       return billingCmd(flags);
     case "storage":

@@ -1,9 +1,18 @@
-# Working on this foldrun account
+# Working with a coding agent
 
-This folder is a foldrun account: agents, flows and knowledge as markdown.
-There is no build — the files ARE the program — so the loop is edit, check,
-run, deploy. `foldrun guide` refreshes this section; your own notes above or
-below it are kept.
+The page a coding agent (Claude Code, Cursor, Codex) should read first in a
+foldrun account, and the one `foldrun init` points it to. A foldrun account
+is agents, flows and knowledge as markdown. There is no build — the files ARE
+the program — so the loop is edit, check, run, deploy.
+
+`foldrun init` writes a short block into the account's `AGENTS.md`, between
+`<!-- BEGIN:foldrun-agent-rules -->` markers, telling the coding agent to
+read these docs before it writes anything, and a `CLAUDE.md` that imports it.
+The block is for the tool editing the folder: the runtime strips it before
+the rest of `AGENTS.md` reaches your agents. `foldrun guide` re-adds or
+refreshes it; `foldrun docs <page>` prints any page of these docs, from the
+copy that ships with your CLI, so a coding agent always reads the version it
+is working against.
 
 ## The loop
 
@@ -21,7 +30,7 @@ foldrun deploy             # push the account (or `deploy <workspace>`) to the p
 
 | Path | What |
 |---|---|
-| `AGENTS.md` | the account's shared context and defaults — every agent in every workspace reads it. Not a place for notes to a coding tool: those go here, in CLAUDE.md |
+| `AGENTS.md` | the account's shared context and defaults — every agent in every workspace reads it (except the managed coding-agent block, which the runtime strips) |
 | `workspaces/<name>/` | one workspace: a desk, a pipeline, a product |
 | `workspaces/<name>/AGENTS.md` | that workspace's context and settings |
 | `workspaces/<name>/agents/<name>/agent.md` | one role: its persona, model, tools |
@@ -208,4 +217,5 @@ foldrun secrets set|ls|rm|status · connect NAME · account [providers] · billi
 foldrun login · logout · whoami · keys ls|create|revoke · doctor
 ```
 
-`foldrun <command> --help` explains any of them.
+`foldrun <command> --help` explains any of them, and `foldrun docs cli` is the
+whole reference.
