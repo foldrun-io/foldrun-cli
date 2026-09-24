@@ -3512,7 +3512,7 @@ async function storageCmd(positional, flags, layout) {
     if (ttlDays !== undefined && ttlDays !== null && !(Number.isFinite(ttlDays) && ttlDays > 0)) throw new Error("--ttl is a number of days, more than zero");
     const body = await remoteCall(url, flags, `/api/workspaces/${ws}/shares`, {
       method: "POST",
-      body: { path: rel.startsWith("storage/") ? rel : `storage/${rel}`, ...(ttlDays !== undefined ? { ttlDays } : {}) },
+      body: JSON.stringify({ path: rel.startsWith("storage/") ? rel : `storage/${rel}`, ...(ttlDays !== undefined ? { ttlDays } : {}) }),
     });
     console.log(`\n  ${c.green("✓")} ${c.bold(body.url)}`);
     console.log(`  ${c.dim(`${body.path} · ${body.contentType} · ${body.expiresAt ? `until ${when(body.expiresAt)}` : "never expires"} — anyone with the link can fetch it; \`foldrun storage unshare ${body.token} --to ${ws}\` takes it down`)}\n`);
@@ -3692,7 +3692,7 @@ async function scheduleCmd(flags) {
  */
 async function providersCmd(url, flags) {
   const body = flags.check === true
-    ? { ...(await remoteCall(url, flags, "/api/account/providers")), lastCheck: (await remoteCall(url, flags, "/api/account/providers", { method: "POST", body: {} })).lastCheck }
+    ? { ...(await remoteCall(url, flags, "/api/account/providers")), lastCheck: (await remoteCall(url, flags, "/api/account/providers", { method: "POST", body: "{}" })).lastCheck }
     : await remoteCall(url, flags, "/api/account/providers");
   const configured = body.configured ?? [];
   const last = body.lastCheck ?? null;

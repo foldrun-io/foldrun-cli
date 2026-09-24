@@ -160,10 +160,10 @@ test("in a workspace folder the workspace needs no naming, and elsewhere it does
   assert.match(nowhere.out, /which workspace\?/);
 });
 
-test("an unknown verb names the three there are", async () => {
+test("an unknown verb names the verbs there are", async () => {
   const s = await serve(storage());
   const r = await at(s.url, "storage", "push", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /unknown storage verb "push" — ls, cat or get/);
+  assert.match(r.out, /unknown storage verb "push" — ls, cat, get, share, shares or unshare/);
 });
