@@ -191,6 +191,11 @@ what it cost → fix the markdown → `deploy` → `rerun`.
 
 ## Storage — workspace files agents produce
 
+**A request body is at most 10 MB.** Anything larger is refused with `413`
+before it reaches a route — it is never passed on cut short. Larger files go
+through `POST /api/workspaces/<ws>/storage/upload-url`, which returns a signed
+URL to PUT the bytes to directly.
+
 | Route | Methods | |
 |---|---|---|
 | `/api/workspaces/<ws>/storage?path=` | GET, POST, PUT, DELETE | list, record (`path`, `sha`, `size`), write, remove |
