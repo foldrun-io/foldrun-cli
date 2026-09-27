@@ -31,7 +31,9 @@ timezone: Australia/Sydney
   `!` parks it for a human, the shorthand for `approve: true`.
 - **Target** — the first link on the line is structural: the agent that runs,
   or `[[flow:name]]` for a whole flow composed in place. Cycles, and nesting
-  past three levels, are errors.
+  past three levels, are errors. Options under a `[[flow:name]]` line are not
+  applied to the nested steps — only `?` and the instruction carry — and
+  `check` names any it finds.
 - **Instruction** — everything after the dash. Other `[[links]]` in it resolve
   to real paths before the model sees them.
 
@@ -85,7 +87,7 @@ begins.
 
 | option | |
 |---|---|
-| `when:` | run only if the **previous group's** result has a line **beginning** with this marker — non-exclusive, every match runs |
+| `when:` | run only if the **previous group's** result has a line **beginning** with this marker — non-exclusive, every match runs. `when: rows of <path>` runs only if that CSV has a data row |
 | `case:` | exclusive branch: the **first** `case:` whose marker begins a line of the previous group's result runs, the rest are routed past |
 | `else:` | runs only when no `case:` in the group matched |
 | `each:` | fan out — `lines`, `items`, or `rows of <path>` |
@@ -100,7 +102,7 @@ begins.
 | `retry:` | attempts after the first, clamped to 5. Each retry waits — 15 s, 30 s, 1 m, 2 m, 4 m, jittered — holding no sandbox while it waits; a stop ends the wait. An attempt the cluster ended for want of memory or disk (OOMKilled, Evicted) is retried one `size:` class up |
 | `timeout:` | seconds, or `90s` / `15m` / `4h` / `3d` — **the only clock there is** |
 | `max_turns:` | the most model turns before the step is stopped (1 to 500) — the third bound beside `budget:` and `timeout:` |
-| `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`) |
+| `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`). The shell gets the step's final turn in the file `$FOLDRUN_REPLY_FILE` |
 | `approve:` | park until a person releases it |
 | `ask:` | the same gate carrying a question; the typed answer reaches the prompt |
 | `preview:` | what the gate shows: paths under `storage/`, comma-separated, globs allowed — `draft/*.mdx, draft/images/*.webp` |
@@ -143,6 +145,26 @@ opened the gate. Saying a marker is absent necessarily names it, so the more
 carefully an agent explained itself the more likely it was to trip its own
 condition. Write verdicts as headlines — the line leads with the marker,
 which is the house convention anyway — and both readings agree.
+
+**Or ask the data.** `when: rows of ../../storage/queue.csv` runs the step
+only if that CSV has a data row — the same file, read the same way, as
+`each: rows of`. Use it for the steps after a fan-out:
+
+```markdown
+1. [[scan]] — write every open item to storage/queue.csv
+2. [[writer]] — one draft per item
+   each: rows of ../../storage/queue.csv
+3. [[sheet]] — collate the drafts
+   when: rows of ../../storage/queue.csv
+4! [[poster]] — publish what was approved
+   when: rows of ../../storage/queue.csv
+```
+
+On a day with nothing in the queue the writer skips itself, and without the
+`when:` the sheet and the gate would still run — a skipped fan-out leaves no
+result, so there is no marker to read, and a person is asked to approve
+nothing. With it, the run ends after the scan. A missing file, a header on
+its own, or a path outside the workspace all skip, and the step says which.
 
 For `case:` it matters more, because routing is exclusive. A label picked
 out of a sentence does not merely run an extra step: "this is not a
