@@ -26,7 +26,11 @@ timezone: Australia/Sydney
 ```
 
 - **Group** — steps sharing a number run **in parallel**; the next group starts
-  when all of them finish and receives every result, labelled per agent.
+  when all of them finish and receives every result, labelled per agent. A
+  gate (`!`, `ask:`, `wait: event`) holds its whole group, so a gated step
+  numbered the same as another starts beside it on approval, not after it —
+  `check` warns about that, and about a gap in the numbers (3, 3, 4, 5, 5!, 7
+  is a renumbering that missed one step).
 - **Marker** — `?` makes the step optional (it fails without failing the flow);
   `!` parks it for a human, the shorthand for `approve: true`.
 - **Target** — the first link on the line is structural: the agent that runs,
