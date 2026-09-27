@@ -846,11 +846,13 @@ async function check(workspace, flags = {}) {
 
   for (const f of flows) {
     if (f.steps.length === 0) note("error", `flows/${f.file}`, "no steps");
+    // A step's own agent is core's check (lintFlow, below), so the CLI, the
+    // platform and a run all say the same thing about it; checking it here as
+    // well reported every unknown agent twice. Only a [[flow:x]] step, which
+    // lintFlow cannot see without the other flows, is checked here.
     for (const s of f.steps) {
-      const target = s.subflow ?? s.agent;
-      const known = s.subflow ? flowNames.has(target) : agentNames.has(target);
-      if (!known) {
-        note("error", `flows/${f.file}`, `[[${s.subflow ? "flow:" : ""}${target}]] does not exist`, s.line);
+      if (s.subflow && !flowNames.has(s.subflow)) {
+        note("error", `flows/${f.file}`, `[[flow:${s.subflow}]] does not exist`, s.line);
       }
     }
     for (const w of lintFlow(f, { agents: [...agentNames], outwardAgents })) note(w.level ?? "warn", `flows/${f.file}`, w.message, w.line);

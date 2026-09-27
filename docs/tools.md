@@ -56,6 +56,7 @@ headers:
 | `methods` | the verb allowlist — a tool that declares none is read-only |
 | `headers` | `${SECRET}` placeholders, resolved host-side at call time |
 | `openapi` | a URL or file; turns one generic tool into typed ones, one per operation |
+| `operations` | only these operations, by `operationId` or `METHOD /path`; the generic tool is withheld. It fails closed: if the document does not load or none of them resolve, the API has no tools that run, never the generic one. Keep an allowlisted document in the workspace, so a vendor renaming an operation cannot empty it |
 
 The model never sees a credential — the host substitutes it as the request
 goes out. The method allowlist protects against the agent; the key's own scopes

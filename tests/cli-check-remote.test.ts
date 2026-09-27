@@ -73,7 +73,7 @@ trigger: manual
   const r = await at(s.url, "check", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /error\s+flows\/weekly\.md:\d+\s+\[\[ghost\]\] does not exist/);
+  assert.match(r.out, /error\s+flows\/weekly\.md:\d+\s+\[\[ghost\]\] is not an agent in this workspace/);
   assert.match(r.out, /1 error/);
 });
 

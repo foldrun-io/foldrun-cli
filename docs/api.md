@@ -118,7 +118,7 @@ everywhere else a run is live.
 | `/api/workspaces/<ws>/agents/<agent>/run` | POST | run one agent alone (`task`; `test: true` for a test run) |
 | `/api/workspaces/<ws>/evals` | GET, POST | list; create (`name`) |
 | `/api/workspaces/<ws>/evals/<eval>/run` | POST | run one eval |
-| `/api/workspaces/<ws>/tools/<tool>/test` | POST | exercise one tool (`args`, `path`) |
+| `/api/workspaces/<ws>/tools/<tool>/test` | POST | exercise one tool (`args`, `path`). An http tool with an `operations:` allowlist is probed only with a GET to one of its operations (no `path`: the first GET without parameters), and fails if the allowlist resolves nothing, as a run does |
 
 Running an agent alone is the fastest way to test a prompt change without
 paying for the steps around it.
