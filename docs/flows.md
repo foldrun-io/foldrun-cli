@@ -109,7 +109,7 @@ begins.
 | `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`). The shell gets the step's final turn in the file `$FOLDRUN_REPLY_FILE` |
 | `approve:` | park until a person releases it |
 | `ask:` | the same gate carrying a question; the typed answer reaches the prompt |
-| `preview:` | what the gate shows: paths under `storage/`, comma-separated, globs allowed — `draft/*.mdx, draft/images/*.webp` |
+| `preview:` | what the gate shows: paths under `storage/`, comma-separated, globs allowed — `draft/*.mdx, draft/images/*.webp`; at most 12 files |
 | `wait:` | `3d` (`s`/`m`/`h`/`d`, capped at 30 days) or `event` |
 | `on-fail:` | another agent takes the step over, with the failure as context |
 | `delegate:` | the step's agent picks who runs next, from this set |
@@ -301,7 +301,7 @@ normal outcome, recorded as one.
 | `trigger` | how it starts — see below |
 | `schedule` / `timezone` | 5-field cron, and the zone it fires in — which is also the calendar every step in this flow works to (see below) |
 | `at` | ISO 8601 instant, for `trigger: once` |
-| `after` / `on` | the flow to chain on, and whether on `completed` (default), `failed` or `any` |
+| `after` / `on` | the flow to chain on, and whether on `completed` (default), `failed`, `blocked` or `any` |
 | `path` | the `storage/` prefix to watch, for `trigger: storage` |
 | `url` / `every` | what to poll and how often (default 15m), for `trigger: watch` |
 | `signature` / `signing_secret` | `github` \| `stripe` \| `slack` \| `hmac`, and the vault entry to check it against |

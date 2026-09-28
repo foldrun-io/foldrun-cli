@@ -740,6 +740,8 @@ async function check(workspace, flags = {}) {
     // written into the file. The run would say so in its trail and carry
     // on; the deploy refuses it; this is where a person hears it first.
     for (const w of a.webProblems ?? []) note("error", `agents/${a.name}`, w);
+    // `schedule:` on an agent fires nothing — only a flow has a clock.
+    if (a.scheduleProblem) note("error", `agents/${a.name}`, a.scheduleProblem);
     // `language:` that is not a tag — "Persian" where `fa` was meant.
     if (a.languageProblem) note("error", `agents/${a.name}`, a.languageProblem);
     // `region: Australia` where `au` was meant, `currency: dollars`, `units: both`.
@@ -1304,6 +1306,7 @@ async function deployOverHttp(url, workspace, files, flags) {
     updated: body.updated ?? [],
     removed: body.removed ?? [],
     issues: body.issues ?? [],
+    warnings: body.warnings ?? [],
     blockedBy: body.blockedBy ?? [],
     preserved: body.preserved ?? 0,
     commit: body.commit ?? null,
@@ -3301,6 +3304,9 @@ async function deployOne(url, tenant, workspace, files, flags, layout, from) {
     for (const i of plan.issues) console.log(`    ${c.red("✗")} ${c.bold(i.where)}  ${i.message}`);
     return 1;
   }
+  // Advisory: the deploy still proceeds. The outward-without-a-gate lint the
+  // same as `foldrun check`, surfaced so an API push is not the last to hear.
+  for (const w of plan.warnings ?? []) console.log(`    ${c.amber("!")} ${c.bold(w.where)}  ${w.message}`);
   if (plan.blockedBy.length && !flags.force) {
     console.log(
       `\n  ${c.amber("⏸")} ${plan.blockedBy.length} run${plan.blockedBy.length === 1 ? " is" : "s are"} still using these files: ` +

@@ -29,7 +29,9 @@ run: send.py
 
 Nothing changes at run time. What changes is `check`: a flow step whose agent
 grants an outward tool must have a `verify:` the runtime can fail on, or a
-gate (`!` or `ask:`). Neither, and the deploy is refused, with the step named.
+gate (`!` or `ask:`). Neither, and `foldrun check` fails, naming the step —
+this is the gate. A `deploy` also **warns**, naming the step, but still goes
+through: `check` is where the line is drawn, so run it before you push.
 
 The reason is in the failure it prevents. A step that sent nothing and a step
 that sent everything both end the same way — reported as done — unless
@@ -55,6 +57,9 @@ headers:
 | `base` | the URL every call is relative to |
 | `methods` | the verb allowlist — a tool that declares none is read-only |
 | `headers` | `${SECRET}` placeholders, resolved host-side at call time |
+| `query` | query parameters appended to every call — for an API that carries its key in the query string; a `${SECRET}` is resolved host-side |
+| `timeout` | seconds a call may take; without one the call runs until it finishes |
+| `rate` | calls per second from one step — `5/s`, `100/m`; a call over the limit waits, it does not fail |
 | `openapi` | a URL or file; turns one generic tool into typed ones, one per operation |
 | `operations` | only these operations, by `operationId` or `METHOD /path`; the generic tool is withheld. It fails closed: if the document does not load or none of them resolve, the API has no tools that run, never the generic one. Keep an allowlisted document in the workspace, so a vendor renaming an operation cannot empty it |
 

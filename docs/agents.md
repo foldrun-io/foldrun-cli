@@ -76,7 +76,7 @@ The built-in groups are one word each, so you can hold them in your head:
 | `fetch` | WebFetch only — the local half |
 | `search` | `search_files(query)` over knowledge, memory, state and storage at every scope |
 | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs |
-| `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line. Run records, not files: the way a digest agent reads what every desk concluded this week |
+| `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week |
 
 Anything in `tools:` that no built-in claims is one of your own tools,
 resolved against the workspace's `tools/` and then the account library. A
@@ -149,10 +149,11 @@ A name resolves to the endpoint, its wire format and where the key goes;
 
 ## Running on a clock
 
-`schedule` (5-field cron, or `@hourly`/`@daily`/`@weekly`/`@monthly`) with an
-optional IANA `timezone` runs the agent on its own. Absent, it runs on demand
-— the dashboard, `foldrun run`, or an API call. For anything involving more
-than one agent, put the schedule on a flow instead.
+An agent has no clock of its own — only a **flow** runs on a schedule. Put
+`schedule:` (5-field cron, or `@hourly`/`@daily`/`@weekly`/`@monthly`) on the
+flow that runs this agent; a single-agent job is a one-step flow. A `schedule:`
+written in an `agent.md` fires nothing, so `check` and `deploy` refuse it
+rather than let it deploy dead. See [Writing a flow](flows).
 
 ### `timezone:` — the calendar this agent works to
 
