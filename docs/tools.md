@@ -937,7 +937,31 @@ channel — `stable` (the default), `beta` or `dev`, each a real concurrent
 Chrome. For any engine it can name a binary installed in the image at
 `/opt/browser/<engine>/<version>/` (drop an exact build there to pin it).
 A version that is not installed falls back to the default build and says so
-on stderr. Note Google does not distribute arbitrary old Chrome versions, so
+on stderr.
+
+**`live: true` — a page that outlives the call.** Normally each `web_browse`
+call is its own short-lived process: it opens a fresh page, and when it ends
+the page goes with it. A `session` carries the *login* across calls (cookies
+and localStorage), but not the page — so a multi-step form whose progress
+lives in the page resets between calls. `live: true` keeps the browser and
+its open page running beside the step, and the next call reattaches to it
+over the DevTools protocol and finds the page exactly as it was left:
+
+```yaml
+web_browse:
+  engine: chromium
+  live: true
+```
+
+Then call 1 opens the wizard and clicks Next, call 2 reads step two and fills
+it, call 3 submits — with the agent reasoning between each. `url` becomes
+optional: leave it out (or pass the same URL) to act on the page as it
+stands; a different URL navigates the live page. `session` names which live
+page (default `live`). `live=end` on a call closes it; one idle for 15
+minutes closes itself, and the step's sandbox ending closes it too. Live
+sessions run in the step rather than the account's browser pod, are
+Chromium-only (`chrome`/`chromium`), and do not support `video`, `har`,
+`auth` or `device` (they say so and carry on). `live` also works per call. Note Google does not distribute arbitrary old Chrome versions, so
 pinning an exact old Chrome means supplying that build yourself; the three
 release channels are what ships.
 
