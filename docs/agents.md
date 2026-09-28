@@ -266,7 +266,9 @@ web_browse:
 `engine` is `chrome` (the default), `firefox` or `safari` — the engine names `chromium` and `webkit` still work; `user_agent`,
 `cookies` (a vault name, never the cookies), `cookie_domain`, `storage` and
 `storage_origin` (the same, for a login kept in localStorage or IndexedDB
-rather than a cookie), `device`, `locale` and `timezone` complete the picture. The same key still
+rather than a cookie), `device`, `locale` and `timezone` complete the picture. `headless:`
+(`true` or `false`) is accepted and checked, but not acted on yet: every
+browser runs headless today. The same key still
 takes a vendor name on its own (`web_browse: browserbase`), and inside a
 block that is `via:`. It cascades like the clock — agent, workspace, account
 — and a call argument overrides it for one call. Full table and the reasons:

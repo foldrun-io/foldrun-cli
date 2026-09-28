@@ -843,6 +843,13 @@ web_browse:
 ---
 ```
 
+`headless:` (`true` or `false`) is accepted in the block and checked, but
+**nothing acts on it yet**: every browser runs headless today, the full
+Chromium build with no window. `headless: false` is meant to run the same
+browser with a window, on a virtual screen (Xvfb, already in the runner
+image) where the machine has none; until the tool and the browser pod start
+that screen, it passes `check` and changes nothing.
+
 `cookies:` is a secret's name, and `check` refuses anything that is not one —
 a header line pasted into the file is caught while the mistake is still
 private. The secret is still declared under `secrets:`, as it always was; the
@@ -1000,7 +1007,13 @@ going away under it.
 The step is handed its address as `FOLDRUN_BROWSER_WS`; every call connects
 and gets a browser launched for it alone, with the same flags the in-step
 launch uses, so two runs never share cookies and two accounts never share a
-pod. The pod's seconds and bytes are the account's compute and network on
+pod. Those flags cross only because the pod's server runs as
+`playwright run-server --unsafe`: without it Playwright keeps `headless` and
+`proxy` from a client's launch options and silently drops `args`, which is
+what happened until 28 Sep 2026 (`--no-sandbox`, `--disable-dev-shm-usage`,
+`--disable-gpu` and the AutomationControlled switch never reached a pod
+browser). The pod is the account's own and only its run pods can reach it,
+so accepting a client's flags there is safe. The pod's seconds and bytes are the account's compute and network on
 the ledger, as one `browser <pod>` line when it is reaped — the search
 pod's lifecycle, for the browser. An account that does not browse pays for
 no browser; nothing account-level is always on.
