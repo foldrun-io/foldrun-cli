@@ -1061,7 +1061,7 @@ async function runTarget(target, flags) {
 // ---------------------------------------------------------------- gallery
 
 /**
- * The platform's gallery — `web_browse`, `sql` and the other tools it ships to
+ * The platform's gallery — `web_browse`, `web_search` and `web_fetch`, the tools it ships to
  * every account — is a shelf every run on the platform reads beneath the
  * account's own library. A laptop had no shelf, so an agent granting
  * `web_browse` ran fine on a deploy and had no browser under `foldrun run`.

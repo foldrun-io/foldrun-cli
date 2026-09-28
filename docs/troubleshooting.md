@@ -66,8 +66,7 @@ Settings or in the file, or remove the line.
 The agent reached for a path outside its workspace — `/tmp/something`, an
 absolute path, a checkout a tool made — and was refused. The message names
 the path it probably meant. It costs a turn, nothing more; if one step
-collects many, name the exact path in its prompt (`workspace/storage/x.md`,
-`git_repo action=read path=…`).
+collects many, name the exact path in its prompt (`workspace/storage/x.md`).
 
 ## "this push is not live yet — runs in flight"
 

@@ -137,8 +137,8 @@ where a nearer copy overrides it. That list is the blast radius of changing it.
 
 ## The gallery — platform-maintained tools
 
-Every tool the platform ships — `web_browse`, `web_search`, `sql`, `git_repo`,
-`email` and the rest — is **available in every account from the start**.
+Every tool the platform ships — `web_browse`, `web_search` and `web_fetch` —
+is **available in every account from the start**.
 An agent grants one the same way it grants anything: `tools: [web_search]`
 in its `agent.md`, and it runs, with nothing installed first. The gallery
 is a shelf beneath your account library, laid down on the box at boot, so
@@ -593,35 +593,6 @@ widget, the site scores the session), Cloudflare's full-page managed
 challenge, Arkose, GeeTest — those come back as the page they are. Tested
 against a stand-in solver and stand-in widgets in real Chromium, not yet
 against a real solver account.
-
-The other one to know is `git_repo`: a git repository — a site, a codebase
-— as material an agent reads and changes. `clone` fetches it into a
-checkout that lives only for the step (pass `paths` to narrow a large repo
-to the directories you need), `read` and `find` look inside it, `write`
-copies a workspace file in, `commit` pushes one change, and `publish` puts
-a drafted file into a fresh clone and pushes it. Which repository, branch
-and live site is a `git:` block in the workspace's `AGENTS.md`; the token
-is the `GIT_TOKEN` secret, read by git through a credential helper so it is
-in no URL and no log.
-
-```yaml
-git:
-  repo: acme/website           # or any https URL
-  branch: main
-  site: https://acme.example   # for routes and newest, the live sitemap
-  author: bot@acme.example
-```
-
-Every push holds a write lock on the remote (`refs/foldrun/lock/<branch>`),
-so two desks never push in the same minute; a push rejected because the
-branch moved is replayed on the new tip, up to three times; a true conflict
-— the same lines changed both ways — stops with the file names and pushes
-nothing; and a SHA is reported only once the remote confirms the commit is
-on the branch. `publish` refuses to overwrite a file that changed since the
-workspace last `read` it. The record of every attempt is `storage/git/`
-(`pushed.sha`, `pushed.run`, `failed.txt`), which a flow's `verify:` can
-hold a step to. Git cannot cross steps — a run copies files back, never
-`.git/` — so the step that commits is the step that clones.
 
 ### Browsing somewhere else
 

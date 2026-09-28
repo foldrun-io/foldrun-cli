@@ -160,8 +160,8 @@ the run is approved from the dashboard.
 
 Notification email is **your mail**: a desk telling its owner what it
 found comes from the sender you chose. Set `RESEND_API_KEY` and
-`EMAIL_FROM` as account secrets — the same connection your agents' `email`
-tool uses — and every notification goes out through your key, from your
+`EMAIL_FROM` as account secrets — the same key an email tool of your own
+would use — and every notification goes out through your key, from your
 address, under your domain's reputation and your inbox's rules. `EMAIL_FROM`
 must be an address the Resend account behind that key may send from (a
 verified domain, or Resend's onboarding sender for testing).
