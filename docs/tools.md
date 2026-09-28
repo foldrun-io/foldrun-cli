@@ -843,12 +843,21 @@ web_browse:
 ---
 ```
 
-`headless:` (`true` or `false`) is accepted in the block and checked, but
-**nothing acts on it yet**: every browser runs headless today, the full
-Chromium build with no window. `headless: false` is meant to run the same
-browser with a window, on a virtual screen (Xvfb, already in the runner
-image) where the machine has none; until the tool and the browser pod start
-that screen, it passes `check` and changes nothing.
+`headless:` picks whether the browser has a window. Unset or `true` is the
+usual: the full Chromium build with no window, pages 1366×900. `headless:
+false` is the same browser **with a window**, 1920×1080, and pages take the
+window's size instead of an emulated one. It is for a site that renders
+differently or breaks without a window, and for watching or recording a
+run; it is slower and heavier, so leave it unset otherwise. There is no
+per-call argument for it.
+
+Where there is no screen, a virtual one is supplied: the account's browser
+pod starts Xvfb (`:99`) at boot, and an in-step browser on Linux starts its
+own for the call and stops it after. On a Mac, or a Linux desktop, the window
+opens on your screen. The run log says `browser: with a window (headless:
+false)` and where. It is not a disguise: the machine, its graphics (software,
+no GPU), its network and the fact that a program drives the browser are all
+unchanged.
 
 `cookies:` is a secret's name, and `check` refuses anything that is not one —
 a header line pasted into the file is caught while the mistake is still
