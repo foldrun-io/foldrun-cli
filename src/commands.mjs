@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage } from "./guide.mjs";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles } from "./credentials.mjs";
+import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
 // job, or a test that wants to match what a person reads. The tests had
@@ -1004,6 +1004,7 @@ function assertCredentials() {
 async function runTarget(target, flags) {
   if (!target) throw new Error("what should I run? try `foldrun run <agent>` or `foldrun run <flow>`");
   assertCredentials();
+  await useGallery(flags);
   const { startFlowRun, loadFlow, listAgents, readRun } = await core();
   const T = "default";
   const P = "workspace";
@@ -1053,6 +1054,87 @@ async function runTarget(target, flags) {
     await new Promise((r) => setTimeout(r, 700));
   }
   return 1;
+}
+
+// ---------------------------------------------------------------- gallery
+
+/**
+ * The platform's gallery — `web_browse`, `sql` and the other tools it ships to
+ * every account — is a shelf every run on the platform reads beneath the
+ * account's own library. A laptop had no shelf, so an agent granting
+ * `web_browse` ran fine on a deploy and had no browser under `foldrun run`.
+ * The CLI keeps a copy per platform here and points the local runner at it:
+ * the same lookup order, the workspace first, then the account, then this.
+ */
+const galleryCacheDir = (url) => path.join(credentialsDir(), "gallery", new URL(url).host);
+
+/** Write the gallery as the platform lays its own shelf down: <kind>/<file>. */
+function writeGalleryCache(dir, tools) {
+  // A mirror, not an accumulation: a renamed entry must not leave its old
+  // file behind for the loader to find as a second tool of the same name.
+  fs.rmSync(dir, { recursive: true, force: true });
+  let files = 0;
+  for (const t of tools) {
+    for (const f of t.files ?? []) {
+      const full = path.join(dir, f.kind, f.file);
+      if (!full.startsWith(dir + path.sep)) throw new Error(`gallery file outside the shelf: ${f.kind}/${f.file}`);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, f.content, { mode: 0o644 });
+      files++;
+    }
+  }
+  fs.writeFileSync(path.join(dir, ".fetched"), new Date().toISOString());
+  return files;
+}
+
+/**
+ * Before a local run: refresh this platform's gallery if we can, keep the last
+ * copy if we cannot, and hand the runner the directory. Never fails the run —
+ * a laptop offline still runs whatever does not need the shelf.
+ */
+async function useGallery(flags) {
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  if (!url) return;
+  const dir = galleryCacheDir(url);
+  try {
+    const body = await remoteCall(url, { ...flags, quiet: true }, "/api/library/gallery", {}, { seconds: 15 });
+    if (Array.isArray(body.tools) && body.tools.length) writeGalleryCache(dir, body.tools);
+  } catch (err) {
+    if (fs.existsSync(dir)) console.error(c.dim(`  gallery: using the copy from ${fs.readFileSync(path.join(dir, ".fetched"), "utf8").trim()} (${err instanceof Error ? err.message.split("\n")[0] : err})`));
+  }
+  if (!fs.existsSync(dir)) return;
+  const { registerPlatform } = await core();
+  registerPlatform({ galleryDir: () => dir });
+}
+
+async function galleryCmd(positional, flags) {
+  const url = platformFor(flags, "gallery");
+  const [verb, name] = positional;
+  if (verb === "upgrade") {
+    if (!name) throw new Error("which tool? `foldrun gallery upgrade <tool>` — `foldrun gallery` lists them");
+    const body = await remoteCall(url, flags, "/api/library/gallery", { method: "POST", body: JSON.stringify({ tool: name }) });
+    console.log(`\n  ${c.green("upgraded")} ${c.bold(name)} ${c.dim(`in the account library to the gallery's current version (${body.path}) — the previous copy is one revision back`)}\n`);
+    return 0;
+  }
+  const body = await remoteCall(url, flags, "/api/library/gallery");
+  const tools = body.tools ?? [];
+  if (verb === "pull") {
+    const dir = galleryCacheDir(url);
+    const files = writeGalleryCache(dir, tools);
+    console.log(`\n  ${c.green("✓")} ${tools.length} gallery tools, ${files} files ${c.dim(`→ ${dir}`)}`);
+    console.log(`  ${c.dim("`foldrun run` refreshes this itself before each run; this is for offline work")}\n`);
+    return 0;
+  }
+  if (verb) throw new Error(`\`foldrun gallery ${verb}\` — the verbs are \`pull\` and \`upgrade <tool>\`, or none to list`);
+  console.log("");
+  for (const t of tools) {
+    const own = t.installed === "current" ? c.dim("your copy, current")
+      : t.installed === "differs" ? c.amber("your copy differs — `foldrun gallery upgrade " + t.name + "`")
+      : c.dim("from the platform");
+    console.log(`  ${c.bold(t.name.padEnd(18))} ${t.title}  ${own}`);
+  }
+  console.log(`\n  ${c.dim(`${tools.length} tools on ${url} — grant one with \`tools: [name]\`; nothing to install`)}\n`);
+  return 0;
 }
 
 // ---------------------------------------------------------------- probe
@@ -1142,8 +1224,9 @@ async function probeCmd(modelArg) {
 
 // ---------------------------------------------------------------- eval
 
-async function runEvals(name) {
+async function runEvals(name, flags = {}) {
   assertCredentials();
+  await useGallery(flags);
   const { listEvals, runEval } = await core();
   const T = "default";
   const P = "workspace";
@@ -4878,7 +4961,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return runTarget(positional[0], flags);
     case "eval":
       needsOne(layout, "eval");
-      return runEvals(positional[0]);
+      return runEvals(positional[0], flags);
     case "probe":
       return probeCmd(positional[0]);
     case "connect":
@@ -4915,6 +4998,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return docsCmd(positional, flags);
     case "billing":
       return billingCmd(flags);
+    case "gallery":
+      return galleryCmd(positional, flags);
     case "storage":
       return storageCmd(positional, flags, layout);
     case "agent":

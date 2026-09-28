@@ -263,7 +263,7 @@ Reads return which secrets exist, never their values.
 | `/api/search?q=` | GET | find anything in the account by name — workspaces, agents, flows, tools, skills, knowledge, memory, runs (by id, flow or headline); ranked, at most six per kind. The dashboard's Find palette reads it |
 | `/api/schedule` | GET, POST | GET: every scheduled flow with `valid` (the cron parses) and `upcoming` (the next three fires). POST: tick the scheduler now — install-wide, so `workspace:manage`; returns `{ ok, fired }` |
 | `/api/library/<kind>?path=` | GET, POST, PUT, DELETE | account-level shared documents (`name`, `content`, `path`, `template`) |
-| `/api/library/gallery` | POST | update an installed gallery tool to the version the platform ships (`tool`) — written through the revision log, so the previous copy is one revision back |
+| `/api/library/gallery` | GET, POST | GET: every tool the platform ships to every account, whole (`tools: [{ name, kind, title, description, files: [{ kind, file, content }], installed }]`, `installed` being `current`, `differs` or null for this account's own copy) — what `foldrun gallery` reads and lays down on a laptop. POST: update an installed gallery tool to the version the platform ships (`tool`) — written through the revision log, so the previous copy is one revision back |
 
 ## Roles
 

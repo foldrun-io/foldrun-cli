@@ -21,6 +21,7 @@
 //   foldrun schedule       every flow in the account that fires on a clock, and when it fires next
 //   foldrun triggers       why nothing ran: fired vs started per flow, and each reason
 //   foldrun billing        the balance, and what the money went on
+//   foldrun gallery        the tools the platform ships to every account — list, pull, upgrade <tool>
 //   foldrun storage <verb>  ls / cat / get / share / shares / unshare — what the agents produced, and public links to it
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
@@ -88,6 +89,7 @@ const HELP = `foldrun — agents are just folders
   foldrun triggers          why nothing ran: per flow, fired vs started and every reason (--since <days>, --to <workspace>)
   foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path>, put <file> (--as <path>), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
+  foldrun gallery           the platform's built-in tools (web_browse, sql…) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun account           the account's defaults — also set <key> <value>, clear <key>, providers (--check) (singular; accounts lists logins)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret

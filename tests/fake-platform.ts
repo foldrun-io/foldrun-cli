@@ -68,11 +68,11 @@ export function serve(routes: Record<string, (body: string, query: URLSearchPara
 
 /** The real binary, awaited — never spawnSync, since the fake platform
  *  answers from this very process and a blocked loop never replies. */
-export function cli(args: string[], opts: { cwd?: string } = {}): Promise<{ out: string; code: number }> {
+export function cli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): Promise<{ out: string; code: number }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd: opts.cwd ?? ROOT,
-      env: { ...process.env, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1" },
+      env: { ...process.env, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", ...(opts.env ?? {}) },
     });
     let out = "";
     child.stdout.on("data", (d) => (out += d));

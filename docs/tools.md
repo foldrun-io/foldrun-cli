@@ -150,6 +150,19 @@ current files through the revision log, so your version is one revision
 back. Nothing from the gallery is granted
 to any agent until its `agent.md` names it.
 
+**On a laptop** the shelf comes from the platform you are signed in to.
+`foldrun run` and `foldrun eval` fetch the gallery before they start and keep
+a copy under `~/.foldrun/gallery/<host>/`, so an agent granting `web_browse`
+runs locally exactly as it does on a deploy, with the same lookup order: the
+workspace's copy, then the account library's, then the shelf. Offline, the
+last copy is used and the run says so. `foldrun gallery` lists the shelf and
+marks which tools your account keeps its own copy of, `foldrun gallery pull`
+refreshes the copy by hand, and `foldrun gallery upgrade <tool>` is the
+Library page's *update to gallery version*. A browser tool also needs
+Playwright on the laptop (`npm i -g playwright@1.63.0`, then `npx playwright
+install chromium`); `web_browse` finds it globally, Homebrew's included, or
+in the project, and says how to install it when it is missing.
+
 | tool | what it does | the key it needs |
 |---|---|---|
 | `web_search` | searches the web on the account's own engine — titles, links, snippets | none |
