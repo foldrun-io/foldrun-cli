@@ -932,6 +932,15 @@ falls back to Chromium and says so on stderr. `safari` is **WebKit**, Safari's
 engine, and `webkit` is the same. A cookie earned in one is presented by the
 other at your own risk — the user agent is part of what a site checked.
 
+`version:` picks a specific build of the engine. For Chrome it is a release
+channel — `stable` (the default), `beta` or `dev`, each a real concurrent
+Chrome. For any engine it can name a binary installed in the image at
+`/opt/browser/<engine>/<version>/` (drop an exact build there to pin it).
+A version that is not installed falls back to the default build and says so
+on stderr. Note Google does not distribute arbitrary old Chrome versions, so
+pinning an exact old Chrome means supplying that build yourself; the three
+release channels are what ships.
+
 Why identity belongs together: a Cloudflare clearance cookie is bound to the
 user agent that earned it. A skill that repeats the UA in every call is one
 edit away from a session that stops working and says nothing about why

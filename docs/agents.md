@@ -264,7 +264,7 @@ web_browse:
   user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
 ```
 
-`engine` is `chrome` (real Google Chrome, falling back to Chromium where it is not installed), `chromium` (the open-source build, the default), `firefox` or `safari` (`webkit` also works); `user_agent`,
+`engine` is `chrome` (real Google Chrome, falling back to Chromium where it is not installed), `chromium` (the open-source build, the default), `firefox` or `safari` (`webkit` also works); `version` picks a build (`stable`/`beta`/`dev` for Chrome, or a binary installed in the image); `user_agent`,
 `cookies` (a vault name, never the cookies), `cookie_domain`, `storage` and
 `storage_origin` (the same, for a login kept in localStorage or IndexedDB
 rather than a cookie), `device`, `locale` and `timezone` complete the picture. `headless: false`
