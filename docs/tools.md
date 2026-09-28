@@ -168,15 +168,16 @@ in the project, and says how to install it when it is missing.
 | `web_search` | searches the web on the account's own engine — titles, links, snippets | none |
 | `web_fetch` | reads one URL, or up to twenty: the page itself, as markdown, text, html, meta or links | none |
 | `web_browse` | a real browser: JavaScript runs, and it can click, fill, scroll, screenshot, download and extract | none |
-| `sql` | SQL over the CSV and JSON files in the working directory — read-only | none |
-| `git_repo` | a git repository as material: clone narrowly, read, commit and push one change | `GIT_TOKEN` (or `GITHUB_TOKEN`) with write access to the repository |
-| `email` | sends transactional email through Resend | `RESEND_API_KEY` |
-| `slack` | posts a message to a Slack channel | `SLACK_BOT_TOKEN` — a bot with `chat:write`, invited to the channel |
-| `github` | reads repos, issues and pull requests; opens issues and comments | `GITHUB_TOKEN` — fine-grained, scoped to the repos |
-| `stripe` | reads customers, payments, subscriptions and invoices. Read-only on purpose: reporting, not refunds | `STRIPE_API_KEY` — a restricted key |
 
-The key is a vault secret, declared under the agent's `secrets:`; the value
-never appears in a file.
+The gallery is deliberately just these three — the web capability that is
+hard to build from a plain HTTP call. **Everything else you integrate
+yourself**, as your own tool in the library: Slack, GitHub, Stripe, email, a
+CRM, your own service. An `apis:` block turns an OpenAPI or a base URL into a
+tool; a folder tool runs a script. Credentials come from your vault, declared
+under the agent's `secrets:`, and the value never appears in a file. The
+platform ships no third-party integrations, so it never carries their keys or
+versions — you own the tool, its scope and its blast radius. See
+[HTTP — an API as a tool](#http--an-api-as-a-tool) and [Script — code as a tool](#script--code-as-a-tool).
 
 ## Reaching the web
 
