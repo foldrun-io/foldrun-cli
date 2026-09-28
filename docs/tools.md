@@ -942,6 +942,27 @@ edit away from a session that stops working and says nothing about why
 (what happened to Medium on 2026-09-17). `check` refuses an engine that does
 not exist and a setting that is not text, in one sentence, before a run.
 
+### When a click cannot reach its element
+
+Many sites draw their own checkboxes and radios and hide the real control,
+so it has no size on screen, and a cookie banner fixed over the page covers
+whatever is under it. A plain click waits out its time and fails on both.
+`web_browse` falls back on its own: after a short first try it uses the
+keyboard, the standard every accessible control supports — Space on a
+checkbox, radio or switch, Enter on a button or link — then the control's
+label, and it reads a toggle back rather than trusting the press. The result
+names what worked, `check #terms (by keyboard (Space) …)`, so nobody has to
+know the trick.
+
+Two options on any action:
+
+- `"timeout": 3000` bounds that action (it used to apply only to `wait`). An
+  element not on the page still gets that long to appear.
+- `"force": true` sends the click event to the element itself instead of to
+  its place on the screen, past a cover or a hidden input. A toggle is still
+  read back. Use it when the fallback reports failure; it skips what a person
+  could see, so prefer the default.
+
 ### Proving a write stuck
 
 A save that reports success and reverts is the worst failure a driven page
