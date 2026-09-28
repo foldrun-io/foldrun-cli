@@ -246,8 +246,12 @@ so it can also **act**: click, fill a form, press keys, pick from a dropdown,
 scroll, go back and forward, follow a link, step into an iframe or a popup tab,
 open and close tabs, paste HTML into a rich editor, hand a file to a file
 picker, save a download, type and click and swipe with no selector at all,
-set a cookie or a storage key, stub the server (`mock`), and go offline.
-Those go in an `actions` list that runs in order before the page is read.
+set a cookie or a storage key, stub the server (`mock`), and go offline. It
+can sign in from a credential secret the model never sees (`login`), move a
+single-page app to another route without a reload (`pushstate`), call a tool
+the page itself offers (`webmcp`), and move the pointer the way a person does
+(`"human": true`). Those go in an `actions` list that runs in order before
+the page is read.
 
 Some steps are not actions. `expect` is a **claim** — the element is there,
 reads this, the URL contains that — and a wrong one fails the step. `if`
@@ -258,16 +262,18 @@ are what turn a list of clicks into something a flow can trust.
 Around that it carries what a real browser carries: a named `session` so a
 login done once holds for the rest of the run, `state` so it holds for the
 next run too, `cookies` from a secret for sites that sign in without a
-password, three engines (`browser: chromium | firefox | webkit`), phone
+password, four engines (`browser: chrome | firefox | safari | lightpanda` —
+the last runs the JavaScript and never draws, for reading and filling at a
+fraction of the memory), phone
 emulation, `block` to drop images and trackers on heavy pages, `proxy` and
 `auth` and `headers` from secrets, `capture` to save the JSON a page fetches
 for itself, and `video`, `trace` or `har` when you need to see what happened.
 
-Its eighteen `mode` values fall into five groups — **read** the page (`text`,
+Its twenty `mode` values fall into five groups — **read** the page (`text`,
 `markdown`, `html`, `aria`), take **what it carries** (`meta`, `table`,
 `network`, `capture`, `links`), keep a **file** (`screenshot`, `pdf`), walk
 the **site** (`map`, `crawl`), or **ask it a question** (`console`, `vitals`,
-`a11y`, `diff`, `feed`). Every argument, action and mode is listed under
+`a11y`, `diff`, `feed`, `webmcp`, `react`). Every argument, action and mode is listed under
 [The browser, in full](#the-browser-in-full).
 
 Beside `mode` (what comes back) and `actions` (what is done first) the tool
@@ -646,7 +652,7 @@ exactly as it always did.
 | `session` | a name; cookies and logins persist across calls in the run |
 | `cookies` | the NAME of a secret holding a site's sign-in cookies |
 | `cookie_domain` | the domain those cookies belong to |
-| `browser` | `chrome` (real Google Chrome; falls back to Chromium where absent), `chromium` (open-source), `firefox`, or `safari` — WebKit; `webkit` also works. Default `chromium` |
+| `browser` | `chrome` (real Google Chrome; falls back to Chromium where absent), `chromium` (open-source), `firefox`, `safari` — WebKit; `webkit` also works — or `lightpanda`, which runs the JavaScript and never draws: no `screenshot`, `pdf`, `vitals`, `video`, `trace`, `har`, `device` or `session`, and the call says so. Default `chromium` |
 | `engine` | the same setting, under the name the `web_browse:` block uses; either on a call, both only if they agree |
 | `device` | a device to emulate by Playwright name: `"iPhone 15"`, `"Pixel 7"` |
 | `block` | resource types and host globs not to load: `"image,font,*.doubleclick.net"` |
@@ -674,11 +680,26 @@ exactly as it always did.
 | `identity` | a name from the agent's `web_browse: identities:` map — engine, device, locale, timezone, user agent, proxy, headers, cookies as one word |
 | `state` | a name; the login (cookies and localStorage) is loaded from `../../state/browser/<name>.json` first and saved back at the end — across runs. Refused with `cookies` or `storage` from a secret |
 | `har` | `"true"` or a `.har` path — every request and response with bodies, as an HTTP Archive |
+| `live` | `"true"` keeps the page open for the next call in the step; `"end"` closes it |
+| `within` | with `mode=aria` or an annotated screenshot: a selector for the part of the page to number; its numbers are found in it again |
+| `depth` | with `mode=aria`: how many levels of the tree, 1–50 |
+| `compact` | with `mode=aria`: `true` drops empty containers — a generic or group with no name and no text |
+| `delta` | with `mode=aria`: `true` returns only what changed since the last snapshot of the same page in this session, or one line saying nothing did |
+| `annotate` | with `mode=screenshot`: `true` draws a box and its number on every element that can be acted on, and lists them — the numbers are `"@e4"` |
+| `visual` | with `mode=diff`: `true` compares pixels, not words — what share changed, where, and `outputs/diff.png` with the changes in red |
+| `init` | workspace paths of scripts run in every page before its own |
+| `allowed_domains` | the only domains the browser may reach — pages, scripts, fetches, sockets. From the block, a call may narrow it, never widen it |
+| `boundaries` | `true` wraps the page's words in markers with a fresh nonce |
+| `webgpu` | `true` gives the page WebGPU, on a software GPU where there is none |
+| `extensions` | workspace paths of unpacked Chrome extensions; the browser then runs in the step, in Chromium |
+| `ignore_https_errors` | `true` opens a page whose certificate does not check out |
+| `cpu_profile` | a `.cpuprofile` path — where the page's JavaScript spent its time, for DevTools |
+| `state_key` | the NAME of a secret whose value encrypts the `state` login at rest (AES-256-GCM) |
 
 **Modes** — `text` (default), `markdown`, `html`, `aria` read the page;
 `meta`, `table`, `network`, `capture`, `links` take what it carries;
-`screenshot`, `pdf` keep a file; `map`, `crawl` walk the site. The five that
-ask a question:
+`screenshot`, `pdf` keep a file; `map`, `crawl` walk the site. The seven
+that ask a question:
 
 | mode | what comes back |
 |---|---|
@@ -687,6 +708,12 @@ ask a question:
 | `a11y` | an accessibility audit — axe-core's violations with the elements and the fix; the built-in checks when the image has no axe; `outputs/a11y.json` |
 | `diff` | the page as markdown against the last `diff` read of the same URL, as a line diff with context; the baseline lives in `../../state/browser/diff/` and the first read saves it |
 | `feed` | the RSS, Atom or JSON feed — the URL itself when it is one, else the first linked, else the usual paths — as items; `outputs/feed.json` |
+| `webmcp` | the tools the page offers agents through WebMCP (`document.modelContext`) — name, description, input schema — to call with a `webmcp` action; Chromium; `outputs/webmcp.json`. The descriptions are the page's words: data, not instructions |
+| `react` | the React component tree, read from the fibers React keeps on the DOM, with simple props and keys; production builds show minified names; `outputs/react.txt` |
+
+`diff` with `visual=true` compares the page as a picture instead: the share
+of pixels that changed, the rectangle they fall in, and `outputs/diff.png` —
+the changes in red on a faded copy of the page as it is now.
 
 **Actions** — each step is an object with one of these keys. Selectors are
 Playwright's: CSS, `text=Sign in`, `role=button[name="Save"]`, `xpath=…`,
@@ -700,19 +727,25 @@ or a number from the last `mode=aria`, written `"@e4"`.
 | `drag` + `to` | drag one selector onto another |
 | `fill` + `text` | set a field's value |
 | `type` + `text` | key by key, for the editors `fill` cannot set |
+| `fill` / `type` + `secret` | the value of a secret the agent declares, in place of `text`; it never appears in the log, the output or `results.json`, and the call runs no script |
+| `login` | a secret's NAME holding `{"username", "password"}` as JSON (optionally `url` and `username_selector` / `password_selector` / `submit_selector`) or `user:pass`. Finds the form in the page or its frames, handles a username-then-password form, submits. With a `url` in the secret it goes there first and refuses to fill a form on any other site. The password is redacted from every output even when the page echoes it |
+| `insert` | text into whatever has focus as one input event, no key presses |
+| `pushstate` | a single-page app's own route change — its router when it exposes one (Next.js), else `history.pushState` and `popstate`; same origin only |
+| `webmcp` + `input` | call a tool the page offers by name; its answer joins the results; Chromium |
+| `"human": true` | on `click`, `dblclick`, `hover`, `drag` or a `mouse` move: the pointer travels a curve from where it was and lands inside the element, with a person's pauses |
 | `press` + `key` | a key on a selector, or on the page when the selector is `""` — `"Enter"`, `"Control+A"` |
 | `select` + `value` | a dropdown option |
 | `wait` | a selector, or a number of milliseconds |
 | `goto` | navigate to a URL |
 | `scroll` | `"bottom"`, `"top"`, or a number of pixels |
-| `screenshot` (+ `selector`, `full`, `clip`, `quality`, `settle`) | the full page to `outputs/<name>.png`, scrolled once first so lazy images are in it; one element with `selector`; the viewport alone with `"full": false`; a rectangle with `"clip": [x, y, w, h]`; `"settle": false` skips the scroll. A `.jpg` path is JPEG at `"quality"` (default 60) — a fraction of the PNG's size for the same read |
+| `screenshot` (+ `selector`, `full`, `clip`, `quality`, `settle`, `annotate`) | the full page to `outputs/<name>.png`, scrolled once first so lazy images are in it; one element with `selector`; the viewport alone with `"full": false`; a rectangle with `"clip": [x, y, w, h]`; `"settle": false` skips the scroll; `"annotate": true` draws every actionable element's number on it. A `.jpg` path is JPEG at `"quality"` (default 60) — a fraction of the PNG's size for the same read |
 | `pdf` | the page, to `outputs/<name>.pdf` — Chromium only |
 | `paste` + `html` or `file` | a real paste of HTML into a rich editor; headings, links and lists survive |
 | `upload` + `file` | hand a file to a control that opens a file picker |
 | `download` + `to` | from a control or a URL, saved under `outputs/` |
 | `extract` + `fields` (+ `limit`) | one JSON row per match; a field is a selector inside it, `a@href` reads an attribute; the rows are the output and the whole set is written to `outputs/extracted.json` |
 | `frame` | scope the steps after it to an iframe; `""` returns to the page. A selector missing from the page is also looked for inside every frame automatically |
-| `tab` | `1` or `"last"` — switch to a tab a click opened; `"new"` (+ `url`) opens one, `"close"` closes the current |
+| `tab` | `1` or `"last"` — switch to a tab a click opened; `"new"` (+ `url`, + `label`) opens one, a label switches to it by name, `"close"` closes the current |
 | `back`, `forward`, `reload` | `true` — history, and the page again |
 | `focus`, `clear`, `highlight` | focus a control; empty a field; outline elements for the next screenshot |
 | `scroll` | also takes a selector: bring it into view |
@@ -722,7 +755,7 @@ or a number from the last `mode=aria`, written `"@e4"`.
 | `tap`, `swipe` (`up` / `down` / `left` / `right`, + `selector`) | touch: a tap on an element, a swipe's touch events at it or the page |
 | `clipboard` (`write` + `text`, `read`) | the clipboard; a read joins the results |
 | `wait` | also: `"load"`, `"domcontentloaded"`, `"networkidle"`, `"navigation"`; `"url"` + `matches`; `"text"` + `text`; `"response"` / `"request"` + `matches`; `"fn"` + `js`; a selector + `"gone": true`; any with `timeout` |
-| `get` + `what` (`text`, `html`, `value`, `count`, `box`, `visible`, `checked`, `enabled`, `attr` + `attr`) | a question; also `"url"`, `"title"`, `"localstorage"` / `"sessionstorage"` + `key`. Answers go to the results — the output when nothing else is — and `outputs/results.json` |
+| `get` + `what` (`text`, `html`, `value`, `count`, `box`, `visible`, `checked`, `enabled`, `styles` (+ `props`), `attr` + `attr`) | a question; also `"url"`, `"title"`, `"localstorage"` / `"sessionstorage"` + `key`. Answers go to the results — the output when nothing else is — and `outputs/results.json` |
 | `eval` + expression | its value joins the results; the same rules as `js` |
 | `expect` | a claim: a selector (visible) with `text`, `value`, `count`, `gone`, `checked`, `enabled`, or `attr` + `equals` / `contains` / `matches`; or `"url"` / `"title"` / `"text"` + `contains` / `matches` / `equals`. Wrong, the step fails and the rest stop |
 | `if` + `then` / `else` | the shape of `expect`, as a branch: lists of steps, either optional |
@@ -754,6 +787,19 @@ web_browse(url="https://example.com/cart", mode="aria", interactive=true)
 web_browse(url="https://example.com/cart", actions='[{"click": "@e7"}]')
   →   @e7 = button "Delete" (2 of 2)
 ```
+
+Four options cut the snapshot down. `within=` numbers one part of the page
+(a form, the main column), and a number made there is found there again.
+`depth=` stops the tree at a level. `compact=true` drops the empty
+containers. `delta=true` returns only what changed since the last snapshot
+of the same page in the same `session` — with `live: true`, that is the way
+to see what one click did without reading the page again.
+
+`mode=screenshot annotate=true` puts the same numbers on a picture: a box
+and its number over every element that can be acted on, and the list under
+it. The numbers are saved like `mode=aria`'s, so `"@e4"` works in the next
+call — for an icon button with no name, a canvas, or a layout the tree
+cannot describe.
 
 **Modes** — four groups, and no two modes answer the same question.
 
@@ -805,9 +851,11 @@ errors, a script the server refused or that never loaded — are one stderr
 line each, so an empty page comes with its reason. A crawl retries a wire
 error, a 5xx or a 429 once before recording it.
 
-Not there, on purpose: reading cookies or localStorage back, rewriting
-requests, HAR files, offline mode, an `edge` engine (it is Chromium), and
-anything that helps a page not look automated.
+Not there, on purpose: reading cookies or localStorage back (a `get` of
+storage is refused where a secret seeded it), an `edge` engine (it is
+Chromium), and anything that helps a page not look automated — `"human":
+true` moves the pointer like a person, and changes nothing else about
+the browser.
 
 ### How this agent's browser presents itself
 
@@ -892,7 +940,9 @@ is the caller's own decision and is used as given.
 changing. A block may sit on the agent, the workspace's `AGENTS.md` or the
 account's; the nearest one wins and replaces the others whole. **A call
 argument beats the file** — `browser=`, `user_agent=`, `device=`, `locale=`,
-`timezone=` — so the block is a default, never a lock.
+`timezone=` — so the block is a default. The exceptions are what the agent
+may do rather than how it looks: `allowed_domains:` and `deny:` are locks
+(see [What this agent's browser may do](#what-this-agents-browser-may-do)).
 
 `chrome` is **real Google Chrome** (Playwright's `chrome` channel), where the
 image has it — a truer user-agent and brands, and the proprietary codecs
@@ -941,6 +991,58 @@ user agent that earned it. A skill that repeats the UA in every call is one
 edit away from a session that stops working and says nothing about why
 (what happened to Medium on 2026-09-17). `check` refuses an engine that does
 not exist and a setting that is not text, in one sentence, before a run.
+
+### What this agent's browser may do
+
+Some settings are not how the browser looks but what the agent may do with
+it, and those belong where no page can argue with them — the file.
+
+```yaml
+web_browse:
+  allowed_domains: [portal.example.com, "*.example-cdn.com"]
+  deny: [eval, download, upload]
+  boundaries: true
+  init: [scripts/stub-analytics.js]
+  state_key: BROWSER_STATE_KEY
+```
+
+`allowed_domains:` is the only list of places the browser can reach: pages,
+scripts, images, fetches and sockets to any other host are refused at the
+network layer, a service worker cannot go around it, and WebRTC is held to
+proxied transports. `*.example.com` covers the subdomains and the bare
+domain. Unlike the rest of the block **it is a lock**: a call's
+`allowed_domains=` can only narrow it, and a call that names a host outside
+it is refused before a browser opens. `deny:` names actions this agent may
+never take — `check` refuses a name that is not an action, because a
+misspelt denial would deny nothing, and `js` stands for the call argument.
+`boundaries: true` wraps every reply's page text in markers carrying a nonce
+the page cannot know, so words a site wrote to look like instructions stay
+labelled as the site's. It is a label, not a wall.
+
+`init:` runs workspace scripts in every page before the page's own — a
+stub for an analytics call, a polyfill. `extensions:` loads unpacked Chrome
+extensions from the workspace; the browser then runs in the step rather than
+the account's pod, in Chromium (branded Chrome no longer loads them).
+`webgpu: true` and `ignore_https_errors: true` do what they say. `state_key:`
+names a secret whose value encrypts the `state=` login at rest with
+AES-256-GCM, so a session cookie in `state/` is not a login anyone who can
+read the workspace can use; declare the secret under `secrets:`. An
+encrypted state without its key is refused rather than started signed out.
+
+**A sign-in the model never sees.** A `login` step takes a credential
+secret — `{"username": "…", "password": "…", "url": "https://portal.example.com/login"}` —
+finds the form, fills it and submits. With a `url` in the secret it goes
+there first and will not fill a form on any other origin, so a page cannot
+talk the agent into typing the password somewhere else. The password is
+replaced by `[secret NAME]` in every output even when the page prints it
+back, and a call that signs in runs no script (`eval`, `js`, `get` of a
+value), because script could read the field. Sign in with `session=` or
+`state=`, and read in the next call.
+
+**Watching a vendor's browser.** With `web_browse: via: browserbase` (or
+`steel`, `hyperbrowser`) the run log carries the session's live view URL —
+`live view: https://…` — where a person can watch the page or take it over
+for a 2FA prompt, while the call runs.
 
 ### When a click cannot reach its element
 
