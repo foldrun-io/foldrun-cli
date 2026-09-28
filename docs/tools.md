@@ -675,7 +675,7 @@ exactly as it always did.
 | `session` | a name; cookies and logins persist across calls in the run |
 | `cookies` | the NAME of a secret holding a site's sign-in cookies |
 | `cookie_domain` | the domain those cookies belong to |
-| `browser` | `chrome` (default), `firefox`, or `safari` — Safari's engine, WebKit; `chromium` and `webkit` still work |
+| `browser` | `chrome` (real Google Chrome; falls back to Chromium where absent), `chromium` (open-source), `firefox`, or `safari` — WebKit; `webkit` also works. Default `chromium` |
 | `engine` | the same setting, under the name the `web_browse:` block uses; either on a call, both only if they agree |
 | `device` | a device to emulate by Playwright name: `"iPhone 15"`, `"Pixel 7"` |
 | `block` | resource types and host globs not to load: `"image,font,*.doubleclick.net"` |
@@ -851,7 +851,7 @@ in its actions — so there is no block key for any of them:
 name: publisher
 tools: [web_browse]
 web_browse:
-  engine: chrome             # chrome (default) | firefox | safari
+  engine: chrome             # chrome (real Chrome) | chromium | firefox | safari
   user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
   cookies: MEDIUM_COOKIES    # the vault NAME, never the cookies
   cookie_domain: .medium.com
@@ -923,12 +923,14 @@ account's; the nearest one wins and replaces the others whole. **A call
 argument beats the file** — `browser=`, `user_agent=`, `device=`, `locale=`,
 `timezone=` — so the block is a default, never a lock.
 
-`chrome` and `safari` are the names people use; Playwright calls the same two
-`chromium` and `webkit`, and both spellings are accepted so nothing written
-earlier breaks. Worth knowing what they are: `chrome` is the open-source
-**Chromium** build, not the branded Chrome, and `safari` is **WebKit**,
-Safari's engine. A cookie earned in one is presented by the other at your own
-risk — the user agent is part of what a site checked.
+`chrome` is **real Google Chrome** (Playwright's `chrome` channel), where the
+image has it — a truer user-agent and brands, and the proprietary codecs
+Chromium lacks. `chromium` is the open-source build. They are the same engine;
+`chrome` just runs the branded browser. Where Chrome is not installed — a
+laptop without it, or an arch Google does not ship Chrome for — `chrome`
+falls back to Chromium and says so on stderr. `safari` is **WebKit**, Safari's
+engine, and `webkit` is the same. A cookie earned in one is presented by the
+other at your own risk — the user agent is part of what a site checked.
 
 Why identity belongs together: a Cloudflare clearance cookie is bound to the
 user agent that earned it. A skill that repeats the UA in every call is one
