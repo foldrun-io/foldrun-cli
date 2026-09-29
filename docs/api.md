@@ -134,7 +134,8 @@ paying for the steps around it.
 | `/api/workspaces/<ws>/runs/<id>/rerun` | POST | again — `step` to start partway, or `agent` to start at the first step that agent runs (one of the two is required). Takes `?wait=true&timeout=` like a flow start |
 | `/api/workspaces/<ws>/runs/bulk` | POST | one action on many runs at once. `action` is `stop` or `rerun`; the runs are named by any of `runIds`, `status`, `flow`, `since`, `until`, AND-ed together, and a call naming none of them is refused rather than treated as "everything". `from` picks the step a rerun starts at, `dryRun: true` answers with what would be touched and touches nothing. At most 100 runs per call — past that it answers `422` with the count, because a filter matching more than that is almost certainly the wrong filter. Each run is its own outcome: the reply carries `matched`, `succeeded`, `failed` and a `runs` array, so one run that finished a second ago does not abort the other thirty |
 | `/api/workspaces/<ws>/runs/<id>/approve` | POST | release a run parked on a human |
-| `/api/workspaces/<ws>/runs/<id>/archive` | GET | one file the run archived from an agent's `outputs/` — `agent` and `path` name it; the run page's Out column links here. Served as bytes, never as a page |
+| `/api/workspaces/<ws>/runs/<id>/archive` | GET | one file the run archived from an agent's `outputs/` — `agent` and `path` name it; the run page's Out column links here, and plays a recording or shows a picture inline. Served as bytes, never as a page; a `Range` header gets `206` with that slice, which is how a video seeks |
+| `/api/workspaces/<ws>/runs/<id>/live` | GET | the live view: with no query, `{ agents: { <agent>: <last frame at> } }`; with `agent=`, the newest frame that agent's browser streamed as `image/jpeg` (or `204` when there is none), and `x-live-url`, `x-live-at`, `x-live-ended`, `x-live-engine` headers. Frames arrive from `web_browse` through the step's egress lease and expire five minutes after the last |
 | `/api/workspaces/<ws>/runs/<id>/promote` | POST | save a completed run as a regression case in `evals/<target>-regressions.md` — `evalName` to pick the file, `caseName` to name the case, `expect` (assertion lines, e.g. `["contains: $34"]`) to replace the default judge. Returns `{ ok, file, created, caseName }` |
 | `/api/workspaces/<ws>/triggers?since=` | GET | why nothing happened: one row per flow saying how often its trigger fired, how often that became a run, and what the difference was — a duplicate delivery, a throttled burst, a debounced burst still being waited out, a quarantined flow, an `overlap: skip`, a fire missed while the platform was down. Plus every decision newest-first, and the hook/inbox delivery log, which answers the separate question of whether a request arrived and was authentic. `since` is days, default 7 |
 | `/api/workspaces/<ws>/notify/test` | POST | sends one real notification to whatever this workspace's `notify:` resolves to, and answers `{ ok, destination, detail }` — including the provider's own words when it failed, which are what name the problem. Always `200`: the request was handled, and the result is the answer. Needs the permission that runs, because it sends real mail |
@@ -302,6 +303,31 @@ person: a key names an account, never a who.
 | `/api/billing/subscribe` | POST, DELETE | POST `plan` — starter, creator, pro or scale. With no subscription yet, answers `url`: a Stripe Checkout in subscription mode; the return trip starts the first cycle. With a live one, changes it at Stripe at once, prorated (an upgrade is invoiced today and the bigger bundle lands with it; a downgrade comes back as credit on the next invoice), and answers `changed: true`. POST `resume: true` takes a pending cancellation off — nothing is charged and no cycle moves. DELETE ends the plan with the current cycle: the credits stand until then, and credits bought on top are kept |
 | `/api/billing/stripe` | POST | Stripe's webhook — signature-verified, not for you. Beside top-ups it turns plan cycles: `invoice.paid` grants the bundle (the first invoice shares its marker with the checkout's return trip, so the news arriving twice grants once), `invoice.payment_failed` marks the plan past due, `customer.subscription.deleted` ends it — what is left of the bundle expires, the levers come off, money the customer added stays |
 
+## Super admin
+
+Hosted installs only, and only for the owner of the platform's own account
+(`foldrun`, or whatever `FOLDRUN_PLATFORM_ACCOUNT` names). To everyone else
+these do not exist — 404, not 403 — because a refusal would confirm there is
+a console to refuse. Nothing grants it but owning that account: no role
+word, no list of emails, no route. To hand the platform to someone else,
+transfer the account.
+
+The console is `/admin` (`/operator` redirects there), a sidebar of eight
+pages: **Overview** (what needs a decision, then the numbers, then the
+customers), **Health** (worker, Postgres, Redis, the queue, stuck runs,
+broken providers, quarantined flows), **Customers** (every account with its
+levers), **Users** (every person on the platform), **Runs** (every run, with
+a stop), **Revenue** (charged, cost, margin, payments, wallets at risk),
+**Audit**, and **Platform** (the install's switches, read-only). Each
+customer has an overview with the levers and a billing page with the money
+in full, including the provider cost and margin the customer never sees.
+
+| Route | Methods | |
+|---|---|---|
+| `/api/admin/accounts` | GET, POST | GET lists every account. POST `account`, `email` creates a customer: an owner with a password nobody knows and a set-password link that works once (returned, and emailed when the platform can) |
+| `/api/admin/runs` | POST | the platform stopping a customer's run: `{ tenant, workspace, runId, action: "stop" }`. The super admin is not a member of anyone's account and is not made one to do this; the act is audited as `stop-run` with who and against whom |
+| `/api/admin/accounts/<account>` | GET, POST | GET returns the account's admin state and its members (with `mfa` and `verified`) — the super admin needs a member's id before they can act on one. POST: one `action` on one account, each written to the audit: `adjust` (`usd` ± non-zero, `note` required — lands on the ledger as an adjustment), `plan` (`name`, `priority` high/normal/low, `concurrency`, `workspaces` — overrides the account's own settings and the install defaults), `notes`, `suspend` (`reason`, which the customer reads; runs are refused with 423 and the same reason, sign-in still works), `restore`, `reset-password` (`userId` — a random password returned once, every session of theirs ended), `reset-link` (`userId` — a set-password link that works once, for 30 minutes), `disable-mfa` (`userId` — the recovery path for a lost phone; audited, and the customer is told), `verify-email` (`userId`), `change-email` (`userId`, `email` — move a member's login, the owner's included, to a new address; unique across the install; the new address is unverified until it clicks the confirmation mail this sends, and the old one is on the audit line), `overdraft` (`limitUsd` — how far below zero the account may run; empty is no floor; `off: true` takes it away; the customer sees it on their wallet page), `waive` (`compute`, `models`, `network` — the meters this account is not charged for; naming none, or `off: true`, charges it for everything again), `grant-plan` (`plan` — start a cycle by hand, no Stripe: the bundle lands, the levers are the tier's, once per admin per day), `end-plan`. The audit records the member, never a password |
+
 ## Authentication routes
 
 | Route | Methods | |
@@ -360,3 +386,14 @@ signed-in person, never by a key — mints an ordinary API key at their role.
 | `/api/approve/<tenant>/<ws>/<id>?token=` | GET, POST | decide a run parked on a human, from the link in its notification. GET shows what is waiting and two buttons — it never decides, because inbox link-checkers follow GETs. POST `decision` (`approve` or `reject`) and an optional `note`, form-encoded or JSON; answers JSON when `Accept` prefers it. The token is derived from the run id under the install key, not stored, so a key rotation kills every link. Needs `FOLDRUN_PUBLIC_URL` to be minted at all |
 | `/api/workspaces/<ws>/hooks/<flow>/rotate` | POST | new token, old URLs stop working |
 | `/api/git/<tenant>/<ws>?branch=&dir=` | POST | GitHub push webhook — HMAC-signed, fetches the tarball at that commit and deploys it |
+
+## Operations
+
+| Route | Auth | |
+|---|---|---|
+| `/api/healthz` | open | `{ ok, version, role, workerAlive, database, redis }` — reports, never gates |
+| `/api/metrics` | `FOLDRUN_METRICS_TOKEN` only | Prometheus text: queue depth, oldest pending, runs running, runs awaiting approval, spend across every account — platform-wide numbers, so no account's key or session reads them; unset, the route is closed |
+
+`healthz` reports a failing database rather than refusing, because taking the
+web tier out of the load balancer for a dependency it can still serve most
+pages without is the wrong trade.

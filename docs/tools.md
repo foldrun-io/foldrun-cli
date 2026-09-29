@@ -262,9 +262,10 @@ are what turn a list of clicks into something a flow can trust.
 Around that it carries what a real browser carries: a named `session` so a
 login done once holds for the rest of the run, `state` so it holds for the
 next run too, `cookies` from a secret for sites that sign in without a
-password, four engines (`browser: chrome | firefox | safari | lightpanda` —
-the last runs the JavaScript and never draws, for reading and filling at a
-fraction of the memory), phone
+password, five engines (`browser: chrome | firefox | safari | lightpanda |
+obscura` — the last two are light browsers of their own: Lightpanda runs the
+JavaScript and never draws, Obscura draws but cannot intercept requests),
+phone
 emulation, `block` to drop images and trackers on heavy pages, `proxy` and
 `auth` and `headers` from secrets, `capture` to save the JSON a page fetches
 for itself, and `video`, `trace` or `har` when you need to see what happened.
@@ -652,7 +653,7 @@ exactly as it always did.
 | `session` | a name; cookies and logins persist across calls in the run |
 | `cookies` | the NAME of a secret holding a site's sign-in cookies |
 | `cookie_domain` | the domain those cookies belong to |
-| `browser` | `chrome` (real Google Chrome; falls back to Chromium where absent), `chromium` (open-source), `firefox`, `safari` — WebKit; `webkit` also works — or `lightpanda`, which runs the JavaScript and never draws: no `screenshot`, `pdf`, `vitals`, `video`, `trace`, `har`, `device` or `session`, and the call says so. Default `chromium` |
+| `browser` | `chrome` (real Google Chrome; falls back to Chromium where absent), `chromium` (open-source), `firefox`, `safari` — WebKit; `webkit` also works — or `lightpanda`, which runs the JavaScript and never draws: no `screenshot`, `pdf`, `vitals`, `video`, `trace`, `har`, `device` or `session`, and the call says so — or `obscura`, as light and it does draw (screenshots, a raster `pdf`, the live view), but it cannot intercept requests, so no `block`, mocks, `routes`, `allowed_domains`, `video`, `trace`, `har` or `session`. Default `chromium` |
 | `engine` | the same setting, under the name the `web_browse:` block uses; either on a call, both only if they agree |
 | `device` | a device to emulate by Playwright name: `"iPhone 15"`, `"Pixel 7"` |
 | `block` | resource types and host globs not to load: `"image,font,*.doubleclick.net"` |
@@ -695,6 +696,8 @@ exactly as it always did.
 | `ignore_https_errors` | `true` opens a page whose certificate does not check out |
 | `cpu_profile` | a `.cpuprofile` path — where the page's JavaScript spent its time, for DevTools |
 | `state_key` | the NAME of a secret whose value encrypts the `state` login at rest (AES-256-GCM) |
+| `max_output` | return at most this many characters, 200 to 18,000 — never more than the tool's own cap |
+| `against` | with `mode=diff`: another page's URL to compare this one with now — staging and production, a page and its translation — as markdown, or pixels with `visual=true` |
 
 **Modes** — `text` (default), `markdown`, `html`, `aria` read the page;
 `meta`, `table`, `network`, `capture`, `links` take what it carries;
@@ -1015,6 +1018,10 @@ domain. Unlike the rest of the block **it is a lock**: a call's
 it is refused before a browser opens. `deny:` names actions this agent may
 never take — `check` refuses a name that is not an action, because a
 misspelt denial would deny nothing, and `js` stands for the call argument.
+`eval` also covers script by another name (a `wait` on a function, a
+clipboard read), and `goto` covers a new tab or a sign-in that opens a URL.
+The list holds across redirects: each hop is checked before the browser
+follows it.
 `boundaries: true` wraps every reply's page text in markers carrying a nonce
 the page cannot know, so words a site wrote to look like instructions stay
 labelled as the site's. It is a label, not a wall.
@@ -1042,7 +1049,34 @@ value), because script could read the field. Sign in with `session=` or
 **Watching a vendor's browser.** With `web_browse: via: browserbase` (or
 `steel`, `hyperbrowser`) the run log carries the session's live view URL —
 `live view: https://…` — where a person can watch the page or take it over
-for a 2FA prompt, while the call runs.
+for a 2FA prompt, while the call runs. `via: cdp` connects to any browser
+that serves the DevTools protocol — a Chrome started with
+`--remote-debugging-port`, a pool of your own — at the address in the
+`BROWSER_CDP_URL` secret.
+
+### Watching it: live, and the recording
+
+On the platform, the page a step's browser drives is **live on the run
+page** while the step runs: under the step, a panel shows what the browser
+shows, with the address it is on, marked `live`, and `last seen` once the
+call ends. The tool streams it — Chromium and Obscura send a frame when the
+page changes, Firefox and WebKit a screenshot a second, at most three frames
+a second either way — through the step's own egress lease, which is what
+lets the platform put a frame on that run and no other. Frames are held five
+minutes after the last. Nothing to switch on; `web_browse: live_view: false`
+turns it off for an agent. Lightpanda draws nothing, so it shows nothing.
+
+**The recording** is `video=true` on a call, or `web_browse: video: true` in
+the block to record every call. Once the run finishes, the run page plays it
+inline under the step, beside any screenshots the step took, and a video
+seeks because the archive serves byte ranges.
+
+**A call that signs in is never watched or kept.** A `login` step or a field
+filled from a secret turns the live view off for that call, and refuses
+`trace` and `har` (a trace keeps every field's value, a HAR every request
+body); a `video` the block asks for is skipped for that one call and says
+so. Sign in in one call with `session=` or `state=`, and do the rest —
+watched and recorded — in the next.
 
 ### When a click cannot reach its element
 

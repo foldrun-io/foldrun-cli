@@ -264,7 +264,7 @@ web_browse:
   user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
 ```
 
-`engine` is `chrome` (real Google Chrome, falling back to Chromium where it is not installed), `chromium` (the open-source build, the default), `firefox`, `safari` (`webkit` also works) or `lightpanda` (runs the JavaScript, never draws — light, and no screenshots); `version` picks a build (`stable`/`beta`/`dev` for Chrome, or a binary installed in the image); `live: true` keeps the page open between calls so a multi-step form can be driven one step per call; `user_agent`,
+`engine` is `chrome` (real Google Chrome, falling back to Chromium where it is not installed), `chromium` (the open-source build, the default), `firefox`, `safari` (`webkit` also works), `lightpanda` (runs the JavaScript, never draws — light, and no screenshots) or `obscura` (as light, draws, no request interception); `version` picks a build (`stable`/`beta`/`dev` for Chrome, or a binary installed in the image); `live: true` keeps the page open between calls so a multi-step form can be driven one step per call; `user_agent`,
 `cookies` (a vault name, never the cookies), `cookie_domain`, `storage` and
 `storage_origin` (the same, for a login kept in localStorage or IndexedDB
 rather than a cookie), `device`, `locale` and `timezone` complete the picture. `headless: false`
@@ -282,7 +282,9 @@ take, like `eval` or `download`; a misspelt one is refused by `check`).
 Beside them: `boundaries: true` marks the page's words in every reply,
 `init:` runs workspace scripts before each page's own, `extensions:` loads
 unpacked Chrome extensions, `webgpu: true`, `ignore_https_errors: true`, and
-`state_key:` names a secret that encrypts saved logins. See
+`state_key:` names a secret that encrypts saved logins; `video: true`
+records every call for the run page to play, and `live_view: false` stops
+the page being shown live there. See
 [What this agent's browser may do](tools#what-this-agents-browser-may-do).
 
 What a call reads is not in the block: `mode`, `interactive`, `within`,
