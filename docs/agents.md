@@ -65,18 +65,26 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `permissionMode` | `plan` makes the run read-only, whatever else was granted |
 | `web_search`, `web_fetch`, `web_browse` | whose search index, page reader and browser those three tools use — `web_search: brave`, `web_fetch: jina`, `web_browse: browserbase` — with the key named in the vault. Unset is the platform's own. `web_search` and `web_fetch` are set per agent; `web_browse` also cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#searching-somewhere-else); the browser block: [below](#web_browse--which-browser-and-how-it-presents-itself) |
 
-The built-in groups are one word each, so you can hold them in your head:
+The built-ins, by what they reach. Only **Web** talks to an outside vendor, so
+only Web takes a provider:
 
-| group | |
-|---|---|
-| `read` | Read, Glob, Grep — inspect but never modify |
-| `files` | Read, Write, Edit, Glob, Grep |
-| `bash` | Bash |
-| `web` | WebSearch (server-side, billed per call) + WebFetch |
-| `fetch` | WebFetch only — the local half |
-| `search` | `search_files(query)` over knowledge, memory, state and storage at every scope |
-| `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs |
-| `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week |
+| category | grant | gives | provider |
+|---|---|---|---|
+| **Web** | `web_search` | finds URLs | `web_search:` — unset is ours (SearXNG) |
+| | `web_fetch` | reads a page, no browser | `web_fetch:` — unset is ours |
+| | `web_browse` | drives a real browser | `web_browse:` — unset is ours |
+| **Files** | `read` | Read, Glob, Grep — inspect but never modify | — |
+| | `write` | Read, Write, Edit, Glob, Grep | — |
+| **Code** | `code` | Bash — runs anything in the sandbox: Python and Node (packages via `runtime:`), or a binary you ship | — |
+| **Memory** | `search` | `search_files(query)` over knowledge, memory, state and storage at every scope | — |
+| | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs | — |
+| | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
+
+`files` and `bash` are the older names for `write` and `code`, and still work.
+`web`, `fetch`, `WebSearch` and `WebFetch` are **retired**: they granted
+Anthropic's own search and fetch, which sit off the run record and ignore the
+provider. They are still granted so a deployed agent keeps running, but
+`foldrun check` errors on them with the name to write instead.
 
 Anything in `tools:` that no built-in claims is one of your own tools,
 resolved against the workspace's `tools/` and then the account library. A

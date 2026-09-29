@@ -59,7 +59,7 @@ like.
 name: researcher
 description: Finds and summarises sources.
 model: default
-tools: [WebSearch, Read, Write]
+tools: [web_search, web_fetch, write]
 ---
 
 You research a topic and report what you found. Prefer primary sources.

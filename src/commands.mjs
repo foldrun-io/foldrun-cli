@@ -790,6 +790,13 @@ async function check(workspace, flags = {}) {
         note("info", `agents/${a.name}`, `tools: [${t}] — from the library on ${platform.url}`);
         continue;
       }
+      if (WEB_TOOLS.has(t)) {
+        // Built in: the platform's gallery grants it in every account
+        // without an install, and a local run fetches the gallery when
+        // signed in. Signed out there is nothing on disk to run.
+        if (!platform.url) note("warn", `agents/${a.name}`, `tools: [${t}] — one of the platform's web tools; sign in (\`foldrun login\`) to run it locally`);
+        continue;
+      }
       const hint = platform.url
         ? `in this workspace, the local account library, or the library on ${platform.url}`
         : "in this workspace or the account library (a library on a platform is seen when signed in: `foldrun login`, or --url)";
@@ -818,6 +825,14 @@ async function check(workspace, flags = {}) {
           note("error", `agents/${a.name}`, `skills: [${s}] — no skill of that name in this agent, the workspace or the library`);
         }
       }
+    }
+
+    // Retired built-ins: still granted, so a deployed desk keeps running,
+    // but the author is told the name to write. Two ways onto the web, one
+    // of them off the run record, was the trap.
+    for (const t of a.retiredTools ?? []) {
+      const instead = t === "web" ? "web_search, web_fetch" : t === "WebSearch" ? "web_search" : "web_fetch";
+      note("error", `agents/${a.name}`, `tools: [${t}] is retired — write ${instead} instead (ours, on the run record, swappable with a provider)`);
     }
 
     // `use:` is gone. Nothing under it is granted, so say the exact line to
@@ -935,6 +950,10 @@ async function check(workspace, flags = {}) {
   );
   return errors.length ? 1 : 0;
 }
+
+/** The web tools the platform's gallery serves: built in, and the only
+ *  built-ins that take a provider. */
+const WEB_TOOLS = new Set(["web_search", "web_fetch", "web_browse"]);
 
 /** Transports a pre-v0.1 tool could put in `type:`. */
 const TRANSPORTS = new Set(["http", "script", "mcp"]);
