@@ -11,8 +11,7 @@ description: Watches competitor sites and drafts a weekly digest.
 model: default
 effort: high
 tools:
-  - web_search
-  - web_fetch
+  - web
   - write
   - [[price-tracker]]
 secrets: [SLACK_WEBHOOK_TOKEN]
@@ -64,16 +63,14 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `mcpServers` | an MCP server declared inline |
 | `secrets` | vault entries its tools may use — names only, never values |
 | `permissionMode` | `plan` makes the run read-only, whatever else was granted |
-| `web_search`, `web_fetch`, `web_browse` | whose search index, page reader and browser those three tools use — `web_search: brave`, `web_fetch: jina`, `web_browse: browserbase` — with the key named in the vault. Unset is the platform's own; `web_search:` also takes a block of the own engine's settings — engines, categories, safesearch, plugins ([Tools](tools#tuning-the-accounts-own-engine)). `web_search` and `web_fetch` are set per agent; `web_browse` also cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#searching-somewhere-else); the browser block: [below](#web_browse--which-browser-and-how-it-presents-itself) |
+| `web` | the `web` tool's settings: `actions:` — which of its eight it may use (all when absent) — and who does each, `web: {search: brave, fetch: jina, browse: browserbase, crawl: firecrawl}`, with the key named in the vault. Unset is foldrun's own. `search:` also takes a block of the own engine's settings — engines, categories, safesearch, plugins ([Tools](tools#tuning-the-accounts-own-engine)); `browse:` a block of the browser's ([below](#webbrowse--which-browser-and-how-it-presents-itself)), and `browse:` alone cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#reaching-the-web). The older per-action keys (`web_search:` …) are retired and still read |
 
 The built-ins, by what they reach. Only **Web** talks to an outside vendor, so
 only Web takes a provider:
 
 | category | grant | gives | provider |
 |---|---|---|---|
-| **Web** | `web_search` | finds URLs | `web_search:` — unset is ours (SearXNG) |
-| | `web_fetch` | reads a page, no browser | `web_fetch:` — unset is ours |
-| | `web_browse` | drives a real browser | `web_browse:` — unset is ours |
+| **Web** | `web` | eight actions — search, fetch, browse, crawl, map, extract, answer, monitor | one per action under `web:` — unset is ours |
 | **Files** | `read` | Read, Glob, Grep — inspect but never modify | — |
 | | `write` | Read, Write, Edit, Glob, Grep | — |
 | **Code** | `code` | Bash — runs anything in the sandbox: Python and Node (packages via `runtime:`), or a binary you ship | — |
@@ -81,11 +78,12 @@ only Web takes a provider:
 | | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs | — |
 | | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
 
-`files`, `bash`, `web`, `fetch`, `WebSearch` and `WebFetch` are **retired**.
-`files` and `bash` are the old names for `write` and `code`; the web four
-granted Anthropic's own search and fetch, which sit off the run record and
-ignore the provider. They are still granted so a deployed agent keeps running, but
-`foldrun check` errors on them with the name to write instead.
+**Retired**, still granted so a deployed agent keeps running, and each an
+error in `foldrun check` naming what to write instead: `files` and `bash`
+(now `write` and `code`); `fetch`, `WebSearch` and `WebFetch` (Anthropic's own
+search and fetch, off the run record and deaf to a provider — now `web`); and
+`web_search`, `web_fetch` and `web_browse` (the three tools `web` replaced).
+`web` itself meant Anthropic's pair until 2026-09-29; it now means ours.
 
 Anything in `tools:` that no built-in claims is one of your own tools,
 resolved against the workspace's `tools/` and then the account library. A
@@ -252,10 +250,10 @@ Prose in AGENTS.md reaches the model and nothing else. A search engine
 asked in English answers in English whatever the agent was told; a browser
 reports `en-US` to every page; a fetch sends no `Accept-Language`.
 `language:` is what those read. Set it and three things happen: the prompt
-gains one sentence naming the language, `web_search` asks the engine in it
-(and for its region, when the tag has one), `web_browse` reports it as the
-page's locale, and `web_fetch` requests it. A `language=` argument on
-`web_search`, or `locale=` on `web_browse`, overrides it for one call.
+gains one sentence naming the language, `web action=search` asks the engine in it
+(and for its region, when the tag has one), `web action=browse` reports it as the
+page's locale, and `web action=fetch` requests it. A `language=` argument on
+`web action=search`, or `locale=` on `web action=browse`, overrides it for one call.
 
 It cascades like the clock: agent frontmatter → workspace `AGENTS.md` →
 account `AGENTS.md` → `FOLDRUN_LANGUAGE` → English. Leave it out to
@@ -263,14 +261,15 @@ inherit. A value that is not a tag — `Persian` where `fa` was meant — is
 refused by `check` and by the deploy, in one sentence, rather than being
 read as English by every tool.
 
-### `web_browse:` — which browser, and how it presents itself
+### `web.browse:` — which browser, and how it presents itself
 
 The browser's identity is part of the agent, not of each call:
 
 ```yaml
-web_browse:
-  engine: firefox
-  user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
+web:
+  browse:
+    engine: firefox
+    user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
 ```
 
 `engine` is `chrome` (real Google Chrome, falling back to Chromium where it is not installed), `chromium` (the open-source build, the default), `firefox`, `safari` (`webkit` also works), `lightpanda` (runs the JavaScript, never draws — light, and no screenshots) or `obscura` (as light, draws, no request interception); `version` picks a build (`stable`/`beta`/`dev` for Chrome, or a binary installed in the image); `live: true` keeps the page open between calls so a multi-step form can be driven one step per call; `user_agent`,
@@ -279,7 +278,7 @@ web_browse:
 rather than a cookie), `device`, `locale` and `timezone` complete the picture. `headless: false`
 runs the same browser with a window (on a virtual screen where the machine
 has none); unset is the usual no-window browser. The same key still
-takes a vendor name on its own (`web_browse: browserbase`), and inside a
+takes a vendor name on its own (`web: {browse: browserbase}`), and inside a
 block that is `via:`. It cascades like the clock — agent, workspace, account
 — and a call argument overrides it for one call. Full table and the reasons:
 [Tools](tools#how-this-agents-browser-presents-itself).
@@ -324,7 +323,7 @@ which country, and the runtime derives the rest rather than asking for it:
 | text direction | the script | right to left — `dir="rtl"` on anything rendered |
 
 Set it and the prompt gains a `# Locale` block stating exactly those facts,
-`web_search` asks the engine for that country, and the sandbox carries
+`web action=search` asks the engine for that country, and the sandbox carries
 `FOLDRUN_REGION`, `FOLDRUN_CURRENCY`, `FOLDRUN_UNITS`, `FOLDRUN_CALENDAR`,
 `FOLDRUN_DATE_LOCAL` (only when the calendar is not Gregorian) and
 `FOLDRUN_RTL` for scripts. Three overrides exist for the cases where a
@@ -343,7 +342,7 @@ from here), `notify:`, `budget:` (a cap in USD over
 a month — `60` — or a day or week — `60/day`, `60/week`; unset is no limit),
 `concurrency:` (in the account's file: how many of its runs go at once — the
 next one waits its turn; see [Budgets and billing](budgets-and-billing)),
-`web_browse:` (see above),
+`web.browse:` (see above),
 `foldrun_version:` — and the body is context every agent works under.
 
 Nearest wins, but a **key** replaces the whole value rather than merging into

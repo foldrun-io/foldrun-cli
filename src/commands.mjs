@@ -735,7 +735,7 @@ async function check(workspace, flags = {}) {
       note("error", `agents/${a.name}`, a.timezoneProblem);
     }
 
-    // A web_search:, web_fetch: or web_browse: value that cannot work —
+    // A web: value (or an older web_search:, web_fetch:, web_browse:) that cannot work —
     // DeepSeek named for search, a search API named for fetch, a key
     // written into the file. The run would say so in its trail and carry
     // on; the deploy refuses it; this is where a person hears it first.
@@ -953,7 +953,7 @@ async function check(workspace, flags = {}) {
 
 /** The web tools the platform's gallery serves: built in, and the only
  *  built-ins that take a provider. */
-const WEB_TOOLS = new Set(["web_search", "web_fetch", "web_browse"]);
+const WEB_TOOLS = new Set(["web", "web_search", "web_fetch", "web_browse"]);
 
 /** Transports a pre-v0.1 tool could put in `type:`. */
 const TRANSPORTS = new Set(["http", "script", "mcp"]);
@@ -1080,7 +1080,7 @@ async function runTarget(target, flags) {
 // ---------------------------------------------------------------- gallery
 
 /**
- * The platform's gallery — `web_browse`, `web_search` and `web_fetch`, the tools it ships to
+ * The platform's gallery — `web` (and the retired `web_browse`, `web_search`, `web_fetch`), the tools it ships to
  * every account — is a shelf every run on the platform reads beneath the
  * account's own library. A laptop had no shelf, so an agent granting
  * `web_browse` ran fine on a deploy and had no browser under `foldrun run`.
@@ -1972,16 +1972,17 @@ export function cookieDomainFor(url) {
  *  it was not pointed at is a command nobody trusts twice. */
 export function renderBrowseBlock({ secret, url, identity, hasStorage, engine }) {
   const lines = [
-    "web_browse:",
-    `  engine: ${engine}`,
-    `  user_agent: "${identity.user_agent}"`,
-    `  cookies: ${secret}_COOKIES`,
-    `  cookie_domain: ${cookieDomainFor(url)}`,
+    "web:",
+    "  browse:",
+    `    engine: ${engine}`,
+    `    user_agent: "${identity.user_agent}"`,
+    `    cookies: ${secret}_COOKIES`,
+    `    cookie_domain: ${cookieDomainFor(url)}`,
   ];
   if (hasStorage) {
-    lines.push(`  storage: ${secret}_STORAGE`, `  storage_origin: ${new URL(url).origin}`);
+    lines.push(`    storage: ${secret}_STORAGE`, `    storage_origin: ${new URL(url).origin}`);
   }
-  lines.push(`  locale: ${identity.locale}`, `  timezone: ${identity.timezone}`);
+  lines.push(`    locale: ${identity.locale}`, `    timezone: ${identity.timezone}`);
   return lines.join("\n");
 }
 

@@ -50,7 +50,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `foldrun rerun <run-id>` | the same flow again, from a step: `--from <n>` as the flow file numbers them, or `--agent <name>` for the first step that agent runs. Earlier steps are recorded as skipped. This is the debug loop from the terminal: fix the file, `deploy`, `rerun --from` the step that failed. `--wait` follows the new run like `invoke --wait`; `--to <workspace>` from anywhere |
 | `foldrun triggers` | why nothing ran. One row per flow that fired in the window: its trigger, how many fires became runs, when it last ran, and every reason for the difference with a count — a duplicate delivery, a throttled or debounced burst, a fire the platform slept through, an `overlap: skip`, a flow switched off by `disable_after:`. A switched-off flow is a non-zero exit; one successful run clears it. `--since <days>` (default 7), `--to <workspace>` |
 | `foldrun billing` | the account's balance, whether billing is on at all, what the platform is currently waiving, and the recent ledger entries with what each was for — a run names its workspace, flow and run id; an adjustment carries its own note. `--limit <n>` shows more |
-| `foldrun gallery` | the tools the platform ships to every account (`web_browse`, `web_search`, `web_fetch`), and for each whether this account keeps its own copy and whether that copy still matches. `pull` lays the shelf down under `~/.foldrun/gallery/<host>/` for offline runs (`foldrun run` and `foldrun eval` refresh it themselves before each run); `upgrade <tool>` replaces the account's copy with the current gallery version, the old one a revision back |
+| `foldrun gallery` | the tools the platform ships to every account (`web`, and the retired `web_search`, `web_fetch` and `web_browse` it replaced), and for each whether this account keeps its own copy and whether that copy still matches. `pull` lays the shelf down under `~/.foldrun/gallery/<host>/` for offline runs (`foldrun run` and `foldrun eval` refresh it themselves before each run); `upgrade <tool>` replaces the account's copy with the current gallery version, the old one a revision back |
 | `foldrun account` | the account's own defaults — the AGENTS.md frontmatter every workspace under it inherits: `timezone`, `notify`, `budget`, `concurrency`. `foldrun account set timezone Australia/Sydney`, `set notify email you@example.com` (`--events failed,awaiting-approval,completed`), `set notify url https://…`, `set budget 60/month`, `set concurrency 4`, and `clear <key>` to unset one. `set notify` merges against what is there, because the platform replaces the whole block. `providers` lists the model providers the account's files use and the last daily key check — `--check` asks now, and a dead key is a non-zero exit. Singular — `accounts` below is the list of logins on this machine |
 | `foldrun accounts` | every account signed in on this machine, and which one a bare command acts as. `foldrun profiles` is the same command |
 | `foldrun use <name>` | act as one of them from here on. `foldrun switch <name>` is the same command |
@@ -193,15 +193,16 @@ a Cloudflare clearance cookie is bound to the user agent that earned it, and a
 session copied without its identity is a challenge waiting to happen:
 
 ```yaml
-web_browse:
-  engine: chrome
-  user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/152.0.0.0 Safari/537.36"
-  cookies: MEDIUM_COOKIES
-  cookie_domain: .medium.com
-  storage: MEDIUM_STORAGE
-  storage_origin: https://medium.com
-  locale: en-US
-  timezone: Australia/Sydney
+web:
+  browse:
+    engine: chrome
+    user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/152.0.0.0 Safari/537.36"
+    cookies: MEDIUM_COOKIES
+    cookie_domain: .medium.com
+    storage: MEDIUM_STORAGE
+    storage_origin: https://medium.com
+    locale: en-US
+    timezone: Australia/Sydney
 ```
 
 It also says which cookie looks like the login and **when it dies**, so the

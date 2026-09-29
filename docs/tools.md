@@ -137,9 +137,10 @@ where a nearer copy overrides it. That list is the blast radius of changing it.
 
 ## The gallery — platform-maintained tools
 
-Every tool the platform ships — `web_browse`, `web_search` and `web_fetch` —
-is **available in every account from the start**.
-An agent grants one the same way it grants anything: `tools: [web_search]`
+Every tool the platform ships — `web`, and the retired `web_search`,
+`web_fetch` and `web_browse` it replaced — is **available in every account
+from the start**.
+An agent grants one the same way it grants anything: `tools: [web]`
 in its `agent.md`, and it runs, with nothing installed first. The gallery
 is a shelf beneath your account library, laid down on the box at boot, so
 a platform upgrade reaches every account at once.
@@ -157,7 +158,7 @@ to any agent until its `agent.md` names it.
 
 **On a laptop** the shelf comes from the platform you are signed in to.
 `foldrun run` and `foldrun eval` fetch the gallery before they start and keep
-a copy under `~/.foldrun/gallery/<host>/`, so an agent granting `web_browse`
+a copy under `~/.foldrun/gallery/<host>/`, so an agent granting `web`
 runs locally exactly as it does on a deploy, with the same lookup order: the
 workspace's copy, then the account library's, then the shelf. Offline, the
 last copy is used and the run says so. `foldrun gallery` lists the shelf and
@@ -165,14 +166,14 @@ marks which tools your account keeps its own copy of, `foldrun gallery pull`
 refreshes the copy by hand, and `foldrun gallery upgrade <tool>` is the
 Library page's *update to gallery version*. A browser tool also needs
 Playwright on the laptop (`npm i -g playwright@1.63.0`, then `npx playwright
-install chromium`); `web_browse` finds it globally, Homebrew's included, or
+install chromium`); `web action=browse` finds it globally, Homebrew's included, or
 in the project, and says how to install it when it is missing.
 
 | tool | what it does | the key it needs |
 |---|---|---|
-| `web_search` | searches the web on the account's own engine — titles, links, snippets | none |
-| `web_fetch` | reads one URL, or up to twenty: the page itself, as markdown, text, html, meta or links | none |
-| `web_browse` | a real browser: JavaScript runs, and it can click, fill, scroll, screenshot, download and extract | none |
+| `web action=search` | searches the web on the account's own engine — titles, links, snippets | none |
+| `web action=fetch` | reads one URL, or up to twenty: the page itself, as markdown, text, html, meta or links | none |
+| `web action=browse` | a real browser: JavaScript runs, and it can click, fill, scroll, screenshot, download and extract | none |
 
 The gallery is deliberately just these three — the web capability that is
 hard to build from a plain HTTP call. **Everything else you integrate
@@ -186,53 +187,51 @@ versions — you own the tool, its scope and its blast radius. See
 
 ## Reaching the web
 
-Three tools, three jobs. They are one family on purpose: the same vocabulary,
-so moving between them costs one word.
+One tool, `web`, and eight **actions** — `action=` picks one, and the other
+arguments are that action's. Each has a fixed input and output, whoever
+answers it:
 
-| tool | what it does | what it costs |
+| action | in → out | foldrun's own |
 |---|---|---|
-| `web_search` | finds URLs — query in, titles and links out | free on the account's own engine |
-| `web_fetch` | reads one URL — **the page itself**, not a summary of it | tokens only |
-| `web_browse` | drives one URL — a real browser, JavaScript runs | a pod |
+| `search` | a query → numbered titles, URLs, snippets | the account's own engine (SearXNG) — free |
+| `fetch` | a URL (or up to 20) → **the page itself**, not a summary | one plain HTTP request — tokens only |
+| `browse` | a URL, and steps → what a person would see; JavaScript runs | the account's browser pod |
+| `crawl` | a site → its pages, one file each under `outputs/crawl/` | plain HTTP, same site, robots.txt honoured |
+| `map` | a site → every URL on it | its sitemaps, else the links on its pages |
+| `extract` | a page → JSON | selectors (`fields=`, `each=`), or the page's own JSON-LD and OpenGraph |
+| `answer` | a question → an answer with its sources | the passages that answer it, quoted and ranked, with sources — no prose |
+| `monitor` | a page or a question → what changed since the last call | lines added and removed, or new results; kept in `state/` |
 
-Nothing searches the live web. `web_search` queries an **index** — somebody's
-stored copy of the web, made earlier. `web_fetch` and `web_browse` are the
-only two that touch a live page. Search finds; the other two read.
+None of foldrun's own has a second model in it. `answer` returns evidence for
+the agent — which is already the model — to answer from; `extract` by
+`schema=` or `prompt=`, which needs a model to read the page, needs a
+provider.
 
-Start with `web_fetch`. It is one HTTP request, roughly fifty times cheaper
-than `web_browse`, and it is enough for anything the server sends whole —
-documentation, JSON, RSS, most articles. When a page builds itself with
-JavaScript, `web_fetch` says so and names `web_browse` rather than returning
-an empty shell that reads as "no content". That message is the signal to
-escalate; the `url` and `mode` carry over unchanged.
+```yaml
+tools: [web]
+web:
+  actions: [search, fetch, crawl]   # what it may do — all eight when absent
+  fetch: jina                       # who does each; absent is foldrun's own
+  crawl: firecrawl
+```
 
-`web_fetch` returns the page at the fidelity you ask for — `markdown` (the
-default), `text`, `html`, `meta`, `links`, or `raw` for the bytes untouched.
-It is deliberately not Anthropic's built-in `WebFetch`, which fetches a page
-and then hands it to a small model, so what reaches your agent is that
-model's answer *about* the page. Ours returns the page, lands on the run
-record with every other step, and works whichever model is driving.
+| action | providers |
+|---|---|
+| `search` | brave, exa, tavily, parallel, you, jina, firecrawl, perplexity, linkup, serper, serpapi, dataforseo — and model providers' own (anthropic, zai, …) |
+| `fetch` | jina, firecrawl, exa, tavily, parallel, zyte, scrapingbee |
+| `browse` | browserbase, steel, hyperbrowser, browserless, brightdata, zenrows, cdp |
+| `crawl` | firecrawl, tavily |
+| `map` | firecrawl, tavily |
+| `extract` | firecrawl, zyte, hyperbrowser |
+| `answer` | exa, linkup, tavily, parallel, perplexity, you |
+| `monitor` | parallel (a question), firecrawl (a page) |
 
-### Actions, and who does them
-
-Underneath the tools, the web is eight **actions**, each with a fixed input
-and output whoever answers it: `search`, `fetch`, `browse`, `crawl`, `map`,
-`extract`, `answer`, `monitor`. A provider is the set of actions it has an
-adapter for; foldrun is one of them, and the one used when nothing is named.
-
-| action | foldrun | providers |
-|---|---|---|
-| `search` | the account's own SearXNG | brave, exa, tavily, parallel, you, jina, firecrawl, perplexity, linkup, serper, serpapi, dataforseo |
-| `fetch` | one plain HTTP request | jina, firecrawl, exa, tavily, parallel, zyte, scrapingbee |
-| `browse` | the account's browser pod | browserbase, steel, hyperbrowser, browserless, brightdata, zenrows, cdp |
-| `crawl`, `map` | `web_browse mode=crawl` / `mode=map` | — |
-| `extract` | `web_browse`'s `extract` step | — |
-| `answer`, `monitor` | planned | — |
-
-`web_<action>: <provider>` names who does it; unset is foldrun. A provider
-named for an action it cannot do is an **error in `foldrun check`** and at
-deploy, naming the providers that can — never a quiet fall back to ours, which
-would bill and behave differently from what the file says.
+A provider named for an action it cannot do is an **error in `foldrun check`**
+and at deploy, naming the providers that can — never a quiet fall back to
+ours, which would bill and behave differently from what the file says. Its key
+is the vault name in the provider's own section below (`FIRECRAWL_API_KEY`, …)
+or your own with `{name: firecrawl, key: ${MY_KEY}}`; it rides the egress
+proxy to that provider's host alone.
 
 `browse` has a second level: the steps and modes inside a page. A browser
 reached over the DevTools protocol is driven by our code, so it takes every
@@ -241,20 +240,47 @@ step, except the few its vendor's docs say it cannot: Bright Data has no
 `download`; ZenRows no `solve`. Such a step fails with that sentence.
 
 Every adapter records the vendor page it was built from and the day it was
-last matched to it; a test fails when that is more than 90 days old.
+last matched to it; a test fails when that is more than 90 days old. The
+adapters for crawl, map, extract, answer and monitor were built from their
+vendors' docs on 2026-09-29 and have not yet been called with a live key.
+
+**Retired, still read.** Until 2026-09-29 this was three tools —
+`web_search`, `web_fetch`, `web_browse` — each with its own key
+(`web_search: exa`). Both still work, so nothing deployed changes; `foldrun
+check` names each for the rewrite: `tools: [web]`, and the key's value moved
+under `web:` unchanged. `tools: [web]` used to mean Anthropic's own
+WebSearch and WebFetch; it now means this.
+
+Nothing searches the live web. `search` queries an **index** — somebody's
+stored copy of the web, made earlier. `fetch` and `browse` are the only two
+that touch a live page. Search finds; the other two read.
+
+Start with `fetch`. It is one HTTP request, roughly fifty times cheaper than
+`browse`, and it is enough for anything the server sends whole —
+documentation, JSON, RSS, most articles. When a page builds itself with
+JavaScript, `fetch` says so and names `browse` rather than returning an empty
+shell that reads as "no content". That message is the signal to escalate;
+the `url` and `mode` carry over unchanged.
+
+`fetch` returns the page at the fidelity you ask for — `markdown` (the
+default), `text`, `html`, `meta`, `links`, or `raw` for the bytes untouched.
+It is deliberately not Anthropic's built-in `WebFetch`, which fetches a page
+and then hands it to a small model, so what reaches your agent is that
+model's answer *about* the page. Ours returns the page, lands on the run
+record with every other step, and works whichever model is driving.
 
 ### One page, a list, or a whole site
 
-`web_fetch` reads **one URL per call**. That is not a limitation to work
+`web action=fetch` reads **one URL per call**. That is not a limitation to work
 around — it is what makes it cheap and what makes a run legible, because every
 page read is its own line on the record. Scale comes from the flow, not from
 the tool:
 
 | you want | use |
 |---|---|
-| one page | `web_fetch url=…` |
+| one page | `web action=fetch url=…` |
 | a list of pages | a flow step with **`each:`** — the step runs once per URL, in parallel |
-| a whole site | `web_browse mode=map` (every URL it can find) or `mode=crawl` (page by page, robots.txt honoured, resuming where it stopped) |
+| a whole site | `web action=map` (every URL) or `web action=crawl` (page by page) over plain HTTP; `web action=browse mode=map` / `mode=crawl` when the site needs JavaScript |
 
 So a search that returns twenty links becomes twenty reads by adding one line
 to the flow, not by passing twenty URLs to one call:
@@ -271,7 +297,7 @@ mapping or crawling one site. Not one enormous call.
 
 ### What else the browser does
 
-Reading a page is the smallest thing `web_browse` does. It is a real browser,
+Reading a page is the smallest thing `web action=browse` does. It is a real browser,
 so it can also **act**: click, fill a form, press keys, pick from a dropdown,
 scroll, go back and forward, follow a link, step into an iframe or a popup tab,
 open and close tabs, paste HTML into a rich editor, hand a file to a file
@@ -320,16 +346,16 @@ run log. An empty page arrives with its reason.
 
 ### Which language the tools work in
 
-None of the three hardcode a country. `web_search` asks the engine in the
+None of the actions hardcodes a country. `web action=search` asks the engine in the
 agent's `language:` — and for its region when the tag carries one, as
-`en-AU` or `pt-BR` — `web_browse` reports it as the page's locale, and
-`web_fetch` sends it as `Accept-Language`. The value cascades from the agent
+`en-AU` or `pt-BR` — `web action=browse` reports it as the page's locale, and
+`web action=fetch` sends it as `Accept-Language`. The value cascades from the agent
 to its workspace to the account, and is English when nobody set it; see
 [`language:`](agents#language--the-language-this-agent-works-in). A
 country the tag does not carry comes from
 [`region:`](agents#region--the-country-this-agent-works-for) — `language: en`
 with `region: au` searches as `en` for Australia. One call can differ:
-`web_search … language=de region=at`, `web_browse … locale=de-DE`.
+`web action=search … language=de region=at`, `web action=browse … locale=de-DE`.
 
 ### Two kinds of search company
 
@@ -388,12 +414,12 @@ Which to use is not a matter of quality:
 
 One more thing the marketing blurs: **searching is almost never live.** Tier
 one answers from a stored copy made hours or months ago. "Real-time" usually
-means a fresh index plus a live fetch of the top few results. Only `web_fetch`
-and `web_browse` touch a page as it is right now.
+means a fresh index plus a live fetch of the top few results. Only `web action=fetch`
+and `web action=browse` touch a page as it is right now.
 
 ### Searching somewhere else
 
-`web_search` is the only one of the three whose *index* you can buy from
+`search` is the only action whose *index* you can buy from
 someone else, and what you are buying is **an index we cannot crawl** — not
 a faster endpoint. Name who answers and the tool the model sees does not
 change: same name, same arguments, same shape back.
@@ -401,15 +427,17 @@ change: same name, same arguments, same shape back.
 ```yaml
 ---
 name: researcher
-tools: [web_search, web_fetch, web_browse]
-web_search: exa              # short form — the key is EXA_API_KEY in the vault
+tools: [web]
+web:
+  search: exa              # short form — the key is EXA_API_KEY in the vault
 ---
 ```
 
 ```yaml
-web_search:                  # long form — your own vault name
-  name: exa
-  key: ${MY_EXA_KEY}
+web:
+  search:                  # long form — your own vault name
+    name: exa
+    key: ${MY_EXA_KEY}
 ```
 
 The long form is the same two spellings `provider:` takes, and `key:` is a
@@ -417,7 +445,7 @@ reference, never a value: a credential written into the file is refused.
 
 Two kinds of name, and they run in different places:
 
-| `web_search:` | kind | whose index | where it runs |
+| `web.search:` | kind | whose index | where it runs |
 |---|---|---|---|
 | *unset* | ours | the account's own engine | in the run's sandbox |
 | `brave` | search API, your key | Brave — ~40B pages, ~100M refreshed a day; the index Claude searches | **our tool, in the sandbox** |
@@ -493,16 +521,17 @@ desk search nothing for a month.
 
 ### Fetching through someone else
 
-`web_fetch` is ours by default — free, one HTTP request, on the record —
+`web action=fetch` is ours by default — free, one HTTP request, on the record —
 and that is enough for most of the web. A fetch API is for the pages ours
 cannot read: one that refuses a plain request, or twenty that would be slow
 one at a time. Same switch, same two spellings:
 
 ```yaml
-web_fetch: jina              # or firecrawl, exa, tavily, parallel, zyte, scrapingbee
+web:
+  fetch: jina              # or firecrawl, exa, tavily, parallel, zyte, scrapingbee
 ```
 
-| `web_fetch:` | tier | what it gives back | per call | key |
+| `web.fetch:` | tier | what it gives back | per call | key |
 |---|---|---|---|---|
 | *unset* | ours | the page, at the fidelity asked | 1, or up to 20 with `urls=` | — |
 | `jina` | reader | clean markdown, text or html | 1 | **optional** — 20 a minute without one |
@@ -541,7 +570,7 @@ the egress proxy. A *search or fetch API* does not — it is called by our own
 tool, from the sandbox, with your key filled in at the boundary. Prefer the
 second whenever the same index is available both ways.
 
-The one to know is `web_browse`: a real headless browser that opens a page,
+The one to know is `web action=browse`: a real headless browser that opens a page,
 renders its JavaScript, and can then click, fill, press keys, select, scroll,
 screenshot, print to PDF, paste HTML into a rich editor, hand a file to a
 file picker, save a download, step into an iframe or a popup tab, and pull
@@ -577,7 +606,7 @@ field a selector inside it, `@attr` for an attribute; the rows are the
 output and the whole set lands in `outputs/extracted.json` uncapped:
 
 ```text
-web_browse(url="https://example.com/directory", block="image,font",
+web(action="browse", url="https://example.com/directory", block="image,font",
         actions='[{"extract": ".listing",
                    "fields": {"name": "h3", "phone": ".tel", "url": "a@href"}}]')
 ```
@@ -592,12 +621,12 @@ foldrun secrets set MEDIUM_COOKIES        # paste: sid=…; uid=…
 ```
 
 ```yaml
-tools: [web_browse]
+tools: [web]
 secrets: [MEDIUM_COOKIES]
 ```
 
 ```text
-web_browse(url="https://medium.com/new-story", cookies="MEDIUM_COOKIES",
+web(action="browse", url="https://medium.com/new-story", cookies="MEDIUM_COOKIES",
         wait_for="[data-testid=editorTitleParagraph]",
         actions='[{"fill": "[data-testid=editorTitleParagraph]", "text": "Title"},
                   {"paste": "[data-testid=editorParagraphText]", "file": "outputs/article.html"},
@@ -633,16 +662,17 @@ against a real solver account.
 
 ### Browsing somewhere else
 
-`web_browse` renders in the account's own browser pod. Name a vendor and the
+`web action=browse` renders in the account's own browser pod. Name a vendor and the
 same tool — every mode, every action — connects over CDP to a browser on
 their machines instead. For the pages that refuse ours: a residential pool,
 built-in unblocking, a different reputation.
 
 ```yaml
-web_browse: browserbase      # or steel, hyperbrowser, browserless, brightdata, zenrows
+web:
+  browse: browserbase      # or steel, hyperbrowser, browserless, brightdata, zenrows
 ```
 
-| `web_browse:` | what it is | key |
+| `web.browse:` | what it is | key |
 |---|---|---|
 | *unset* | the account's own pod, whichever engine the block or the call asks for | — |
 | `browserbase` | hosted Chromium with stealth; a session is opened for the call | `BROWSERBASE_API_KEY` |
@@ -668,7 +698,7 @@ an actor marketplace, not a browser endpoint.
 
 ### The browser, in full
 
-Every argument, action and mode the gallery `web_browse` takes. The first seven
+Every argument, action and mode the gallery `web action=browse` takes. The first seven
 arguments are the original ones, so a call that passed only `url` behaves
 exactly as it always did.
 
@@ -684,7 +714,7 @@ exactly as it always did.
 | `cookies` | the NAME of a secret holding a site's sign-in cookies |
 | `cookie_domain` | the domain those cookies belong to |
 | `browser` | `chrome` (real Google Chrome; falls back to Chromium where absent), `chromium` (open-source), `firefox`, `safari` — WebKit; `webkit` also works — or `lightpanda`, which runs the JavaScript and never draws: no `screenshot`, `pdf`, `vitals`, `video`, `trace`, `har`, `device` or `session`, and the call says so — or `obscura`, as light and it does draw (screenshots, a raster `pdf`, the live view), but it cannot intercept requests, so no `block`, mocks, `routes`, `allowed_domains`, `video`, `trace`, `har` or `session`. Default `chromium` |
-| `engine` | the same setting, under the name the `web_browse:` block uses; either on a call, both only if they agree |
+| `engine` | the same setting, under the name the `web.browse:` block uses; either on a call, both only if they agree |
 | `device` | a device to emulate by Playwright name: `"iPhone 15"`, `"Pixel 7"` |
 | `block` | resource types and host globs not to load: `"image,font,*.doubleclick.net"` |
 | `capture` | a URL glob; every matching response is saved under `outputs/captures/` |
@@ -708,7 +738,7 @@ exactly as it always did.
 | `interactive` | with `mode=aria`: `true` lists only the numbered things you can act on, one per line |
 | `expect` | a JSON array of claims checked after the actions, each the shape of an `expect` step; every one is reported, any failure fails the call |
 | `routes` | a JSON array of `mock` steps in place before the first request |
-| `identity` | a name from the agent's `web_browse: identities:` map — engine, device, locale, timezone, user agent, proxy, headers, cookies as one word |
+| `identity` | a name from the agent's `web: {browse: identities:}` map — engine, device, locale, timezone, user agent, proxy, headers, cookies as one word |
 | `state` | a name; the login (cookies and localStorage) is loaded from `../../state/browser/<name>.json` first and saved back at the end — across runs. Refused with `cookies` or `storage` from a secret |
 | `har` | `"true"` or a `.har` path — every request and response with bodies, as an HTTP Archive |
 | `live` | `"true"` keeps the page open for the next call in the step; `"end"` closes it |
@@ -813,11 +843,11 @@ there were two — the step fails and says which, instead of clicking a
 neighbour. Read the page with `mode=aria` again and use the new numbers.
 
 ```
-web_browse(url="https://example.com/cart", mode="aria", interactive=true)
+web(action="browse", url="https://example.com/cart", mode="aria", interactive=true)
   → button "Delete" [ref=e5]
     button "Delete" [ref=e7]
     link "Checkout" [ref=e12] -> /checkout
-web_browse(url="https://example.com/cart", actions='[{"click": "@e7"}]')
+web(action="browse", url="https://example.com/cart", actions='[{"click": "@e7"}]')
   →   @e7 = button "Delete" (2 of 2)
 ```
 
@@ -894,23 +924,24 @@ the browser.
 
 Engine, user agent, device, locale and timezone are the browser's identity,
 not what one call does, so they belong in the file once rather than in every
-call. `web_browse:` takes a block for them, and the vendor moves to `via:`.
+call. `web.browse:` takes a block for them, and the vendor moves to `via:`.
 What one call does stays in the call — `mode`, `interactive`, and `"@e4"`
 in its actions — so there is no block key for any of them:
 
 ```yaml
 ---
 name: publisher
-tools: [web_browse]
-web_browse:
-  engine: chrome             # chrome (real Chrome) | chromium | firefox | safari
-  user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
-  cookies: MEDIUM_COOKIES    # the vault NAME, never the cookies
-  cookie_domain: .medium.com
-  device: "Pixel 7"          # optional: viewport, scale, touch and its own UA
-  locale: en-AU
-  timezone: Australia/Sydney
-  via: browserbase           # optional: render on a vendor's machines
+tools: [web]
+web:
+  browse:
+    engine: chrome             # chrome (real Chrome) | chromium | firefox | safari
+    user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
+    cookies: MEDIUM_COOKIES    # the vault NAME, never the cookies
+    cookie_domain: .medium.com
+    device: "Pixel 7"          # optional: viewport, scale, touch and its own UA
+    locale: en-AU
+    timezone: Australia/Sydney
+    via: browserbase           # optional: render on a vendor's machines
 ---
 ```
 
@@ -943,9 +974,10 @@ and `storage_origin:` beside it, because storage is walled off per origin and
 `.example.com` cannot name one.
 
 ```yaml
-web_browse:
-  storage: INDIEHACKERS_STORAGE
-  storage_origin: https://www.indiehackers.com
+web:
+  browse:
+    storage: INDIEHACKERS_STORAGE
+    storage_origin: https://www.indiehackers.com
 ```
 
 ```json
@@ -969,7 +1001,7 @@ stderr saying so. Otherwise an agent that browses widely would hand whatever
 page it opened the session that belongs to one site. A `cookies=` on the call
 is the caller's own decision and is used as given.
 
-`web_browse: browserbase` still means exactly what it did, so no file needs
+`web: {browse: browserbase}` still means exactly what it did, so no file needs
 changing. A block may sit on the agent, the workspace's `AGENTS.md` or the
 account's; the nearest one wins and replaces the others whole. **A call
 argument beats the file** — `browser=`, `user_agent=`, `device=`, `locale=`,
@@ -993,7 +1025,7 @@ Chrome. For any engine it can name a binary installed in the image at
 A version that is not installed falls back to the default build and says so
 on stderr.
 
-**`live: true` — a page that outlives the call.** Normally each `web_browse`
+**`live: true` — a page that outlives the call.** Normally each `web action=browse`
 call is its own short-lived process: it opens a fresh page, and when it ends
 the page goes with it. A `session` carries the *login* across calls (cookies
 and localStorage), but not the page — so a multi-step form whose progress
@@ -1002,9 +1034,10 @@ its open page running beside the step, and the next call reattaches to it
 over the DevTools protocol and finds the page exactly as it was left:
 
 ```yaml
-web_browse:
-  engine: chromium
-  live: true
+web:
+  browse:
+    engine: chromium
+    live: true
 ```
 
 Then call 1 opens the wizard and clicks Next, call 2 reads step two and fills
@@ -1031,12 +1064,13 @@ Some settings are not how the browser looks but what the agent may do with
 it, and those belong where no page can argue with them — the file.
 
 ```yaml
-web_browse:
-  allowed_domains: [portal.example.com, "*.example-cdn.com"]
-  deny: [eval, download, upload]
-  boundaries: true
-  init: [scripts/stub-analytics.js]
-  state_key: BROWSER_STATE_KEY
+web:
+  browse:
+    allowed_domains: [portal.example.com, "*.example-cdn.com"]
+    deny: [eval, download, upload]
+    boundaries: true
+    init: [scripts/stub-analytics.js]
+    state_key: BROWSER_STATE_KEY
 ```
 
 `allowed_domains:` is the only list of places the browser can reach: pages,
@@ -1076,7 +1110,7 @@ back, and a call that signs in runs no script (`eval`, `js`, `get` of a
 value), because script could read the field. Sign in with `session=` or
 `state=`, and read in the next call.
 
-**Watching a vendor's browser.** With `web_browse: via: browserbase` (or
+**Watching a vendor's browser.** With `web: {browse: via: browserbase}` (or
 `steel`, `hyperbrowser`) the run log carries the session's live view URL —
 `live view: https://…` — where a person can watch the page or take it over
 for a 2FA prompt, while the call runs. `via: cdp` connects to any browser
@@ -1093,10 +1127,10 @@ call ends. The tool streams it — Chromium and Obscura send a frame when the
 page changes, Firefox and WebKit a screenshot a second, at most three frames
 a second either way — through the step's own egress lease, which is what
 lets the platform put a frame on that run and no other. Frames are held five
-minutes after the last. Nothing to switch on; `web_browse: live_view: false`
+minutes after the last. Nothing to switch on; `web: {browse: live_view: false}`
 turns it off for an agent. Lightpanda draws nothing, so it shows nothing.
 
-**The recording** is `video=true` on a call, or `web_browse: video: true` in
+**The recording** is `video=true` on a call, or `web: {browse: video: true}` in
 the block to record every call. Once the run finishes, the run page plays it
 inline under the step, beside any screenshots the step took, and a video
 seeks because the archive serves byte ranges.
@@ -1113,7 +1147,7 @@ watched and recorded — in the next.
 Many sites draw their own checkboxes and radios and hide the real control,
 so it has no size on screen, and a cookie banner fixed over the page covers
 whatever is under it. A plain click waits out its time and fails on both.
-`web_browse` falls back on its own: after a short first try it uses the
+`web action=browse` falls back on its own: after a short first try it uses the
 keyboard, the standard every accessible control supports — Space on a
 checkbox, radio or switch, Enter on a button or link — then the control's
 label, and it reads a toggle back rather than trusting the press. The result
@@ -1136,7 +1170,7 @@ has: every line of the log says it worked. `confirm=` is the contract that
 catches it.
 
 ```
-web_browse(url="…", actions='[…]', confirm="text=Draft saved")
+web(action="browse", url="…", actions='[…]', confirm="text=Draft saved")
 ```
 
 After the actions, the call reloads the page and requires that selector, or
@@ -1155,7 +1189,7 @@ general form — a list of claims about the page after the actions, each
 checked and reported, any failure failing the call:
 
 ```
-web_browse(url="…", actions='[…]',
+web(action="browse", url="…", actions='[…]',
            expect='[{"expect": "text=Draft saved"},
                     {"expect": "url", "contains": "/p/"},
                     {"expect": "label=Title", "value": "Owner Inspections"}]')
@@ -1182,15 +1216,16 @@ will set five next time. The block names the bundle once and the call says
 the name:
 
 ```yaml
-web_browse:
-  identities:
-    au-mobile:  { device: "Pixel 7", locale: en-AU, timezone: Australia/Sydney, proxy: PROXY_AU }
-    au-desktop: { locale: en-AU, timezone: Australia/Sydney }
-    us-desktop: { locale: en-US, timezone: America/New_York, proxy: PROXY_US }
+web:
+  browse:
+    identities:
+      au-mobile:  { device: "Pixel 7", locale: en-AU, timezone: Australia/Sydney, proxy: PROXY_AU }
+      au-desktop: { locale: en-AU, timezone: Australia/Sydney }
+      us-desktop: { locale: en-US, timezone: America/New_York, proxy: PROXY_US }
 ```
 
 ```
-web_browse(url="…", identity="au-mobile", mode="screenshot")
+web(action="browse", url="…", identity="au-mobile", mode="screenshot")
 ```
 
 `check` refuses an identity with an engine that does not exist, a secret
@@ -1217,7 +1252,7 @@ Playwright servers on the runner image (Playwright pinned to an exact
 version, 1.63.0, in `run-container.ts` — the numbered snapshot needs 1.59
 or later, and a floating `@1` would move the pods and the tool under a
 working desk on any rebuild), in the run namespace, the first
-started the moment a step in the account grants `web_browse`, another added
+started the moment a step in the account grants `web action=browse`, another added
 for every two steps browsing at once (`FOLDRUN_BROWSER_STEPS_PER_POD`, up to
 `FOLDRUN_BROWSER_MAX_PODS`, four), kept while calls keep coming, and
 deleted after fifteen minutes unused (`FOLDRUN_BROWSER_IDLE_MS`): a pod
@@ -1257,7 +1292,7 @@ page renders.
 A [test run](runs#test-runs) is handed no browser pod at all. The policy
 that denies a test run the internet is on the run pod, and a browser pod it
 drove would fetch the world on its behalf; refusing the address keeps its
-browser under that policy, so a `web_browse` call on a test run fails closed
+browser under that policy, so a `web action=browse` call on a test run fails closed
 like any other outward call, and the run log says so.
 
 The pool is one Service and one plain NetworkPolicy pair per account: this
@@ -1269,10 +1304,10 @@ rule is written once.
 
 ## Search — the account's own engine
 
-`web_search` is a gallery tool that asks the account's search engine, a
+`web action=search` is a gallery tool that asks the account's search engine, a
 SearXNG that federates the public engines and merges what they return. On a
 cluster it is **the account's own pool of pods**: the first started when a
-step that grants `web_search` is about to run, another for every eight
+step that grants `web action=search` is about to run, another for every eight
 steps searching at once (`FOLDRUN_SEARCH_STEPS_PER_POD`, up to
 `FOLDRUN_SEARCH_MAX_PODS`, three), kept while steps keep using them, and
 deleted after fifteen minutes unused, surplus first. It asks SearXNG's
@@ -1281,7 +1316,7 @@ address, several of the defaults refuse it, and those two answered every
 query with relevant results. An account's queries share a process
 with no one else's, an account that hammers search suspends only its own
 engines, and the pod's seconds and bytes are that account's compute and
-network on the ledger. A step that does not grant `web_search` starts
+network on the ledger. A step that does not grant `web action=search` starts
 nothing. There is no shared engine behind it any more: should the cluster
 refuse the account its pod, the step **fails** with one line saying so
 rather than searching through a process every account once shared. The
@@ -1294,24 +1329,25 @@ source — not for tracking rankings, which is a paid SERP API's job.
 
 ### Tuning the account's own engine
 
-`web_search:` takes a block of SearXNG settings in place of a name — the
-way `web_browse:` takes the browser's. Each is a default for every call the
+`web.search:` takes a block of SearXNG settings in place of a name — the
+way `web.browse:` takes the browser's. Each is a default for every call the
 agent makes:
 
 ```yaml
 ---
 name: researcher
-tools: [web_search, web_fetch]
-web_search:
-  engines: [bing, google cse, duckduckgo]   # ask only these
-  exclude_engines: [wikipedia]              # never these — a lock no call lifts
-  categories: [general, news]               # when no engine list is set
-  safesearch: moderate                      # off | moderate | strict (0, 1, 2)
-  time_range: month                         # day | week | month | year, when a call does not say
-  timeout: 5                                # seconds SearXNG waits for its engines, 0.5-30
-  plugins: [oa_doi_rewrite]                 # switch plugins on for this agent
-  exclude_plugins: [tracker_url_remover]    # and off
-  doi_resolver: doi.org                     # where oa_doi_rewrite points a paper's link
+tools: [web]
+web:
+  search:
+    engines: [bing, google cse, duckduckgo]   # ask only these
+    exclude_engines: [wikipedia]              # never these — a lock no call lifts
+    categories: [general, news]               # when no engine list is set
+    safesearch: moderate                      # off | moderate | strict (0, 1, 2)
+    time_range: month                         # day | week | month | year, when a call does not say
+    timeout: 5                                # seconds SearXNG waits for its engines, 0.5-30
+    plugins: [oa_doi_rewrite]                 # switch plugins on for this agent
+    exclude_plugins: [tracker_url_remover]    # and off
+    doi_resolver: doi.org                     # where oa_doi_rewrite points a paper's link
 ---
 ```
 
@@ -1374,8 +1410,8 @@ real values are in the sandbox for the step, and the run trace says which
 script asked for them. A script that sends its own requests can instead go
 through the egress proxy — read `FOLDRUN_EGRESS`, send `${NAME}` in the
 header — and declare `secrets: proxied` in its tool file; then nothing
-real is in the sandbox for it. The gallery's `web_search` does, because it
-needs no secret at all; the `web_browse` does not, because a cookie has to be
+real is in the sandbox for it. The gallery's `web action=search` does, because it
+needs no secret at all; the `web action=browse` does not, because a cookie has to be
 seeded into a real browser. See [Secrets](secrets#where-the-value-actually-is).
 
 ## Skills — procedure, not capability

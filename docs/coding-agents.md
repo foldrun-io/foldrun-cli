@@ -178,7 +178,7 @@ description: Finds and summarises sources.
 model: default              # fast | default | max
 effort: low                 # how hard to think about it
 size: large                 # small | large | heavy — the sandbox it rents
-tools: [web_search, read, my-folder-tool]  # built-ins and your own tools/, one list
+tools: [web, read, my-folder-tool]  # built-ins and your own tools/, one list
 disallowedTools: [Bash]     # subtract from what it would otherwise have
 skills: [house-style]       # from skills/
 scripts: [summarise.py]     # from scripts/, each becomes a callable tool
