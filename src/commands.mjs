@@ -1822,7 +1822,7 @@ async function followRemote(url, flags, ws, runId, seen = new Map(), open = new 
       }
       if (attempt >= 3) {
         throw new Error(
-          `${err.message} three times while ${runId} is still ${run.status} — \`foldrun logs ${runId} --to ${ws} --follow\` picks it up again, or ${url}/dashboard/${ws}/runs?run=${runId}`,
+          `${err.message} three times while ${runId} is still ${run.status} — \`foldrun logs ${runId} --to ${ws} --follow\` picks it up again, or ${url}/dashboard/${ws}/runs/${runId}`,
         );
       }
       console.error(`  ${c.dim(`… ${err.message}; reconnecting (${attempt}/3)`)}`);
@@ -2544,7 +2544,7 @@ async function invoke(target, flags) {
     return finishLine(run);
   }
   if (!flags.wait) {
-    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)}${body.test ? ` ${c.amber("TEST")}` : ""} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${url}/dashboard/${ws}/runs?run=${body.runId}`)}\n`);
+    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)}${body.test ? ` ${c.amber("TEST")}` : ""} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${url}/dashboard/${ws}/runs/${body.runId}`)}\n`);
     return 0;
   }
   const run = body.run ?? body;
@@ -2552,7 +2552,7 @@ async function invoke(target, flags) {
   const ok = status === "completed";
   if (body.result) console.log(`\n${body.result}\n`);
   const mark = ok ? c.green("✓") : status === "awaiting-approval" ? c.amber("⏸") : c.red("✗");
-  console.log(`  ${mark} ${status}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}${status === "awaiting-approval" ? c.dim(` — ${url}/dashboard/${ws}/runs?run=${body.runId}`) : ""}\n`);
+  console.log(`  ${mark} ${status}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}${status === "awaiting-approval" ? c.dim(` — ${url}/dashboard/${ws}/runs/${body.runId}`) : ""}\n`);
   return ok ? 0 : status === "awaiting-approval" ? 2 : 1;
 }
 

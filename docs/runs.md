@@ -29,7 +29,18 @@ An agent that opens with "I'll start by…" makes all three useless.
 
 ## The run page
 
-The step list on the left, the trace on the right, and a timeline above it —
+Every run has a page of its own, `/dashboard/<workspace>/runs/<run>`, and
+every list, card, alert and search result that names a run opens it; the
+old `?run=` links still land there. It opens on the answer: how the run
+ended — status and the agent's verdict read together, so a run that
+completed and reported BLOCKED shows **blocked**, not green — what it was,
+its headline, when it started, how long it took, its steps and cost. If a
+step failed, its reason sits right under that, one click from the step
+(`#step-3` in the address opens and shows any step). A strip of the same
+flow's recent runs, this one ringed, says whether this was a one-off. **←**
+and **→** move to the older and newer run, **u** back to the list.
+
+Below that, the step list, the trace and a timeline —
 one bar per step with its tool calls marked in milliseconds, so a slow run
 says which step was slow. Every step shows its instruction, what it was
 handed from earlier groups, what it returned, its cost, and how many times it
@@ -42,8 +53,23 @@ step 3/7` — so you can switch away and still see where it is. Only the step
 that is happening is open; a finished step folds to one line with its
 headline, duration, tokens and cost, and the next step opens as it starts.
 Click a step to pin it open or shut, or use **expand all** / **collapse
-all** above the column. A **json** link beside the cost opens the run record
-exactly as the runner wrote it.
+all** above the column. A **json** link opens the run record exactly as the
+runner wrote it.
+
+A step's trace marks each line for what it is — the agent's words, a tool
+call (its name, then what it was called with, a click from whole), a verify
+result as **verified** or **verify failed**, an error, or the runner's own
+plumbing (egress, timings, resources), which is dimmed. Chips above it show
+only one kind, errors included; **full height** shows all of it at once. A
+step that drove a browser shows it live, then plays its recordings — see
+[Tools](tools#watching-it-live-and-the-recording).
+
+The account's home opens on **mission control**: what is **running now**
+(each run's step and agent, and anything running over an hour flagged), what
+**needs attention** (the newest failed, BAD or BLOCKED run of each flow in
+the last day with why, and anything waiting for an approval), and every
+desk's **last 24 runs** as a strip of cells beside its success rate, runs
+today and a week's spend. Every row and every cell opens its run.
 
 Each agent also has an **Activity** page: every step it has ever run, across
 flows and direct runs, with that step's own headline. It is where "how has
