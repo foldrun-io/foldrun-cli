@@ -314,6 +314,7 @@ normal outcome, recorded as one.
 | `debounce` | how long a burst of events must go quiet before it becomes one run |
 | `catchup` | `last` (default) or `none` — what a schedule does about a fire the platform slept through |
 | `disable_after` | consecutive failures after which this flow stops firing |
+| `pause_when` | a marker (`DONE`, `NOTHING LEFT`): when a step's reply in the flow's latest run leads a line with it, the schedule and every other trigger stop firing the flow, and you are told once — for a flow whose job can finish. Worked out from that run, so nothing needs un-setting: run the flow by hand when there is new work, and a run that does not say the marker resumes it. Test runs and stopped runs do not count |
 | `sla` | how long a run is expected to take; past it, one notification |
 | `approvers` | who may decide this flow's gates — addresses, or `admins` |
 | `approve_within` | how long a gate waits before the run is rejected |
