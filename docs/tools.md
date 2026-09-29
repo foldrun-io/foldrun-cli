@@ -244,9 +244,11 @@ proxy to that provider's host alone.
 
 `browse` has a second level: the steps and modes inside a page. A browser
 reached over the DevTools protocol is driven by our code, so it takes every
-step, except the few its vendor's docs say it cannot: Bright Data has no
-`download`, `upload` or second `tab`; Browserbase and Hyperbrowser no
-`download`; ZenRows no `solve`. Such a step fails with that sentence.
+step — only Bright Data's has no second `tab` (its docs). Files cross by
+their bytes: an upload is built inside the page, and a download the vendor's
+machine saved is fetched again by its address, from the page and then from
+here with its cookies — so a download that only a form's POST produces, or a
+one-time link, may not come back from a vendor's browser.
 
 Every adapter records the vendor page it was built from and the day it was
 last matched to it; a test fails when that is more than 90 days old. The
@@ -696,8 +698,52 @@ step**, not at the proxy: CDP is a websocket, which the egress proxy does
 not carry, so the wrapper holds the real value the way it already holds a
 cookie secret, and opens the vendor's session itself. And **`proxy=` and
 `block=` do not reach a vendor's browser** — those are launch options, and
-the vendor launched it; configure them on the vendor's session instead. The
-tool says so on the run log when both are present.
+the vendor launched it; ask the vendor's session for them instead, below.
+The tool says so on the run log when both are present.
+
+**What the vendor's session is asked for — `session:`.** The vendor's own
+options, under one set of names, each mapped onto that vendor's fields as its
+docs name them (read 2026-09-29):
+
+```yaml
+web:
+  browse:
+    via: browserbase
+    session:
+      proxy: { country: AU, city: Sydney }   # true · { country, state, city } · { own: MY_PROXY_SECRET }
+      captcha: true                          # the vendor solves them
+      stealth: true
+      region: ap-southeast-1
+      timeout: 30m
+      keep: client-portal                    # a saved login, reused run to run
+      record: false
+      block: [ads]                           # ads · trackers · cookies (banners)
+      options: { browserSettings: { viewport: { width: 1440, height: 900 } } }   # the vendor's own fields, as written
+```
+
+| `session:` | browserbase | steel | hyperbrowser | browserless | brightdata | zenrows |
+|---|---|---|---|---|---|---|
+| `proxy: true` | `proxies` | `useProxy` | `useProxy` | `proxy=residential` | always on | always on |
+| `proxy.country` · `state` · `city` | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ — ✓ | ✓ — — (user name) | ✓ — — |
+| `proxy.own` | `external` | `proxyUrl` | `proxyServer` (Enterprise) | `externalProxyServer` (paid) | — | — |
+| `captcha` | `solveCaptchas` (on by default) | `solveCaptcha` | `solveCaptchas` | `solveCaptchas` | `Captcha.setAutoSolve` | — |
+| `stealth` | `verified` (Scale) | humanized input | `useStealth` | the `/stealth` route | built in | built in |
+| `region` | us-west-2 · us-east-1 · eu-central-1 · ap-southeast-1 | — | us · us-central · us-west · us-east · asia-south · europe-west | sfo · lon · ams | — | — |
+| `timeout` | 60s–6h | 15s–24h | 1m–12h | the connection's | — (5 min idle, 60 max) | 1m–15m |
+| `keep` | a context | a profile | a profile | — | — | — |
+| `record` | `recordSession` (on by default) | — | `enableWebRecording` | — | — | — |
+| `block` | ads | ads | ads · trackers · cookies | ads | ads · cookies | — |
+| `options` | into the request | into the request | into the request | query parameters | — | query parameters |
+
+A setting the vendor has no option for fails `foldrun check`, naming the
+vendors that do — the same rule as an action. `keep` stores the vendor's
+context or profile id in the workspace's `state/web-browse/`, so the next run
+signs in as the last one left off; it uses the vendor's own browser context
+as it stands, so `user_agent`, `device`, `locale`, `timezone` and
+`identities` beside it are refused. ZenRows' browser refuses a changed user
+agent or device, so those are refused with it. A Steel session is released,
+and a Hyperbrowser one stopped, when the call ends — a Steel session left
+alone runs, and bills, to its timeout.
 
 A vendor that cannot be reached is not fatal: the tool says which one
 refused and renders in the step, as it does when the account pod is away.
