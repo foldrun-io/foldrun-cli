@@ -213,6 +213,36 @@ and then hands it to a small model, so what reaches your agent is that
 model's answer *about* the page. Ours returns the page, lands on the run
 record with every other step, and works whichever model is driving.
 
+### Actions, and who does them
+
+Underneath the tools, the web is eight **actions**, each with a fixed input
+and output whoever answers it: `search`, `fetch`, `browse`, `crawl`, `map`,
+`extract`, `answer`, `monitor`. A provider is the set of actions it has an
+adapter for; foldrun is one of them, and the one used when nothing is named.
+
+| action | foldrun | providers |
+|---|---|---|
+| `search` | the account's own SearXNG | brave, exa, tavily, parallel, you, jina, firecrawl, perplexity, linkup, serper, serpapi, dataforseo |
+| `fetch` | one plain HTTP request | jina, firecrawl, exa, tavily, parallel, zyte, scrapingbee |
+| `browse` | the account's browser pod | browserbase, steel, hyperbrowser, browserless, brightdata, zenrows, cdp |
+| `crawl`, `map` | `web_browse mode=crawl` / `mode=map` | — |
+| `extract` | `web_browse`'s `extract` step | — |
+| `answer`, `monitor` | planned | — |
+
+`web_<action>: <provider>` names who does it; unset is foldrun. A provider
+named for an action it cannot do is an **error in `foldrun check`** and at
+deploy, naming the providers that can — never a quiet fall back to ours, which
+would bill and behave differently from what the file says.
+
+`browse` has a second level: the steps and modes inside a page. A browser
+reached over the DevTools protocol is driven by our code, so it takes every
+step, except the few its vendor's docs say it cannot: Bright Data has no
+`download`, `upload` or second `tab`; Browserbase and Hyperbrowser no
+`download`; ZenRows no `solve`. Such a step fails with that sentence.
+
+Every adapter records the vendor page it was built from and the day it was
+last matched to it; a test fails when that is more than 90 days old.
+
 ### One page, a list, or a whole site
 
 `web_fetch` reads **one URL per call**. That is not a limitation to work
