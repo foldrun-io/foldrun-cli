@@ -209,6 +209,7 @@ URL to PUT the bytes to directly.
 | `/api/workspaces/<ws>/storage?path=` | GET, POST, PUT, DELETE | list, record (`path`, `sha`, `size`), write, remove |
 | `/api/workspaces/<ws>/storage/download?path=` | GET | a redirect to a presigned URL |
 | `/api/workspaces/<ws>/storage/upload-url` | POST | a presigned PUT (`path`, `sha`) |
+| `/api/workspaces/<ws>/storage/preview?path=` | GET | the file parsed for reading, as JSON — text, a table, a document, slides, an archive listing, a mesh, a hex dump. Stored HTML and SVG come back as strings for a sandboxed frame, never served as pages. `413` over 25 MB |
 | `/api/workspaces/<ws>/assets` | POST | create a document (`kind`, `name`, `agent`, `template`) |
 
 Blobs go to object storage; the index of what exists stays local. Presigned

@@ -135,7 +135,7 @@ declared the same way.
 | `foldrun rerun <run-id>` | the same flow again from a step — `--from <n>` as the flow numbers them, or `--agent <name>` for the first step that agent runs; `--wait` follows it |
 | `foldrun schedule` | every flow in the account that fires on a clock, its cron line, and the next few times it fires |
 | `foldrun triggers` | why nothing ran: per flow, how often its trigger fired, how often that became a run, and every reason for the difference (`--since <days>`, `--to`) |
-| `foldrun storage <verb>` | what a workspace produced: `ls [prefix]`, `cat <path>`, `get <path>` — with when each file was written and which run wrote it |
+| `foldrun storage <verb>` | what a workspace produced: `ls [prefix]`, `cat <path>`, `get <path>` — with when each file was written and which run wrote it. `put <file|folder>...` uploads any files (`--into <folder/>`, `--as <path>` for one), `rm <path>` removes one, and `share`, `shares`, `unshare` manage public links |
 | `foldrun storage put <file>` | upload a file into a workspace's storage (`--as <path>` names it) — also `rm <path>` |
 | `foldrun storage share <path>` | a public link to one produced file (`--ttl <days>`, default 7; `--forever`) — also `shares` (`--all`) and `unshare <token>` |
 | `foldrun billing` | the account's balance and its recent ledger entries, with what each was for |

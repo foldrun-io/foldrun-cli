@@ -22,7 +22,7 @@
 //   foldrun triggers       why nothing ran: fired vs started per flow, and each reason
 //   foldrun billing        the balance, and what the money went on
 //   foldrun gallery        the tools the platform ships to every account — list, pull, upgrade <tool>
-//   foldrun storage <verb>  ls / cat / get / share / shares / unshare — what the agents produced, and public links to it
+//   foldrun storage <verb>  ls / cat / get / put / rm / share / shares / unshare — what the agents produced, and public links to it
 //   foldrun runtimes        the environments a workspace's agents need, and whether each is built
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
@@ -88,7 +88,7 @@ const HELP = `foldrun — agents are just folders
   foldrun guide             write the coding-agent rules: a block in AGENTS.md and CLAUDE.md importing it (--check, --print)
   foldrun docs [page]       foldrun's docs, from the copy this CLI ships — what a coding agent should read (--path)
   foldrun triggers          why nothing ran: per flow, fired vs started and every reason (--since <days>, --to <workspace>)
-  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path>, put <file> (--as <path>), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
+  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path>, put <file|folder>... (--into <folder/>, --as <path> for one file), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
   foldrun runtimes          the environments a deployed workspace's agents need (python, pip and npm packages) and whether each is built — failed ones with the installer's error (--wait holds on while any is building)
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
   foldrun gallery           the platform's built-in tools (web_browse, web_search, web_fetch) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>

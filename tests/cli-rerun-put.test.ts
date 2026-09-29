@@ -37,24 +37,72 @@ test("storage put uploads the bytes under the file's name or --as, and rm remove
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-put-"));
   const local = path.join(dir, "brief.md");
   fs.writeFileSync(local, "# brief\n");
+  // No bucket: upload-url answers url null and the platform takes the bytes.
   const s = await serve({
+    "POST /api/workspaces/rank-desk/storage/upload-url": () => ({ url: null }),
     "PUT /api/workspaces/rank-desk/storage": (body) => ({ file: { path: "brief.md", size: body.length } }),
     "DELETE /api/workspaces/rank-desk/storage": () => ({ ok: true }),
   });
   const put = await at(s.url, "storage", "put", local, "--to", "rank-desk");
   assert.equal(put.code, 0, put.out);
   assert.match(put.out, /rank-desk\/storage\/brief\.md/);
-  assert.equal(s.seen[0].query.get("path"), "brief.md");
-  assert.equal(s.seen[0].body, "# brief\n");
+  const puts = () => s.seen.filter((x) => x.method === "PUT");
+  assert.equal(puts()[0].query.get("path"), "brief.md");
+  assert.equal(puts()[0].body, "# brief\n");
   const renamed = await at(s.url, "storage", "put", local, "--as", "reports/brief.md", "--to", "rank-desk");
   assert.equal(renamed.code, 0, renamed.out);
-  assert.equal(s.seen[1].query.get("path"), "reports/brief.md");
+  assert.equal(puts()[1].query.get("path"), "reports/brief.md");
   const rm = await at(s.url, "storage", "rm", "reports/brief.md", "--to", "rank-desk");
   s.close();
   fs.rmSync(dir, { recursive: true, force: true });
   assert.equal(rm.code, 0, rm.out);
-  assert.equal(s.seen[2].method, "DELETE");
-  assert.equal(s.seen[2].query.get("path"), "reports/brief.md");
+  const del = s.seen.at(-1)!;
+  assert.equal(del.method, "DELETE");
+  assert.equal(del.query.get("path"), "reports/brief.md");
+});
+
+test("storage put walks folders under --into, skips .git and empty files, and refuses --as for several", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-put-"));
+  fs.mkdirSync(path.join(dir, "site", "sub"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "site", ".git"));
+  fs.writeFileSync(path.join(dir, "site", "a.txt"), "a");
+  fs.writeFileSync(path.join(dir, "site", "sub", "b.bin"), Buffer.from([0, 1, 2]));
+  fs.writeFileSync(path.join(dir, "site", ".git", "HEAD"), "ref");
+  fs.writeFileSync(path.join(dir, "site", "empty.txt"), "");
+  // An older platform with no upload-url route: 404, then the plain PUT.
+  const s = await serve({ "PUT /api/workspaces/rank-desk/storage": () => ({ ok: true }) });
+  const r = await at(s.url, "storage", "put", path.join(dir, "site"), "--into", "drop/", "--to", "rank-desk");
+  assert.equal(r.code, 0, r.out);
+  const paths = s.seen.filter((x) => x.method === "PUT").map((x) => x.query.get("path"));
+  assert.deepEqual(paths, ["drop/site/a.txt", "drop/site/sub/b.bin"]);
+  assert.match(r.out, /empty\.txt\s+skipped, empty/);
+  const two = await at(s.url, "storage", "put", path.join(dir, "site"), "--as", "x.txt", "--to", "rank-desk");
+  s.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.notEqual(two.code, 0);
+  assert.match(two.out, /--as names one file/);
+});
+
+test("storage put sends the bytes to a presigned URL, then records the file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-put-"));
+  const local = path.join(dir, "photo.jpg");
+  fs.writeFileSync(local, "jpegbytes");
+  const bucket = await serve({ "PUT /bucket/obj": () => ({}) });
+  const s = await serve({
+    "POST /api/workspaces/rank-desk/storage/upload-url": () => ({ url: `${bucket.url}/bucket/obj` }),
+    "POST /api/workspaces/rank-desk/storage": () => ({ ok: true }),
+  });
+  const r = await at(s.url, "storage", "put", local, "--to", "rank-desk");
+  s.close();
+  bucket.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.equal(r.code, 0, r.out);
+  assert.equal(bucket.seen[0].body, "jpegbytes");
+  const record = JSON.parse(s.seen.at(-1)!.body);
+  assert.equal(record.path, "photo.jpg");
+  assert.equal(record.size, 9);
+  assert.match(record.sha, /^[0-9a-f]{64}$/);
+  assert.equal(JSON.parse(s.seen[0].body).sha, record.sha);
 });
 
 test("keys create --workspaces narrows the key, and 'all' asks for every workspace", async () => {

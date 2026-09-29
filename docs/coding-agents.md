@@ -88,7 +88,7 @@ api workspaces/$WS/flows/<flow>/run -X POST   # start one
 | `/agents` · `/agents/<a>/run` | GET POST · POST | list agents, run one |
 | `/evals` · `/evals/<e>/run` | GET POST · POST | list evals, run one |
 | `/tools/<t>/test` | POST | exercise one tool alone |
-| `/storage` · `/storage/download` · `/shares` | GET POST PUT DELETE · GET · POST GET DELETE | files agents produced; public links to them |
+| `/storage` · `/storage/download` · `/storage/upload-url` · `/storage/preview` · `/shares` | GET POST PUT DELETE · GET · POST · GET · POST GET DELETE | files agents produced and people uploaded, any type; a file parsed for reading; public links to them |
 | `/triggers?since=` | GET | why nothing ran: fired vs started per flow, with reasons |
 | `/hooks/<f>/rotate` | POST | new webhook token for a flow |
 | `/api/secrets` · `/api/schedule` · `/api/account` · `/api/keys` | account-level | the vault, the clock, defaults, API keys |

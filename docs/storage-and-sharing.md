@@ -81,7 +81,38 @@ workspace being redeployed.
 
 ## The account view
 
-Storage at the account level shows every workspace's folder in one tree,
-with what each is costing at the foot. It is a view: a run still sees only
-its own workspace's folder, and there is no upload there — a file is uploaded
-where it will be read.
+Storage at the account level lists every workspace as its own section, each
+closed until you open it, with each file's size, age and share state. It is a
+view: a run still sees only its own workspace's folder.
+
+You can upload any file, of any type, to any workspace from there. Use
+**Upload** in the toolbar and pick the workspace, use the **Upload** button on
+a workspace's section, or drop files onto that section. From a terminal,
+`foldrun storage put` does the same, and it takes folders whole:
+
+```sh
+foldrun storage put report.pdf photos/ --into inspections/ --to blog-desk
+foldrun storage put draft.md --as drafts/today.md --to blog-desk
+```
+
+## Previews
+
+Click a file to read it without downloading it. Images, video, audio, PDFs
+and fonts play in the browser as themselves. Everything else is parsed on the
+server and drawn as what it is:
+
+| What | Formats |
+|---|---|
+| text and code | txt, md, mdx, json, yaml, csv as a table, source files, logs, anything that reads as text |
+| office | docx, xlsx, pptx, odt, ods, odp, rtf; legacy doc, xls and ppt as their text |
+| Apple and design | pages, numbers, key, sketch, xd by the preview picture inside them |
+| camera and layered images | RAW (cr2, nef, arw, dng and others), psd, tiff, heic by their embedded preview; svg and svgz as a picture |
+| mail and contacts | eml, mht, ics, vcf |
+| notebooks and links | ipynb, url, webloc |
+| archives | zip, tar, tgz, gz by their contents; 7z, rar and others by name only |
+| 3D | stl, obj, ply, glb, drawn and turned by dragging |
+
+A stored web page opens in a sandboxed frame with scripts off, and an SVG
+only as an image, so a file cannot run code on the dashboard. Anything the
+preview cannot read shows its first bytes, and the download button always
+gives the file itself. Files over 25 MB are not previewed.

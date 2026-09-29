@@ -3657,8 +3657,8 @@ function humanBytes(n) {
 }
 
 /**
- * `foldrun storage ls|cat|get|share|shares|unshare` — what a workspace PRODUCED,
- * and the public links to it.
+ * `foldrun storage ls|cat|get|put|rm|share|shares|unshare` — what a workspace
+ * PRODUCED, what you put beside it, and the public links to it.
  *
  * `source` is the other half of this and the distinction is the whole
  * point: source is what you wrote, storage is what the agents made. A
@@ -3754,26 +3754,76 @@ async function storageCmd(positional, flags, layout) {
   }
 
   if (verb === "put") {
-    const local = positional[1];
-    if (!local) throw new Error("`foldrun storage put <file>` — --as <path> names it differently in storage/");
-    if (!fs.existsSync(local) || !fs.statSync(local).isFile()) throw new Error(`${local} is not a file here`);
-    const rel = typeof flags.as === "string" && flags.as ? flags.as : path.basename(local);
-    const bytes = fs.readFileSync(local);
-    if (!bytes.length) throw new Error(`${local} is empty — the platform refuses an empty file`);
-    const token = tokenFor(url, flags);
-    const res = await remoteFetch(url, `/api/workspaces/${ws}/storage?path=${encodeURIComponent(rel)}`, { method: "PUT", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token });
-    const text = await res.text();
-    if (!res.ok) {
-      let why = text.slice(0, 200);
-      try {
-        why = JSON.parse(text).error ?? why;
-      } catch {
-        /* not JSON */
-      }
-      throw new HttpError(`${rel} in ${ws}: ${why}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, {});
+    // Files and whole folders, into any workspace (--to). Each file goes the
+    // way the dashboard sends it: hashed, a presigned PUT straight to the
+    // bucket, then recorded — so a 400 MB video never meets the platform's
+    // request-size limit. An install with no bucket answers url: null and
+    // takes the bytes itself.
+    const locals = positional.slice(1);
+    if (!locals.length) throw new Error("`foldrun storage put <file|folder>...` — --as <path> renames one file, --into <folder/> puts them under a folder in storage/");
+    const into = typeof flags.into === "string" && flags.into ? `${flags.into.replace(/^\/+|\/+$/g, "")}/` : "";
+    const jobs = [];
+    const walk = (abs, rel) => {
+      const st = fs.statSync(abs);
+      if (st.isDirectory()) {
+        for (const name of fs.readdirSync(abs).sort()) {
+          if (name === ".DS_Store" || name === ".git" || name === "node_modules") continue;
+          walk(path.join(abs, name), `${rel}/${name}`);
+        }
+      } else if (st.isFile()) jobs.push({ abs, rel });
+    };
+    for (const local of locals) {
+      if (!fs.existsSync(local)) throw new Error(`${local} is not here`);
+      walk(path.resolve(local), path.basename(path.resolve(local)));
     }
-    console.log(`\n  ${c.green("✓")} ${ws}/storage/${rel}  ${c.dim(`${humanBytes(bytes.length)} from ${local}`)}\n`);
-    return 0;
+    if (typeof flags.as === "string" && flags.as) {
+      if (jobs.length !== 1) throw new Error("--as names one file; for several use --into <folder/>");
+      jobs[0].rel = flags.as;
+    }
+    const token = tokenFor(url, flags);
+    const base = `/api/workspaces/${encodeURIComponent(ws)}/storage`;
+    const said = async (res) => {
+      const text = await res.text();
+      try { return JSON.parse(text).error ?? text.slice(0, 200); } catch { return text.slice(0, 200); }
+    };
+    let ok = 0, skipped = 0, bytesSent = 0;
+    const failed = [];
+    console.log();
+    for (const job of jobs) {
+      const rel = `${into}${job.rel}`.replace(/\\/g, "/");
+      const bytes = fs.readFileSync(job.abs);
+      if (!bytes.length) {
+        skipped++;
+        console.log(`  ${c.dim(`– ${ws}/storage/${rel}  skipped, empty`)}`);
+        continue;
+      }
+      try {
+        const sha = crypto.createHash("sha256").update(bytes).digest("hex");
+        const ask = await remoteFetch(url, `${base}/upload-url`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha }) }, { token });
+        // A platform older than presigned uploads answers 404 here: it
+        // takes the bytes itself, the way one with no bucket does.
+        if (!ask.ok && ask.status !== 404) throw new HttpError(await said(ask), ask.status, {});
+        const { url: direct } = ask.ok ? await ask.json() : { url: null };
+        if (direct) {
+          const put = await fetch(direct, { method: "PUT", body: bytes, signal: AbortSignal.timeout(Math.max(120, bytes.length / 200_000) * 1000) });
+          if (!put.ok) throw new Error(`the storage service refused it (${put.status})`);
+          const done = await remoteFetch(url, base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha, size: bytes.length }) }, { token });
+          if (!done.ok) throw new HttpError(await said(done), done.status, {});
+        } else {
+          const put = await remoteFetch(url, `${base}?path=${encodeURIComponent(rel)}`, { method: "PUT", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token });
+          if (!put.ok) throw new HttpError(await said(put), put.status, {});
+        }
+        ok++;
+        bytesSent += bytes.length;
+        console.log(`  ${c.green("✓")} ${ws}/storage/${rel}  ${c.dim(humanBytes(bytes.length))}`);
+      } catch (err) {
+        const status = err instanceof HttpError ? err.status : 0;
+        failed.push(rel);
+        console.log(`  ${c.red("✗")} ${ws}/storage/${rel}  ${c.dim(`${err.message}${status === 401 || status === 403 ? refusedHint(url, flags) : ""}`)}`);
+      }
+    }
+    console.log(`\n  ${c.dim(`${ok} of ${jobs.length} uploaded to ${ws} · ${humanBytes(bytesSent)}${skipped ? ` · ${skipped} empty skipped` : ""}${failed.length ? ` · ${failed.length} refused` : ""} — \`foldrun storage ls --to ${ws}\``)}\n`);
+    return failed.length ? 1 : 0;
   }
   if (verb === "rm") {
     const rel = positional[1];
