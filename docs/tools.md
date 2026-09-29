@@ -91,11 +91,20 @@ runtime:
 | `run` | the program beside this file. Omit it and a fenced code block in the body is the program (the single-file form) |
 | `args` | each argument and what it means — this is what the model reads |
 | `timeout` | seconds; without one the program runs until it finishes |
-| `interpreter` | what runs the file — `python3`, `bash`, `node` — when the extension does not say, or says wrong |
+| `interpreter` | what runs the file — `python3`, `bash`, `node` — when the extension does not say, or says wrong. `python3` (or `python`) means the tool's own environment when it has a `runtime:`, not the image's bare python |
 | `secrets` | `proxied` when the program sends through the egress proxy itself (reads `FOLDRUN_EGRESS`, sends `${NAME}`); the default, `materialised`, puts the real values in its environment |
 | `outward` | `true` when the program makes something happen outside — sends, posts, orders. On a [test run](runs#test-runs) a step granting it is handed no real secret at all, whatever their names |
 | `test_mode` | `allow` for a reader that happens to use a send-capable secret (a Business Profile reader on the same token the poster uses): on a test run the step still gets the real values. An `outward` tool in the same step wins. Parsed as `testMode` |
 | `runtime` | interpreters and packages, merged into the step's environment |
+
+A folder tool may declare its dependencies the way its ecosystem does
+instead: a `requirements.txt` beside the program counts as
+`runtime: packages:` (plain requirement lines; `-r`, `-e` and index options
+are ignored), and a `package.json`'s `dependencies` count as
+`runtime: npm:`. Both merge with any `runtime:` in `tool.md`, so a tool copied
+out of a repository keeps working. `foldrun check` warns when a program
+imports a package nothing declares — the tool that runs on the laptop that
+happens to have it and fails on its first platform call.
 
 `args` descriptions are the tool's interface. Write them for someone who has
 never seen the program, and say when to use the tool in `description` — that

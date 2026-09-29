@@ -668,7 +668,7 @@ async function check(workspace, flags = {}) {
   const {
     listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
     workspaceTools, libraryTools, checkFormatVersion, missingToolPrograms, discoverSkills,
-    libraryDir,
+    libraryDir, undeclaredImports,
   } = await core();
   const T = "default";
   const P = "workspace";
@@ -856,6 +856,21 @@ async function check(workspace, flags = {}) {
       "error",
       m.scope === "account" ? `library/tools/${m.name}` : `tools/${m.name}`,
       `run: ${m.run} — no such file (looked for ${m.looked})`,
+    );
+  }
+
+  // A program that imports a package nothing declares runs on the machine
+  // that happens to have it and fails on the platform's first call. Advisory:
+  // the import may be satisfied some way this cannot see. Older cores have no
+  // scanner, and then there is simply nothing to say.
+  for (const u of undeclaredImports ? undeclaredImports(T, P) : []) {
+    const how = u.language === "python"
+      ? `add \`runtime: packages: [${u.modules.join(", ")}]\` to the tool (or a requirements.txt beside it)`
+      : `add \`runtime: npm: [${u.modules.join(", ")}]\` to the tool (or a package.json beside it)`;
+    note(
+      "warn",
+      u.scope === "account" ? `library/tools/${u.name}` : `tools/${u.name}`,
+      `${u.file} imports ${u.modules.join(", ")}, which nothing declares — ${how}`,
     );
   }
 
@@ -3344,7 +3359,64 @@ async function deployOne(url, tenant, workspace, files, flags, layout, from) {
       `${plan.preserved ? c.dim(` · kept ${plan.preserved} file${plan.preserved === 1 ? "" : "s"} the agents own`) : ""}`,
   );
   if (layout) writeStamp(layout, url, workspace, files);
+  // The environments the agents need are built on the platform as the deploy
+  // lands; wait for them here so a package that will not install is heard
+  // now, not from the first scheduled run. --no-runtimes skips the wait.
+  if (url && flags["no-runtimes"] !== true) await reportRuntimes(url, workspace, flags, { waitSeconds: 120 });
   return 0;
+}
+
+/**
+ * The runtimes a deployed workspace's agents need, and whether each is built
+ * (GET /api/workspaces/<ws>/runtimes). With waitSeconds, polls while any is
+ * still pending or building. A platform without the endpoint says nothing:
+ * older installs simply build on first run, as they always did.
+ */
+async function reportRuntimes(url, workspace, flags, { waitSeconds = 0 } = {}) {
+  const until = Date.now() + waitSeconds * 1000;
+  let runtimes = [];
+  for (;;) {
+    try {
+      runtimes = (await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(workspace)}/runtimes`)).runtimes ?? [];
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return [];
+      throw err;
+    }
+    const busy = runtimes.some((r) => r.state === "pending" || r.state === "building");
+    if (!busy || Date.now() >= until) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  for (const r of runtimes) {
+    const what = [
+      r.python && r.python !== true ? `python ${r.python}` : null,
+      ...(r.packages ?? []),
+      ...(r.npm ?? []).map((n) => `npm:${n}`),
+    ].filter(Boolean).join(", ") || "python";
+    const who = c.dim(`(${(r.agents ?? []).join(", ")})`);
+    const mark =
+      r.state === "ready" ? c.green("✓") : r.state === "failed" ? c.red("✗") : c.amber("…");
+    const tail =
+      r.state === "failed"
+        ? `\n        ${c.red(String(r.error ?? "failed").split("\n").slice(-3).join("\n        "))}`
+        : r.state === "ready"
+          ? ""
+          : c.dim(` ${r.state}${waitSeconds ? ` after ${waitSeconds}s — \`foldrun runtimes --to ${workspace}\` checks again` : ""}`);
+    console.log(`    ${mark} runtime ${c.dim(r.fingerprint.slice(0, 8))} ${what} ${who}${tail}`);
+    for (const bad of r.rejected ?? []) console.log(`      ${c.amber("!")} not a requirement, ignored: ${bad}`);
+  }
+  return runtimes;
+}
+
+/** `foldrun runtimes` — the deployed workspace's environments and their state. */
+async function runtimesCmd(flags, layout) {
+  const url = platformFor(flags, "runtimes");
+  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  if (!ws) throw new Error("which workspace? `foldrun runtimes --to <workspace>` — or run it inside one");
+  console.log(`\n  ${c.bold(ws)} ${c.dim("runtimes")}`);
+  const runtimes = await reportRuntimes(url, ws, flags, { waitSeconds: flags.wait === true ? 120 : 0 });
+  if (!runtimes.length) console.log(`    ${c.dim("no agent here declares a runtime")}`);
+  console.log();
+  return runtimes.some((r) => r.state === "failed") ? 1 : 0;
 }
 
 /**
@@ -5028,6 +5100,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return galleryCmd(positional, flags);
     case "storage":
       return storageCmd(positional, flags, layout);
+    case "runtimes":
+      return runtimesCmd(flags, layout);
     case "agent":
       // `new` scaffolds one here; `run` runs one there. The noun is the same
       // thing in both cases, which is why they share a command.

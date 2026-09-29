@@ -128,8 +128,8 @@ a browser or holds real data.
 
 ```yaml
 runtime:
-  python: "3.12"            # optional pin
-  packages: [pandas]        # pip
+  python: "3.12"            # optional pin — fetched when the image lacks it
+  packages: [pandas]        # pip, installed with uv
   node: true
   npm: [cheerio]
 ```
@@ -137,6 +137,23 @@ runtime:
 An agent's own runtime and the runtimes of the tools it grants merge into one
 environment per step, so a tool carries its own dependencies and the agent
 does not repeat them.
+
+The image a step runs in is small on purpose: an interpreter, `uv`, `npm`,
+and none of the world's packages. What a step needs arrives through
+`runtime:` — built once per distinct declaration, kept in the account's
+cache, and reused by every later step and every agent that declares the same
+thing. The environment comes first on `PATH`, so a tool file that says
+`interpreter: python3`, a `#!/usr/bin/env python3` shebang and a bare
+`python3` in Bash all find the packages. A cached environment is checked
+before it is used, and rebuilt when it no longer holds what it promised (an
+interrupted build, an image whose python changed). One nobody has used for
+30 days is pruned.
+
+On a platform, a deploy builds the environments its agents need before any
+step does: `foldrun deploy` waits for them and prints each one, ready or
+failed with the installer's own error, and `foldrun runtimes` asks again
+later. A package that will not install is heard at deploy, not from the
+first scheduled run.
 
 ## Its own model credential
 

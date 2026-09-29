@@ -92,6 +92,13 @@ reads agents step 1 never saw.
 Never touched by a deploy: `runs/`, `state/`, `secrets.json`, and any memory an
 agent wrote that the push does not mention.
 
+`GET /api/workspaces/<ws>/runtimes` answers what a deploy started on the
+platform: every distinct `runtime:` the workspace's agents need
+(`fingerprint`, `agents`, `python`, `packages`, `npm`, and `rejected` for
+entries that are not requirements), each with the `state` of the build the
+platform ran for it — `pending`, `building`, `ready`, or `failed` with the
+installer's own `error`. `foldrun deploy` polls it after a deploy.
+
 ## Flows
 
 | Route | Methods | |
