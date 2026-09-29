@@ -1262,6 +1262,74 @@ address, so the public engines' per-address limits stay shared. Search
 here is for finding a page to read — a directory, a firm's site, a primary
 source — not for tracking rankings, which is a paid SERP API's job.
 
+### Tuning the account's own engine
+
+`web_search:` takes a block of SearXNG settings in place of a name — the
+way `web_browse:` takes the browser's. Each is a default for every call the
+agent makes:
+
+```yaml
+---
+name: researcher
+tools: [web_search, web_fetch]
+web_search:
+  engines: [bing, google cse, duckduckgo]   # ask only these
+  exclude_engines: [wikipedia]              # never these — a lock no call lifts
+  categories: [general, news]               # when no engine list is set
+  safesearch: moderate                      # off | moderate | strict (0, 1, 2)
+  time_range: month                         # day | week | month | year, when a call does not say
+  timeout: 5                                # seconds SearXNG waits for its engines, 0.5-30
+  plugins: [oa_doi_rewrite]                 # switch plugins on for this agent
+  exclude_plugins: [tracker_url_remover]    # and off
+  doi_resolver: doi.org                     # where oa_doi_rewrite points a paper's link
+---
+```
+
+| Key | What SearXNG is asked | A call may |
+|---|---|---|
+| `engines` | only these engines (`engines=`) | replace it with `engines=` or `categories=` |
+| `exclude_engines` | every engine it would ask, minus these | not lift it |
+| `categories` | every enabled engine in these (`categories=`) | replace it |
+| `safesearch` | `safesearch=` 0, 1 or 2 | — |
+| `time_range` | `time_range=`, the default recency | replace it with `time_range=` |
+| `timeout` | `timeout_limit=` | — |
+| `plugins` / `exclude_plugins` | `enabled_plugins=` / `disabled_plugins=` | — |
+| `doi_resolver` | `doi_resolver=` | — |
+
+The call also takes `page=` (1-10) to go past the first results.
+
+**One choice of engines, never two.** The call's `engines=` or
+`categories=` beats the file's, and at either level a named engine list
+beats categories. SearXNG given both would ask the named engines *and*
+every engine in the categories, so `engines: [naver]` would quietly bring
+the rest back; the tool never sends both.
+
+**Names are checked against the running engine.** SearXNG drops a name it
+does not know without a word — a misspelt engine would search everything
+else and look like it worked. `check` refuses a name that is not shaped
+like one, a plugin that does not exist, an engine both asked for and
+excluded, and any of these keys beside `name:` (a search API would ignore
+every one). The tool then checks engines, categories, plugins and the
+resolver against the instance's `/config` and refuses a wrong one with the
+right ones beside it. SearXNG loads only some of its engines: one marked
+*inactive* in its settings (Startpage and Mojeek on newer images, the
+key-only APIs) cannot be asked for from a file.
+
+**Date filters skip engines.** With a `time_range` SearXNG skips every
+engine that cannot filter by date — Yandex and Wikipedia among them. The
+tool names the ones it skipped, and refuses a search where that would be
+all of them.
+
+**What comes back.** Beside the results the tool prints the engine's
+answers (a calculation, a hash), infoboxes (a Wikipedia or Wikidata panel),
+"did you mean" corrections and related searches, and names the engines
+that did not answer even when others did.
+
+Not keys, on purpose: SearXNG's page-only preferences — `theme`,
+`results_on_new_tab`, `image_proxy`, `url_formatting`, `autocomplete` — do
+nothing to a JSON answer, and a key that does nothing is a question someone
+asks later.
+
 ## Script tools and secrets
 
 On a [test run](runs#test-runs) a script is not given a send-capable secret:
