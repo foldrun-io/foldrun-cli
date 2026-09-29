@@ -40,7 +40,7 @@ description: The queries the business wants to win, and where each is measured.
 
 ## Memory is what the agent learned
 
-`memory/` is the one place an agent writes without an explicit `files`
+`memory/` is the one place an agent writes without an explicit `write`
 grant. One fact per file, with frontmatter the index can read. An agent that
 learns a customer's phone format, a site's quirk, a date that mattered,
 writes it there and finds it next run — and a deploy never overwrites memory

@@ -11,8 +11,9 @@ description: Watches competitor sites and drafts a weekly digest.
 model: default
 effort: high
 tools:
-  - web
-  - files
+  - web_search
+  - web_fetch
+  - write
   - [[price-tracker]]
 secrets: [SLACK_WEBHOOK_TOKEN]
 ---
@@ -63,7 +64,7 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `mcpServers` | an MCP server declared inline |
 | `secrets` | vault entries its tools may use — names only, never values |
 | `permissionMode` | `plan` makes the run read-only, whatever else was granted |
-| `web_search`, `web_fetch`, `web_browse` | whose search index, page reader and browser those three tools use — `web_search: brave`, `web_fetch: jina`, `web_browse: browserbase` — with the key named in the vault. Unset is the platform's own. `web_search` and `web_fetch` are set per agent; `web_browse` also cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#searching-somewhere-else); the browser block: [below](#web_browse--which-browser-and-how-it-presents-itself) |
+| `web_search`, `web_fetch`, `web_browse` | whose search index, page reader and browser those three tools use — `web_search: brave`, `web_fetch: jina`, `web_browse: browserbase` — with the key named in the vault. Unset is the platform's own; `web_search:` also takes a block of the own engine's settings — engines, categories, safesearch, plugins ([Tools](tools#tuning-the-accounts-own-engine)). `web_search` and `web_fetch` are set per agent; `web_browse` also cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#searching-somewhere-else); the browser block: [below](#web_browse--which-browser-and-how-it-presents-itself) |
 
 The built-ins, by what they reach. Only **Web** talks to an outside vendor, so
 only Web takes a provider:
@@ -80,10 +81,10 @@ only Web takes a provider:
 | | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs | — |
 | | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
 
-`files` and `bash` are the older names for `write` and `code`, and still work.
-`web`, `fetch`, `WebSearch` and `WebFetch` are **retired**: they granted
-Anthropic's own search and fetch, which sit off the run record and ignore the
-provider. They are still granted so a deployed agent keeps running, but
+`files`, `bash`, `web`, `fetch`, `WebSearch` and `WebFetch` are **retired**.
+`files` and `bash` are the old names for `write` and `code`; the web four
+granted Anthropic's own search and fetch, which sit off the run record and
+ignore the provider. They are still granted so a deployed agent keeps running, but
 `foldrun check` errors on them with the name to write instead.
 
 Anything in `tools:` that no built-in claims is one of your own tools,
@@ -205,7 +206,7 @@ agents/reporter/
 ```
 
 `memory/` writes are the only writes an agent may make outside `outputs/`
-without an explicit `files` grant. `knowledge/` is denied outright — through
+without an explicit `write` grant. `knowledge/` is denied outright — through
 the file tools and through bash.
 
 ### Where files live, from the agent's point of view

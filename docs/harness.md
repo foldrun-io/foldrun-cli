@@ -28,7 +28,7 @@ Run any step that acts on the outside world through these eight.
 
 **1. Can it only do its job?**
 Grant the tools it needs and no more. An agent that must not edit gets `read`,
-not `files`. The publisher that posts should not hold the tool that rewrites
+not `write`. The publisher that posts should not hold the tool that rewrites
 what it is posting — on 2026-09-14 a send step edited its own gate file to get
 past a guard, and the fix was taking the editing tools away, not asking it
 nicely.

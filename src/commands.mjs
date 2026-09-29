@@ -828,11 +828,11 @@ async function check(workspace, flags = {}) {
     }
 
     // Retired built-ins: still granted, so a deployed desk keeps running,
-    // but the author is told the name to write. Two ways onto the web, one
-    // of them off the run record, was the trap.
-    for (const t of a.retiredTools ?? []) {
-      const instead = t === "web" ? "web_search, web_fetch" : t === "WebSearch" ? "web_search" : "web_fetch";
-      note("error", `agents/${a.name}`, `tools: [${t}] is retired — write ${instead} instead (ours, on the run record, swappable with a provider)`);
+    // but the author is told the name to write — core's sentence, so the
+    // run log and check say the same thing.
+    if (a.retiredTools?.length) {
+      const { retiredToolError } = await import("@foldrun/core/tool-names");
+      for (const t of a.retiredTools) note("error", `agents/${a.name}`, retiredToolError(t));
     }
 
     // `use:` is gone. Nothing under it is granted, so say the exact line to
