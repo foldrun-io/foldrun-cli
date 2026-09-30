@@ -1,7 +1,7 @@
 // `foldrun gallery` — the tools the platform ships to every account, from the
 // terminal, and the copy a laptop keeps so `foldrun run` finds them.
 //
-// An agent granting `web_browse` ran on every deploy and had no browser under
+// An agent granting `web` ran on every deploy and had no browser under
 // `foldrun run`, because the gallery was a directory only the platform had.
 //
 //   node --test tests/cli-gallery.test.ts
@@ -16,10 +16,10 @@ import { serve, at, cli } from "./fake-platform.ts";
 const gallery = {
   tools: [
     {
-      name: "web_browse", kind: "tools", title: "Headless browser", description: "a browser",
+      name: "web", kind: "tools", title: "Web", description: "the web",
       files: [
-        { kind: "tools", file: "web_browse/tool.md", content: "---\nname: web_browse\nrun: run.mjs\n---\n" },
-        { kind: "tools", file: "web_browse/run.mjs", content: "console.log('page')\n" },
+        { kind: "tools", file: "web/tool.md", content: "---\nname: web\nrun: run.mjs\n---\n" },
+        { kind: "tools", file: "web/run.mjs", content: "console.log('page')\n" },
       ],
       installed: null,
     },
@@ -36,7 +36,7 @@ test("gallery lists what ships, and says which copies are the account's own", as
   const r = await at(s.url, "gallery");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /web_browse\s+Headless browser\s+from the platform/);
+  assert.match(r.out, /web\s+Web\s+from the platform/);
   assert.match(r.out, /sql .*your copy differs — `foldrun gallery upgrade sql`/);
   assert.match(r.out, /2 tools on http:\/\/127\.0\.0\.1:\d+ — grant one with `tools: \[name\]`; nothing to install/);
 });
@@ -49,7 +49,7 @@ test("gallery pull lays the shelf down per platform, as <kind>/<file>", async ()
   assert.equal(r.code, 0, r.out);
   const dir = path.join(home, "gallery", new URL(s.url).host);
   assert.match(r.out, /2 gallery tools, 3 files/);
-  assert.equal(fs.readFileSync(path.join(dir, "tools/web_browse/run.mjs"), "utf8"), "console.log('page')\n");
+  assert.equal(fs.readFileSync(path.join(dir, "tools/web/run.mjs"), "utf8"), "console.log('page')\n");
   assert.ok(fs.existsSync(path.join(dir, "tools/sql/tool.md")));
   assert.ok(fs.existsSync(path.join(dir, ".fetched")));
   fs.rmSync(home, { recursive: true, force: true });

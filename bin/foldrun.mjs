@@ -93,7 +93,7 @@ const HELP = `foldrun — agents are just folders
   foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path>, put <file|folder>... (--into <folder/>, --as <path> for one file), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
   foldrun runtimes          the environments a deployed workspace's agents need (python, pip and npm packages) and whether each is built — failed ones with the installer's error (--wait holds on while any is building)
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
-  foldrun gallery           the platform's built-in tools (web_browse, web_search, web_fetch) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
+  foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun account           the account's defaults — also set <key> <value>, clear <key>, providers (--check) (singular; accounts lists logins)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret

@@ -152,8 +152,7 @@ where a nearer copy overrides it. That list is the blast radius of changing it.
 
 ## The gallery — platform-maintained tools
 
-Every tool the platform ships — `web`, and the retired `web_search`,
-`web_fetch` and `web_browse` it replaced — is **available in every account
+Every tool the platform ships — `web` — is **available in every account
 from the start**.
 An agent grants one the same way it grants anything: `tools: [web]`
 in its `agent.md`, and it runs, with nothing installed first. The gallery
@@ -260,13 +259,6 @@ Every adapter records the vendor page it was built from and the day it was
 last matched to it; a test fails when that is more than 90 days old. The
 adapters for crawl, map, extract, answer and monitor were built from their
 vendors' docs on 2026-09-29 and have not yet been called with a live key.
-
-**Retired, still read.** Until 2026-09-29 this was three tools —
-`web_search`, `web_fetch`, `web_browse` — each with its own key
-(`web_search: exa`). Both still work, so nothing deployed changes; `foldrun
-check` names each for the rewrite: `tools: [web]`, and the key's value moved
-under `web:` unchanged. `tools: [web]` used to mean Anthropic's own
-WebSearch and WebFetch; it now means this.
 
 Nothing searches the live web. `search` queries an **index** — somebody's
 stored copy of the web, made earlier. `fetch` and `browse` are the only two

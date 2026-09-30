@@ -735,7 +735,7 @@ async function check(workspace, flags = {}) {
       note("error", `agents/${a.name}`, a.timezoneProblem);
     }
 
-    // A web: value (or an older web_search:, web_fetch:, web_browse:) that cannot work —
+    // A web: value that cannot work, or a per-action key outside web: —
     // DeepSeek named for search, a search API named for fetch, a key
     // written into the file. The run would say so in its trail and carry
     // on; the deploy refuses it; this is where a person hears it first.
@@ -790,11 +790,11 @@ async function check(workspace, flags = {}) {
         note("info", `agents/${a.name}`, `tools: [${t}] — from the library on ${platform.url}`);
         continue;
       }
-      if (WEB_TOOLS.has(t)) {
+      if (t === WEB_TOOL) {
         // Built in: the platform's gallery grants it in every account
         // without an install, and a local run fetches the gallery when
         // signed in. Signed out there is nothing on disk to run.
-        if (!platform.url) note("warn", `agents/${a.name}`, `tools: [${t}] — one of the platform's web tools; sign in (\`foldrun login\`) to run it locally`);
+        if (!platform.url) note("warn", `agents/${a.name}`, `tools: [${t}] — the platform's web tool; sign in (\`foldrun login\`) to run it locally`);
         continue;
       }
       const hint = platform.url
@@ -986,9 +986,9 @@ async function check(workspace, flags = {}) {
   return errors.length ? 1 : 0;
 }
 
-/** The web tools the platform's gallery serves: built in, and the only
- *  built-ins that take a provider. */
-const WEB_TOOLS = new Set(["web", "web_search", "web_fetch", "web_browse"]);
+/** The web tool the platform's gallery serves: built in, and the only
+ *  built-in that takes a provider. */
+const WEB_TOOL = "web";
 
 /** Transports a pre-v0.1 tool could put in `type:`. */
 const TRANSPORTS = new Set(["http", "script", "mcp"]);
@@ -1115,10 +1115,10 @@ async function runTarget(target, flags) {
 // ---------------------------------------------------------------- gallery
 
 /**
- * The platform's gallery — `web` (and the retired `web_browse`, `web_search`, `web_fetch`), the tools it ships to
- * every account — is a shelf every run on the platform reads beneath the
- * account's own library. A laptop had no shelf, so an agent granting
- * `web_browse` ran fine on a deploy and had no browser under `foldrun run`.
+ * The platform's gallery — `web`, the tool it ships to every account — is
+ * a shelf every run on the platform reads beneath the account's own
+ * library. A laptop had no shelf, so an agent granting a gallery tool ran
+ * fine on a deploy and had no program under `foldrun run`.
  * The CLI keeps a copy per platform here and points the local runner at it:
  * the same lookup order, the workspace first, then the account, then this.
  */
@@ -2250,7 +2250,7 @@ function hasAnyStorage(s) {
   );
 }
 
-/** Web Storage and IndexedDB for this origin, in the shape `web_browse`'s
+/** Web Storage and IndexedDB for this origin, in the shape web browse's
  *  `storage:` seeds back. Read in the page, because that is the only place
  *  these exist. */
 async function readStorage(page, origin) {

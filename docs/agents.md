@@ -64,7 +64,7 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `mcpServers` | an MCP server declared inline |
 | `secrets` | vault entries its tools may use — names only, never values |
 | `permissionMode` | `plan` makes the run read-only, whatever else was granted |
-| `web` | the `web` tool's settings: `actions:` — which of its eight it may use (all when absent) — and who does each, `web: {search: brave, fetch: jina, browse: browserbase, crawl: firecrawl}`, with the key named in the vault. Unset is foldrun's own. `search:` also takes a block of the own engine's settings — engines, categories, safesearch, plugins ([Tools](tools#tuning-the-accounts-own-engine)); `browse:` a block of the browser's ([below](#webbrowse--which-browser-and-how-it-presents-itself)), and `browse:` alone cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#reaching-the-web). The older per-action keys (`web_search:` …) are retired and still read |
+| `web` | the `web` tool's settings: `actions:` — which of its eight it may use (all when absent) — and who does each, `web: {search: brave, fetch: jina, browse: browserbase, crawl: firecrawl}`, with the key named in the vault. Unset is foldrun's own. `search:` also takes a block of the own engine's settings — engines, categories, safesearch, plugins ([Tools](tools#tuning-the-accounts-own-engine)); `browse:` a block of the browser's ([below](#webbrowse--which-browser-and-how-it-presents-itself)), and `browse:` alone cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#reaching-the-web). A per-action key outside the block is not read — `check` errors on it |
 
 The built-ins, by what they reach. Only **Web** talks to an outside vendor, so
 only Web takes a provider:
@@ -114,10 +114,9 @@ terminal when there is one.
 
 **Retired**, still granted so a deployed agent keeps running, and each an
 error in `foldrun check` naming what to write instead: `files` and `bash`
-(now `write` and `code`); `fetch`, `WebSearch` and `WebFetch` (Anthropic's own
-search and fetch, off the run record and deaf to a provider — now `web`); and
-`web_search`, `web_fetch` and `web_browse` (the three tools `web` replaced).
-`web` itself meant Anthropic's pair until 2026-09-29; it now means ours.
+(now `write` and `code`). The web is `web` alone; Anthropic's `WebSearch` and
+`WebFetch` are not names to grant — a model provider's own search is chosen
+under `web:` (`web: {search: zai}`), and anything else is an unknown tool.
 
 Anything in `tools:` that no built-in claims is one of your own tools,
 resolved against the workspace's `tools/` and then the account library. A
