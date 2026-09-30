@@ -518,6 +518,13 @@ every flow that uses the agent shares — the canvas says which flows before it
 writes. A sub-agent without a `description:` is asked for one first. The
 **List** tab is the older card view; the choice is remembered per browser.
 
+The same edits from a terminal, written by the same code: `foldrun flow add
+<flow> <pattern>` for a palette block (it prints the diff and refuses one
+`foldrun check` would call an error), `foldrun agent link <agent> --subagent |
+--consult | --can-ask` (and `unlink`) for the docks and the toggle, and
+`foldrun flow show <flow>` for the canvas itself, as text. See the
+[CLI reference](cli).
+
 ## What the platform never does
 
 It sets **no clock of its own** — not on a step, a script tool, an HTTP tool, a
