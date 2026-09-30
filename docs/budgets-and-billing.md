@@ -210,7 +210,8 @@ when. If the invoice is still unpaid when the grace ends, the hourly sweep
 suspends the account for new runs with the reason **payment overdue**, and
 one more email says so; the banner turns red. Runs in flight finish, people
 can still sign in, nothing is deleted. The moment `invoice.paid` arrives
-for it — or `invoice.voided` — the suspension is lifted, and a payment
+for it — or `invoice.voided`, `invoice.marked_uncollectible`, or Stripe
+cancelling the subscription — the suspension is lifted, and a payment
 gets a thank-you email. Every step is once per invoice, however often
 Stripe retries or redelivers; a second invoice failing during the grace
 does not restart it. Dunning lifts only a suspension it placed: an account
@@ -265,7 +266,11 @@ webhook, `invoice.paid`, `customer.subscription.updated` — and in no fixed
 order; whichever arrives first grants and the rest find it done. A plan
 change inside a period is a new cycle on the new plan (the prorated invoice
 and the updated event are the same cycle, one grant); a renewal is a new
-period. Downgrades still lose the carry.
+period. A change inside a period grants the new plan's bundle **pro-rated
+by the share of the period left**, the way Stripe prorates the charge; a
+renewal grants it whole. Going back to a plan already granted this period
+switches the plan and its gates back but grants nothing again. Downgrades
+still lose the carry.
 
 **The low-balance guard runs every hour**, and right after a run whose
 charge takes the balance across the warning line. Per crossing of the line
@@ -273,8 +278,12 @@ it makes at most **one** auto top-up attempt and sends at most **one**
 email; a declined card is not retried every hour — the email goes instead —
 and both re-arm once the balance is back above the line.
 
+**Tax.** A top-up credits the price before tax: with Stripe Tax on, the
+Checkout price is tax-inclusive, so a $50 top-up costs $50 and credits $50.
+An auto top-up is a bare charge with no Stripe Tax and no tax invoice.
+
 **Refunds.** A refunded top-up takes off the credits it added — the charge's
-own amount caps it — and the balance is **not** floored at zero: credit
+own amount caps it, scaled to the pre-tax share when the charge carried tax — and the balance is **not** floored at zero: credit
 refunded after it was spent leaves the account in the red, and admission
 refuses the next run until it is topped up. A refunded plan fee does not
 touch the wallet: the credits it bought were a grant, and they end with the
@@ -284,7 +293,8 @@ cycle.
 card network already has the money). The account is found through the
 disputed charge — its metadata, its payment's, then the saved customer. Won
 (or an inquiry closed without a chargeback): the same amount goes back on,
-once. Lost: it stays off.
+once. Lost: it stays off. As with refunds, a dispute on a plan fee does not
+touch the wallet; it is logged and left to the super admin.
 
 **Every line says why it exists.** Each ledger line carries a reason —
 usage, pod, fee, checkout, auto-topup, manual, operator, refund, dispute,
@@ -321,8 +331,9 @@ is `<public url>/api/billing/stripe`, sending exactly:
 | `invoice.paid` | a plan cycle granted: signup, renewal, or a change; an overdue invoice settled |
 | `invoice.payment_failed` | the plan goes past due; dunning starts |
 | `invoice.voided` | an overdue invoice cancelled; dunning ends |
+| `invoice.marked_uncollectible` | an overdue invoice written off; dunning ends |
 | `customer.subscription.updated` | a plan swap, or a status change |
-| `customer.subscription.deleted` | the plan it paid for ends |
+| `customer.subscription.deleted` | the plan it paid for ends; its dunning ends |
 | `payment_intent.succeeded` | an auto top-up credited |
 | `payment_intent.payment_failed` | an auto top-up refused; the warning goes |
 | `charge.refunded` | a refunded top-up's credits come off |

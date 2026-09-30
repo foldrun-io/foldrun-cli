@@ -83,7 +83,8 @@ writes are text: markdown, and a script's or a register's own formats —
 
 ```json
 { "files": [{ "path": "agents/x/agent.md", "content": "..." }],
-  "commit": "abc123", "force": false, "dryRun": false }
+  "commit": "abc123", "force": false, "dryRun": false,
+  "expectRemoved": ["storage/old-report.md"] }
 ```
 
 Returns `{ ok, applied, commit, added, updated, removed, preserved }`; with `dryRun: true`, `{ ok, applied: false, added, updated, removed, issues, blockedBy }` and nothing is written. Over 10 MB is `413`. **`422` with
@@ -94,6 +95,14 @@ broken flow is caught at push time rather than at 3am when its schedule fires.
 `dryRun: true` checks and changes nothing. `force: true` deploys over a live
 run, which otherwise refuses — swapping files under a running flow means step 3
 reads agents step 1 never saw.
+
+`expectRemoved` (optional) is the `removed` list a person confirmed from a dry
+run. If the deploy would now remove anything outside it — a run wrote a new
+`storage/` output in between, say — it is refused with **`409`**
+`{ ok: false, reason: "removals changed", removed, unexpectedRemovals }` and
+nothing changes; confirm the new `removed` and send it again. The check and the
+swap happen in one step, so nothing can slip in between. Absent, no check.
+`foldrun deploy` always sends it: `[]` when nothing was to be removed.
 
 Never touched by a deploy: `runs/`, `state/`, `secrets.json`, and any memory an
 agent wrote that the push does not mention.
@@ -147,8 +156,8 @@ paying for the steps around it.
 | `/api/workspaces/<ws>/runs/<id>/rerun` | POST | again — `step` to start partway, or `agent` to start at the first step that agent runs (one of the two is required). Takes `?wait=true&timeout=` like a flow start |
 | `/api/workspaces/<ws>/runs/bulk` | POST | one action on many runs at once. `action` is `stop` or `rerun`; the runs are named by any of `runIds`, `status`, `flow`, `since`, `until`, AND-ed together, and a call naming none of them is refused rather than treated as "everything". `from` picks the step a rerun starts at, `dryRun: true` answers with what would be touched and touches nothing. At most 100 runs per call — past that it answers `422` with the count, because a filter matching more than that is almost certainly the wrong filter. Each run is its own outcome: the reply carries `matched`, `succeeded`, `failed` and a `runs` array, so one run that finished a second ago does not abort the other thirty |
 | `/api/workspaces/<ws>/runs/<id>/approve` | POST | release a run parked on a human |
-| `/api/workspaces/<ws>/runs/<id>/answer` | POST | answer a question an agent asked mid-step (`tools: [ask]`): `{question: <id>, answer}`. The agent is waiting in a live sandbox and gets it within a second or two. First answer wins — a second is `409` with the answer that stands. `404` when the question is not this run's or has expired |
-| `/api/workspaces/<ws>/runs/<id>/message` | POST | say something to a running agent: `{text}` (at most 4 000 characters). It reaches the model after its next tool call, as context — it never changes the step's tools. `409` unless the run is running |
+| `/api/workspaces/<ws>/runs/<id>/answer` | POST | answer a question an agent asked mid-step (`tools: [ask]`): `{question: <id>, answer}`. The agent is waiting in a live sandbox and gets it within a second or two. First answer wins — a second is `409` with the answer that stands; also `409` when the agent stopped waiting (its ask timed out) or its step is no longer running. `404` when the question is not this run's or has expired |
+| `/api/workspaces/<ws>/runs/<id>/message` | POST | say something to a running agent: `{text, step?}` (at most 4 000 characters). It reaches the model after its next tool call, as context — it never changes the step's tools. `step` is the step's index in the run; left out, the only running step. With several running (a parallel group) and no `step`, `400` listing them in `running`, so a sibling never takes a message meant for another. `409` unless the run, and that step, are running. Replies `{ok, step, message}` |
 | `/api/workspaces/<ws>/runs/<id>/archive` | GET | one file the run archived from an agent's `outputs/` — `agent` and `path` name it; the run page's Out column links here, and plays a recording or shows a picture inline. Served as bytes, never as a page; a `Range` header gets `206` with that slice, which is how a video seeks |
 | `/api/workspaces/<ws>/runs/<id>/live` | GET | the live view: with no query, `{ agents: { <agent>: <last frame at> } }`; with `agent=`, the newest frame that agent's browser streamed as `image/jpeg` (or `204` when there is none), and `x-live-url`, `x-live-at`, `x-live-ended`, `x-live-engine` headers. Frames arrive from `web action=browse` through the step's egress lease and expire five minutes after the last |
 | `/api/workspaces/<ws>/runs/<id>/promote` | POST | save a completed run as a regression case in `evals/<target>-regressions.md` — `evalName` to pick the file, `caseName` to name the case, `expect` (assertion lines, e.g. `["contains: $34"]`) to replace the default judge. Returns `{ ok, file, created, caseName }` |

@@ -4576,12 +4576,20 @@ async function messageCmd(positional, flags, layout) {
   const runId = positional[0];
   const text = positional.slice(1).join(" ").trim();
   if (!runId || !text) throw new Error("`foldrun message <run-id> \"…\"` — the run must be running");
+  // `--step <n>`: which running step, by its index in the run — needed only
+  // when a parallel group has several running; the platform lists them.
+  let step;
+  if (flags.step !== undefined) {
+    if (typeof flags.step !== "string" || !/^\d+$/.test(flags.step)) throw new Error("`--step <n>` — the step's number in the run, from `foldrun runs <run-id>`");
+    step = Number(flags.step);
+  }
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${encodeURIComponent(runId)}/message`, {
+  const sent = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${encodeURIComponent(runId)}/message`, {
     method: "POST",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(step === undefined ? { text } : { text, step }),
   });
-  console.log(`\n  ${c.green("✓")} sent to ${runId} ${c.dim(`in ${ws} — it reaches the agent after its next tool call`)}\n`);
+  const which = typeof sent?.step === "number" ? ` step ${sent.step}` : "";
+  console.log(`\n  ${c.green("✓")} sent to ${runId}${which} ${c.dim(`in ${ws} — it reaches the agent after its next tool call`)}\n`);
   return 0;
 }
 
