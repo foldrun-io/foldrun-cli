@@ -122,6 +122,20 @@ test("an edit check would call an error is refused, and nothing is written", () 
   assert.equal(flowOf(ws), FLOW);
 });
 
+// An error already in the workspace — here a folder tool whose program is
+// gone, whose message names a path — is not the edit's doing. Each check runs
+// on a fresh temporary copy, so the path differs; it must still match.
+test("an error that was there before the edit does not block it", () => {
+  const { root, ws } = desk();
+  fs.mkdirSync(path.join(ws, "tools/broken"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "tools/broken/tool.md"), "---\nname: broken\ntransport: script\nrun: run.mjs\ndescription: gone\n---\n");
+  const before = run(root, "check");
+  assert.match(before.stdout, /tools\/broken/, "check does report it");
+  const r = run(root, "flow", "add", "publish", "approval", "--step", "3");
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /refused/);
+});
+
 test("a value the grammar cannot read is refused in the parser's words", () => {
   const { root, ws } = desk();
   const r = run(root, "flow", "add", "publish", "loop", "--step", "2", "--loop", "9");

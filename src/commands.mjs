@@ -15,8 +15,11 @@ import { defaultPlatform, saveCredential, removeCredential, readCredentials, nor
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
 // job, or a test that wants to match what a person reads. The tests had
-// been setting it all along, to no effect.
-const paint = (code) => (s) => (process.env.NO_COLOR ? String(s) : `\x1b[${code}m${s}\x1b[0m`);
+// been setting it all along, to no effect. Output that is not a terminal
+// (a pipe, a file, a coding agent reading it) gets no escapes either, unless
+// FORCE_COLOR asks for them.
+const colour = !process.env.NO_COLOR && (Boolean(process.env.FORCE_COLOR) || Boolean(process.stdout.isTTY));
+const paint = (code) => (s) => (colour ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 const c = {
   dim: paint(2),
   bold: paint(1),
@@ -5426,7 +5429,14 @@ const problemKey = (p) => `${p.where.replace(/:\d+$/, "")}\u0000${p.message}`;
 async function problemsAdded(desk, changes) {
   const after = new Map(desk.files);
   for (const [rel, content] of changes) after.set(rel, content);
-  const run = (files) => inTree(desk, files, async (dir) => (await checkProblems(dir, { local: true })).problems);
+  // Each run checks a fresh temporary copy, so a message naming a path
+  // names a different folder each time; with the folder taken out, the same
+  // problem before and after the edit is the same problem.
+  const run = (files) =>
+    inTree(desk, files, async (dir) => {
+      const root = path.dirname(path.dirname(dir));
+      return (await checkProblems(dir, { local: true })).problems.map((p) => ({ ...p, message: p.message.split(root).join("<desk>") }));
+    });
   const was = await run(desk.files);
   const now = await run(after);
   const left = new Map();
