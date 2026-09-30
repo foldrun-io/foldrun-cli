@@ -2166,12 +2166,17 @@ async function siteLogin(positional, flags, layout) {
   }
 
   const login = loginCookieOf(cookies);
+  // Here --url is the SITE. The platform must come from everything else
+  // (--profile, FOLDRUN_URL, where you last signed in): read with --url in
+  // it, the secret was PUT to https://medium.com/api/secrets, with the
+  // platform key as its Bearer token.
+  const platformFlags = { ...flags, url: undefined };
   const store = async (name, value) => {
-    const remote = flags.local === true ? undefined : remoteUrl(flags);
+    const remote = flags.local === true ? undefined : remoteUrl(platformFlags);
     const named = takeWorkspace([], layout);
     const scope = flags.account === true ? undefined : flags.to ?? named ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
     if (remote) {
-      await remoteCall(remote, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, value, workspace: scope }) });
+      await remoteCall(remote, platformFlags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, value, workspace: scope }) });
     } else {
       (await core()).setSecret("default", name, value, scope);
     }
@@ -4249,6 +4254,11 @@ async function accountCmd(positional, flags) {
   } else {
     const value = positional[2];
     if (value === undefined) throw new Error(`\`foldrun account set ${key} <value>\` — or \`clear ${key}\` to unset it`);
+    // Not a number is an error, not a clear: Number("abc") is NaN, JSON sends
+    // it as null, and null is how PATCH is told to clear the setting.
+    if (key === "concurrency" && !/^\d+$/.test(value)) {
+      throw new Error(`concurrency is a whole number of runs at once, e.g. \`foldrun account set concurrency 4\` — not "${value}"`);
+    }
     patch = { [key]: key === "concurrency" ? Number(value) : value };
   }
 
