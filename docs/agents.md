@@ -149,6 +149,12 @@ before it is used, and rebuilt when it no longer holds what it promised (an
 interrupted build, an image whose python changed). One nobody has used for
 30 days is pruned.
 
+Steps that need the same environment at once build it once: the others
+wait. A build that fails leaves a `.failed` marker with its error for 60
+seconds, and a step waiting on it stops at once with that error instead of
+waiting out the clock. `python: false` and `node: false` mean the step wants
+none — no environment is built for them.
+
 On a platform, a deploy builds the environments its agents need before any
 step does: `foldrun deploy` waits for them and prints each one, ready or
 failed with the installer's own error, and `foldrun runtimes` asks again

@@ -99,12 +99,18 @@ runtime:
 
 A folder tool may declare its dependencies the way its ecosystem does
 instead: a `requirements.txt` beside the program counts as
-`runtime: packages:` (plain requirement lines; `-r`, `-e` and index options
-are ignored), and a `package.json`'s `dependencies` count as
+`runtime: packages:`, and a `package.json`'s `dependencies` count as
 `runtime: npm:`. Both merge with any `runtime:` in `tool.md`, so a tool copied
 out of a repository keeps working. `foldrun check` warns when a program
 imports a package nothing declares — the tool that runs on the laptop that
 happens to have it and fails on its first platform call.
+
+A `requirements.txt` is read for its requirements. A line ending in a
+backslash joins the next, as `pip-compile` writes its pins. Options are not
+applied — `-r`, `-e`, an index URL, a pin's `--hash` — and the build log
+names them: a hash-pinned file installs its pins without hash checking, and
+says so. A line with an environment marker (`; python_version < "3.11"`) or
+a `name @ url` is refused, with a line in the log.
 
 `args` descriptions are the tool's interface. Write them for someone who has
 never seen the program, and say when to use the tool in `description` — that
@@ -305,6 +311,11 @@ to the flow, not by passing twenty URLs to one call:
 
 A hundred sites is the same shape one level up: a flow fanning out, each step
 mapping or crawling one site. Not one enormous call.
+
+Where a result is written to a file — `fetch --save`, `extract --save`,
+`crawl --out` — the path must stay inside the agent directory. `../`, an
+absolute path elsewhere or a symlink out is refused before any request, so a
+bad path costs no fetch.
 
 ### What else the browser does
 
@@ -896,6 +907,8 @@ the matches it was. `"@e4"` is found again by that. When it is gone, or the
 page now has a different count of the same thing — a third "Delete" where
 there were two — the step fails and says which, instead of clicking a
 neighbour. Read the page with `mode=aria` again and use the new numbers.
+A number read on one page is refused on another (a different origin or
+path), with the same advice: read that page with `mode=aria` first.
 
 ```
 web(action="browse", url="https://example.com/cart", mode="aria", interactive=true)
@@ -1138,7 +1151,9 @@ it is refused before a browser opens. `deny:` names actions this agent may
 never take — `check` refuses a name that is not an action, because a
 misspelt denial would deny nothing, and `js` stands for the call argument.
 `eval` also covers script by another name (a `wait` on a function, a
-clipboard read), and `goto` covers a new tab or a sign-in that opens a URL.
+clipboard read), and `goto` covers a new tab, a sign-in that opens a URL, and
+a `download` given a URL — that is a navigation, and `allowed_domains:` is
+checked for it too.
 The list holds across redirects: each hop is checked before the browser
 follows it.
 `boundaries: true` wraps every reply's page text in markers carrying a nonce

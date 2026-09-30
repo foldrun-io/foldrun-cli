@@ -8,7 +8,7 @@ and no ceiling can spend in an hour what a month was meant to.
 
 | level | where | what it does when reached |
 |---|---|---|
-| **an agent, per run** | `budget: 2` in the agent's `agent.md` | the most that agent may spend in one run, across every step it takes in it — its step stops itself mid-turn at what is left, and a later step of its own in the same run is refused before it starts |
+| **an agent, per run** | `budget: 2` in the agent's `agent.md` | the most that agent may spend in one run, across every step it takes in it — its step stops itself mid-turn at what is left, and a later step of its own in the same run is refused before it starts. Its steps running at once share what is left, as a group shares the run's: the copies of a fan-out split the cap, they are not each handed the whole of it |
 | **a run** | `budget: 6` in a flow's frontmatter | a hard cap: between groups the next group does not start; within a group each step gets an equal share of the remainder and stops itself mid-turn when it is spent — the run cannot end over the cap |
 | **a workspace, over time** | `budget: 60` in the workspace's `AGENTS.md`, or Settings | new runs refuse until the window turns |
 | **the account, over time** | `budget: 500` in the account's `AGENTS.md`, or Settings | the same, for everything |

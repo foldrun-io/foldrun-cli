@@ -57,6 +57,14 @@ restricted, they are OR'd, not AND'd — by this scheduler and by cron itself.
 every day of the first week: about eleven runs a month. For a monthly job,
 use a plain day of month (`0 5 3 * *`) and let the weekday go.
 
+**Daylight saving.** The schedule is read in `timezone:`, and when the clocks
+change it behaves as Vixie cron does. A job at a fixed time — neither minute
+nor hour a `*` — fires once in an hour that happens twice, the first time
+round, and a time the clocks skip fires once, at the first instant after the
+gap. Sydney's `30 2 * * *` runs once on 5 April and at 03:00 on 4 October. A
+`*` in the minute or the hour follows the clock as it is: an hourly job runs
+in both copies of a repeated hour and not in a skipped one.
+
 ## One desk per day
 
 A pattern that has held up: give each scheduled flow its own morning, so a

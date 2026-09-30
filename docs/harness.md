@@ -56,6 +56,9 @@ refusal. A credential that was rejected will be rejected again, and repeating
 a refused write is how a silent 403 becomes a block on your whole address.
 When a step can be refused rather than merely fail, say so in the agent: one
 `BLOCKED` reply naming the secret to renew, and no second attempt.
+An outward step is not retried when its check fails after its tools ran:
+the email went, and a retry would send it again. A failure mid-send is still
+retried, so `check` and `deploy` warn on `retry:` on any outward step.
 
 **5. Who approves the irreversible?**
 `!` or `ask:` on the step that spends money, sends mail or publishes, with

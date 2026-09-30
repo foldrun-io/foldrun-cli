@@ -28,6 +28,11 @@ one workspace sees that workspace's runs and files and nothing else; the
 sidebar, Find, the runs list and the approvals banner all filter to their
 scope. Scope is set on the invite and changed per member later.
 
+Secrets and OAuth connections follow the scope too. A scoped member or key
+sees and changes only its own workspaces' secrets and connections: not
+another workspace's, and not the account-level ones, which belong to
+everyone's workspaces at once.
+
 ## Invites
 
 An invite carries a role, a workspace scope, and an email address it is bound
@@ -44,6 +49,8 @@ honours the same scope: pushing needs write on that workspace, and pushing
 the library needs admin. Two things a key cannot do: act against a named
 member — inviting, re-roling, removing, transferring need a signed-in person,
 because a key names an account and never a who — and exceed its role.
+A scoped admin sees and revokes only keys inside its own scope; a key wider
+than that, the owner's included, is not in its list.
 
 **Deploy keys** are keys scoped to one workspace's git remote, read or write.
 They clone and push that workspace and are refused everywhere else, which is

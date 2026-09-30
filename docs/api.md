@@ -7,7 +7,12 @@ file does not mention it.
 ## Authentication
 
 One funnel for every caller. A route either takes an authenticated tenant or
-refuses — there is no separate "browser API".
+refuses — there is no separate "browser API". The exceptions carry their own
+proof instead of a key: a token or signature (`/s/<token>`, `/api/hooks`,
+`/api/inbox`, `/api/events`, `/api/approve`, `/api/git`, `/api/billing/stripe`,
+`/api/billing/confirm`), the sign-in and recovery steps (`/api/auth/signup`,
+`login`, `forgot`, `reset`, `verify`, `mfa/verify`, `/api/cli/login`,
+`/api/cli/authorize` GET, `/api/oauth/callback`), and `/api/healthz`.
 
 ```
 Authorization: Bearer <api-key>      # machines. Settings → API keys
@@ -31,7 +36,8 @@ than the person who minted it, and opens every route below with that — except
 the ones that are about people: `/api/team` (invite, roles, scope, remove,
 transfer), `/api/auth/*` (profile, password, MFA, sessions), a user's
 `/api/avatars/user/<id>`, and the super admin console. Those need a signed-in
-session and answer a key with `401`. Everything a workspace or an account
+session and answer a key with `401` (a user's avatar answers a key with
+`403`: the key is read, then refused because it is not that person). Everything a workspace or an account
 *does* — files, runs, secrets, shares, schedules, hooks, storage, billing —
 takes the key.
 
@@ -61,7 +67,7 @@ api workspaces/$WS/flows/publish/run -X POST   # start a flow
 
 | Route | Methods | |
 |---|---|---|
-| `/api/workspaces/<ws>/source?path=` | GET | one file, or the tree with no `path` |
+| `/api/workspaces/<ws>/source?path=` | GET, PUT, PATCH, DELETE | GET: one file, or the tree with no `path`. PUT `{path, content, message?}` writes one file (a revision, `message` its note). PATCH `{from, to}` moves one. DELETE `{path}` removes a file or folder. The body carries the path on writes — a `?path=` there is a `400` |
 | | PUT | write (`path`, `content`, optional `message` — recorded on the revision, as `foldrun source put --message` sends it) |
 | | PATCH | move (`from`, `to`) |
 | | DELETE | remove (`path`) |
@@ -147,7 +153,7 @@ paying for the steps around it.
 | `/api/workspaces/<ws>/triggers?since=` | GET | why nothing happened: one row per flow saying how often its trigger fired, how often that became a run, and what the difference was — a duplicate delivery, a throttled burst, a debounced burst still being waited out, a quarantined flow, an `overlap: skip`, a fire missed while the platform was down. Plus every decision newest-first, and the hook/inbox delivery log, which answers the separate question of whether a request arrived and was authentic. `since` is days, default 7 |
 | `/api/workspaces/<ws>/notify/test` | POST | sends one real notification to whatever this workspace's `notify:` resolves to, and answers `{ ok, destination, detail }` — including the provider's own words when it failed, which are what name the problem. Always `200`: the request was handled, and the result is the answer. Needs the permission that runs, because it sends real mail |
 | `/api/workspaces/<ws>/observe?since=` | GET | the observability report the Observe page renders — per-agent failures and retries, per-tool calls/errors/latency, per-flow duration, day series, recent failures. `since` in days, default 30 |
-| `/api/workspaces/<ws>/history?path=&id=` | GET | every change to the workspace, newest first — `path` narrows to one file, `id` returns one revision with its before/after and a line diff. A deploy's revision id is its commit |
+| `/api/workspaces/<ws>/history?path=&id=&limit=` | GET | every change to the workspace, newest first — `path` narrows to one file, `id` returns one revision with its before/after and a line diff, `limit` 1–500, default 100. A deploy's revision id is its commit |
 | `/git/<tenant>/<ws>.git` | git | the workspace as a git remote — `git clone`, `git push` (a push to main deploys and runs the evals; a push to any other branch deploys a **preview** workspace named `<ws>-preview-<branch>` from that branch's tree and runs its evals there — the scheduler never fires a preview's flows, a preview reads its source's secrets, and deleting the branch deletes the preview). A push while runs are in flight is accepted but **not** applied yet: git warns at push time, and the scheduler applies it when those runs finish. HTTP Basic: any username, an API key as the password |
 | `/git/<tenant>/_library.git` | git | the account library as a git remote — a push replaces the shelf |
 | `/api/workspaces/<ws>/repo?branch=` | GET, POST | GET: branches, tags, mirror settings; `?branch=` a branch's net change against main with diffs. POST `{action}`: `deploy` a `ref` (a rollback is a new commit on main), `merge` a `branch` into main and deploy, `delete-branch`, `mirror` (set `url`, https, credentials via the MIRROR_TOKEN secret), `mirror-now` |
@@ -204,9 +210,13 @@ before it reaches a route — it is never passed on cut short. Larger files go
 through `POST /api/workspaces/<ws>/storage/upload-url`, which returns a signed
 URL to PUT the bytes to directly.
 
+A `PUT` to `storage?path=` needs a `Content-Length`. Without one it is refused
+with `411`, because a body cut off at the limit cannot be told from a whole
+one; a body that does not match the length it declared is a `400`.
+
 | Route | Methods | |
 |---|---|---|
-| `/api/workspaces/<ws>/storage?path=` | GET, POST, PUT, DELETE | list, record (`path`, `sha`, `size`), write, remove |
+| `/api/workspaces/<ws>/storage` | GET, POST, PUT, DELETE | GET lists every stored file with the quota; POST records one (`path`, `sha`, `size`); PUT `?path=` writes one; DELETE `?path=` removes one |
 | `/api/workspaces/<ws>/storage/download?path=` | GET | a redirect to a presigned URL |
 | `/api/workspaces/<ws>/storage/upload-url` | POST | a presigned PUT (`path`, `sha`) |
 | `/api/workspaces/<ws>/storage/preview?path=` | GET | the file parsed for reading, as JSON — text, a table, a document, slides, an archive listing, a mesh, a hex dump. Stored HTML and SVG come back as strings for a sandboxed frame, never served as pages. `413` over 25 MB |
@@ -224,9 +234,10 @@ URLs mean nothing in a run pod ever holds the bucket credential.
 
 From the terminal: `foldrun storage share <path>`, `shares`, `unshare <token>`.
 
-`POST` returns a `url` under `/s/<token>`. That URL is the only route on the
-server that answers without a credential — the token *is* the authorisation,
-so it carries 24 random bytes and is never derived from the path.
+`POST` returns a `url` under `/s/<token>`. That URL answers without a
+credential — the token *is* the authorisation, so it carries 24 random bytes
+and is never derived from the path. `createdBy` is the caller (a person's
+email, or the key), never a name the request sends.
 
 Only `storage/`, `files/` and `outputs/` can be shared. An agent talked into
 sharing something is confined to what the workspace produced and can never
