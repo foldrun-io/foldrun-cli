@@ -482,6 +482,42 @@ write it a line per call, re-sending its whole context each time; one
 translator did that 92 times and cost $22 for twelve lines. The run trace
 shows the tier (`model: haiku — flow`) and the write count.
 
+## Editing on the canvas
+
+The dashboard's Flows page opens each flow on a **canvas**: the trigger, then
+one column per group, left to right, parallel steps stacked in their column.
+`case:`/`else:` branches are labelled edges, `loop:` is an arc back to the
+group before, `on-fail:` a red dashed line to the rescuer, a `[[flow:x]]` step
+a dashed node, and a fan-out step a stack. Under each step hangs its agent's
+team: sub-agents (`subagents:`) on solid lines, consults (`agents:`) on dotted
+ones, plus the model, the tool count and whether it **may ask you** (`ask` in
+`tools:`). Problems `foldrun check` would report sit on the node they are about.
+
+The layout is worked out from the markdown every time — nothing about
+positions is saved. Dragging a step into a column runs it in parallel;
+between columns makes it its own step; a move the grammar cannot express (a
+`case:` step first, with nothing to route on) is refused with the reason.
+Everything a drop writes is ordinary flow grammar:
+
+| Palette block | What it writes |
+|---|---|
+| an agent, Chain | a new step in its own group where it is dropped |
+| Parallel | a new step in the group it is dropped on |
+| Run another flow | `N. [[flow:x]]` |
+| Router | a triage step, then one group of `case: X` steps and an optional `else: true` |
+| Fan-out | `each: lines`, `items` or `rows of <path>`, and `max:` |
+| Evaluator loop | `loop: N`, `until: MARKER`, optionally `verify: judge: …` |
+| Approval gate | the `!` marker (`approve: true` on a `?` step) |
+| Ask a person before | `ask: <question>` |
+| Wait | `wait: 30m` or `wait: event` |
+| Rescue | `on-fail: [[agent]]` |
+| Orchestrator + workers, Consult | the agent added to `subagents:` / `agents:` in the step's **agent file** |
+
+The last row, and the "may ask you" toggle, edit the agent's own file, which
+every flow that uses the agent shares — the canvas says which flows before it
+writes. A sub-agent without a `description:` is asked for one first. The
+**List** tab is the older card view; the choice is remembered per browser.
+
 ## What the platform never does
 
 It sets **no clock of its own** — not on a step, a script tool, an HTTP tool, a
