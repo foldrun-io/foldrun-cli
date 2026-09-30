@@ -359,7 +359,7 @@ signed-in person, never by a key — mints an ordinary API key at their role.
 |---|---|---|
 | `/api/cli/login` | POST | `hostname` → `{ id, code, verifyUrl, expiresAt, interval }`. Open: there is no credential yet. Ten-minute lifetime |
 | `/api/cli/login/<id>` | GET | `{ status }` — `pending`, `denied`, `expired`, or `approved` with `token`, `account`, `email`, `role`. The key is returned once; the request is gone after |
-| `/api/cli/authorize` | GET, POST | `?code=` describes the request (machine, expiry). POST `{ code, decision }` from a session approves (mints the key, labelled `cli · <hostname>`) or denies. Every role may sign its own CLI in; an owner's key is an admin's |
+| `/api/cli/authorize` | GET, POST | `?code=` describes the request (machine, expiry). POST `{ code, decision }` from a session approves (mints the key, labelled `cli · <hostname>`) or denies — `decision` is `approve` or `deny`, and absent approves; any other word is a `400`. Every role may sign its own CLI in; an owner's key is an admin's |
 | `/api/me` | GET | who is calling: `account`, `owner`, `role`, `workspaces` (null: all), and the `actor` — a person's email, or a key's id, label, prefix and who minted it |
 
 ## OAuth — connecting an agent to a third party
