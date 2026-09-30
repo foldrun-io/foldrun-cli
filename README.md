@@ -132,6 +132,8 @@ declared the same way.
 | `foldrun approve <run-id>` | release a waiting gate — it asks first, `--yes` means it, `--note "…"` steers the step |
 | `foldrun reject <run-id>` | refuse one, `--note` being the reason |
 | `foldrun stop <run-id>` | kill a run in flight — it says what it will destroy, then asks (`--yes` means it) |
+| `foldrun answer <run-id> "…"` | answer the question an agent is asking mid-step (`--option <n>` picks a choice) |
+| `foldrun message <run-id> "…"` | say something to a running agent — it hears it after its next tool call |
 | `foldrun rerun <run-id>` | the same flow again from a step — `--from <n>` as the flow numbers them, or `--agent <name>` for the first step that agent runs; `--wait` follows it |
 | `foldrun schedule` | every flow in the account that fires on a clock, its cron line, and the next few times it fires |
 | `foldrun triggers` | why nothing ran: per flow, how often its trigger fired, how often that became a run, and every reason for the difference (`--since <days>`, `--to`) |

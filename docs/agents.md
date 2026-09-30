@@ -77,6 +77,38 @@ only Web takes a provider:
 | **Memory** | `search` | `search_files(query)` over knowledge, memory, state and storage at every scope | — |
 | | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs | — |
 | | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
+| **People** | `ask` | `ask_person(question, options?)` — asks the person running the desk mid-step and waits for the answer ([below](#asking-a-person-mid-step)) | — |
+
+### Asking a person mid-step
+
+`tools: [ask]` gives the agent `ask_person`. It posts a question — with up to
+ten `options` when the answer is one of a few — and waits. The question shows
+on the run page, in the dashboard's banner, in `foldrun approvals`, and goes
+wherever the workspace's `notify:` sends approvals. A person answers with a
+click, a sentence, `foldrun answer <run-id> "…"` or `POST
+…/runs/<id>/answer`; the agent gets the answer within a second or two and
+carries on in the same step. Nobody answering in time is an answer too: the
+agent is told to decide if that is safe, or stop and reply BLOCKED.
+
+```yaml
+tools: [read, write, ask]
+ask:
+  timeout: 2h        # how long it may wait — default 30m, at most 24h
+```
+
+**It costs while it waits.** The step's sandbox stays up, so the wait is
+charged as the step's seconds like any other. An approval gate (`!`) parks
+the run and costs nothing while parked — use `ask` for a question that only
+comes up halfway through, a gate for one you know about before the step.
+
+**Messages into a running step.** On the platform, a person can also say
+something to any running agent — the run page's box, `foldrun message
+<run-id> "…"`, or `POST …/runs/<id>/message`. It reaches the model after its
+next tool call, as context; it never changes the step's tools or what it may
+do. A model writing without calling tools hears it at the next call it makes.
+Every question, answer and delivered message is on the step's trace and its
+record. A local `foldrun run` has no inbox; there `ask_person` asks on the
+terminal when there is one.
 
 **Retired**, still granted so a deployed agent keeps running, and each an
 error in `foldrun check` naming what to write instead: `files` and `bash`

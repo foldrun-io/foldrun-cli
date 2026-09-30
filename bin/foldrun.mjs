@@ -83,6 +83,8 @@ const HELP = `foldrun — agents are just folders
   foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
+  foldrun answer <run-id> "…"  answer the question an agent is asking mid-step (--option <n> picks a choice)
+  foldrun message <run-id> "…" say something to a running agent — it hears it after its next tool call
   foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --wait
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun guide             write the coding-agent rules: a block in AGENTS.md and CLAUDE.md importing it (--check, --print)

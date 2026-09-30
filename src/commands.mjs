@@ -4471,6 +4471,55 @@ async function pool(items, width, fn) {
  * tried first — from a desk directory the run is almost always that desk's,
  * and one request beats fifteen — and only then does it fan out.
  */
+/**
+ * `foldrun answer <run-id> "…"` — answer the question an agent is asking
+ * mid-step (tools: [ask]). `--option <n>` picks one of its offered choices,
+ * `--question <id>` one of several. The agent is waiting in a live sandbox.
+ */
+async function answerCmd(positional, flags) {
+  const url = platformFor(flags, "answer");
+  const runId = positional[0];
+  if (!runId) throw new Error("which run? `foldrun answer <run-id> \"…\"` — `foldrun approvals` lists the questions");
+  const { questions = [] } = await remoteCall(url, flags, "/api/approvals");
+  const mine = questions.filter((q) => q.runId === runId && (typeof flags.question !== "string" || q.id === flags.question));
+  if (!mine.length) throw new Error(`${runId} is not asking anything right now — \`foldrun approvals\` lists what is`);
+  const q = mine[0];
+  let text = positional.slice(1).join(" ").trim();
+  if (flags.option !== undefined) {
+    const n = Number(flags.option);
+    if (!q.options?.length || !Number.isInteger(n) || n < 1 || n > q.options.length) {
+      throw new Error(q.options?.length ? `--option takes 1–${q.options.length}` : "this question offered no options — answer in words");
+    }
+    text = q.options[n - 1];
+  }
+  if (!text) throw new Error(`what is the answer? \`foldrun answer ${runId} "…"\`${q.options?.length ? " or --option <n>" : ""}`);
+  const res = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(q.workspace)}/runs/${encodeURIComponent(runId)}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ question: q.id, answer: text }),
+  });
+  console.log(`\n  ${c.green("✓")} answered ${c.bold(q.agent)} ${c.dim(`in ${q.workspace} · ${runId}`)}: ${res.answer ?? text}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun message <run-id> "…"` — say something to a running agent. It
+ * reaches the model after its next tool call, as context; it changes none
+ * of the step's tools. Platform only: a local \`foldrun run\` has no inbox.
+ */
+async function messageCmd(positional, flags, layout) {
+  const url = platformFor(flags, "message");
+  const runId = positional[0];
+  const text = positional.slice(1).join(" ").trim();
+  if (!runId || !text) throw new Error("`foldrun message <run-id> \"…\"` — the run must be running");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${encodeURIComponent(runId)}/message`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+  console.log(`\n  ${c.green("✓")} sent to ${runId} ${c.dim(`in ${ws} — it reaches the agent after its next tool call`)}\n`);
+  return 0;
+}
+
 async function workspaceOfRun(url, flags, layout, runId) {
   if (typeof flags.to === "string") return flags.to;
   const names = await remoteWorkspaceNames(url, flags);
@@ -4541,12 +4590,27 @@ const waitingSteps = (run) =>
 async function approvalsCmd(flags, layout) {
   const url = platformFor(flags, "approvals");
   const only = typeof flags.to === "string" ? flags.to : null;
-  const { approvals = [] } = await remoteCall(url, flags, "/api/approvals");
+  const { approvals = [], questions = [] } = await remoteCall(url, flags, "/api/approvals");
   const waiting = only ? approvals.filter((a) => a.workspace === only) : approvals;
+  const asking = only ? questions.filter((q) => q.workspace === only) : questions;
 
-  if (!waiting.length) {
+  if (!waiting.length && !asking.length) {
     console.log(`\n  ${c.dim(only ? `nothing is waiting on a person in ${only}` : "nothing is waiting on a person")}\n`);
     return 0;
+  }
+  // Questions agents are asking mid-step (tools: [ask]) come first: their
+  // sandboxes are live and waiting, not parked.
+  if (asking.length) {
+    console.log();
+    for (const q of asking) {
+      console.log(`  ${c.bold("?")} ${c.bold(q.runId)}  ${q.workspace} · ${q.flow}  ${c.dim(`asking ${ago(q.askedAt)}`)}`);
+      console.log(`      ${c.dim(`${q.agent} asks`)}`);
+      for (const line of wrap(q.question, 84)) console.log(`      ${line}`);
+      (q.options ?? []).forEach((o, i) => console.log(`      ${c.dim(`${i + 1}.`)} ${o}`));
+      console.log();
+    }
+    console.log(`  ${c.dim(`\`foldrun answer <run-id> "…"\` (or --option <n>) answers — the agent is waiting in its sandbox`)}\n`);
+    if (!waiting.length) return 0;
   }
 
   // What each gate PREVIEWS lives on the run record, not on the index — a
@@ -5231,6 +5295,10 @@ export async function run(command, positional, flags, workspace, layout) {
       return reportCmd(positional[0], flags, layout);
     case "stop":
       return stopCmd(positional[0], flags, layout);
+    case "answer":
+      return answerCmd(positional, flags);
+    case "message":
+      return messageCmd(positional, flags, layout);
     case "rerun":
       return rerunCmd(positional[0], flags, layout);
     case "account":
