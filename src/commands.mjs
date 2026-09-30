@@ -3888,7 +3888,7 @@ async function storageCmd(positional, flags, layout) {
         // A platform older than presigned uploads answers 404 here: it
         // takes the bytes itself, the way one with no bucket does.
         if (!ask.ok && ask.status !== 404) throw new HttpError(await said(ask), ask.status, {});
-        const { url: direct } = ask.ok ? await ask.json() : { url: null };
+        const { url: direct } = /** @type {{ url?: string | null }} */ (ask.ok ? await ask.json() : { url: null });
         if (direct) {
           const put = await fetch(direct, { method: "PUT", body: bytes, signal: AbortSignal.timeout(Math.max(120, bytes.length / 200_000) * 1000) });
           if (!put.ok) throw new Error(`the storage service refused it (${put.status})`);
