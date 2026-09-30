@@ -19,6 +19,9 @@ export type Seen = { method: string; url: string; query: URLSearchParams; body: 
  *  every fixture into a 500. */
 export const failing = (status: number, body: unknown) => ({ __status: status, body });
 
+/** An answer that is a file, not JSON — a download, a CSV, an export. */
+export const raw = (body: string | Buffer, type: string, headers: Record<string, string> = {}, status = 200) => ({ __raw: body, type, headers, status });
+
 export interface Fake {
   url: string;
   seen: Seen[];
@@ -47,6 +50,11 @@ export function serve(routes: Record<string, (body: string, query: URLSearchPara
           return;
         }
         const answer = route(body, query) as any;
+        if (answer && typeof answer === "object" && "__raw" in answer) {
+          res.writeHead(answer.status ?? 200, { "content-type": answer.type, ...(answer.headers ?? {}) });
+          res.end(answer.__raw);
+          return;
+        }
         const bad = answer && typeof answer === "object" && "__status" in answer;
         res.writeHead(bad ? answer.__status : 200, { "content-type": "application/json" });
         res.end(JSON.stringify(bad ? answer.body : answer));

@@ -71,37 +71,59 @@ const HELP = `foldrun — agents are just folders
   foldrun check [dir]       validate every workspace here, and the shared library
   foldrun check --to <ws>   validate the DEPLOYED copy instead — fetched from the platform, checked here
   foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test)
+  foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker>, --consult <agent> or --can-ask (--description for a worker with none)
+  foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
+  foldrun flow add <flow> <pattern>  one canvas block as a markdown edit: chain, parallel, router, fan-out, loop, approval, ask, wait, rescue, subflow — diff shown, checked, --dry-run
+  foldrun flow show <flow>  the flow as the canvas draws it: trigger, groups, step chips, each agent's team, check problems in place
+  foldrun flow run <flow>   start a flow on the platform — the same command as invoke
+  foldrun flow rotate-hook <flow>  a new webhook URL for a flow; the old one stops at once — asks first, --yes means it
   foldrun tool test <name>  exercise one tool alone, no model and no run (key=value args, --to)
   foldrun extract [dir]     move single-file script tools into folders (tool.md + run.*)
-  foldrun run <target>      run an agent or flow (target: name, or flow:name)
-  foldrun eval [name]       run one eval, or all of them
+  foldrun run <target>      run an agent or flow HERE (target: name, or flow:name) — on the platform: flow run / invoke a flow, agent run one agent
+  foldrun eval [name]       run one eval, or all of them (--to <workspace>: the deployed evals, run on the platform)
+  foldrun promote <run-id>  keep a finished run as a regression case in evals/ (--eval <name>, --expect "contains: …" repeatable, --case <name>)
   foldrun probe <model>     live check: can this model hold a tool loop here?
-  foldrun logs [run-id]     recent runs, or one run's full event trail
-  foldrun runs              what has run lately, across the account — --status, --since, --to, --limit
+  foldrun logs [run-id]     recent runs in one workspace, or one run's full event trail (--local: this machine's)
+  foldrun runs              what has run lately, across the account — --status, --verdict, --since, --to, --limit (--local prints exactly what logs --local prints)
+  foldrun runs rm <run-id>  delete a run's record and archived outputs; a live one is stopped first — asks first, --yes means it
   foldrun report <run-id>   one run, whole: header, every step, what it wrote and what is still waiting
+  foldrun report <run-id> get <agent>/<path>  download a file the run archived from that agent's outputs/ (--file <path>|-, --force)
   foldrun approvals         every gate waiting on a person, with its question (--to <workspace> for one)
   foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
+  foldrun stop --status running [--since 2h] [--flow f]  every run a filter matches (runs/bulk): lists them, asks, stops only those (--dry-run, --to)
   foldrun answer <run-id> "…"  answer the question an agent is asking mid-step (--option <n> picks a choice)
   foldrun message <run-id> "…" say something to a running agent — it hears it after its next tool call
   foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --wait
+  foldrun rerun --status failed [--since 24h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
+  foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
+  foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun guide             write the coding-agent rules: a block in AGENTS.md and CLAUDE.md importing it (--check, --print)
   foldrun docs [page]       foldrun's docs, from the copy this CLI ships — what a coding agent should read (--path)
   foldrun triggers          why nothing ran: per flow, fired vs started and every reason (--since <days>, --to <workspace>)
-  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path>, get <path>, put <file|folder>... (--into <folder/>, --as <path> for one file), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
+  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path> (--preview: a PDF, sheet, deck or zip as text), get <path>, put <file|folder>... (--into <folder/>, --as <path> for one file), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
   foldrun runtimes          the environments a deployed workspace's agents need (python, pip and npm packages) and whether each is built — failed ones with the installer's error (--wait holds on while any is building)
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
+  foldrun billing statement [YYYY-MM]  a month of the ledger (--csv for the file, --file <path> to save it)
+  foldrun billing wallet    burn, runway, auto top-up — also set auto-top-up --threshold <usd> --amount <usd> | off, set email <address>
+  foldrun billing details   who invoices are made out to — also set --name "…" --abn … --address "line1, city, state, postcode, AU" --email …
+  foldrun billing portal    a link to Stripe's billing portal (owner only)
   foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun account           the account's defaults — also set <key> <value>, clear <key>, providers (--check) (singular; accounts lists logins)
+  foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
+  foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|notify> <value>, clear <key>
+  foldrun notify test       send one test notification from a workspace and say what happened (--to <workspace>)
+  foldrun history [path]    every change to a deployed workspace, newest first (--id <revision> for its diff, --limit, --to)
+  foldrun repo ls           a workspace's branches and tags — also diff <branch>, deploy <ref>, merge <branch> (both ask first; --to)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
   foldrun pull [workspace]  bring the platform's account down here (refuses to clobber; --force overrides)
   foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
   foldrun workspaces        what exists here and on the platform — also rm <name> (--platform --yes)
-  foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run)
+  foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run; --tag <t> repeatable)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
 
@@ -121,29 +143,60 @@ Signing in
 Options
   --workspace <dir>         the workspace folder (default: .) — on init, the first workspace's name
   --flat                    init: the old single-folder shape, no account around it
-  --from <template>         start from a shipped template, e.g. templates/hello
+  --from <template>         init: start from a shipped template, e.g. templates/hello
   --transport <k>           tool new: script (default), http or mcp
   --language <l>            tool new: the script's language — javascript, python, bash
   --task "<text>"           the instruction for a manual run
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)
-  --status <s>              runs: only these statuses, comma-separated (failed, completed, awaiting-approval…)
-  --since <span>            runs: only runs started within 24h, 7d, 90m, 2w
+  --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
+  --since <span>            runs, stop, rerun: only runs started within 24h, 7d, 90m, 2w
+  --since <days>            observe, triggers: the window in days (observe default 30, triggers 7)
+  --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
+  --flow <name>             stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs
+  --agent <name>            flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs
+  --instruction "<text>"    flow add: what a new step (chain, parallel, router) is told to do
+  --after <n>               flow add: put the new group after the nth (0 = first); --before <n> before it; default last
+  --group <n>               flow add: the group a parallel step joins
+  --step <n|agent>          flow add: the step a pattern goes on — its place in the file (1 = the first) or the agent it runs
+  --cases <V=agent,…>       flow add: a router's branches, e.g. BUG=bugs,DOCS=docs; --else <agent> when none matches
+  --each <e>                flow add: lines, items or "rows of <path>"; --max <n> caps it (1-20)
+  --loop <n>                flow add: extra cycles, 1-5 (default 3); --until <MARKER> ends it (default APPROVED); --judge "<claim>" adds verify: judge:
+  --question "<text>"       flow add: the ask a person gets before the step; answer: which question of several (its id)
+  --wait <span|event>       flow add: 90s, 30m, 4h, 3d or event
+  --on-fail <agent>         flow add: who takes the step over when it fails
+  --off                     flow add: take the pattern off the step instead (fan-out, loop, approval, ask, wait, rescue)
+  --subagent <name>         agent link, agent unlink: a worker it delegates to (subagents:)
+  --consult <name>          agent link, agent unlink: a colleague it asks (agents:)
+  --can-ask                 agent link, agent unlink: ask in its tools — it may ask you mid-step
+  --description "<text>"    agent link: what a --subagent is for, when its file has no description:
+  --eval <name>             promote: the eval file to write to (default <target>-regressions)
+  --expect "<line>"         promote: an assertion in eval syntax (contains: …, judge: …) — repeatable
+  --case <name>             promote: the case's name
+  --tag <t>                 invoke, flow run: a label on the run — repeatable, sent as tags
+  --preview                 storage cat: the platform reads the file and prints what is in it
+  --csv                     billing statement: the CSV file instead of the table
+  --threshold / --amount    billing wallet set: auto top-up refills --amount (5-500 USD) when the balance falls below --threshold
+  --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
+  --days <n>                usage: the window the charges cover (default 56)
+  --id <revision>           history: one revision in full, as diffs
+  --engine <e>              login: (with a site) the browser to sign in with — chrome (default), firefox or safari
+  --new-client              connect: enter a new OAuth client even when one is saved for the secret
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
-  --yes                     approve, stop, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
-  --json                    report: the raw run record instead of the report
+  --yes                     approve, stop, rerun (bulk), flow rotate-hook, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
+  --json                    report: the raw run record instead of the report; observe, usage: the raw document
   --events <a,b>            account set notify: failed, awaiting-approval, completed
-  --limit <n>               runs, billing: how many rows
+  --limit <n>               runs, billing, history: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
-  --file <path>             source put: the local file to send (default: stdin); storage get: where to write it
+  --file <path>             source put: the local file to send (default: stdin); storage get, report get, account export, billing statement: where to write it (- for stdout)
   --message "<why>"         source put: recorded on the file's revision
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke, agent run: hold on and print the result
   --path <p>                tool test: the path an http tool should probe, appended to its base:
   --watch                   invoke: follow the run's trace here as it happens
   --print                   open: print the URL only
-  --from <n>                invoke: start at step n; earlier steps are skipped
+  --from <n>                invoke, flow run, rerun: start at step n; earlier steps are recorded as skipped (a bulk rerun defaults to 1)
   --no-browser              login, connect: print the address instead of opening it
   --provider <name>         connect: google, github, microsoft or linkedin (fills the URLs)
   --scopes "<a b c>"        connect: space-separated scopes (default: the provider's example)
@@ -154,7 +207,7 @@ Options
   --for <workspace>         keys create: a deploy key for one workspace (--access read|write)
 
 Platform options (deploy, invoke, secrets, logs, keys)
-  --to <workspace>          workspace on the platform (deploy default: folder name)
+  --to <workspace>          workspace on the platform (deploy default: folder name); flow add/show, agent link: edit or show the deployed copy instead of this folder
   --tenant <name>           account to deploy into (default: default, local only)
   --data <dir>              the installation's data directory
   --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
@@ -162,9 +215,10 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --timeout <s>             seconds one request may take (or FOLDRUN_TIMEOUT; default 30, tool test 300)
   FOLDRUN_TIMEOUT=<s>       seconds one request to the platform may take (default 30)
   --profile <name>          act as one stored account for this command (see foldrun accounts)
+  --quiet                   leave out the dim "acting as …" line a platform command prints on stderr
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
-  --dry-run                 deploy: check and report, change nothing
+  --dry-run                 deploy: check and report, change nothing; flow add, agent link, agent unlink: show the diff, write nothing; stop, rerun (bulk): list what matches, touch nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
   --yes                     deploy: allow deleting files this folder no longer has (asked otherwise; required with no terminal)
@@ -184,7 +238,13 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv"]);
+// Flags said more than once collect into a list: `--tag a --tag b`.
+const REPEATABLE = new Set(["tag", "expect"]);
+// `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes
+// a span: `--wait 30m`, `--wait event`. Only a value that reads as one is
+// taken, so `invoke x --wait` and friends are as they were.
+const WAIT_VALUE = /^(\d+(\.\d+)?\s*[smhd]|event)$/i;
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
@@ -194,8 +254,12 @@ for (let i = 0; i < rest.length; i++) {
   }
   const name = rest[i].slice(2);
   const next = rest[i + 1];
-  if (BOOLEAN_FLAGS.has(name) || next === undefined || next.startsWith("--")) flags[name] = true;
-  else flags[name] = rest[++i];
+  let value;
+  if (name === "wait" && next !== undefined && WAIT_VALUE.test(next)) value = rest[++i];
+  else if (BOOLEAN_FLAGS.has(name) || next === undefined || next.startsWith("--")) value = true;
+  else value = rest[++i];
+  if (REPEATABLE.has(name) && typeof value === "string") flags[name] = [...(Array.isArray(flags[name]) ? flags[name] : []), value];
+  else flags[name] = value;
 }
 
 // Help, before anything runs. `foldrun deploy --help` used to parse --help
@@ -215,10 +279,12 @@ function helpFor(which) {
   if (!which) return HELP;
   const esc = which.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const usage = new RegExp(`^\\s*foldrun ${esc}(\\s|$)`);
-  const option = new RegExp(`(^|[;,]\\s*)${esc}(\\s[^;:]*)?:`);
+  // "approve, reject: …" names approve too — a comma after the name is
+  // part of a list of commands, not the end of it.
+  const option = new RegExp(`(^|[;,]\\s*)${esc}([\\s,][^;:]*)?:`);
   const lines = HELP.split("\n");
   const own = lines.filter((l) => usage.test(l));
-  const opts = lines.filter((l) => /^\s*--/.test(l) && option.test(l.replace(/^\s*--\S+(\s<[^>]+>)?\s+/, "")));
+  const opts = lines.filter((l) => /^\s*--/.test(l) && option.test(l.replace(/^\s*--\S+(\s+(\/\s+)?--\S+)*(\s"?<[^>]+>"?)?\s+/, "")));
   if (!own.length && !opts.length) return HELP;
   return ["", ...own, ...(opts.length ? ["", "Options:", ...opts] : []), "", "`foldrun --help` for everything."].join("\n");
 }

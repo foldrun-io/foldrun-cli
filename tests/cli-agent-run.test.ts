@@ -106,5 +106,5 @@ test("agent new still works, and an unknown verb names both", async () => {
   const r = await at(s.url, "agent", "wibble", "tracker", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /new, run are the verbs, not "wibble"/);
+  assert.match(r.out, /new, run, link, unlink are the verbs, not "wibble"/);
 });
