@@ -484,7 +484,13 @@ shows the tier (`model: haiku — flow`) and the write count.
 
 ## Editing on the canvas
 
-The dashboard's Flows page opens each flow on a **canvas**: the trigger, then
+The dashboard's Flows page lists each flow **collapsed**: its name, file,
+trigger and schedule, step count, the last runs and what they cost, Run flow,
+and a count of what `foldrun check` flags. Click the name to open it (Expand
+all / Collapse all sit by the search); a flow whose check has errors starts
+open, a search opens the flows it matches, `#flow-<name>` in the URL opens that
+one, and each viewer's open or shut is remembered in their browser. Open, it
+shows each flow on a **canvas**: the trigger, then
 one column per group, left to right, parallel steps stacked in their column.
 `case:`/`else:` branches are labelled edges, `loop:` is an arc back to the
 group before, `on-fail:` a red dashed line to the rescuer, a `[[flow:x]]` step
@@ -518,9 +524,21 @@ every flow that uses the agent shares — the canvas says which flows before it
 writes. A sub-agent without a `description:` is asked for one first. The
 **List** tab is the older card view; the choice is remembered per browser.
 
+To **delete a step**, use the × on its node (shown on hover or focus, always
+on the selected step), the Delete or Backspace key on a selected step, or
+**Delete step** in the step's panel. It asks first, naming the step and what
+else changes: `case:`/`when:` steps after it that will now route on the step
+before, the groups that renumber, the other steps in a parallel group that
+stay. The step line and its indented options go; groups after an emptied one
+renumber so there is no gap; prose around the steps stays and the agent's own
+file is not touched. A delete that would give `foldrun check` a new error is
+refused. The × on a sub-agent or consult chip removes it from the agent's
+`subagents:` / `agents:` the same way, after the same confirm.
+
 The same edits from a terminal, written by the same code: `foldrun flow add
 <flow> <pattern>` for a palette block (it prints the diff and refuses one
-`foldrun check` would call an error), `foldrun agent link <agent> --subagent |
+`foldrun check` would call an error), `foldrun flow rm-step <flow> --step
+<n|agent>` for the delete, `foldrun agent link <agent> --subagent |
 --consult | --can-ask` (and `unlink`) for the docks and the toggle, and
 `foldrun flow show <flow>` for the canvas itself, as text. See the
 [CLI reference](cli).

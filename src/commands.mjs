@@ -5705,6 +5705,61 @@ async function flowAddCmd(positional, flags, layout) {
   return 0;
 }
 
+/**
+ * `foldrun flow rm-step <flow> --step <n|agent>` — the canvas's delete: the
+ * step line and its indented options go, the groups after it renumber, the
+ * agent's file is not touched (core's removeStep). Says what else changes,
+ * shows the diff, refuses one `check` would call a new error, then asks —
+ * a delete, so no terminal needs --yes. --dry-run writes nothing; --to
+ * <workspace> sends the canvas's PATCH { edit: { op: "remove" } }.
+ */
+async function flowRmStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow rm-step <flow> --step <n|agent>`");
+  const desk = await openDesk(flags, layout, `flow rm-step ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const { removeStep, removeStepImpact } = await patterns();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  const i = pickStep(steps, flags.step, flow);
+  const impact = removeStepImpact(raw, i);
+
+  console.log(`\n  ${c.bold(flow)} ${c.dim(`· delete ${impact.label} · ${desk.label}`)}\n`);
+  for (const n of impact.notes) console.log(`  ${c.dim("·")} ${n}`);
+  console.log();
+  let next;
+  try {
+    next = removeStep(raw, i);
+  } catch (err) {
+    console.log(`  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
+    return 1;
+  }
+  await printDiff(rel, raw, next);
+  console.log();
+  const added = await problemsAdded(desk, [[rel, next]]);
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report ${added.filter((p) => p.level === "error").length === 1 ? "that error" : "those errors"}, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (!(await confirmed(flags, "flow rm-step", `Delete ${impact.label} from ${flow}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing deleted")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "remove", step: i } }) });
+    console.log(`  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
+  } else {
+    fs.writeFileSync(path.join(desk.dir, rel), next);
+    console.log(`  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  }
+  return 0;
+}
+
 /** Whether an agent file says what the agent is for. */
 function hasDescription(raw) {
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1] ?? "";
@@ -6788,9 +6843,10 @@ export async function run(command, positional, flags, workspace, layout) {
         ? agentRunCmd(positional, flags, layout)
         : scaffoldCmd("agents", positional, flags, layout);
     case "flow":
-      // `new` scaffolds a file; `add` and `show` are the canvas; `run` is
+      // `new` scaffolds a file; `add`, `rm-step` and `show` are the canvas; `run` is
       // `invoke`, spelled the way `agent run` is; `rotate-hook` a new URL.
       if (positional[0] === "add") return flowAddCmd(positional, flags, layout);
+      if (positional[0] === "rm-step") return flowRmStepCmd(positional, flags, layout);
       if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
       if (positional[0] === "run") return invoke(positional[1], flags);
       if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);
