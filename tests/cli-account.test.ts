@@ -198,9 +198,13 @@ function fakePlatform(): Promise<Fake> {
         }
         m = /^\/api\/workspaces\/([^/]+)\/deploy$/.exec(url.pathname);
         if (m) {
-          deploys.push(m[1]);
           const files = new Map<string, string>(json.files.map((f: { path: string; content: string }) => [f.path, f.content]));
-          workspaces.set(m[1], files);
+          // A dry run plans and changes nothing, as the platform's does —
+          // and `deploy` asks for one first, to say what it would delete.
+          if (!json.dryRun) {
+            deploys.push(m[1]);
+            workspaces.set(m[1], files);
+          }
           return send({ added: [...files.keys()], updated: [], removed: [], issues: [], blockedBy: [], preserved: 0, commit: null });
         }
         m = /^\/api\/workspaces\/([^/]+)$/.exec(url.pathname);

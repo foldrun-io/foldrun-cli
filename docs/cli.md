@@ -33,7 +33,8 @@ so the key is the way, or any other model provider named with `provider:`
 | `foldrun stop <run-id>` | kill a run in flight: the queued job is dropped and the sandbox the current step is spending in is destroyed. It prints which step is running and what has been spent, then asks you to type the run id back unless `--yes`. Finished steps keep their results, and costs already incurred stay on the bill. A run that has already finished is said so, not stopped |
 | `foldrun secrets set NAME` | store a secret — also `ls`, `rm`, and `status` (OAuth grant health) |
 | `foldrun connect NAME` | OAuth sign-in from the terminal, stored as an auto-refreshing secret — `--provider google\|github\|microsoft\|linkedin`; reconnecting a secret whose client is saved asks for nothing (`--new-client` to enter one) |
-| `foldrun deploy [dir]` | push this account into an installation — every workspace and the shared library. `foldrun deploy <workspace>` pushes one. Never removes a workspace the platform has and the folder does not |
+| `foldrun deploy [dir]` | push this account into an installation — every workspace and the shared library. `foldrun deploy <workspace>` pushes one. Never removes a workspace the platform has and the folder does not. It first prints where it is going and as whom (`deploying to <url> as <profile> (<email>)`); a deploy that would delete files the folder no longer has lists them — the platform-written ones (`storage/`, the trigger log) apart — and asks. With no terminal (a script, a CI job, a coding agent) it refuses unless `--yes`. A deploy that only adds or changes files asks nothing |
+| `foldrun help <command>` | that command's usage and options. `foldrun <command> --help` and `-h` print the same and never run the command |
 | `foldrun pull [workspace]` | bring the platform's account down into this folder — refuses to overwrite a locally edited file, and names every one it would have taken (`--force` takes them) |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
 | `foldrun workspaces` | what exists here, what exists on the platform, which are both — also `new <name>`, and `rm <name>` (locally; `--platform --yes` deletes it there) |
@@ -74,7 +75,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `--limit <n>` | `runs`, `billing`: how many rows, newest first (`runs` default 20, `billing` 15). Each workspace is asked for its own newest `n` before the merge, so one busy desk cannot crowd out a quiet one |
 | `--step <n>` | `approve`, `reject`: decide one gate, numbered as `report` prints it. Without it, every step of that run which is waiting |
 | `--note "<text>"` | `approve`: guidance the approved step reads in its prompt — "approve, but skip the Sydney batch". `reject`: the reason, recorded on the trace |
-| `--yes` | `approve`, `stop`: skip the confirmation, deliberately. Required when there is no terminal to ask |
+| `--yes` | `approve`, `stop`: skip the confirmation, deliberately; `deploy`: allow deleting files the folder no longer has. Required when there is no terminal to ask |
 | `--json` | `report`: the raw run record instead of the report |
 | `--events <a,b>` | `account set notify`: which events are notified on — `failed`, `awaiting-approval`, `completed` |
 | `--watch` | `invoke`: follow the run's trace here as it happens; the exit code is the run's |

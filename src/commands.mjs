@@ -3333,10 +3333,66 @@ async function deployAccount(layout, flags, only) {
   return worst;
 }
 
+/** "<profile> (<email or key label>)" — who a deploy is about to act as,
+ *  asked of the platform once per command. */
+let identityCache = null;
+async function deployIdentity(url, flags) {
+  if (identityCache) return identityCache;
+  const profile = flags.token || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
+  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : (profile?.name ?? "?");
+  let who = "";
+  try {
+    const me = await remoteCall(url, { ...flags, quiet: true }, "/api/me");
+    who = me.actor?.kind === "user" ? me.actor.email : `key "${me.actor?.label ?? me.actor?.prefix ?? ""}"`;
+    if (me.account) who += `, account ${me.account}`;
+  } catch {
+    who = "identity unknown";
+  }
+  identityCache = `${c.bold(source)} ${c.dim(`(${who})`)}`;
+  return identityCache;
+}
+
+/** List what a deploy would delete — platform-written files first, apart,
+ *  because those are the ones a local folder rarely has and a person rarely
+ *  means to lose — and ask. Throws without a terminal and without --yes. */
+async function confirmRemovals(workspace, removed, flags) {
+  const produced = removed.filter((f) => /^storage\/|trigger-log\.jsonl$/.test(f));
+  const other = removed.filter((f) => !produced.includes(f));
+  console.log(`\n  ${c.red(`${removed.length} file${removed.length === 1 ? "" : "s"} would be DELETED`)} from ${c.bold(workspace)} on the platform:`);
+  const show = (list) => {
+    for (const f of list.slice(0, 20)) console.log(`    ${c.red("-")} ${f}`);
+    if (list.length > 20) console.log(`    ${c.dim(`… and ${list.length - 20} more`)}`);
+  };
+  if (produced.length) {
+    console.log(`  ${c.amber("written by runs, not by you")} ${c.dim("(storage/ outputs, the trigger log)")}`);
+    show(produced);
+  }
+  if (other.length) {
+    if (produced.length) console.log(`  ${c.dim("source files missing from this folder")}`);
+    show(other);
+  }
+  return confirmed(flags, "a deploy that deletes files", `delete ${removed.length} file${removed.length === 1 ? "" : "s"} from ${workspace}? [y/N] `);
+}
+
 /** One workspace, pushed and reported. Extracted so the account loop and the
  *  single-workspace path print the same four lines. */
 async function deployOne(url, tenant, workspace, files, flags, layout, from) {
   const { planDeploy, deployWorkspace, deployedCommit } = await core();
+  // Say where this is going and ask before anything is deleted. On
+  // 2026-09-30 a deploy went to the machine's default profile (not the
+  // account meant) and deleted the platform's storage/ outputs and trigger
+  // log with no question asked. So: plan first, name the destination, and a
+  // deploy that REMOVES anything needs a yes — or --yes, which is the only
+  // way through without a terminal (an AI session or a script is not one).
+  // A deploy that only adds or changes files goes straight on, as before.
+  if (!flags["dry-run"]) {
+    const preview = url ? await deployOverHttp(url, workspace, files, { ...flags, "dry-run": true }) : planDeploy(tenant, workspace, files);
+    if (url) console.log(`\n  ${c.dim("deploying to")} ${c.bold(url)} ${c.dim("as")} ${await deployIdentity(url, flags)}`);
+    if (preview.removed.length && !(await confirmRemovals(workspace, preview.removed, flags))) {
+      console.log(`  ${c.amber("·")} ${workspace} not deployed — nothing was changed\n`);
+      return 1;
+    }
+  }
   /** @type {any} */
   const plan = url
     ? await deployOverHttp(url, workspace, files, flags)

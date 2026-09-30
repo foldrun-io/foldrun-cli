@@ -114,7 +114,7 @@ Signing in
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys — also create <label>, revoke <id>
-  foldrun --help
+  foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)
 
 Options
   --workspace <dir>         the workspace folder (default: .) — on init, the first workspace's name
@@ -165,6 +165,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --dry-run                 deploy: check and report, change nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
+  --yes                     deploy: allow deleting files this folder no longer has (asked otherwise; required with no terminal)
   --platform --yes          workspaces rm: delete it on the platform, deliberately
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
@@ -193,6 +194,31 @@ for (let i = 0; i < rest.length; i++) {
   const next = rest[i + 1];
   if (BOOLEAN_FLAGS.has(name) || next === undefined || next.startsWith("--")) flags[name] = true;
   else flags[name] = rest[++i];
+}
+
+// Help, before anything runs. `foldrun deploy --help` used to parse --help
+// into a flag nothing read and then DEPLOY (2026-09-30, to the wrong account).
+// --help or -h anywhere, or `foldrun help <command>`, prints that command's
+// lines and exits 0 — no platform is contacted, no file is touched.
+if (flags.help === true || rest.includes("-h") || command === "help") {
+  const which = command === "help" ? positional[0] : command;
+  console.log(helpFor(which));
+  process.exit(0);
+}
+
+/** The lines of HELP about one command: its `foldrun <command>` usage lines
+ *  and the options whose description names it. The whole text when nothing
+ *  matches or none was named. */
+function helpFor(which) {
+  if (!which) return HELP;
+  const esc = which.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const usage = new RegExp(`^\\s*foldrun ${esc}(\\s|$)`);
+  const option = new RegExp(`(^|[;,]\\s*)${esc}(\\s[^;:]*)?:`);
+  const lines = HELP.split("\n");
+  const own = lines.filter((l) => usage.test(l));
+  const opts = lines.filter((l) => /^\s*--/.test(l) && option.test(l.replace(/^\s*--\S+(\s<[^>]+>)?\s+/, "")));
+  if (!own.length && !opts.length) return HELP;
+  return ["", ...own, ...(opts.length ? ["", "Options:", ...opts] : []), "", "`foldrun --help` for everything."].join("\n");
 }
 
 // Commands that are about an ACCOUNT, not one folder: they read or write the
