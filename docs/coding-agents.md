@@ -53,8 +53,8 @@ at deploy, no conversion. Write it either way.
 
 ## What a deploy does NOT touch
 
-`runs/`, `state/`, `secrets.json`, and any memory an agent wrote that your
-push does not mention. Those belong to the platform, not to git — a deploy
+`runs/`, `state/`, `storage/`, `secrets.json`, the trigger log, and any
+memory an agent wrote that your push does not mention. Those belong to the platform, not to git — a deploy
 that reverted what an agent learned would make every run a little dumber.
 
 Secrets never go in these files. `foldrun secrets set NAME` puts them in the
