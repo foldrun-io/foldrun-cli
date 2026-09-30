@@ -1175,6 +1175,18 @@ async function galleryCmd(positional, flags) {
 
 // ---------------------------------------------------------------- probe
 
+/** Every stop reason a model's turn can end on, in a line a person reads.
+ *  The translator maps other providers' finish reasons onto these. */
+const STOP_REASONS = {
+  end_turn: "finished its answer",
+  max_tokens: "cut off at the output limit",
+  stop_sequence: "hit a stop sequence",
+  tool_use: "wanted a tool and did not get the result back",
+  pause_turn: "paused a long server-side tool turn",
+  refusal: "declined (a safety or content filter)",
+  model_context_window_exceeded: "the context window filled up",
+};
+
 /**
  * `foldrun probe <model>` — can this model hold a tool loop, answered by
  * running one. The workspace's provider block is honoured, so the probe
@@ -1244,6 +1256,13 @@ async function probeCmd(modelArg) {
   console.log(report.ok ? c.green("✓") : c.red("✗"));
   console.log(`    tool call made      ${report.calledTool ? c.green("yes") : c.red("no")}`);
   console.log(`    result read back    ${report.echoedNonce ? c.green("yes") : c.red("no")}`);
+  // Why the model's last turn ended. end_turn is a healthy probe; the rest
+  // name the failure a run would hit the same way.
+  if (report.stopReason) {
+    const why = STOP_REASONS[report.stopReason];
+    const word = report.stopReason === "end_turn" ? c.green(report.stopReason) : c.yellow(report.stopReason);
+    console.log(`    stopped because     ${word}${why ? c.dim(` — ${why}`) : ""}`);
+  }
   console.log(`    ${c.dim(`${report.durationMs}ms${report.costUsd != null ? ` · $${report.costUsd.toFixed(4)}` : ""}`)}`);
   if (!report.ok && report.reply) {
     console.log(`    ${c.dim("reply:")} ${report.reply.slice(0, 200)}`);

@@ -99,6 +99,33 @@ refuses `reasoning.effort` outright — the translator leaves the knob off for
 those families on both wires and says so in the drop line. Every other id
 keeps it, because a gateway ignores a field it cannot use and an o-series,
 gpt-5, grok or deepseek-r model wants it.
+
+## Why a turn stopped
+
+Every model reply ends with a stop reason, and the model loop acts on it: run
+the tool, carry on, or stop. An Anthropic-shaped endpoint sends its own. For a
+translated one the translator reads what the provider said and gives the
+closest Anthropic word, because the loop only understands those:
+
+| stop reason | Chat Completions (`format: openai`) | Responses (`format: responses`) |
+|---|---|---|
+| `end_turn` | `stop`, or anything unrecognised | a completed response |
+| `max_tokens` | `length` | `incomplete_details.reason: max_output_tokens` |
+| `tool_use` | `tool_calls`, `function_call`, or any reply carrying a tool call | any reply carrying a function call |
+| `stop_sequence` | `stop` plus the matched string — vLLM's `stop_reason`, SGLang's `matched_stop` — when it is one of the request's `stop_sequences` | never: the Responses API has no stop sequences, and they are dropped |
+| `refusal` | `content_filter` (OpenAI, Azure, Gemini's safety block) | a `refusal` content part, or `incomplete_details.reason: content_filter` |
+| `model_context_window_exceeded` | Mistral's `model_length` | never: a full context is a 400 there, and the error crosses as one |
+| `pause_turn` | never | never — it belongs to Anthropic's server-side tools, which the translator drops |
+
+A cut-off reply beats a tool call: a `length` finish with half a tool call
+in it reads as `max_tokens`, so the loop does not run a truncated call. A
+refusal beats everything. Plain OpenAI says `stop` whether the model finished
+or hit a stop sequence, so on OpenAI itself a stop sequence reads as
+`end_turn`.
+
+`foldrun probe` prints the stop reason the model ended on. A healthy probe
+says `end_turn`; `max_tokens`, `refusal` or `model_context_window_exceeded`
+there names the failure a run would hit the same way.
 ## Verified 2026-09-02
 
 The translator itself was driven end to end from `foldrun probe` against
