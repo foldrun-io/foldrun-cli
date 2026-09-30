@@ -226,3 +226,11 @@ came back for it within forty minutes — is reported as such, in the
 cluster's own words (`OOMKilled`, `Evicted`), and handed to the step's
 `retry:` policy. Locally, with steps in containers rather than pods, an
 interrupted step is run again from its start, as before.
+
+A step whose program exits without reporting a result — it crashed after
+its last tool call — no longer waits out those forty minutes. The platform
+notices the exit within about half a minute, reads the whole log once more
+in case only the stream missed the result, and otherwise fails the step
+with `the step's program exited (code N) without reporting a result`
+followed by the last lines the program printed on stderr. The sandbox is
+still held at that point, so the files the step wrote are kept.
