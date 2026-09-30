@@ -695,7 +695,7 @@ async function checkProblems(workspace, flags = {}) {
   const {
     listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
     workspaceTools, libraryTools, checkFormatVersion, missingToolPrograms, discoverSkills,
-    libraryDir, undeclaredImports, toolSecretNeeds,
+    libraryDir, undeclaredImports,
   } = await core();
   const T = "default";
   const P = "workspace";
@@ -904,25 +904,6 @@ async function checkProblems(workspace, flags = {}) {
       m.scope === "account" ? `library/tools/${m.name}` : `tools/${m.name}`,
       `run: ${m.run} — no such file (looked for ${m.looked})`,
     );
-  }
-
-  // A tool file that lists the secrets its program reads grants none of them:
-  // only the agent's own `secrets:` reach the sandbox. An agent that grants
-  // the tool without declaring them fails at run time with "X is not set"
-  // (strata-desk's reporter, 1 Oct) — say it here, with the line to write.
-  const needs = toolSecretNeeds ? toolSecretNeeds(T, P) : new Map();
-  for (const a of agents) {
-    for (const t of a.tools ?? []) {
-      const need = needs.get(t);
-      if (!need) continue;
-      const missing = need.secrets.filter((n) => !(a.secrets ?? []).includes(n));
-      if (!missing.length) continue;
-      note(
-        "error",
-        `agents/${a.name}`,
-        `tools: [${t}] reads ${missing.join(", ")}, which this agent does not declare — add them to its secrets: (${[...new Set([...(a.secrets ?? []), ...missing])].join(", ")}); a tool file's secrets: never grants them`,
-      );
-    }
   }
 
   // A program that imports a package nothing declares runs on the machine

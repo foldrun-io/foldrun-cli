@@ -92,7 +92,7 @@ runtime:
 | `args` | each argument and what it means — this is what the model reads |
 | `timeout` | seconds; without one the program runs until it finishes |
 | `interpreter` | what runs the file — `python3`, `bash`, `node` — when the extension does not say, or says wrong. `python3` (or `python`) means the tool's own environment when it has a `runtime:`, not the image's bare python |
-| `secrets` | `proxied` when the program sends through the egress proxy itself (reads `FOLDRUN_EGRESS`, sends `${NAME}`); the default, `materialised`, puts the real values in its environment |
+| `secrets` | the vault names the program reads, `[RESEND_API_KEY, EMAIL_FROM]` — granting the tool grants them, so the agent does not list them again; or `proxied` when the program sends through the egress proxy itself (reads `FOLDRUN_EGRESS`, sends `${NAME}`); the default, `materialised`, puts the real values in its environment |
 | `outward` | `true` when the program makes something happen outside — sends, posts, orders. On a [test run](runs#test-runs) a step granting it is handed no real secret at all, whatever their names |
 | `test_mode` | `allow` for a reader that happens to use a send-capable secret (a Business Profile reader on the same token the poster uses): on a test run the step still gets the real values. An `outward` tool in the same step wins. Parsed as `testMode` |
 | `runtime` | interpreters and packages, merged into the step's environment |
@@ -1466,6 +1466,15 @@ is set beside it. A script that sends should check the variable and say what
 it would have done; one that does not is stopped by the provider's auth error.
 Mark a tool that sends `outward: true`, and a reader that shares a sender's
 token `test_mode: allow`.
+
+**Where a secret is declared.** On the tool, when the tool needs it: a
+script tool lists the names its program reads under `secrets:` in its own
+file, and any agent that grants the tool gets them — the same as an API
+tool, whose `${NAME}` placeholders always travelled with it. On the agent,
+when the agent uses it directly: a key in an `apis:` header it defines, or a
+value its own `code` reads. A name in both places is granted once. The run
+trace lists the secrets a step received and the scope each came from; one
+that is not in the vault is an error on the step's record, by name.
 
 A script reads its secrets from its environment. By default that means the
 real values are in the sandbox for the step, and the run trace says which
