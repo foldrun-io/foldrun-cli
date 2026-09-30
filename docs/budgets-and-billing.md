@@ -162,7 +162,7 @@ thing as JSON.
 ## The Billing section
 
 Money is one subject, and the dashboard treats it as one section under the
-avatar, with seven tabs:
+avatar, with eight tabs:
 
 | tab | what it is |
 |---|---|
@@ -170,8 +170,9 @@ avatar, with seven tabs:
 | **Plan** | the plan you are on, this cycle's credits and when they reset, and the plans you could move to |
 | **Usage** | what was consumed, from the run records, and what each flow and agent cost by week from the ledger |
 | **Statement** | the ledger as a statement: grouped by day, human labels, month-to-date, filters, and a CSV for the month |
-| **Invoices** | a receipt for every card payment, hosted by Stripe, and a statement for every month |
-| **Payment** | the saved card and the auto top-up rule, with defaults derived from the burn. The legal name, address and tax number are the ones Stripe collects at checkout and prints on its invoice |
+| **Invoices** | a tax invoice for every card payment — the plan's fee and each top-up — hosted by Stripe, and a statement for every month |
+| **Payment** | the saved card and the auto top-up rule, with defaults derived from the burn |
+| **Details** | who the invoices are made out to: legal name, ABN, address and the invoice email |
 | **Spend limits** | the account's cap and each workspace's — over a day, a week or a month — as bars with the warning marks drawn where they fire, editable in place |
 
 The balance also sits in the header of every page, tinted by runway, and a
@@ -182,6 +183,39 @@ reason. The old `/dashboard/wallet` address redirects here.
 
 Adding credit is the owner's to do. Anyone else sees why the button is not
 there, and who to ask, rather than a button that fails.
+
+**Tax invoices.** Every payment is invoiced to the account's one Stripe
+customer, made on the first payment and carrying what Details holds — the
+legal name, the invoice email, the address, and the ABN as the customer's
+tax id (checked against the ABN rule before it is kept). A top-up's
+checkout asks Stripe for a numbered invoice, not just a receipt, so a
+business can claim the GST on credits as well as on the plan. With
+`STRIPE_TAX=1` (Stripe Tax enabled on the Stripe account), checkout works
+the tax out from the address, collects the address and a tax id if they
+are missing, and writes them back to the customer. Saving Details updates
+the customer at Stripe at once; without Stripe, or when Stripe refuses,
+they are kept and sent with the next save or payment.
+
+**Manage in Stripe.** The Payment, Plan, Invoices and Details tabs carry a
+button into Stripe's Billing Portal — the card, every invoice as a PDF, the
+plan — for the owner. Its look and what it allows (cancelling, switching
+plan) are set once at Stripe, under Settings → Billing → Customer portal.
+
+**When a plan payment fails.** Stripe retries the card on its own
+schedule. On the first failure of an invoice the owner is emailed once —
+the amount, Stripe's page to pay that invoice, and the way to update the
+card — and a grace period starts (`FOLDRUN_DUNNING_GRACE_DAYS`, default 7).
+Runs go on meanwhile, and an amber banner across the dashboard says until
+when. If the invoice is still unpaid when the grace ends, the hourly sweep
+suspends the account for new runs with the reason **payment overdue**, and
+one more email says so; the banner turns red. Runs in flight finish, people
+can still sign in, nothing is deleted. The moment `invoice.paid` arrives
+for it — or `invoice.voided` — the suspension is lifted, and a payment
+gets a thank-you email. Every step is once per invoice, however often
+Stripe retries or redelivers; a second invoice failing during the grace
+does not restart it. Dunning lifts only a suspension it placed: an account
+the super admin suspended for another reason stays suspended. The super
+admin sees where it stands on the customer's overview.
 
 **Your data, and leaving.** Settings → Your data gives the owner one JSON
 file with the account's workspaces, members, an index of every run and the
@@ -284,8 +318,9 @@ is `<public url>/api/billing/stripe`, sending exactly:
 | event | what it does |
 |---|---|
 | `checkout.session.completed` | a top-up credited, or a plan's first cycle granted |
-| `invoice.paid` | a plan cycle granted: signup, renewal, or a change |
-| `invoice.payment_failed` | the plan goes past due |
+| `invoice.paid` | a plan cycle granted: signup, renewal, or a change; an overdue invoice settled |
+| `invoice.payment_failed` | the plan goes past due; dunning starts |
+| `invoice.voided` | an overdue invoice cancelled; dunning ends |
 | `customer.subscription.updated` | a plan swap, or a status change |
 | `customer.subscription.deleted` | the plan it paid for ends |
 | `payment_intent.succeeded` | an auto top-up credited |
