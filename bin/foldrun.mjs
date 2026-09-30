@@ -129,7 +129,7 @@ Options
   --since <span>            runs: only runs started within 24h, 7d, 90m, 2w
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
-  --yes                     approve, stop: skip the confirmation, deliberately
+  --yes                     approve, stop, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
   --json                    report: the raw run record instead of the report
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --limit <n>               runs, billing: how many rows

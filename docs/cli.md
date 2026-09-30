@@ -75,7 +75,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `--limit <n>` | `runs`, `billing`: how many rows, newest first (`runs` default 20, `billing` 15). Each workspace is asked for its own newest `n` before the merge, so one busy desk cannot crowd out a quiet one |
 | `--step <n>` | `approve`, `reject`: decide one gate, numbered as `report` prints it. Without it, every step of that run which is waiting |
 | `--note "<text>"` | `approve`: guidance the approved step reads in its prompt — "approve, but skip the Sydney batch". `reject`: the reason, recorded on the trace |
-| `--yes` | `approve`, `stop`: skip the confirmation, deliberately; `deploy`: allow deleting files the folder no longer has. Required when there is no terminal to ask |
+| `--yes` | skip the confirmation, deliberately: `approve`, `stop`, `deploy` (when it would delete files), and every delete — `storage rm`, `storage unshare`, `source rm`, `secrets rm`, `keys revoke`, `workspaces rm`. Required when there is no terminal to ask; without it nothing is deleted |
 | `--json` | `report`: the raw run record instead of the report |
 | `--events <a,b>` | `account set notify`: which events are notified on — `failed`, `awaiting-approval`, `completed` |
 | `--watch` | `invoke`: follow the run's trace here as it happens; the exit code is the run's |

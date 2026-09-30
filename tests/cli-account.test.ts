@@ -403,7 +403,10 @@ test("workspaces rm removes the local folder and leaves the platform alone", asy
   const p = await fakePlatform();
   p.workspaces.set("ads-desk", new Map());
   try {
-    const r = await foldrunAsync(root, "workspaces", "rm", "ads-desk", "--url", p.url, "--token", "k");
+    const kept = await foldrunAsync(root, "workspaces", "rm", "ads-desk", "--url", p.url, "--token", "k");
+    assert.notEqual(kept.status, 0, "deleting the folder asks first; no terminal means --yes");
+    assert.ok(exists(root, "workspaces", "ads-desk"), "refused means the folder is still there");
+    const r = await foldrunAsync(root, "workspaces", "rm", "ads-desk", "--yes", "--url", p.url, "--token", "k");
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.ok(!exists(root, "workspaces", "ads-desk"));
     assert.deepEqual(p.deleted, []);

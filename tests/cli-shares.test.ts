@@ -60,10 +60,14 @@ test("shares lists live links by default, and --all shows the expired and revoke
 
 test("unshare revokes by token, and says so when there was nothing to revoke", async () => {
   const s = await serve({ "DELETE /api/workspaces/rank-desk/shares": (_b, q) => ({ ok: true, revoked: q.get("token") === "tok_live" }) });
-  const yes = await at(s.url, "storage", "unshare", "tok_live", "--to", "rank-desk");
+  // A revoke asks first; with no terminal it needs --yes and sends nothing without it.
+  const refused = await at(s.url, "storage", "unshare", "tok_live", "--to", "rank-desk");
+  assert.notEqual(refused.code, 0);
+  assert.equal(s.seen.filter((x) => x.method === "DELETE").length, 0, "refused sends no DELETE");
+  const yes = await at(s.url, "storage", "unshare", "tok_live", "--to", "rank-desk", "--yes");
   assert.equal(yes.code, 0, yes.out);
   assert.match(yes.out, /revoked/);
-  const no = await at(s.url, "storage", "unshare", "tok_nope", "--to", "rank-desk");
+  const no = await at(s.url, "storage", "unshare", "tok_nope", "--to", "rank-desk", "--yes");
   s.close();
   assert.equal(no.code, 1);
   assert.match(no.out, /nothing revoked/);

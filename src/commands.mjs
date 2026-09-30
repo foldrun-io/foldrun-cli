@@ -2390,6 +2390,7 @@ async function secretsCmd(positional, flags, layout) {
   }
 
   if (verb === "rm") {
+    if (!(await sureToDelete(flags, "secrets rm", `secret ${name}${scope ? ` (workspace ${scope})` : " (account)"}${url ? ` on ${url}` : ""}`))) return 1;
     if (url) {
       await remoteCall(url, flags, "/api/secrets", {
         method: "DELETE",
@@ -3092,6 +3093,7 @@ async function keysCmd(positional, flags) {
   }
   if (verb === "revoke" || verb === "rm") {
     if (!arg) throw new Error("which key? foldrun keys revoke <id> — ids are in `foldrun keys ls`");
+    if (!(await sureToDelete(flags, "keys revoke", `API key ${arg} on ${url} (anything using it stops working)`))) return 1;
     await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: arg }) });
     console.log(`\n  ${c.green("✓")} revoked ${arg}\n`);
     return 0;
@@ -3159,6 +3161,7 @@ async function sourceCmd(positional, flags) {
   }
   if (verb === "rm" || verb === "delete") {
     if (!a) throw new Error("foldrun source rm <path> --to <workspace>");
+    if (!(await sureToDelete(flags, "source rm", `${a} from the deployed ${ws}`))) return 1;
     await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: a }) });
     console.log(`\n  ${c.green("✓")} removed ${a}\n`);
     return 0;
@@ -3646,6 +3649,7 @@ async function workspacesCmd(positional, flags, layout) {
     if (!layout.workspacesDir) throw new Error("not in an account folder — there is nothing here to remove");
     const dir = path.join(layout.workspacesDir, name);
     if (!fs.existsSync(dir)) throw new Error(`no workspace "${name}" here — have: ${layout.workspaces.join(", ") || "none"}`);
+    if (!(await sureToDelete(flags, "workspaces rm", `the folder ${dir} and everything in it`))) return 1;
     fs.rmSync(dir, { recursive: true, force: true });
     console.log(`\n  ${c.green("✓")} removed ${c.dim(dir)}  ${c.dim("(locally — the platform's copy is untouched)")}\n`);
     return 0;
@@ -3824,6 +3828,7 @@ async function storageCmd(positional, flags, layout) {
   if (verb === "unshare") {
     const token = positional[1];
     if (!token) throw new Error("`foldrun storage unshare <token>` — `foldrun storage shares` lists them");
+    if (!(await sureToDelete(flags, "storage unshare", `share link ${token} (anyone holding it gets 404)`))) return 1;
     const { revoked } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares?token=${encodeURIComponent(token)}`, { method: "DELETE" });
     if (!revoked) {
       console.log(`\n  ${c.dim(`nothing revoked — ${token} is not a live link of this account's`)}\n`);
@@ -3908,6 +3913,7 @@ async function storageCmd(positional, flags, layout) {
   if (verb === "rm") {
     const rel = positional[1];
     if (!rel) throw new Error("`foldrun storage rm <path>` — `foldrun storage ls` names them");
+    if (!(await sureToDelete(flags, "storage rm", `${ws}/storage/${rel}`))) return 1;
     await remoteCall(url, flags, `/api/workspaces/${ws}/storage?path=${encodeURIComponent(rel)}`, { method: "DELETE" });
     console.log(`\n  ${c.green("✓")} ${ws}/storage/${rel} removed\n`);
     return 0;
@@ -4499,6 +4505,14 @@ async function workspaceOfRun(url, flags, layout, runId) {
  * and it is REQUIRED where there is no terminal to ask: a script that pipes
  * into this must say so, rather than being waved through by an empty read.
  */
+/** Ask before a delete that cannot be undone. False means "keep it"; no
+ *  terminal and no --yes throws, the way approve, stop and deploy do. */
+async function sureToDelete(flags, verb, what) {
+  if (await confirmed(flags, verb, `${what} — this cannot be undone. Delete? [y/N] `)) return true;
+  console.log(`\n  ${c.dim("nothing deleted")}\n`);
+  return false;
+}
+
 async function confirmed(flags, verb, question, expect) {
   if (flags.yes === true) return true;
   if (!process.stdin.isTTY) {

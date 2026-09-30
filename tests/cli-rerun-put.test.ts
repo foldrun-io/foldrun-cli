@@ -52,7 +52,10 @@ test("storage put uploads the bytes under the file's name or --as, and rm remove
   const renamed = await at(s.url, "storage", "put", local, "--as", "reports/brief.md", "--to", "rank-desk");
   assert.equal(renamed.code, 0, renamed.out);
   assert.equal(puts()[1].query.get("path"), "reports/brief.md");
-  const rm = await at(s.url, "storage", "rm", "reports/brief.md", "--to", "rank-desk");
+  const kept = await at(s.url, "storage", "rm", "reports/brief.md", "--to", "rank-desk");
+  assert.notEqual(kept.code, 0, "rm without a terminal or --yes is refused");
+  assert.equal(s.seen.filter((x) => x.method === "DELETE").length, 0);
+  const rm = await at(s.url, "storage", "rm", "reports/brief.md", "--to", "rank-desk", "--yes");
   s.close();
   fs.rmSync(dir, { recursive: true, force: true });
   assert.equal(rm.code, 0, rm.out);

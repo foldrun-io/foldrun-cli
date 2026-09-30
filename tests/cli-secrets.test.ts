@@ -46,7 +46,13 @@ test("secrets set --workspace lands under the folder's name, --account under the
     assert.match(ls.stdout, /SHARED/);
     assert.doesNotMatch(ls.stdout, /s3cret|acct/, "values are never printed");
 
-    const rm = foldrun("secrets", "rm", "API_KEY", "--workspace", ws, "--local");
+    // A delete asks first; with no terminal it needs --yes, and without it
+    // nothing is removed.
+    const refused = foldrun("secrets", "rm", "API_KEY", "--workspace", ws, "--local");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stdout + refused.stderr, /--yes/);
+    assert.match(foldrun("secrets", "ls", "--workspace", ws, "--local").stdout, /API_KEY/, "refused means kept");
+    const rm = foldrun("secrets", "rm", "API_KEY", "--workspace", ws, "--local", "--yes");
     assert.equal(rm.status, 0, rm.stdout + rm.stderr);
     assert.doesNotMatch(foldrun("secrets", "ls", "--workspace", ws, "--local").stdout, /API_KEY/);
   } finally {
