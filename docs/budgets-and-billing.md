@@ -187,6 +187,89 @@ surprise. With billing on, an empty balance refuses *new* runs — runs in
 flight finish. Every run is charged exactly once; the ledger is a database
 table with that as a constraint, not a promise.
 
+## How the money is kept straight
+
+The bookkeeping rules behind the numbers, for whoever has to answer "why is
+my balance this".
+
+**One grant per plan cycle.** A cycle is the subscription, the plan and the
+end of the period it pays for, and that is the grant's key. Stripe tells us
+about a paid cycle several ways — the checkout returning, the checkout
+webhook, `invoice.paid`, `customer.subscription.updated` — and in no fixed
+order; whichever arrives first grants and the rest find it done. A plan
+change inside a period is a new cycle on the new plan (the prorated invoice
+and the updated event are the same cycle, one grant); a renewal is a new
+period. Downgrades still lose the carry.
+
+**The low-balance guard runs every hour**, and right after a run whose
+charge takes the balance across the warning line. Per crossing of the line
+it makes at most **one** auto top-up attempt and sends at most **one**
+email; a declined card is not retried every hour — the email goes instead —
+and both re-arm once the balance is back above the line.
+
+**Refunds.** A refunded top-up takes off the credits it added — the charge's
+own amount caps it — and the balance is **not** floored at zero: credit
+refunded after it was spent leaves the account in the red, and admission
+refuses the next run until it is topped up. A refunded plan fee does not
+touch the wallet: the credits it bought were a grant, and they end with the
+cycle.
+
+**Chargebacks.** The disputed amount comes off when the dispute opens (the
+card network already has the money). The account is found through the
+disputed charge — its metadata, its payment's, then the saved customer. Won
+(or an inquiry closed without a chargeback): the same amount goes back on,
+once. Lost: it stays off.
+
+**Every line says why it exists.** Each ledger line carries a reason —
+usage, pod, fee, checkout, auto-topup, manual, operator, refund, dispute,
+dispute-won, plan, trial, grant-expired, credits-expired — and lines written
+before the field have theirs derived from their key and note. Statements
+label lines by it. **Burn**, the 30-day spend and month-to-date count usage
+and the daily fees only — not expiries, refunds, chargebacks or an
+operator's debit. The admin console's **charged** figure is usage (runs and
+account pod sessions) in the customer list and the money report alike;
+**paid in** is top-ups paid plus plan fees from the invoices Stripe said
+were paid; **held in wallets** is credit bought and unspent — granted
+credit is shown apart, because nobody paid for it by the dollar.
+
+**Hand-placed plans renew.** A plan the super admin grants runs a month and
+is renewed by the hourly sweep at its period's end, with the same grant and
+rollover rules. Granting a plan to an account Stripe is billing is refused
+(end it first, or change it at Stripe); ending a Stripe-billed plan cancels
+the subscription at Stripe first, at once, and changes nothing if Stripe
+refuses.
+
+**An operator's credit or debit is written once** per idempotency key the
+console sends, and audited once.
+
+**Stripe.** Every call pins its API version (`2025-03-31.basil`;
+`STRIPE_API_VERSION` overrides) — create the webhook endpoint on the same
+version — and charges in `FOLDRUN_CURRENCY` (default `usd`), which is also
+the unit of every balance. Set the currency before any money is on the
+books; Stripe will not mix currencies on one customer. The webhook endpoint
+is `<public url>/api/billing/stripe`, sending exactly:
+
+| event | what it does |
+|---|---|
+| `checkout.session.completed` | a top-up credited, or a plan's first cycle granted |
+| `invoice.paid` | a plan cycle granted: signup, renewal, or a change |
+| `invoice.payment_failed` | the plan goes past due |
+| `customer.subscription.updated` | a plan swap, or a status change |
+| `customer.subscription.deleted` | the plan it paid for ends |
+| `payment_intent.succeeded` | an auto top-up credited |
+| `payment_intent.payment_failed` | an auto top-up refused; the warning goes |
+| `charge.refunded` | a refunded top-up's credits come off |
+| `charge.dispute.created` | a chargeback's amount comes off |
+| `charge.dispute.closed` | won: it goes back on; lost: it stays off |
+
+Every delivery is logged — the event, the account, what was done or the
+error, and a hash of the payload (never the payload, which carries names
+and addresses). The super admin lists the log at `GET
+/api/admin/stripe-events` and replays one event with `POST
+/api/admin/stripe-events/<id>/replay`, which re-fetches it from Stripe and
+runs it through the same handler; every write it makes is keyed once, so a
+replay of an event that was handled changes nothing.
+
 ## Plan gates
 
 Two more limits come with the plan rather than the wallet: how many
