@@ -35,6 +35,18 @@ test("answer --option sends the chosen option to that run's question", async () 
   assert.match(r.out, /answered writer/);
 });
 
+test("answer --option with no number is a usage error, not option 1", async () => {
+  const s = await serve({
+    "/api/approvals": () => QUESTIONS,
+    "POST /api/workspaces/blog-desk/runs/run-9/answer": (b) => ({ ok: true, question: "q_1", answer: JSON.parse(b).answer }),
+  });
+  const r = await at(s.url, "answer", "run-9", "--option");
+  s.close();
+  assert.notEqual(r.code, 0, r.out);
+  assert.equal(s.seen.filter((x) => x.method === "POST").length, 0, "nothing was answered");
+  assert.match(r.out, /--option <n>/);
+});
+
 test("answer in words; a run that is not asking says so", async () => {
   const s = await serve({
     "/api/approvals": () => QUESTIONS,

@@ -4549,6 +4549,8 @@ async function answerCmd(positional, flags) {
   const q = mine[0];
   let text = positional.slice(1).join(" ").trim();
   if (flags.option !== undefined) {
+    // A bare `--option` parses as true, and Number(true) is 1.
+    if (typeof flags.option !== "string") throw new Error(`--option needs a number: \`foldrun answer ${runId} --option <n>\``);
     const n = Number(flags.option);
     if (!q.options?.length || !Number.isInteger(n) || n < 1 || n > q.options.length) {
       throw new Error(q.options?.length ? `--option takes 1–${q.options.length}` : "this question offered no options — answer in words");
