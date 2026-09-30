@@ -813,6 +813,26 @@ async function check(workspace, flags = {}) {
       }
     }
 
+    // Sub-agents: a name that is nothing, a delegate the model cannot pick
+    // (no description), or one left holding none of its tools inside this
+    // agent's step — each would be a delegation that silently does less.
+    if (a.subagents?.length) {
+      const { checkOverlap } = await import("@foldrun/core/subagents");
+      const byName = new Map(agents.map((x) => [x.name, x]));
+      for (const s of a.subagents) {
+        const sub = byName.get(s);
+        if (!sub) {
+          note("error", `agents/${a.name}`, `subagents: [${s}] — no such agent in this workspace`);
+        } else if (s === a.name) {
+          note("warn", `agents/${a.name}`, `subagents: [${s}] — an agent delegating to itself; it is skipped at run time`);
+        } else if (!sub.description?.trim()) {
+          note("error", `agents/${s}`, `no description — ${a.name} delegates to it (subagents:), and the model picks a sub-agent by its description`);
+        } else if (sub.tools.length && !checkOverlap(a.tools, sub.tools).length) {
+          note("warn", `agents/${a.name}`, `subagents: [${s}] — none of ${s}'s tools are in ${a.name}'s, and a sub-agent never gets more than its parent: it would have no tools`);
+        }
+      }
+    }
+
     // `skills:` present is an allowlist. A name that matches nothing silently
     // withholds a skill the author believed was loaded — and an empty list
     // withholds every one of them, which is legal but worth saying out loud.

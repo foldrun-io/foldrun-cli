@@ -57,7 +57,8 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `tools` | the one grant list — built-in groups, exact SDK names, and your own tools |
 | `disallowedTools` | subtract from what it would otherwise have |
 | `skills` | an allowlist. **Absent inherits every skill in scope**; `[]` withholds all of them |
-| `agents` | colleagues it may consult mid-run |
+| `agents` | colleagues it may consult mid-run — an answer, no tools |
+| `subagents` | colleagues it may delegate a whole job to — own context, own tools, never more than its own ([below](#delegating-to-a-sub-agent)) |
 | `scripts` | programs in `scripts/`, each becoming a callable tool |
 | `apis` | an HTTP API declared inline, as one tool |
 | `mcpServers` | an MCP server declared inline |
@@ -78,6 +79,7 @@ only Web takes a provider:
 | | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs | — |
 | | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
 | **People** | `ask` | `ask_person(question, options?)` — asks the person running the desk mid-step and waits for the answer ([below](#asking-a-person-mid-step)) | — |
+| **Colleagues** | `agents:` · `subagents:` | not in `tools:` — their own fields: consult a colleague for an answer, or delegate a job to one that works with its own tools ([consult](#consulting-colleagues), [delegate](#delegating-to-a-sub-agent)) | — |
 
 ### Asking a person mid-step
 
@@ -143,6 +145,52 @@ answers one self-contained question as a **toolless** call, inline, with the
 spend landing on the consulting step. Depth is one — consultants cannot
 consult further. It is deliberately weak: a consult asks a specialist what
 they think; it does not hand over the task.
+
+## Delegating to a sub-agent
+
+```yaml
+subagents:
+  - [[researcher]]
+```
+
+A sub-agent takes a whole job — read these forty pages, check these links,
+work through this folder — in **its own context, with its own tools**, and
+hands back what it found. The delegating agent's context stays on its own
+work. It is the Agent SDK's own sub-agent (the model gets an `Agent` tool,
+the way Claude Code delegates), fed from the named agents' files.
+
+| | `agents:` — consult | `subagents:` — delegate |
+|---|---|---|
+| context | its own | its own |
+| tools | none | its own `tools:`, cut to the delegating agent's |
+| gives back | one answer to one question | the result of a job, in its reply |
+| cost | on the consulting step | on the delegating step |
+
+What keeps it inside the step:
+
+- **Never more than its parent.** A sub-agent's tools are its own `tools:`,
+  resolved as its own step's would be, then **cut to what the delegating
+  agent holds** — a sub-agent with `tools: [read, code]` under a parent with
+  `tools: [read]` gets `read` only. Its `disallowedTools:` apply too.
+- **Same sandbox.** Same files, same secrets and leases, the same path
+  confinement and the same approval gates: the SDK runs a sub-agent's tool
+  calls through the step's own checks, and foldrun also refuses anything
+  outside the sub-agent's list there.
+- **One level deep.** A sub-agent never gets the `Agent` tool, so it cannot
+  delegate again.
+- **Its `description:` is required.** The model picks a sub-agent by it; a
+  sub-agent without one is not delegated to, and `foldrun check` says so.
+- **Its `model:`** is its own (remapped by the step's provider like the
+  step's); absent, it uses the step's model.
+- **One step.** Flows still decide what runs next — a sub-agent is a helper
+  inside the step that called it, never a step of its own. Its spend lands on
+  that step; the run trace shows its tool calls marked with its name, and a
+  `delegating to <name>` line for each job it was given.
+
+It works where the step works: `foldrun run` on your machine and a run on the
+platform alike. `foldrun check` errors on a name that is not an agent and on a
+sub-agent with no description, and warns when a sub-agent would hold none of
+its tools inside the delegating agent's.
 
 ## Where it runs
 
