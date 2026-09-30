@@ -162,15 +162,16 @@ thing as JSON.
 ## The Billing section
 
 Money is one subject, and the dashboard treats it as one section under the
-avatar, with six tabs:
+avatar, with seven tabs:
 
 | tab | what it is |
 |---|---|
 | **Balance** | the number, large, with how long it lasts in words, thirty days of spend as a sparkline, what is held against runs in flight, and Add credit with the amount that covers a month already chosen |
+| **Plan** | the plan you are on, this cycle's credits and when they reset, and the plans you could move to |
 | **Usage** | what was consumed, from the run records, and what each flow and agent cost by week from the ledger |
 | **Statement** | the ledger as a statement: grouped by day, human labels, month-to-date, filters, and a CSV for the month |
 | **Invoices** | a receipt for every card payment, hosted by Stripe, and a statement for every month |
-| **Payment** | the saved card, the auto top-up rule with defaults derived from the burn, and the billing details every statement is made out to |
+| **Payment** | the saved card and the auto top-up rule, with defaults derived from the burn. The legal name, address and tax number are the ones Stripe collects at checkout and prints on its invoice |
 | **Spend limits** | the account's cap and each workspace's — over a day, a week or a month — as bars with the warning marks drawn where they fire, editable in place |
 
 The balance also sits in the header of every page, tinted by runway, and a
@@ -178,6 +179,37 @@ banner appears across the dashboard when the balance is under a week's cover
 or empty, carrying the one button that fixes it. A refused run says why at
 the button that was clicked, with a link to add credit when money was the
 reason. The old `/dashboard/wallet` address redirects here.
+
+Adding credit is the owner's to do. Anyone else sees why the button is not
+there, and who to ask, rather than a button that fails.
+
+**Your data, and leaving.** Settings → Your data gives the owner one JSON
+file with the account's workspaces, members, an index of every run and the
+whole ledger (`GET /api/account/export`). The same place holds **Close
+account**: type the account's name and it is suspended at once — no new
+runs, schedules stop firing — while the platform team settles the last
+invoice and any refund. Nothing is deleted by the request itself; people can
+still sign in and take the copy.
+
+## The admin console's money levers
+
+Each customer (account) in the super admin console has a Billing tab with
+every lever that changes what the customer pays, each behind a confirmation
+that names the amount and the account: **credit or debit** with a reason on
+the ledger (the console sends an idempotency key, so a double click is one
+line), **extend the trial** (more trial credits as a grant, with whatever
+trial credit is left carried into it; not for an account on a plan), the
+**plan** (grant a cycle by hand, end it, and the lane and limits that ride
+with it), **going into minus**, and **charges this account does not pay**.
+The overview beside it holds the contact on record (name, email, phone,
+company, ABN), notes, suspension, and the customer's Stripe customer and
+subscription with links into Stripe's own dashboard — test or live, read
+from the install's key.
+
+Revenue has a CSV per month for the accountant (`GET /api/admin/export`):
+one row per customer and a total, charges by leg, fees, top-ups, grants,
+expiries, refunds, disputes, adjustments and net, with Stripe's own figures
+for the month beside them when Stripe is connected.
 
 ## The wallet
 
