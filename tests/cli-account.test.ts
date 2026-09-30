@@ -415,6 +415,27 @@ test("workspaces rm removes the local folder and leaves the platform alone", asy
   }
 });
 
+// `rm ..` resolved to the account root's parent and, with --yes, deleted
+// it. Only a workspace this account actually has may be named.
+test("workspaces rm refuses anything that is not one of this account's workspaces", async () => {
+  const root = account();
+  const p = await fakePlatform();
+  try {
+    for (const name of ["..", ".", "ads-desk/..", "../ads-desk", "a/b", "nope"]) {
+      const r = await foldrunAsync(root, "workspaces", "rm", name, "--yes", "--url", p.url, "--token", "k");
+      assert.notEqual(r.status, 0, `rm ${name} refused`);
+      assert.match(r.stderr, /no workspace|not a workspace name/, r.stderr);
+    }
+    assert.ok(exists(root, "workspaces", "ads-desk"));
+    assert.ok(fs.existsSync(root), "the account folder is still there");
+    const plat = await foldrunAsync(root, "workspaces", "rm", "..", "--platform", "--yes", "--url", p.url, "--token", "k");
+    assert.notEqual(plat.status, 0);
+    assert.deepEqual(p.deleted, []);
+  } finally {
+    p.close();
+  }
+});
+
 test("deleting on the platform needs saying so twice", async () => {
   const root = account();
   const p = await fakePlatform();

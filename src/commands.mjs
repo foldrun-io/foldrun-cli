@@ -1346,7 +1346,7 @@ async function runEvals(name, flags = {}) {
  * have to know which one it was — a deploy that is refused over HTTP should
  * read exactly like one refused on disk.
  */
-async function deployOverHttp(url, workspace, files, flags) {
+async function deployOverHttp(url, workspace, files, flags, expectRemoved) {
   const token = tokenFor(url, flags);
   const endpoint = `${url.replace(/\/+$/, "")}/api/workspaces/${encodeURIComponent(workspace)}/deploy`;
 
@@ -1360,6 +1360,9 @@ async function deployOverHttp(url, workspace, files, flags) {
         commit: flags.commit ?? null,
         force: flags.force === true,
         dryRun: flags["dry-run"] === true,
+        // The removals a person confirmed; the platform refuses (409) a
+        // deploy that would now remove anything else.
+        ...(expectRemoved ? { expectRemoved } : {}),
       }),
     });
   } catch (err) {
@@ -1370,6 +1373,13 @@ async function deployOverHttp(url, workspace, files, flags) {
   if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — run \`foldrun login\` again, or check FOLDRUN_TOKEN`);
   // 422 is a refusal the caller has to read, not a transport failure: the
   // issues are in the body and reported like any other refused deploy.
+  if (res.status === 409 && Array.isArray(body.unexpectedRemovals)) {
+    return {
+      added: [], updated: [], issues: [], warnings: [], blockedBy: [], preserved: 0, commit: null,
+      removed: body.removed ?? [],
+      unexpectedRemovals: body.unexpectedRemovals,
+    };
+  }
   if (!res.ok && res.status !== 422) {
     throw new Error(body.error ?? `${url} returned ${res.status}`);
   }
@@ -3408,6 +3418,15 @@ async function deployOne(url, tenant, workspace, files, flags, layout, from) {
   // deploy that REMOVES anything needs a yes — or --yes, which is the only
   // way through without a terminal (an AI session or a script is not one).
   // A deploy that only adds or changes files goes straight on, as before.
+  //
+  // The yes is to THAT list. A run can write new storage/ outputs between
+  // the question and the deploy, and the deploy used to remove whatever was
+  // missing at that moment. So the confirmed list goes with the deploy as
+  // expectRemoved, and a platform whose plan now removes more refuses (409)
+  // with the new list — which a person confirms again, or, with no
+  // terminal, is refused even under --yes: that yes was to a shorter list.
+  /** @type {string[] | undefined} */
+  let expectRemoved;
   if (!flags["dry-run"]) {
     const preview = url ? await deployOverHttp(url, workspace, files, { ...flags, "dry-run": true }) : planDeploy(tenant, workspace, files);
     if (url) console.log(`\n  ${c.dim("deploying to")} ${c.bold(url)} ${c.dim("as")} ${await deployIdentity(url, flags)}`);
@@ -3415,16 +3434,33 @@ async function deployOne(url, tenant, workspace, files, flags, layout, from) {
       console.log(`  ${c.amber("·")} ${workspace} not deployed — nothing was changed\n`);
       return 1;
     }
+    expectRemoved = preview.removed;
   }
+  const attempt = () =>
+    url
+      ? deployOverHttp(url, workspace, files, flags, expectRemoved)
+      : flags["dry-run"]
+        ? planDeploy(tenant, workspace, files)
+        : deployWorkspace(tenant, workspace, files, {
+            commit: flags.commit ?? null,
+            force: flags.force === true,
+            expectRemoved,
+          });
   /** @type {any} */
-  const plan = url
-    ? await deployOverHttp(url, workspace, files, flags)
-    : flags["dry-run"]
-      ? planDeploy(tenant, workspace, files)
-      : deployWorkspace(tenant, workspace, files, {
-          commit: flags.commit ?? null,
-          force: flags.force === true,
-        });
+  let plan = await attempt();
+  for (let tries = 0; plan.unexpectedRemovals?.length; tries++) {
+    console.log(`\n  ${c.amber("!")} since you confirmed, this deploy would also remove: ${plan.unexpectedRemovals.join(", ")}`);
+    if (!process.stdin.isTTY || tries >= 3) {
+      console.log(`  ${c.amber("·")} ${workspace} not deployed — nothing was changed. Run the deploy again to confirm the new list.\n`);
+      return 1;
+    }
+    if (!(await confirmRemovals(workspace, plan.removed, { ...flags, yes: false }))) {
+      console.log(`  ${c.amber("·")} ${workspace} not deployed — nothing was changed\n`);
+      return 1;
+    }
+    expectRemoved = plan.removed;
+    plan = await attempt();
+  }
 
   console.log(
     `\n  ${c.bold(workspace)} ${c.dim(`${files.length} files · +${plan.added.length} ~${plan.updated.length} -${plan.removed.length}`)}${from ? ` ${c.dim(`← ${from}`)}` : ""}`,
@@ -3657,6 +3693,11 @@ async function workspacesCmd(positional, flags, layout) {
 
   if (verb === "rm" || verb === "remove" || verb === "delete") {
     if (!name) throw new Error("which workspace? `foldrun workspaces rm <name>`");
+    // `rm ..` joined to workspaces/ is the account folder itself. A name is
+    // one path segment, never . or .., and locally one this account has.
+    if (name === "." || name === ".." || /[\\/]/.test(name)) {
+      throw new Error(`"${name}" is not a workspace name — have: ${(layout.workspaces ?? []).join(", ") || "none"}`);
+    }
     if (flags.platform === true) {
       if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
       if (flags.yes !== true) {
@@ -3668,7 +3709,9 @@ async function workspacesCmd(positional, flags, layout) {
     }
     if (!layout.workspacesDir) throw new Error("not in an account folder — there is nothing here to remove");
     const dir = path.join(layout.workspacesDir, name);
-    if (!fs.existsSync(dir)) throw new Error(`no workspace "${name}" here — have: ${layout.workspaces.join(", ") || "none"}`);
+    if (!layout.workspaces.includes(name) || !fs.existsSync(dir)) {
+      throw new Error(`no workspace "${name}" here — have: ${layout.workspaces.join(", ") || "none"}`);
+    }
     if (!(await sureToDelete(flags, "workspaces rm", `the folder ${dir} and everything in it`))) return 1;
     fs.rmSync(dir, { recursive: true, force: true });
     console.log(`\n  ${c.green("✓")} removed ${c.dim(dir)}  ${c.dim("(locally — the platform's copy is untouched)")}\n`);
