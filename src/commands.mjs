@@ -6096,13 +6096,17 @@ const textSha = (text) => crypto.createHash("sha256").update(text, "utf8").diges
  *  saved it while this waited at y/N or ran check; writing anyway would put
  *  their edit back as it was. Refuses, writing nothing, instead. */
 function writeIfUnchanged(desk, rel, before, next) {
-  const abs = path.join(desk.dir, rel);
+  assertUnchanged(desk, rel, before);
+  fs.writeFileSync(path.join(desk.dir, rel), next);
+}
+
+/** Throw, as writeIfUnchanged does, when a desk file no longer reads `before`. */
+function assertUnchanged(desk, rel, before) {
   let now = null;
   try {
-    now = fs.readFileSync(abs, "utf8");
+    now = fs.readFileSync(path.join(desk.dir, rel), "utf8");
   } catch {}
   if (now !== before) throw new Error(`${rel} changed since it was read — nothing was written; run the command again on the new text`);
-  fs.writeFileSync(abs, next);
 }
 
 /** Say the problems an edit would add, in check's words; true when any is an error. */
@@ -6354,11 +6358,14 @@ async function agentLinkCmd(positional, flags, layout) {
     console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
     return 0;
   }
+  // Every file checked before any is written: a description put on the
+  // worker with the link refused would be half an edit.
+  if (!desk.platform) for (const e of edits) assertUnchanged(desk, e.rel, e.before);
   for (const e of edits) {
     if (desk.platform) {
       await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/agents/${enc(e.agent)}`, { method: "PATCH", body: JSON.stringify(e.body) });
     } else {
-      fs.writeFileSync(path.join(desk.dir, e.rel), e.after);
+      writeIfUnchanged(desk, e.rel, e.before, e.after);
     }
   }
   console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${edits.map((e) => e.rel).join(", ")} ${c.dim(desk.platform ? `in ${desk.ws} — a revision on the platform` : "— `foldrun deploy` ships it")}\n`);
