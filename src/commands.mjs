@@ -998,7 +998,9 @@ async function checkProblems(workspace, flags = {}) {
         note("error", `flows/${f.file}`, `[[flow:${s.subflow}]] does not exist`, s.line);
       }
     }
-    for (const w of lintFlow(f, { agents: [...agentNames], outwardAgents })) note(w.level ?? "warn", `flows/${f.file}`, w.message, w.line);
+    // A spelling hint (../../storage → workspace/storage) is info, not a warning:
+    // the old path works, and a check that cries wolf gets ignored.
+    for (const w of lintFlow(f, { agents: [...agentNames], outwardAgents })) note(w.level ?? (w.kind === "spelling" ? "info" : "warn"), `flows/${f.file}`, w.message, w.line);
   }
 
   for (const e of evals) {

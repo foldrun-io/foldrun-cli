@@ -47,7 +47,7 @@ A check that fails with "exit 1" costs somebody an hour. Write the fix into
 the message:
 
 ```markdown
-   verify: node -e "const fs=require('fs');if(!fs.existsSync('../../storage/unanswered.csv')){console.error('the scan wrote no storage/unanswered.csv, and the next step fans out over it. Fix: run the tool once per office and let it write the file.');process.exit(1)}"
+   verify: node -e "const fs=require('fs');if(!fs.existsSync('workspace/storage/unanswered.csv')){console.error('the scan wrote no storage/unanswered.csv, and the next step fans out over it. Fix: run the tool once per office and let it write the file.');process.exit(1)}"
 ```
 
 **4. Is a retry safe?**

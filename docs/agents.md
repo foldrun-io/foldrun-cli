@@ -312,15 +312,24 @@ the file tools and through bash.
 
 ### Where files live, from the agent's point of view
 
-An agent's working directory is its own folder, and every path is relative
-to it. Two spellings reach the workspace root and both are fine:
+An agent's working directory is its own folder, `agents/<name>/`, and every
+path is relative to it. The workspace root is `workspace/` — write that,
+everywhere: in the agent's prose, in a flow's options, in a script's
+arguments and in a shell command.
 
-| place | relative | with the prefix |
-|---|---|---|
-| a deliverable for a person | `../../storage/report.md` | `workspace/storage/report.md` |
-| what the next run needs | `../../state/history.md` | `workspace/state/history.md` |
-| this step's scratch | `outputs/draft.md` | — |
-| the account library (read-only) | — | `account/knowledge/prices.md` |
+| place | write it as |
+|---|---|
+| a deliverable for a person | `workspace/storage/report.md` |
+| what the next run needs | `workspace/state/history.md` |
+| this step's scratch | `outputs/draft.md` |
+| the account library (read-only) | `account/knowledge/prices.md` |
+
+`workspace/` resolves the same in the file tools (Read, Write, Edit, Glob,
+Grep), in Bash and the scripts it runs, in `scripts:` and folder tools, and
+in a shell `verify:` — for the length of a step the agent's folder holds a
+`workspace` link to the workspace root, removed when the step ends. The older
+`../../storage/…` reaches the same place and keeps working; `foldrun check`
+points it out as a hint, never an error.
 
 There is no `/tmp` for an agent, and no absolute path is inside its
 workspace. A directory a tool made outside the workspace — a repository it

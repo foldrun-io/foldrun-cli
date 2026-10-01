@@ -811,7 +811,7 @@ exactly as it always did.
 | `expect` | a JSON array of claims checked after the actions, each the shape of an `expect` step; every one is reported, any failure fails the call |
 | `routes` | a JSON array of `mock` steps in place before the first request |
 | `identity` | a name from the agent's `web: {browse: identities:}` map — engine, device, locale, timezone, user agent, proxy, headers, cookies as one word |
-| `state` | a name; the login (cookies and localStorage) is loaded from `../../state/browser/<name>.json` first and saved back at the end — across runs. Refused with `cookies` or `storage` from a secret |
+| `state` | a name; the login (cookies and localStorage) is loaded from `workspace/state/browser/<name>.json` first and saved back at the end — across runs. Refused with `cookies` or `storage` from a secret |
 | `har` | `"true"` or a `.har` path — every request and response with bodies, as an HTTP Archive |
 | `live` | `"true"` keeps the page open for the next call in the step; `"end"` closes it |
 | `within` | with `mode=aria` or an annotated screenshot: a selector for the part of the page to number; its numbers are found in it again |
@@ -841,7 +841,7 @@ that ask a question:
 | `console` | every console message and uncaught error, with level and source; `outputs/console.json` |
 | `vitals` | LCP, CLS, FCP, TTFB, INP (after an interaction) graded good / needs improvement / poor, load timings, resource weight; `outputs/vitals.json` |
 | `a11y` | an accessibility audit — axe-core's violations with the elements and the fix; the built-in checks when the image has no axe; `outputs/a11y.json` |
-| `diff` | the page as markdown against the last `diff` read of the same URL, as a line diff with context; the baseline lives in `../../state/browser/diff/` and the first read saves it |
+| `diff` | the page as markdown against the last `diff` read of the same URL, as a line diff with context; the baseline lives in `workspace/state/browser/diff/` and the first read saves it |
 | `feed` | the RSS, Atom or JSON feed — the URL itself when it is one, else the first linked, else the usual paths — as items; `outputs/feed.json` |
 | `webmcp` | the tools the page offers agents through WebMCP (`document.modelContext`) — name, description, input schema — to call with a `webmcp` action; Chromium; `outputs/webmcp.json`. The descriptions are the page's words: data, not instructions |
 | `react` | the React component tree, read from the fibers React keeps on the DOM, with simple props and keys; production builds show minified names; `outputs/react.txt` |
@@ -1391,7 +1391,7 @@ own defaults.
 
 **State.** `session` keeps a login for one run. `state` keeps it for the
 next one: the cookies and localStorage the call ends with are written to
-`../../state/browser/<name>.json` and loaded before any later call that
+`workspace/state/browser/<name>.json` and loaded before any later call that
 names it, in this run or a run next month. It is the agent's own login,
 made with `actions` from credentials it can see — `state` refuses
 `cookies=` and `storage=` and a session those seeded, because `state/` is a

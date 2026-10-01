@@ -144,7 +144,7 @@ the word and the file deciding the shape.
 
 The declared shape stays one line in the file; the width comes from the data.
 `each: items` fans out over the array an earlier `output: json` step returned,
-and `each: rows of ../../storage/leads.csv` over a CSV.
+and `each: rows of workspace/storage/leads.csv` over a CSV.
 
 ### Composition
 

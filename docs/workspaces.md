@@ -135,8 +135,8 @@ Three directories look alike and are not:
 
 The test is not "is it important", it is **who reads it next**. A value
 regenerated every run is `storage/`; a value accumulated across runs is
-`state/`. From an agent, `../../storage/x.md` and `workspace/storage/x.md`
-are the same place. See [Storage and sharing](storage-and-sharing).
+`state/`. From an agent, write `workspace/storage/x.md` and
+`workspace/state/x.md` — the older `../../storage/x.md` is the same place. See [Storage and sharing](storage-and-sharing).
 
 ## What a deploy touches
 

@@ -8,8 +8,8 @@ second.
 
 ## Where it lives, from an agent's point of view
 
-An agent writes a deliverable to `workspace/storage/` (or `../../storage/`,
-the same place) and it appears on the workspace's Storage page after the
+An agent writes a deliverable to `workspace/storage/` (the older
+`../../storage/` is the same place) and it appears on the workspace's Storage page after the
 step, kept and downloadable. Uploads dropped on that page land in the same
 directory and are there for the next run to read.
 
