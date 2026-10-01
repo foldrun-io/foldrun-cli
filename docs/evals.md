@@ -36,6 +36,7 @@ satisfy. The heading is the case's name, so make it the thing being checked.
 | `model` | the **judge's** tier, not the subject's — cases run the agent on its own model |
 | `effort` | the judge's effort. PASS/FAIL against one sentence is not deep work |
 | `trigger` | `deploy` (default) or `manual` |
+| `inputs` | `true` makes the file a flow's saved inputs, not a test: its cases are named tasks for [Run with…](flows#run-with-saved-inputs) and `foldrun invoke --inputs`, and nothing runs them as an eval |
 | `live` | an eval's runs are [test runs](runs#test-runs) — nothing outward, `state/` untouched — unless this says `true`. A flow eval that must really send to prove itself opts in; nothing opts in by accident |
 
 ## Assertions

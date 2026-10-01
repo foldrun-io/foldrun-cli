@@ -176,6 +176,7 @@ Options
   --expect "<line>"         promote: an assertion in eval syntax (contains: …, judge: …) — repeatable
   --case <name>             promote: the case's name
   --tag <t>                 invoke, flow run: a label on the run — repeatable, sent as tags
+  --inputs <set>            invoke, flow run: the task is a saved input set (evals/<flow>-inputs.md, or an eval case for the flow)
   --preview                 storage cat: the platform reads the file and prints what is in it
   --csv                     billing statement: the CSV file instead of the table
   --threshold / --amount    billing wallet set: auto top-up refills --amount (5-500 USD) when the balance falls below --threshold

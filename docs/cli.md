@@ -51,7 +51,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `foldrun pull [workspace]` | bring the platform's account down into this folder — refuses to overwrite a locally edited file, and names every one it would have taken (`--force` takes them) |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
 | `foldrun workspaces` | what exists here, what exists on the platform, which are both — also `new <name>`, and `rm <name>` (locally; `--platform --yes` deletes it there) |
-| `foldrun invoke <flow>` | start a flow on a running platform — `--watch` follows its trace here; `--test` makes it a [test run](runs#test-runs) `--once <key>` sends the key as the run's idempotency key, so a CI step that retries after a dropped response is answered with the run it already started instead of paying for a second. `--tag <t>`, repeatable, labels the run (the API's `tags`). `foldrun flow run <flow>` is the same command |
+| `foldrun invoke <flow>` | start a flow on a running platform — `--watch` follows its trace here; `--test` makes it a [test run](runs#test-runs) `--once <key>` sends the key as the run's idempotency key, so a CI step that retries after a dropped response is answered with the run it already started instead of paying for a second. `--tag <t>`, repeatable, labels the run (the API's `tags`). `--inputs <name>` sends a saved input set as the task — a case of `evals/<flow>-inputs.md` or of an eval that runs the flow, as the platform has it (see [Run with saved inputs](flows#run-with-saved-inputs)). `foldrun flow run <flow>` is the same command |
 | `foldrun source <verb>` | one workspace file on a platform: `ls [dir]`, `cat <path>`, `put <path>` (from `--file`, else stdin; `--message` goes on the revision), `mv <from> <to>`, `rm <path>` — the editor's own door, so every write is a revision. For a whole tree, `deploy` |
 | `foldrun open [page]` | the dashboard for this workspace, in the browser (`runs`, `agents`, `graph`, `repo`…) |
 | `foldrun login` | sign this machine in from the browser — no key to copy |
@@ -97,6 +97,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `--subagent`, `--consult`, `--can-ask`, `--description` | `agent link`, `agent unlink`: which list to edit, and a worker's description when it has none |
 | `--eval <name>`, `--expect "<line>"`, `--case <name>` | `promote`: the eval file, an assertion (repeatable), the case's name |
 | `--tag <t>` | `invoke`, `flow run`: a label on the run — repeatable |
+| `--inputs <name>` | `invoke`, `flow run`: the task is that saved input set; not with `--task` |
 | `--preview` | `storage cat`: the platform reads the file and prints what is in it |
 | `--csv` | `billing statement`: the CSV instead of the table |
 | `--threshold`, `--amount` | `billing wallet set auto-top-up`: refill `--amount` (5–500 USD) when the balance falls below `--threshold` |

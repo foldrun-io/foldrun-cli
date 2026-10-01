@@ -1319,8 +1319,15 @@ async function runEvals(name, flags = {}) {
   const { listEvals, runEval } = await core();
   const T = "default";
   const P = "workspace";
-  const all = listEvals(T, P).filter((e) => !name || e.name === name);
-  if (all.length === 0) throw new Error(name ? `no eval called "${name}"` : "no evals in evals/");
+  // An `inputs: true` file is a flow's saved inputs, not a test: it has
+  // nothing to assert, so it is never run as one (see evals.md).
+  const all = listEvals(T, P).filter((e) => (!name || e.name === name) && !e.inputs);
+  if (all.length === 0) {
+    if (name && listEvals(T, P).some((e) => e.name === name)) {
+      throw new Error(`"${name}" is a file of saved inputs, not an eval — \`foldrun invoke <flow> --inputs <set>\` runs one`);
+    }
+    throw new Error(name ? `no eval called "${name}"` : "no evals in evals/");
+  }
 
   let failed = 0;
   for (const info of all) {
@@ -2550,6 +2557,33 @@ async function remoteLogs(url, positional, flags) {
 }
 
 /**
+ * A flow's saved input set, by name, as the platform has it: a case of an
+ * `inputs: true` file under evals/ (what "Save current as input set" on the
+ * dashboard writes), or of any eval that runs this flow — an eval case's
+ * `task:` is an input too. The inputs file wins a name both have.
+ */
+async function savedInputs(url, flags, ws, flow, name) {
+  if (typeof flags.task === "string") throw new Error("--inputs and --task both name the task — pick one");
+  const { evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`);
+  const mine = evals
+    .filter((e) => e.flow === flow)
+    .sort((a, b) => Number(b.inputs === true) - Number(a.inputs === true));
+  const sets = mine.flatMap((e) => (e.cases ?? []).filter((k) => k.task).map((k) => ({ ...k, file: e.file })));
+  const want = name.trim().toLowerCase();
+  const hit = sets.find((k) => k.name === name) ?? sets.find((k) => k.name.toLowerCase() === want);
+  if (!hit) {
+    const names = [...new Set(sets.map((k) => k.name))];
+    throw new Error(
+      names.length
+        ? `no input set "${name}" for ${flow} in ${ws} — it has ${names.map((n) => `"${n}"`).join(", ")}`
+        : `${flow} in ${ws} has no saved inputs — save one from "Run with…" on its card, or add evals/${flow}-inputs.md (see flows.md)`,
+    );
+  }
+  console.log(`\n  ${c.dim(`inputs: ${hit.name} (evals/${hit.file})`)}`);
+  return hit.task;
+}
+
+/**
  * `foldrun invoke <flow>` — start a flow on a running platform. The remote
  * sibling of `foldrun run`: same task flag, but the run continues on the
  * server whether or not this terminal sticks around. `--wait` holds on for
@@ -2595,12 +2629,16 @@ async function invoke(target, flags) {
   // earlier steps are recorded as skipped. Mutually exclusive with --task
   // server-side (the task goes to step 1, which --from skips).
   const from = flags.from !== undefined ? Number(flags.from) : undefined;
+  // --inputs <set>: the task is a saved input set — the file the dashboard's
+  // "Run with…" reads and writes, as the platform has it.
+  const task = typeof flags.inputs === "string" ? await savedInputs(url, flags, ws, target, flags.inputs) : typeof flags.task === "string" ? flags.task : "";
+  if (flags.inputs !== undefined && typeof flags.inputs !== "string") throw new Error("which input set? `--inputs <name>`");
   let body;
   try {
     body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
       method: "POST",
       body: JSON.stringify({
-        task: typeof flags.task === "string" ? flags.task : "",
+        task,
         ...(from !== undefined ? { from } : {}),
         // --test: the platform marks the run a test run — sends refused or
         // sunk at the proxy, send-capable secrets withheld, state/ kept.

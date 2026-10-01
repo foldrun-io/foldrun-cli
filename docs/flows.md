@@ -543,6 +543,65 @@ The same edits from a terminal, written by the same code: `foldrun flow add
 `foldrun flow show <flow>` for the canvas itself, as text. See the
 [CLI reference](cli).
 
+### History
+
+**History** on a flow's card opens every revision of its file — who saved
+it, when and with what message — the same history `GET …/history` serves.
+Pick one to see what it changed, or **Compare with current** to see it
+against the file as it is now. **Restore this version** writes that
+revision's text back as a new revision, `restored <rev> from history`, so a
+restore is undone the same way. It is refused, and nothing is written, if the
+file changed after the drawer opened (a canvas edit in another tab, a
+deploy): reopen History to see the newer version first.
+
+### Run with saved inputs
+
+**Run with…** on a flow's card starts it with a saved input set — a named
+task. The sets are markdown in `evals/`: the flow's own
+`evals/<flow>-inputs.md`, and every case of an eval that runs this flow
+(each already has a `task:`). **Save current as input set** writes the task
+you typed into the inputs file:
+
+```markdown
+---
+name: publish-inputs
+flow: publish
+inputs: true             # saved inputs, not a test
+trigger: manual
+---
+
+## rain gauges
+task: Write about cleaning a rain gauge.
+
+## weekly
+task: |
+  This week's round-up.
+  * five items at most
+```
+
+`inputs: true` makes it a file of inputs rather than an eval: `foldrun check`
+validates the flow it names, but no deploy, Run button or `foldrun eval` runs
+it, because there is nothing to assert. A Test run is the default; a Live run
+asks first. From a terminal, `foldrun invoke <flow> --inputs <name>` sends
+the same set.
+
+### Draft with AI
+
+**Draft with AI** (beside New flow) and **Redraft with AI** (on a card) take
+a description in words and propose the flow file, plus an `agent.md` for each
+agent it needs that the workspace does not have — existing agents are used by
+name. The proposal is checked with the deploy's own checks and the flow lint
+`foldrun check` runs; if they find errors the model is shown them and
+repairs once, and anything still wrong is listed beside the files. Each file
+is shown as a diff against what is there. **Nothing is written** until you
+press Save and confirm; then each file is saved as an ordinary revision.
+
+The model is the workspace's own Anthropic-format `provider:` when it has
+one (a Chat-Completions provider is refused), else the platform's models,
+billed to the account like a run (one ledger line, flow `ai-draft`). A
+description is at most 4,000 characters and an answer at most 8,000 tokens.
+Drafting needs the editor role.
+
 ## What the platform never does
 
 It sets **no clock of its own** — not on a step, a script tool, an HTTP tool, a

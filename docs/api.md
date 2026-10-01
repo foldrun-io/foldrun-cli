@@ -67,7 +67,7 @@ api workspaces/$WS/flows/publish/run -X POST   # start a flow
 
 | Route | Methods | |
 |---|---|---|
-| `/api/workspaces/<ws>/source?path=` | GET, PUT, PATCH, DELETE | GET: one file, or the tree with no `path`. PUT `{path, content, message?}` writes one file (a revision, `message` its note). PATCH `{from, to}` moves one. DELETE `{path}` removes a file or folder. The body carries the path on writes — a `?path=` there is a `400` |
+| `/api/workspaces/<ws>/source?path=` | GET, PUT, PATCH, DELETE | GET: one file (`{ path, content, sha256 }`), or the tree with no `path`. PUT `{path, content, message?, ifMatch?}` writes one file (a revision, `message` its note); with `ifMatch` — the `sha256` a GET returned — it is refused with `409` and nothing written if the file has changed since (History's restore and the AI draft's save send it). PATCH `{from, to}` moves one. DELETE `{path}` removes a file or folder. The body carries the path on writes — a `?path=` there is a `400` |
 | | PUT | write (`path`, `content`, optional `message` — recorded on the revision, as `foldrun source put --message` sends it) |
 | | PATCH | move (`from`, `to`) |
 | | DELETE | remove (`path`) |
@@ -120,6 +120,7 @@ installer's own `error`. `foldrun deploy` polls it after a deploy.
 |---|---|---|
 | `/api/workspaces/<ws>/flows` | GET, POST | list; create (`name`, `pattern`) |
 | `/api/workspaces/<ws>/flows/<flow>` | POST, PATCH, DELETE | edit a step (`step`, `instruction`, `options`, `target`, `subflow`), rearrange (`groups`), set `trigger`; delete |
+| `/api/workspaces/<ws>/flows/draft` | POST, PATCH, DELETE | POST draft a flow with a model: `{ description, flow? }` (`flow` redrafts that one). Returns `{ ok, files: [{ path, content, before, sha256 }], issues: [{ where, message, level }], repaired, notes }` — checked with the deploy's checks and the flow lint, repaired once. **Writes nothing**; save with the source PUT. Needs `workspace:write`; a description over 4,000 characters is `413`; a Chat-Completions `provider:` is `422`. On the platform's models the balance is checked first (`402`) and the call is charged as one ledger line, flow `ai-draft`. PATCH and DELETE, and a POST without `description`, are the edits of a flow that happens to be named `draft`, exactly as at `flows/<flow>` |
 | `/api/workspaces/<ws>/flows/<flow>/run` | POST | start it. An `Idempotency-Key` header, or `idempotencyKey` in the body, makes a retried call safe: a dropped response, a proxy timeout or a CI step that ran twice is answered `started: false` with the `runId` it already started, rather than starting a second run and billing for it. Keys are remembered for 24 hours, per flow |
 
 `POST .../run` takes `task` (the input), `from` (start at step N — a rerun of
