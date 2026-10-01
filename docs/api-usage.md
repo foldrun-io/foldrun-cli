@@ -111,8 +111,15 @@ Idempotency-Key: <a UUID you generate, one per operation>
   with `Retry-After: 1`.
 - A `5xx` is not remembered, so a retry after a server failure is a real
   second attempt.
+- A request that never finished (the server restarted mid-answer) holds its
+  key for at most two minutes, then the key is free for a real retry.
+- Minting or rotating a key: a replay says what was done but its `key` is
+  `null` — the secret is shown once and never stored. Revoke that key and
+  mint another.
 
-Keys belong to your account and to the route: use a fresh UUID per
+Keys belong to the caller — your account and the API key or person sending
+them; another key of the same account never gets your stored answer — and to
+the route: use a fresh UUID per
 operation, and the same one when you retry it. The OpenAPI document marks
 every operation that honours the header. The CLI sends one on every such
 call and reuses it on its own retry.

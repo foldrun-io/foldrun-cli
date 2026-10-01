@@ -3418,6 +3418,7 @@ async function keysCmd(positional, flags) {
     if (typeof flags.workspaces === "string") body.workspaces = flags.workspaces === "all" ? null : flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
     const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+    if (made.key == null) return lostSecret(made.id);
     console.log(`  ${made.key}\n`);
     console.log(`  ${c.dim("Shown once. FOLDRUN_TOKEN=<key> uses it; `foldrun keys revoke " + made.id + "` ends it.")}\n`);
     return 0;
@@ -3437,12 +3438,21 @@ async function keysCmd(positional, flags) {
     if (grace === "0" && !(await sureToDelete(flags, "keys rotate", `API key ${arg} on ${url}, now (anything using it stops working — --grace 1h keeps it for an hour)`))) return 1;
     const made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}/rotate`, { method: "POST", body: JSON.stringify({ grace }) });
     console.log(`\n  ${c.green("✓")} rotated ${arg} → ${c.bold(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+    if (made.key == null) return lostSecret(made.id);
     console.log(`  ${made.key}\n`);
     const ends = made.replaced?.endsAt;
     console.log(`  ${c.dim(`Shown once. The old key ${grace === "0" ? "is revoked" : `keeps working until ${String(ends).slice(0, 16).replace("T", " ")} UTC`}.`)}\n`);
     return 0;
   }
   throw new Error(`keys: unknown verb "${verb}" — ls, create, rotate, revoke`);
+}
+
+/** A retried mint or rotate is answered from the first call, and the server
+ *  never stores a key's secret — so a retry after a lost answer has none. */
+function lostSecret(id) {
+  console.log(`  ${c.yellow("The key was made, but its secret was in the answer that was lost; it is never stored, so it cannot be shown again.")}`);
+  console.log(`  ${c.dim(`Revoke it (\`foldrun keys revoke ${id}\`) and make another.`)}\n`);
+  return 1;
 }
 
 /**
