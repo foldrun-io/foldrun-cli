@@ -536,10 +536,43 @@ file is not touched. A delete that would give `foldrun check` a new error is
 refused. The × on a sub-agent or consult chip removes it from the agent's
 `subagents:` / `agents:` the same way, after the same confirm.
 
+### Runs on the canvas, and the controls
+
+A canvas opens fitted to its card once the card is open — the whole flow
+across when it fits (a five-step flow on a laptop-width page), otherwise from
+the trigger, to pan — and is as tall as the drawing. Once you pan or zoom, the
+view is yours until the page reloads.
+
+While a run of the flow is live, each step is coloured by where that run is —
+pending, running, done, failed, skipped, waiting for you — with how long it
+has taken and what it has cost, updating as the run moves. Otherwise each step
+wears the last finished run's status, time and cost in grey. The squares above
+the canvas are the recent runs: click one to colour the canvas by it, × to go
+back. A step's record is found by agent and group order, since a run is not
+the flow one for one: a fan-out's items and an `on-fail:` rescuer count
+towards the step they came from, and a `[[flow:x]]` step stands for the nested
+flow's steps. A step added since that run has no record and shows none.
+
+| Control | What it does |
+|---|---|
+| ⋯ on a step, or right-click | **Run from here** (a new run from the last finished one, earlier steps carried — asks first unless that run was a test), **Test this step alone** (that agent once, with the step's instruction, as a test run), **Pause before** (the `!` marker on or off), Duplicate, Copy, Paste after, Fold the parallel group, Delete |
+| Duplicate (⌘/Ctrl+D) | a copy of the step and its options, in the same group |
+| Copy, Paste (⌘/Ctrl+C, V) | the step's markdown — its line and options — so it pastes into any flow, here or in another tab; pasted steps go after the selection and keep which of them ran in parallel |
+| Undo, Redo (⌘/Ctrl+Z, Shift+⌘/Ctrl+Z) | the last 50 flow edits made on this canvas, each written back as a new revision; refused, and the history cleared, when the file changed some other way since |
+| Shift-click, Shift-drag | select several steps: drag them together (onto a column they join it, between columns they become one group), Delete removes them in one edit, Copy copies them |
+| ⌘/Ctrl+K | the canvas's commands: add a step or pattern, run or test-run the flow, go to step N, fold a group, the minimap, undo. Right after you touch a canvas; elsewhere it is the page's Find |
+| M, ? | the minimap (remembered in this browser), the shortcut sheet |
+| Fold | a parallel group drawn as one node — a view choice, nothing is written |
+| ⚙ Options → Call limits | rows of key and count written as `limits: {web.search: 10, calls: 300}` on the step — a key is `web.<action>`, `web`, `calls` or one of the agent's tools, a count a whole number from 1; the node then shows a `limits:` chip |
+
+Starting a live run from the canvas always asks first. No shortcut fires while
+you type in a field or an editor.
+
 The same edits from a terminal, written by the same code: `foldrun flow add
 <flow> <pattern>` for a palette block (it prints the diff and refuses one
 `foldrun check` would call an error), `foldrun flow rm-step <flow> --step
-<n|agent>` for the delete, `foldrun agent link <agent> --subagent |
+<n|agent>` for the delete, `foldrun flow dup-step <flow> --step <n|agent>`
+for Duplicate, `foldrun agent link <agent> --subagent |
 --consult | --can-ask` (and `unlink`) for the docks and the toggle, and
 `foldrun flow show <flow>` for the canvas itself, as text. See the
 [CLI reference](cli).
