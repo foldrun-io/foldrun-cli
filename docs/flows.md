@@ -107,7 +107,7 @@ begins.
 | `timeout:` | seconds, or `90s` / `15m` / `4h` / `3d` — **the only clock there is** |
 | `max_turns:` | the most model turns before the step is stopped (1 to 500) — the third bound beside `budget:` and `timeout:` |
 | `limits:` | this step's call limits, on one line — `limits: {web.search: 10, calls: 50}` — over the agent's, key by key. A call past one is refused, never run ([Tools](tools#limits--how-many-calls-a-step-may-make)) |
-| `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`). The shell runs in the agent's folder and gets the step's final turn in the file `$FOLDRUN_REPLY_FILE`; `workspace/…` reaches the workspace root there, and in `file: workspace/storage/x.md`. The check runs on what is left of the step's `timeout:` (at least 30 s of it); with no `timeout:` it has no clock either. A stop ends it |
+| `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`). The shell runs in the agent's folder and gets the step's final turn in the file `$FOLDRUN_REPLY_FILE`; `workspace/…` reaches the workspace root there, and in `file: workspace/storage/x.md`; `node workspace/tools/x/check.mjs` runs as its own main module, so a check it makes counts ([Agents](agents#where-files-live-from-the-agents-point-of-view)). The check runs on what is left of the step's `timeout:` (at least 30 s of it); with no `timeout:` it has no clock either. A stop ends it |
 | `approve:` | park until a person releases it |
 | `ask:` | the same gate carrying a question; the typed answer reaches the prompt |
 | `preview:` | what the gate shows: paths under `storage/` (a `workspace/storage/` prefix is accepted), comma-separated, globs allowed — `draft/*.mdx, draft/images/*.webp`; at most 12 files |

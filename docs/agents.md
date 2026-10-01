@@ -331,6 +331,20 @@ in a shell `verify:` — for the length of a step the agent's folder holds a
 `../../storage/…` reaches the same place and keeps working; `foldrun check`
 points it out as a hint, never an error.
 
+A program started through the link is its own main module, as it would be
+anywhere else. `node workspace/tools/check/run.mjs` loads the file by its
+real path while `process.argv[1]` holds the path as typed, so the usual
+`import.meta.url === pathToFileURL(process.argv[1]).href` check was false
+and the program exited 0 having done nothing — a `verify:` that ran it
+passed on every input. Every child a step starts (Bash, a shell `verify:`,
+`scripts:` and folder tools, the Test button) now has `process.argv[1]`
+set to the real path when it goes through the link, by a preload in
+`NODE_OPTIONS`; nothing else about module resolution changes, and a
+`node_modules/.bin` command runs as before. Python needs nothing:
+`python3 workspace/x.py` is `__main__` either way. The Test button stands in
+an agent's folder with the same link, so a tool that reads
+`workspace/state/…` tests as it runs.
+
 There is no `/tmp` for an agent, and no absolute path is inside its
 workspace. A directory a tool made outside the workspace — a repository it
 cloned, say — is reached only through that tool's own read or find action.
