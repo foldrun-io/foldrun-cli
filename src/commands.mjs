@@ -328,7 +328,7 @@ async function scaffoldCmd(kind, positional, flags, layout) {
 
   // The other verbs are dispatched before this — `agent run` and `tool test`
   // go to the platform — so anything left here should have been `new`.
-  const alsoVerbs = { agents: ["run", "link", "unlink"], tools: ["test"], flows: ["add", "show", "run", "rotate-hook"] }[kind] ?? [];
+  const alsoVerbs = { agents: ["run", "link", "unlink"], tools: ["test"], flows: ["add", "rm-step", "dup-step", "show", "run", "rotate-hook"] }[kind] ?? [];
   const verb = positional[0];
   if (verb !== "new") {
     const verbs = ["new", ...alsoVerbs].join(", ");
@@ -5687,6 +5687,56 @@ async function flowAddCmd(positional, flags, layout) {
 }
 
 /**
+ * `foldrun flow dup-step <flow> --step <n|agent>` — the canvas's Duplicate:
+ * a copy of the step (its `?`/`!` marker and every indented option) goes
+ * directly under it in the same group, so the two run in parallel; nothing
+ * else moves (core's duplicateStep). Shows the diff and refuses one `check`
+ * would call a new error. Additive, so it does not ask. --dry-run writes
+ * nothing; --to <workspace> sends the canvas's PATCH { edit: { op: "duplicate" } }.
+ */
+async function flowDupStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow dup-step <flow> --step <n|agent>`");
+  const desk = await openDesk(flags, layout, `flow dup-step ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const { duplicateStep } = await patterns();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  const i = pickStep(steps, flags.step, flow);
+  const s = steps[i];
+  const label = `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}`;
+
+  console.log(`\n  ${c.bold(flow)} ${c.dim(`· duplicate ${label} · ${desk.label}`)}\n`);
+  let next;
+  try {
+    next = duplicateStep(raw, i);
+  } catch (err) {
+    console.log(`  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
+    return 1;
+  }
+  await printDiff(rel, raw, next);
+  console.log();
+  const added = await problemsAdded(desk, [[rel, next]]);
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report ${added.filter((p) => p.level === "error").length === 1 ? "that error" : "those errors"}, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "duplicate", step: i } }) });
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
+  } else {
+    fs.writeFileSync(path.join(desk.dir, rel), next);
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  }
+  return 0;
+}
+
+/**
  * `foldrun flow rm-step <flow> --step <n|agent>` — the canvas's delete: the
  * step line and its indented options go, the groups after it renumber, the
  * agent's file is not touched (core's removeStep). Says what else changes,
@@ -6828,6 +6878,7 @@ export async function run(command, positional, flags, workspace, layout) {
       // `invoke`, spelled the way `agent run` is; `rotate-hook` a new URL.
       if (positional[0] === "add") return flowAddCmd(positional, flags, layout);
       if (positional[0] === "rm-step") return flowRmStepCmd(positional, flags, layout);
+      if (positional[0] === "dup-step") return flowDupStepCmd(positional, flags, layout);
       if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
       if (positional[0] === "run") return invoke(positional[1], flags);
       if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);

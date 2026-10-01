@@ -75,6 +75,7 @@ const HELP = `foldrun — agents are just folders
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
   foldrun flow add <flow> <pattern>  one canvas block as a markdown edit: chain, parallel, router, fan-out, loop, approval, ask, wait, rescue, subflow — diff shown, checked, --dry-run
   foldrun flow rm-step <flow> --step <n|agent>  delete one step (its options too); groups renumber, agent file untouched — says what else changes, diff, checked, asks (--yes), --dry-run
+  foldrun flow dup-step <flow> --step <n|agent>  copy one step (marker and options) directly under it, in parallel with it — diff, checked, --dry-run
   foldrun flow show <flow>  the flow as the canvas draws it: trigger, groups, step chips, each agent's team, check problems in place
   foldrun flow run <flow>   start a flow on the platform — the same command as invoke
   foldrun flow rotate-hook <flow>  a new webhook URL for a flow; the old one stops at once — asks first, --yes means it
@@ -159,7 +160,7 @@ Options
   --instruction "<text>"    flow add: what a new step (chain, parallel, router) is told to do
   --after <n>               flow add: put the new group after the nth (0 = first); --before <n> before it; default last
   --group <n>               flow add: the group a parallel step joins
-  --step <n|agent>          flow add, flow rm-step: the step a pattern goes on (or is deleted) — its place in the file (1 = the first) or the agent it runs
+  --step <n|agent>          flow add, flow rm-step, flow dup-step: the step a pattern goes on (or is deleted, or copied) — its place in the file (1 = the first) or the agent it runs
   --cases <V=agent,…>       flow add: a router's branches, e.g. BUG=bugs,DOCS=docs; --else <agent> when none matches
   --each <e>                flow add: lines, items or "rows of <path>"; --max <n> caps it (1-20)
   --loop <n>                flow add: extra cycles, 1-5 (default 3); --until <MARKER> ends it (default APPROVED); --judge "<claim>" adds verify: judge:
