@@ -2650,6 +2650,15 @@ async function secretsCmd(positional, flags, layout) {
   if (!name) throw new Error(`which secret? try \`foldrun secrets ${verb} NAME\``);
 
   if (verb === "set") {
+    // --kind: the other shapes the Connections form stores — a file, an SSH
+    // login, API headers, a service account's key, a client-credentials app.
+    if (typeof flags.kind === "string") {
+      const { body, local } = await secretOfKind(flags.kind, flags);
+      if (url) await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope }) });
+      else local(await core(), name, body, scope);
+      console.log(`\n  ${c.green("✓")} ${name} stored as ${flags.kind}${url ? "" : " on this machine"} — declare it in agent.md under \`secrets:\` to use it\n`);
+      return 0;
+    }
     // --oauth2: store a refresh recipe instead of a static value. The
     // platform exchanges it for a live access token before every use.
     if (flags.oauth2 === true) {
@@ -7299,7 +7308,30 @@ async function repoCmd(positional, flags, layout) {
     }
     return 0;
   }
-  if (verb !== "deploy" && verb !== "merge") throw new Error(`unknown repo verb "${verb}" — ls, diff <branch>, deploy <ref>, merge <branch>`);
+  if (verb === "rm-branch") {
+    if (!arg || arg === "main") throw new Error("`foldrun repo rm-branch <branch> --to <workspace>` — any branch but main");
+    if (!(await sureToDelete(flags, "repo rm-branch", `branch ${arg} in ${ws}`))) return 1;
+    await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify({ action: "delete-branch", branch: arg }) });
+    console.log(`\n  ${c.green("✓")} branch ${arg} deleted ${c.dim(`in ${ws}`)}\n`);
+    return 0;
+  }
+  if (verb === "mirror") {
+    if (!arg) throw new Error("`foldrun repo mirror <git-url> --to <workspace>` (every push to main goes there too, with the workspace's MIRROR_TOKEN) or `repo mirror off`");
+    const r = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify({ action: "mirror", url: arg === "off" ? null : arg }) });
+    console.log(`\n  ${c.green("✓")} ${r.settings?.mirror ? `main is mirrored to ${r.settings.mirror}` : "no mirror"} ${c.dim(`· ${ws}${r.settings?.mirror ? " · `foldrun repo mirror-now` pushes it now" : ""}`)}\n`);
+    return 0;
+  }
+  if (verb === "mirror-now") {
+    const r = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify({ action: "mirror-now" }) });
+    const st = r.status;
+    if (!st) {
+      console.log(`\n  ${c.dim(`${ws} has no mirror — \`foldrun repo mirror <git-url> --to ${ws}\` sets one`)}\n`);
+      return 1;
+    }
+    console.log(`\n  ${st.ok ? c.green("✓") : c.red("✗")} mirror ${st.ok ? `has ${String(st.sha ?? "").slice(0, 7)}` : "push failed"}${st.detail ? ` — ${st.detail}` : ""} ${c.dim(ws)}\n`);
+    return st.ok ? 0 : 1;
+  }
+  if (verb !== "deploy" && verb !== "merge") throw new Error(`unknown repo verb "${verb}" — ls, diff <branch>, deploy <ref>, merge <branch>, rm-branch <branch>, mirror <url|off>, mirror-now`);
   if (!arg) throw new Error(verb === "deploy" ? "`foldrun repo deploy <commit|branch|tag> --to <workspace>`" : "`foldrun repo merge <branch> --to <workspace>`");
   if (verb === "merge" && arg === "main") throw new Error("main is what a branch merges into — name the branch");
   console.log(
@@ -7475,6 +7507,821 @@ async function accountExportCmd(url, flags) {
   return code;
 }
 
+// ---------------------------------------------------------------- parity, 2 Oct
+//
+// What the dashboard could do on 2 Oct 2026 and the terminal could not, one
+// verb each: the canvas's step options, trigger, regrouping, copy and paste;
+// AI flow drafts; restoring one file from history; the library shelf; saved
+// OAuth clients and every secret kind the Connections form stores; plans,
+// top-ups and the card; the API version pin; the theme; release notes; the
+// ⌘K search; the scheduler tick; the demo workspace; a run's live browser
+// frame; the editor's vocabulary; branch delete and the mirror.
+
+/**
+ * One flow edit, the way flow add / dup-step / rm-step do it: read the file
+ * (here or on the platform), compute the new text with core's own rewriter,
+ * show the diff, refuse what `check` would call a new error, --dry-run stops
+ * there, then write — locally only when the file still reads
+ * what was read, on the platform with `expect` so a newer edit wins.
+ * `bodies(raw)` is the PATCH bodies the dashboard sends for the same edit.
+ */
+async function flowEditCmd(flags, layout, { flow, what, label, compute, bodies }) {
+  const desk = await openDesk(flags, layout, `${what} ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  let next;
+  let meta;
+  try {
+    ({ next, meta } = await compute(raw, steps));
+  } catch (err) {
+    console.log(`\n  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
+    return 1;
+  }
+  console.log(`\n  ${c.bold(flow)} ${c.dim(`· ${typeof label === "function" ? label(meta) : label} · ${desk.label}`)}\n`);
+  if (next === raw) {
+    console.log(`  ${c.dim(`nothing to change — ${rel} already says that`)}\n`);
+    return 0;
+  }
+  await printDiff(rel, raw, next);
+  console.log();
+  const added = await problemsAdded(desk, [[rel, next]]);
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report ${added.filter((p) => p.level === "error").length === 1 ? "that error" : "those errors"}, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    // Each body is checked against the text the one before it left, so a
+    // second write can never land on a file someone else changed between.
+    let seen = raw;
+    for (const { body, after } of bodies(raw, meta)) {
+      await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...body, expect: textSha(seen) }) });
+      seen = after;
+    }
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the dashboard writes it`)}\n`);
+  } else {
+    writeIfUnchanged(desk, rel, raw, next);
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  }
+  return 0;
+}
+
+/** The step options the dashboard's step editor writes (core updateFlowStep). */
+const STEP_OPTION_KEYS = ["model", "effort", "retry", "timeout", "verify", "when", "case", "else", "loop", "until", "each", "max", "limits"];
+
+/**
+ * `foldrun flow set <flow> --step <n|agent> key=value …` — the step editor on
+ * the Flows page: model, effort, retry, timeout, verify, when, case, else,
+ * loop, until, each, max, limits — and `instruction=` for the step's text.
+ * `key=` with nothing after it clears that option. Only the keys named are
+ * touched; every other line of the step stays as written.
+ */
+async function flowSetCmd(positional, flags, layout) {
+  const flow = positional[1];
+  const pairs = positional.slice(2);
+  const usage = `\`foldrun flow set <flow> --step <n|agent> key=value …\` — keys: ${STEP_OPTION_KEYS.join(", ")}, instruction (key= clears)`;
+  if (!flow || !pairs.length) throw new Error(usage);
+  const options = {};
+  let instruction;
+  for (const p of pairs) {
+    const eq = p.indexOf("=");
+    if (eq < 1) throw new Error(`"${p}" is not key=value — ${usage}`);
+    const key = p.slice(0, eq).trim();
+    const value = p.slice(eq + 1).trim();
+    if (key === "instruction") {
+      if (!value) throw new Error("instruction= needs the text — a step with no instruction is a step that does nothing");
+      instruction = value;
+      continue;
+    }
+    if (!STEP_OPTION_KEYS.includes(key)) throw new Error(`"${key}" is not a step option flow set writes — ${STEP_OPTION_KEYS.join(", ")}, instruction. Patterns (ask, wait, on-fail, approve, each: items/rows) are \`foldrun flow add\``);
+    // The editor's rewriter keeps only `each: lines`; anything else would be
+    // dropped without a word. Refuse it here and say where it lives.
+    if (key === "each" && value && value !== "lines") throw new Error(`each=${value}: flow set writes \`each: lines\` only — \`foldrun flow add <flow> fan-out --each "${value}"\` writes the rest`);
+    if (key === "else" && value && !["true", "1"].includes(value)) throw new Error("else=true, or else= to clear it");
+    options[key] = value === "" ? null : value;
+  }
+  const { updateFlowStep, updateFlowStepInstruction } = await core();
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow set",
+    label: (m) => `set ${m.label}`,
+    compute: async (raw, steps) => {
+      const i = pickStep(steps, flags.step, flow);
+      const s = steps[i];
+      let next = raw;
+      const afterInstruction = instruction !== undefined ? updateFlowStepInstruction(next, i, instruction) : next;
+      next = afterInstruction;
+      if (Object.keys(options).length) next = updateFlowStep(next, i, options);
+      return { next, meta: { i, afterInstruction, label: `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}` } };
+    },
+    bodies: (raw, m) => [
+      ...(instruction !== undefined ? [{ body: { step: m.i, instruction }, after: m.afterInstruction }] : []),
+      ...(Object.keys(options).length ? [{ body: { step: m.i, options }, after: null }] : []),
+    ],
+  });
+}
+
+/**
+ * `foldrun flow trigger <flow> manual|webhook|schedule [--schedule "<cron>"]
+ * [--timezone <zone>]` — the trigger picker on a flow card: the frontmatter's
+ * trigger:, schedule: and timezone: lines and nothing else.
+ */
+async function flowTriggerCmd(positional, flags, layout) {
+  const flow = positional[1];
+  const kind = positional[2];
+  const KINDS = ["manual", "schedule", "webhook"];
+  if (!flow || !KINDS.includes(kind)) throw new Error('`foldrun flow trigger <flow> manual|webhook|schedule --schedule "0 9 * * 1" [--timezone Australia/Sydney]`');
+  const schedule = typeof flags.schedule === "string" ? flags.schedule : undefined;
+  const timezone = typeof flags.timezone === "string" ? flags.timezone : undefined;
+  if (kind === "schedule" && !schedule) throw new Error('a schedule needs its cron line: --schedule "0 9 * * 1" (5 fields, or @daily)');
+  if (kind !== "schedule" && (schedule || timezone)) throw new Error(`--schedule and --timezone go with \`schedule\`, not ${kind}`);
+  const trigger = { trigger: kind, ...(schedule ? { schedule } : {}), ...(timezone ? { timezone } : {}) };
+  const { setFlowTrigger } = await core();
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow trigger",
+    label: `trigger ${kind}${schedule ? ` "${schedule}"` : ""}${timezone ? ` ${timezone}` : ""}`,
+    compute: async (raw) => ({ next: setFlowTrigger(raw, trigger), meta: {} }),
+    bodies: () => [{ body: { trigger }, after: null }],
+  });
+}
+
+/**
+ * `foldrun flow move-step <flow> --step <n|agent> --group <g> | --after <g>`
+ * — dragging a card on the board: into group g, in parallel with what is
+ * there, or into a group of its own after group g (0 = first). Only step
+ * numbers change on disk (core reorderFlowSteps).
+ */
+async function flowMoveStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow || (flags.group === undefined) === (flags.after === undefined)) {
+    throw new Error("`foldrun flow move-step <flow> --step <n|agent> --group <g>` (beside group g) or `--after <g>` (its own group after g; 0 = first)");
+  }
+  const { reorderFlowSteps } = await core();
+  const { flowGroups } = await patterns();
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow move-step",
+    label: (m) => m.label,
+    compute: async (raw, steps) => {
+      const i = pickStep(steps, flags.step, flow);
+      const groups = flowGroups(steps).map((g) => ({ ids: [...g] }));
+      const n = groups.length;
+      const target = flags.group !== undefined ? Number(flags.group) : Number(flags.after);
+      if (flags.group !== undefined && (!Number.isInteger(target) || target < 1 || target > n)) throw new Error(`--group takes 1 to ${n} (the groups ${flow} has)`);
+      if (flags.after !== undefined && (!Number.isInteger(target) || target < 0 || target > n)) throw new Error(`--after takes 0 to ${n} (0 is before the first group)`);
+      const anchor = flags.group !== undefined ? groups[target - 1] : target === 0 ? null : groups[target - 1];
+      for (const g of groups) g.ids = g.ids.filter((x) => x !== i);
+      if (flags.group !== undefined) /** @type {{ ids: number[] }} */ (anchor).ids.push(i);
+      else groups.splice(anchor ? groups.indexOf(anchor) + 1 : 0, 0, { ids: [i] });
+      const next = groups.map((g) => g.ids).filter((g) => g.length);
+      const s = steps[i];
+      const name = `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}`;
+      return {
+        next: reorderFlowSteps(raw, next),
+        meta: { groups: next, label: flags.group !== undefined ? `move ${name} beside group ${target}` : `move ${name} to its own group after ${target}` },
+      };
+    },
+    bodies: (raw, m) => [{ body: { groups: m.groups }, after: null }],
+  });
+}
+
+/**
+ * `foldrun flow copy-step <flow> --step <n|agent>[,<n>…]` — the canvas's Copy:
+ * the steps' markdown (step line, marker, every option) on stdout, for
+ * `flow paste` into this flow or another. Reads only.
+ */
+async function flowCopyStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow copy-step <flow> --step <n|agent>` — several as --step 1,3");
+  const desk = await openDesk(flags, layout, `flow copy-step ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const { stepSource } = await patterns();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  const specs = String(flags.step ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const picked = [...new Set((specs.length ? specs : [undefined]).map((s) => pickStep(steps, s, flow)))].sort((a, b) => a - b);
+  process.stdout.write(picked.map((i) => stepSource(raw, i)).join("\n") + "\n");
+  return 0;
+}
+
+/**
+ * `foldrun flow paste <flow> [--after <g> | --group <g>] [--file <path>]` —
+ * the canvas's Paste: step markdown (from `flow copy-step`, a file, or stdin)
+ * goes in as new groups after group g (default: last), or beside group g.
+ * Group numbers are renumbered to fit (core pasteSteps).
+ */
+async function flowPasteCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow paste <flow> [--after <g> | --group <g>]` — the steps from --file <path>, else stdin");
+  let text;
+  if (typeof flags.file === "string" && flags.file !== "-") text = fs.readFileSync(flags.file, "utf8");
+  else if (process.stdin.isTTY) throw new Error("nothing to paste — pipe it in (`foldrun flow copy-step a --step 2 | foldrun flow paste b`) or --file <path>");
+  else text = fs.readFileSync(0, "utf8");
+  if (!/^\s*\d+[?!]?\.\s+\[\[/m.test(text)) throw new Error("that is not step markdown — a step reads like `2. [[writer]] — draft it`");
+  if (flags.group !== undefined && flags.after !== undefined) throw new Error("--group or --after, not both");
+  const { pasteSteps, flowGroups } = await patterns();
+  let at;
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow paste",
+    label: () => ("column" in at ? `paste beside group ${at.column + 1}` : `paste after group ${at.rail}`),
+    compute: async (raw, steps) => {
+      const n = flowGroups(steps).length;
+      if (flags.group !== undefined) {
+        const g = Number(flags.group);
+        if (!Number.isInteger(g) || g < 1 || g > n) throw new Error(`--group takes 1 to ${n}`);
+        at = { column: g - 1 };
+      } else {
+        const a = flags.after === undefined ? n : Number(flags.after);
+        if (!Number.isInteger(a) || a < 0 || a > n) throw new Error(`--after takes 0 to ${n}`);
+        at = { rail: a };
+      }
+      return { next: pasteSteps(raw, text, at).text, meta: {} };
+    },
+    bodies: () => [{ body: { edit: { op: "paste", text, at } }, after: null }],
+  });
+}
+
+/**
+ * `foldrun flow draft "<description>" --to <ws> [--flow <existing>]` — Draft
+ * with AI: the platform has a model write the flow (and any agent files it
+ * needs), checks it, repairs once, and answers with the files. Nothing is
+ * written until they are shown and agreed to (--yes; --dry-run never); each
+ * is saved with ifMatch, so a file that changed meanwhile is refused.
+ */
+async function flowDraftCmd(positional, flags, layout) {
+  const description = positional.slice(1).join(" ").trim();
+  if (!description) throw new Error('`foldrun flow draft "<what the flow should do>" --to <workspace>` — --flow <name> redrafts an existing one');
+  const url = platformFor(flags, "flow draft");
+  const ws = platformWorkspace(flags, layout, "flow draft");
+  const existing = typeof flags.flow === "string" ? flags.flow : undefined;
+  console.log(`\n  ${c.dim(`drafting in ${ws}${existing ? ` (redraft of ${existing})` : ""} — one model call, charged like a step…`)}`);
+  const d = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/flows/draft`, { method: "POST", body: JSON.stringify({ description, ...(existing ? { flow: existing } : {}) }) }, { seconds: Math.max(timeoutSeconds(flags), 180) });
+  const files = d.files ?? [];
+  if (d.notes) console.log(`\n  ${d.notes}`);
+  console.log();
+  for (const f of files) {
+    console.log(`  ${c.dim(f.before === null ? "new" : "replaces")}`);
+    await printDiff(f.path, f.before ?? "", f.content);
+    console.log();
+  }
+  for (const i of d.issues ?? []) console.log(`  ${i.level === "error" ? c.red("error") : c.amber(" warn")}  ${c.bold(i.where)}  ${i.message}`);
+  if ((d.issues ?? []).length) console.log();
+  if (d.repaired) console.log(`  ${c.dim("the first answer had errors; the model was asked once more")}`);
+  if (!files.length) {
+    console.log(`  ${c.dim("the draft came back with no files")}\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim("--dry-run: nothing saved")}\n`);
+    return 0;
+  }
+  if (flags.yes !== true && !process.stdin.isTTY) {
+    console.log(`  ${c.dim(`nothing saved — run it again with --yes to save ${files.length === 1 ? "this file" : `these ${files.length} files`} (the draft will differ), or save them with \`foldrun source put\``)}\n`);
+    return 0;
+  }
+  if (!(await confirmed(flags, "flow draft", `Save ${files.length} file${files.length === 1 ? "" : "s"} to ${ws}${files.some((f) => f.before !== null) ? " (replacing what is there)" : ""}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing saved")}\n`);
+    return 0;
+  }
+  const message = `drafted with AI: ${description.replace(/\s+/g, " ").slice(0, 80)}`;
+  for (const f of files) {
+    try {
+      await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: f.path, content: f.content, message, ifMatch: f.sha256 ?? null }) });
+      console.log(`  ${c.green("✓")} ${f.path}`);
+    } catch (err) {
+      console.log(`  ${c.red("✗")} ${f.path} — ${err instanceof Error ? err.message : err}`);
+      return 1;
+    }
+  }
+  console.log(`\n  ${c.dim(`each is a revision — \`foldrun history --to ${ws}\` · \`foldrun check --to ${ws}\``)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun history restore <path> --id <revision> --to <ws>` — the History
+ * drawer's "Restore this version": the file is rewritten with that
+ * revision's text as a new revision, so the restore is itself undoable.
+ */
+async function historyRestoreCmd(positional, flags, layout) {
+  const file = positional[1];
+  if (!file || typeof flags.id !== "string") throw new Error("`foldrun history restore <path> --id <revision> --to <workspace>` — `foldrun history <path>` lists the revisions");
+  const url = platformFor(flags, "history restore");
+  const ws = platformWorkspace(flags, layout, "history restore");
+  const rev = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/history?id=${enc(flags.id)}&path=${enc(file)}`);
+  const f = (rev.files ?? [])[0];
+  if (!f) throw new Error(`revision ${flags.id} did not touch ${file}`);
+  if (f.after === null || f.after === undefined) throw new Error(`revision ${flags.id} deleted ${file} — \`foldrun source rm ${file} --to ${ws}\` does that`);
+  let current = { content: null, sha256: null };
+  try {
+    current = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=${enc(file)}`);
+  } catch (err) {
+    if (!(err instanceof HttpError && err.status === 404)) throw err;
+  }
+  const label = rev.commit ? String(rev.commit).slice(0, 7) : rev.id;
+  console.log(`\n  ${c.bold(file)} ${c.dim(`· back to ${label} (${when(rev.at)} · ${rev.by}) · ${ws}`)}\n`);
+  if (current.content === f.after) {
+    console.log(`  ${c.dim("it already reads that way — nothing to restore")}\n`);
+    return 0;
+  }
+  await printDiff(file, current.content ?? "", f.after);
+  console.log();
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (!(await confirmed(flags, "history restore", `Restore ${file} to ${label}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing restored")}\n`);
+    return 0;
+  }
+  // The dashboard's own message, so the two read alike in the history.
+  await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, {
+    method: "PUT",
+    body: JSON.stringify({ path: file, content: f.after, message: `restored ${label} from history`, ifMatch: current.sha256 ?? null }),
+  });
+  console.log(`  ${c.green("✓")} ${file} ${c.dim(`reads as it did at ${label} — a new revision; what it said before is still in the history`)}\n`);
+  return 0;
+}
+
+/** `foldrun schedule tick` — Settings' "Run scheduler now": fire what is due now. */
+async function scheduleTickCmd(flags) {
+  const url = platformFor(flags, "schedule tick");
+  const r = await remoteCall(url, flags, "/api/schedule", { method: "POST", body: "{}" });
+  const fired = r.fired ?? [];
+  console.log(fired.length ? `\n  ${c.green("✓")} fired ${fired.join(", ")}\n` : `\n  ${c.dim("nothing due right now — the scheduler checks every 30 seconds anyway")}\n`);
+  return 0;
+}
+
+const LIBRARY_KINDS_CLI = ["skills", "tools", "scripts", "knowledge"];
+
+/**
+ * `foldrun library [ls [kind]] | cat <kind>/<path> | put <kind>/<path> | rm
+ * <kind>/<path>` — the account's shared shelf on the platform, as the Library
+ * page lists, edits and deletes it. `deploy` still pushes the whole of it.
+ */
+async function libraryCmd(positional, flags) {
+  const url = platformFor(flags, "library");
+  const [verb = "ls", spec] = positional;
+  const split = (s) => {
+    const slash = String(s ?? "").indexOf("/");
+    const kind = slash > 0 ? s.slice(0, slash) : "";
+    const rel = slash > 0 ? s.slice(slash + 1) : "";
+    if (!LIBRARY_KINDS_CLI.includes(kind) || !rel) throw new Error(`\`foldrun library ${verb} <kind>/<path>\` — kind is ${LIBRARY_KINDS_CLI.join(", ")}, e.g. skills/house-style/SKILL.md`);
+    return { kind, rel };
+  };
+  if (verb === "ls" || verb === "list") {
+    const kinds = spec ? [spec] : LIBRARY_KINDS_CLI;
+    for (const k of kinds) if (!LIBRARY_KINDS_CLI.includes(k)) throw new Error(`no library kind "${k}" — ${LIBRARY_KINDS_CLI.join(", ")}`);
+    const lists = await Promise.all(kinds.map((k) => remoteCall(url, flags, `/api/library/${k}`)));
+    console.log();
+    lists.forEach((l, n) => {
+      const entries = l.entries ?? [];
+      console.log(`  ${c.bold(kinds[n])} ${c.dim(`${entries.length}`)}`);
+      for (const e of entries) console.log(`    ${pad(e.name ?? e.path ?? "", 28)} ${c.dim(firstLine(e.description ?? "", 70))}`);
+    });
+    console.log(`\n  ${c.dim("foldrun library cat <kind>/<path> · put <kind>/<path> (--file, else stdin) · rm <kind>/<path>")}\n`);
+    return 0;
+  }
+  if (verb === "cat") {
+    const { kind, rel } = split(spec);
+    const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${enc(rel)}`);
+    process.stdout.write(content ?? "");
+    return 0;
+  }
+  if (verb === "put") {
+    const { kind, rel } = split(spec);
+    let content;
+    if (typeof flags.file === "string" && flags.file !== "-") content = fs.readFileSync(flags.file, "utf8");
+    else if (process.stdin.isTTY) throw new Error("what goes in it? --file <path>, or pipe it in");
+    else content = fs.readFileSync(0, "utf8");
+    await remoteCall(url, flags, `/api/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: rel, content }) });
+    console.log(`\n  ${c.green("✓")} library/${kind}/${rel} ${c.dim(`${humanBytes(Buffer.byteLength(content))} — every workspace in the account sees it`)}\n`);
+    return 0;
+  }
+  if (verb === "rm") {
+    const { kind, rel } = split(spec);
+    if (!(await sureToDelete(flags, "library rm", `library/${kind}/${rel} — every workspace that names it loses it`))) return 1;
+    await remoteCall(url, flags, `/api/library/${kind}`, { method: "DELETE", body: JSON.stringify({ path: rel }) });
+    console.log(`\n  ${c.green("✓")} removed library/${kind}/${rel}\n`);
+    return 0;
+  }
+  throw new Error(`unknown library verb "${verb}" — ls [kind], cat, put, rm`);
+}
+
+/**
+ * `foldrun secrets clients [add <name> | rm <name>]` — the OAuth apps saved on
+ * the platform (Settings → Connections), which a consent runs from without
+ * anyone typing a client id again. The client secret is never shown.
+ */
+async function oauthClientsCmd(positional, flags) {
+  const url = platformFor(flags, "secrets clients");
+  const [, verb, name] = positional;
+  if (!verb || verb === "ls") {
+    const { clients = [] } = await remoteCall(url, flags, "/api/oauth/clients");
+    if (!clients.length) {
+      console.log(`\n  ${c.dim("no saved OAuth clients — foldrun secrets clients add <name> --provider google …")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const k of clients) {
+      const host = (() => {
+        try {
+          return new URL(k.authorize_url ?? k.config?.authorize_url ?? "").host;
+        } catch {
+          return "";
+        }
+      })();
+      console.log(`  ${c.bold(pad(k.name, 24))} ${c.dim([host, k.client_id ?? k.config?.client_id, k.scopes ?? k.config?.scopes].filter(Boolean).join(" · "))}`);
+    }
+    console.log(`\n  ${c.dim("foldrun connect NAME --client <name> runs a consent from one into a secret")}\n`);
+    return 0;
+  }
+  if (verb === "rm") {
+    if (!name) throw new Error("`foldrun secrets clients rm <name>`");
+    if (!(await sureToDelete(flags, "secrets clients rm", `the saved OAuth client ${name} (secrets made from it keep working; reconnecting them will ask for the client again)`))) return 1;
+    await remoteCall(url, flags, "/api/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: name }) });
+    console.log(`\n  ${c.green("✓")} ${name} removed\n`);
+    return 0;
+  }
+  if (verb === "add") {
+    if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error("`foldrun secrets clients add <name> --provider google|github|microsoft|linkedin --client-id … [--scopes …]` — the name in kebab-case");
+    const { OAUTH_PRESETS } = await core();
+    const preset = flags.provider ? OAUTH_PRESETS[flags.provider] : undefined;
+    if (flags.provider && !preset) throw new Error(`unknown provider "${flags.provider}" — one of ${Object.keys(OAUTH_PRESETS).join(", ")}, or pass --authorize-url and --token-url`);
+    const authorize_url = flags["authorize-url"] ?? preset?.authorize_url;
+    const token_url = flags["token-url"] ?? preset?.token_url;
+    if (!authorize_url || !token_url) throw new Error("--provider, or both --authorize-url and --token-url");
+    const client_id = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
+    const client_secret = flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden("  client_secret: "));
+    if (!client_id || !client_secret) throw new Error("client_id and client_secret are required");
+    const config = { authorize_url, token_url, client_id, client_secret, scopes: flags.scopes ?? preset?.scopes_example ?? "", ...(preset?.authorize_extra ? { authorize_extra: preset.authorize_extra } : {}) };
+    await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
+    console.log(`\n  ${c.green("✓")} saved ${name} ${c.dim(`— \`foldrun connect NAME --client ${name}\` runs a consent from it`)}\n`);
+    return 0;
+  }
+  throw new Error(`unknown secrets clients verb "${verb}" — ls, add <name>, rm <name>`);
+}
+
+/**
+ * `foldrun connect NAME --client <saved>` — the Connections page's Connect: a
+ * consent from a client saved on the platform, the grant landing as NAME by
+ * the platform's own callback. Waits for it to arrive.
+ */
+async function connectFromClient(name, flags) {
+  const url = platformFor(flags, "connect --client");
+  const workspace = typeof flags.to === "string" ? flags.to : undefined;
+  const before = (await remoteCall(url, flags, "/api/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace)?.connectedAt ?? null;
+  const started = await remoteCall(url, flags, "/api/oauth/start", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}) }) });
+  const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(started.url);
+  console.log(opened ? `\n  Opened your browser to consent with the saved ${c.bold(flags.client)} client.\n` : `\n  Open this address in your browser:\n\n    ${started.url}\n`);
+  console.log(`  ${c.dim("Waiting for the platform to store it…")}`);
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Number(env("FOLDRUN_CONNECT_POLL_MS") ?? 3000)));
+    const row = (await remoteCall(url, flags, "/api/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace);
+    if (row?.connectedAt && row.connectedAt !== before) {
+      console.log(`\n  ${c.green("✓")} ${name} connected on ${url}${workspace ? ` · ${workspace}` : " · account"}\n`);
+      return 0;
+    }
+  }
+  throw new Error("no consent arrived within 10 minutes — run it again");
+}
+
+/**
+ * The secret kinds the Connections form stores besides a plain value and a
+ * browser OAuth grant, as `secrets set NAME --kind <k>`: the PUT body the
+ * form sends, or the core setter for this machine's store.
+ */
+async function secretOfKind(kind, flags) {
+  const read = (p, what) => {
+    if (typeof p !== "string") throw new Error(`--kind ${kind} needs ${what}`);
+    return fs.readFileSync(p, "utf8");
+  };
+  switch (kind) {
+    case "file":
+      return { body: { file: read(flags.file, "--file <path> — the file the secret holds") }, local: (k, n, b, s) => k.setFileSecret("default", n, b.file, s) };
+    case "ssh": {
+      if (typeof flags.host !== "string" || typeof flags.user !== "string") throw new Error("--kind ssh needs --host <host> --user <user> (--port, and --key-file <path> or a password, prompted)");
+      const port = flags.port !== undefined ? Number(flags.port) : undefined;
+      const auth = typeof flags["key-file"] === "string" ? { private_key: read(flags["key-file"], "--key-file <path>") } : { password: typeof flags.value === "string" ? flags.value : await promptHidden("  password: ") };
+      return { body: { ssh: { host: flags.host, user: flags.user, ...(port ? { port } : {}), ...auth } }, local: (k, n, b, s) => k.setSshSecret("default", n, b.ssh, s) };
+    }
+    case "api": {
+      const lines = [].concat(flags.header ?? []);
+      if (!lines.length) lines.push(await promptHidden("  header (Name: value): "));
+      const headers = Object.fromEntries(
+        lines.filter(Boolean).map((l) => {
+          const i = String(l).indexOf(":");
+          if (i < 1) throw new Error(`--header "Name: value" — not "${l}"`);
+          return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
+        }),
+      );
+      const base = typeof flags["base-url"] === "string" ? { base_url: flags["base-url"] } : {};
+      return { body: { api: { ...base, headers } }, local: (k, n, b, s) => k.setApiSecret("default", n, b.api, s) };
+    }
+    case "service-account": {
+      let j;
+      try {
+        j = JSON.parse(read(flags.file, "--file <key.json> — the service account's JSON key"));
+      } catch (err) {
+        if (err instanceof SyntaxError) throw new Error(`${flags.file} is not JSON — the key file Google gives you`);
+        throw err;
+      }
+      const sa = { token_url: j.token_uri ?? "https://oauth2.googleapis.com/token", issuer: j.client_email, private_key: j.private_key, scope: flags.scopes ?? "" };
+      return { body: { service_account: sa }, local: (k, n, b, s) => k.setServiceAccountSecret("default", n, b.service_account, s) };
+    }
+    case "m2m": {
+      if (typeof flags["token-url"] !== "string") throw new Error("--kind m2m needs --token-url, --client-id (and the client secret, prompted or --client-secret)");
+      const client_id = flags["client-id"] ?? (await promptVisible("  client_id: "));
+      const client_secret = flags["client-secret"] ?? (await promptHidden("  client_secret: "));
+      const oauth2 = { token_url: flags["token-url"], client_id, client_secret, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}) };
+      return { body: { oauth2 }, local: (k, n, b, s) => k.setOAuth2Secret("default", n, b.oauth2, s) };
+    }
+    default:
+      throw new Error(`unknown --kind "${kind}" — file, ssh, api, service-account or m2m (a plain value needs no --kind; --oauth2 a refresh token; \`foldrun connect\` a browser sign-in)`);
+  }
+}
+
+/**
+ * `foldrun billing plans | plan <id>|cancel|resume | top-up <usd> | card` —
+ * the Plans and Payment pages. Anything that takes a card answers with
+ * Stripe's own page to open; nothing here touches card data.
+ */
+async function billingPlansCmd(verb, sub, flags) {
+  const url = platformFor(flags, `billing ${verb}`);
+  const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+  const billingOnly = async (fn, what) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403) throw new Error(`${what} needs billing:manage — the owner's — ${err.message}`);
+      if (err instanceof HttpError && err.status === 501) throw new Error(`${what}: ${err.message}`);
+      throw err;
+    }
+  };
+  const follow = async (link, what) => {
+    const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(link);
+    console.log(`\n  ${opened ? `Opened Stripe's page for ${what}.` : `Open Stripe's page for ${what}:`}\n\n    ${link}\n\n  ${c.dim("the link lasts minutes; the balance moves when Stripe confirms the payment, not before")}\n`);
+    return 0;
+  };
+  if (verb === "plans") {
+    const p = await remoteCall(url, flags, "/api/billing/plans");
+    const cur = p.current;
+    console.log(`\n  ${c.bold("plans")}  ${c.dim(`one credit is ${usd(p.creditUsd)}${cur?.plan ? ` · on ${cur.plan} (${cur.status})` : " · no plan — pay as you go"}`)}`);
+    for (const x of p.plans ?? []) {
+      const mark = cur?.plan === x.id ? c.green("●") : c.dim("○");
+      console.log(`  ${mark} ${c.bold(pad(x.id, 8))} ${pad(`$${x.monthlyUsd}/mo`, 9)} ${pad(`${Number(x.credits).toLocaleString()} credits`, 16)} ${pad(`${x.concurrency} at once`, 10)} ${pad(x.workspaces == null ? "any workspaces" : `${x.workspaces} workspaces`, 15)} ${c.dim(x.pitch ?? "")}`);
+    }
+    if (cur?.plan) console.log(`\n  ${c.dim(`this cycle: ${cur.cycleRemainingCredits ?? "?"} of ${cur.cycleCredits ?? "?"} credits left${cur.resetsAt ? `, resets ${String(cur.resetsAt).slice(0, 10)}` : ""}`)}`);
+    console.log(`  ${c.dim(`balance ${usd(p.balanceUsd)}${p.cards ? "" : " · card payments are not configured on this install"}`)}`);
+    console.log(`\n  ${c.dim("foldrun billing plan <id> · plan cancel · plan resume · top-up <usd> · card")}\n`);
+    return 0;
+  }
+  if (verb === "plan") {
+    if (!sub) throw new Error("`foldrun billing plan <starter|creator|pro|scale>`, `plan cancel` or `plan resume` — `billing plans` lists them");
+    if (sub === "cancel") {
+      if (!(await confirmed(flags, "billing plan cancel", "Cancel the plan at the end of this cycle? [y/N] "))) {
+        console.log(`\n  ${c.dim("nothing changed")}\n`);
+        return 0;
+      }
+      const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/subscribe", { method: "DELETE" }), "cancelling the plan");
+      console.log(`\n  ${c.green("✓")} the plan stops ${r.endsAt ? `on ${String(r.endsAt).slice(0, 10)}` : "at the end of this cycle"} ${c.dim("— `foldrun billing plan resume` undoes it until then")}\n`);
+      return 0;
+    }
+    const body = sub === "resume" ? { resume: true } : { plan: sub };
+    if (sub !== "resume" && !(await confirmed(flags, "billing plan", `Move the account to the ${sub} plan? A change on a live plan is prorated at Stripe now. [y/N] `))) {
+      console.log(`\n  ${c.dim("nothing changed")}\n`);
+      return 0;
+    }
+    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/subscribe", { method: "POST", body: JSON.stringify(body) }), "choosing a plan");
+    if (r.url) return follow(r.url, `the ${sub} plan`);
+    console.log(`\n  ${c.green("✓")} ${r.resumed ? `${r.plan} resumed — it renews as before` : r.unchanged ? `already on ${sub}` : `moving to ${r.plan}; the invoice Stripe raises grants the new credits`}\n`);
+    return 0;
+  }
+  if (verb === "top-up") {
+    const amount = Number(sub);
+    if (!(amount > 0)) throw new Error("`foldrun billing top-up <usd>` — how much to add, e.g. 50");
+    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/checkout", { method: "POST", body: JSON.stringify({ usd: amount }) }), "a top-up");
+    return follow(r.url, `a ${usd(amount)} top-up`);
+  }
+  if (verb === "card") {
+    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/card", { method: "POST", body: "{}" }), "saving a card");
+    return follow(r.url, "saving a card for auto top-up");
+  }
+  throw new Error(`unknown billing verb "${verb}"`);
+}
+
+/**
+ * `foldrun api version [pin <YYYY-MM-DD> | unpin]` — Settings → API: the API
+ * version this account's requests get when they send no Foldrun-Version, the
+ * versions still served, and the rate limits.
+ */
+async function apiVersionCmd(positional, flags) {
+  const url = platformFor(flags, "api version");
+  const [, verb, date] = positional;
+  let facts;
+  if (verb === "pin" || verb === "unpin") {
+    if (verb === "pin" && !/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) throw new Error("`foldrun api version pin YYYY-MM-DD` — one of the versions `foldrun api version` lists");
+    try {
+      facts = await remoteCall(url, flags, "/api/account/api", { method: "PATCH", body: JSON.stringify({ version: verb === "pin" ? date : null }) });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403) throw new Error(`pinning the API version needs keys:manage (an admin) — ${err.message}`);
+      throw err;
+    }
+    console.log(`\n  ${c.green("✓")} ${verb === "pin" ? `requests with no Foldrun-Version header now get ${date}` : "unpinned — requests with no header get the current version"}`);
+  } else if (verb === undefined) {
+    facts = await remoteCall(url, flags, "/api/account/api");
+  } else {
+    throw new Error(`unknown api version verb "${verb}" — pin <YYYY-MM-DD> or unpin`);
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify(facts, null, 2));
+    return 0;
+  }
+  const v = facts.version ?? {};
+  const l = facts.limits ?? {};
+  console.log(`\n  ${c.bold("API version")}  ${v.effective}  ${c.dim(v.pinned ? `pinned (current is ${v.current})` : "current — not pinned")}`);
+  console.log(`  ${c.dim(`served: ${(v.supported ?? []).join(", ") || "—"} · each for ${v.supportMonths ?? "?"} months after the next · this CLI sends ${API_VERSION}`)}`);
+  if (l.perCredential) console.log(`  ${c.bold("rate limits")}  ${c.dim(`${l.plan} · per key ${l.perCredential.read} reads / ${l.perCredential.write} writes, per account ${l.perAccount?.read} / ${l.perAccount?.write} — every ${l.windowSeconds}s`)}`);
+  console.log(`\n  ${c.dim("foldrun api version pin YYYY-MM-DD · unpin")}\n`);
+  return 0;
+}
+
+const THEMES_CLI = ["system", "light", "dark"];
+
+/**
+ * `foldrun preferences [set theme system|light|dark]` — Profile → Appearance.
+ * A person's own setting, kept with them on every browser; a key acts for the
+ * person who minted it.
+ */
+async function preferencesCmd(positional, flags) {
+  const url = platformFor(flags, "preferences");
+  const [verb, key, value] = positional;
+  let p;
+  if (verb === "set") {
+    if (key !== "theme" || !THEMES_CLI.includes(value)) throw new Error(`\`foldrun preferences set theme ${THEMES_CLI.join("|")}\``);
+    p = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ theme: value }) });
+    console.log(`\n  ${c.green("✓")} theme ${p.theme} ${c.dim("— on every browser you sign in on")}\n`);
+    return 0;
+  }
+  if (verb !== undefined) throw new Error("`foldrun preferences` shows them; `preferences set theme <system|light|dark>` changes it");
+  p = await remoteCall(url, flags, "/api/me/preferences");
+  if (flags.json === true) {
+    console.log(JSON.stringify(p, null, 2));
+    return 0;
+  }
+  console.log(`\n  theme  ${c.bold(p.theme)}${p.theme === "system" ? c.dim(" — follows the device") : ""}\n\n  ${c.dim(`foldrun preferences set theme ${THEMES_CLI.join("|")}`)}\n`);
+  return 0;
+}
+
+/** `foldrun changelog [--limit n]` — What's new: each release and what it changed. */
+async function changelogCmd(flags) {
+  const url = platformFor(flags, "changelog");
+  const limit = Number(flags.limit) > 0 ? Math.min(50, Math.floor(Number(flags.limit))) : 5;
+  const r = await remoteCall(url, flags, `/api/changelog?limit=${limit}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const releases = r.releases ?? [];
+  if (!releases.length) {
+    console.log(`\n  ${c.dim(`no release notes on this install (it runs ${r.version ?? "an unreleased build"})`)}\n`);
+    return 0;
+  }
+  for (const rel of releases) {
+    console.log(`\n  ${c.bold(rel.version)}${rel.version === r.version ? c.green("  ← running") : ""}  ${c.dim(rel.released_at ? when(rel.released_at) : "")}`);
+    if (!rel.notes) {
+      console.log(`    ${c.dim("no notes for this one")}`);
+      continue;
+    }
+    for (const [title, key] of [["features", "features"], ["fixes", "fixes"], ["docs", "docs"], ["other", "other"]]) {
+      const lines = rel.notes[key] ?? [];
+      if (!lines.length) continue;
+      console.log(`    ${c.dim(title)}`);
+      for (const n of lines) console.log(`    · ${firstLine(typeof n === "string" ? n : n.subject ?? n.text ?? JSON.stringify(n), 110)}`);
+    }
+  }
+  console.log(`\n  ${c.dim("--limit <n> for more (up to 50) · --json for the document")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun find <query>` — the ⌘K search: workspaces, agents, flows, tools,
+ * skills, knowledge, memory and runs across the account, ranked as the
+ * dashboard ranks them.
+ */
+async function findCmd(positional, flags) {
+  const url = platformFor(flags, "find");
+  const q = positional.join(" ").trim();
+  if (!q) throw new Error("`foldrun find <words>` — a name, a run id, or words from a run's headline");
+  const { hits = [] } = await remoteCall(url, flags, `/api/search?q=${enc(q)}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(hits, null, 2));
+    return 0;
+  }
+  if (!hits.length) {
+    console.log(`\n  ${c.dim(`nothing matches "${q}"`)}\n`);
+    return 0;
+  }
+  console.log();
+  const kw = Math.max(...hits.map((h) => h.kind.length));
+  for (const h of hits) {
+    const where = h.workspace ? c.dim(`${h.workspace} · `) : "";
+    console.log(`  ${c.dim(pad(h.kind, kw))}  ${c.bold(h.title)}${h.status ? c.dim(` ${h.status}`) : ""}  ${where}${c.dim(firstLine(h.subtitle ?? "", 70))}`);
+  }
+  console.log();
+  return 0;
+}
+
+/** `foldrun workspaces demo` — "Try the demo pipeline": the demo workspace, made on the platform. */
+async function workspacesDemoCmd(flags) {
+  const url = platformFor(flags, "workspaces demo");
+  const r = await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ demo: true }) });
+  console.log(`\n  ${c.green("✓")} ${c.bold(r.name)} ${c.dim(`on ${url} — ${r.agents} agents, ${r.flows} flow${r.flows === 1 ? "" : "s"}`)}`);
+  console.log(`  ${c.dim(`foldrun flow show <flow> --to ${r.name} · foldrun flow run <flow> --to ${r.name} --test · foldrun pull ${r.name}`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun report <run-id> live [--agent <a>] [--file <path>]` — the run page's
+ * live browser view: which agents have a frame, and the newest frame as a JPEG,
+ * with the page's address and whether the browser has closed.
+ */
+async function reportLiveCmd(runId, flags, layout) {
+  const url = platformFor(flags, "report live");
+  if (!runId) throw new Error("`foldrun report <run-id> live [--agent <name>]`");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const base = `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/live`;
+  const { agents = {} } = await remoteCall(url, flags, base);
+  const names = Object.keys(agents);
+  let agent = typeof flags.agent === "string" ? flags.agent : names.length === 1 ? names[0] : null;
+  if (!agent) {
+    if (!names.length) {
+      console.log(`\n  ${c.dim(`no live browser frames for ${runId} — a step's browser posts them while it runs`)}\n`);
+      return 0;
+    }
+    console.log();
+    for (const n of names) console.log(`  ${c.bold(n)}  ${c.dim(`last frame ${when(agents[n])}`)}`);
+    console.log(`\n  ${c.dim(`foldrun report ${runId} live --agent <name> saves its newest frame`)}\n`);
+    return 0;
+  }
+  const res = await remoteFetch(url, `${base}?agent=${enc(agent)}`, {}, { token: tokenFor(url, flags), seconds: timeoutSeconds(flags) });
+  if (res.status === 204) {
+    console.log(`\n  ${c.dim(`${agent} has no frame — its browser has not shown anything yet`)}\n`);
+    return 0;
+  }
+  if (!res.ok) {
+    const said = await res.text();
+    let why = said.slice(0, 200);
+    try {
+      why = JSON.parse(said).error ?? why;
+    } catch {}
+    throw new HttpError(`live view of ${agent}: ${why}`, res.status, {});
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const page = (() => {
+    try {
+      return decodeURIComponent(res.headers.get("x-live-url") ?? "");
+    } catch {
+      return res.headers.get("x-live-url") ?? "";
+    }
+  })();
+  const code = writeDownload(bytes, `${runId}-${agent}.jpg`, flags, `${runId} · ${agent} live`);
+  if (flags.file !== "-") console.log(`  ${c.dim(`${page || "(no address)"} · ${res.headers.get("x-live-engine") ?? "?"} · ${when(res.headers.get("x-live-at"))}${res.headers.get("x-live-ended") === "1" ? " · browser closed" : ""}`)}\n`);
+  return code;
+}
+
+/**
+ * `foldrun workspace vocabulary --to <ws>` — what the dashboard's editor
+ * offers as you type: agents, flows, skills, tools, secrets (names only),
+ * scripts, document types and linkable documents.
+ */
+async function vocabularyCmd(flags, layout) {
+  const url = platformFor(flags, "workspace vocabulary");
+  const ws = platformWorkspace(flags, layout, "workspace vocabulary");
+  const v = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/vocabulary`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(v, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(ws)}  ${c.dim("names the editor completes")}`);
+  for (const [k, list] of Object.entries(v)) {
+    if (!Array.isArray(list)) continue;
+    const names = list.map((x) => (typeof x === "string" ? x : x.name ?? x.path ?? x.title ?? JSON.stringify(x)));
+    console.log(`\n  ${c.dim(`${k} (${names.length})`)}`);
+    if (names.length) console.log(`  ${wrap(names.join(", "), 100).join("\n  ")}`);
+  }
+  console.log();
+  return 0;
+}
+
 /** A stored file's preview, as text: tables, documents, slides, archives. */
 function printPreview(p, rel) {
   const out = (s = "") => console.log(s);
@@ -7568,6 +8415,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "version":
       return versionCmd(flags);
     case "api":
+      if (positional[0] === "version") return apiVersionCmd(positional, flags);
       return apiCmd(positional, flags);
     case "keys":
       return keysCmd(positional, flags);
@@ -7602,6 +8450,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "status":
       return statusCmd(layout, flags, positional[0]);
     case "workspaces":
+      if (positional[0] === "demo") return workspacesDemoCmd(flags);
       return workspacesCmd(positional, flags, layout);
     case "extract":
       return extract(workspace, flags);
@@ -7622,6 +8471,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "usage":
       return usageCmd(flags);
     case "workspace":
+      if (positional[0] === "vocabulary") return vocabularyCmd(flags, layout);
       return workspaceCmd(positional, flags, layout);
     case "notify":
       return notifyCmd(positional, flags, layout);
@@ -7630,6 +8480,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "notifications":
       return notificationsCmd(positional, flags);
     case "history":
+      if (positional[0] === "restore") return historyRestoreCmd(positional, flags, layout);
       return historyCmd(positional, flags, layout);
     case "repo":
       return repoCmd(positional, flags, layout);
@@ -7642,8 +8493,13 @@ export async function run(command, positional, flags, workspace, layout) {
     case "probe":
       return probeCmd(positional[0]);
     case "connect":
+      if (typeof flags.client === "string") {
+        if (!/^[A-Z][A-Z0-9_]*$/.test(positional[0] ?? "")) throw new Error("`foldrun connect NAME --client <saved client>` — NAME in UPPER_SNAKE_CASE, the secret the grant becomes");
+        return connectFromClient(positional[0], flags);
+      }
       return connect(positional, flags);
     case "secrets":
+      if (positional[0] === "clients") return oauthClientsCmd(positional, flags);
       return secretsCmd(positional, flags, layout);
     case "logs":
       return logsCmd(positional, flags, layout);
@@ -7659,6 +8515,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "reject":
       return decideCmd(command, positional[0], flags, layout);
     case "report":
+      if (positional[1] === "live") return reportLiveCmd(positional[0], flags, layout);
       return positional[1] === "get" ? reportGetCmd(positional[0], positional[2], flags, layout) : reportCmd(positional[0], flags, layout);
     case "stop":
       // No run id and a filter: every run the filter matches (runs/bulk).
@@ -7674,6 +8531,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "account":
       return accountCmd(positional, flags);
     case "schedule":
+      if (positional[0] === "tick") return scheduleTickCmd(flags);
       return scheduleCmd(flags);
     case "triggers":
       return triggersCmd(flags, layout);
@@ -7682,7 +8540,16 @@ export async function run(command, positional, flags, workspace, layout) {
     case "docs":
       return docsCmd(positional, flags);
     case "billing":
+      if (["plans", "plan", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
       return positional.length ? billingVerbCmd(positional, flags) : billingCmd(flags);
+    case "library":
+      return libraryCmd(positional, flags);
+    case "preferences":
+      return preferencesCmd(positional, flags);
+    case "changelog":
+      return changelogCmd(flags);
+    case "find":
+      return findCmd(positional, flags);
     case "gallery":
       return galleryCmd(positional, flags);
     case "storage":
@@ -7705,6 +8572,12 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
       if (positional[0] === "run") return invoke(positional[1], flags);
       if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);
+      if (positional[0] === "set") return flowSetCmd(positional, flags, layout);
+      if (positional[0] === "trigger") return flowTriggerCmd(positional, flags, layout);
+      if (positional[0] === "move-step") return flowMoveStepCmd(positional, flags, layout);
+      if (positional[0] === "copy-step") return flowCopyStepCmd(positional, flags, layout);
+      if (positional[0] === "paste") return flowPasteCmd(positional, flags, layout);
+      if (positional[0] === "draft") return flowDraftCmd(positional, flags, layout);
       return scaffoldCmd("flows", positional, flags, layout);
     case "tool":
       return positional[0] === "test"

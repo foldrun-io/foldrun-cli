@@ -115,6 +115,7 @@ declared the same way.
 | `foldrun init [dir]` | create an account folder with one workspace in it (`--flat` for the old shape) |
 | `foldrun new <name>` | another workspace in this account |
 | `foldrun agent new <name>` | one more agent in this workspace — also `flow new <name>` and `tool new <name>` |
+| `foldrun flow set\|trigger\|move-step\|copy-step\|paste\|draft <flow>` | the Flows page from a terminal: step options, the trigger, a drag, copy and paste, Draft with AI — the same core rewriters, a diff, refused when `check` would call it an error (`--to <ws>` edits the deployed copy) |
 | `foldrun guide` | the coding-agent rules, as Next.js writes them: a short block in `AGENTS.md` telling Claude Code, Cursor or Codex to read `foldrun docs` before editing, and `CLAUDE.md` importing it (`@AGENTS.md`). `init` writes them, `pull` refreshes them, `check` re-adds them when a coding agent runs it; only the marked block is ever rewritten (`--check`, `--print`) |
 | `foldrun docs [page]` | foldrun's docs from the copy this CLI ships, so a coding agent reads the version it is driving, offline (`--path` prints where) |
 | `foldrun check [dir]` | validate every workspace here, and the shared library |
@@ -136,6 +137,7 @@ declared the same way.
 | `foldrun message <run-id> "…"` | say something to a running agent — it hears it after its next tool call |
 | `foldrun rerun <run-id>` | the same flow again from a step — `--from <n>` as the flow numbers them, or `--agent <name>` for the first step that agent runs; `--wait` follows it |
 | `foldrun schedule` | every flow in the account that fires on a clock, its cron line, and the next few times it fires |
+| `foldrun schedule tick` | fire whatever is due now — Settings' "Run scheduler now" |
 | `foldrun backups` | how the account is backed up and the snapshots it is in; `backups request --what runs --at "<when>" [--to <ws>]` asks the platform team for a restore |
 | `foldrun restore <ws> --to <commit\|time\|3d>` | a workspace's source back as it was then — shows the change, asks for the name typed back (`--dry-run`, `--yes`) |
 | `foldrun onboarding` | the account's getting-started steps, done or not, the next one first |
@@ -146,17 +148,25 @@ declared the same way.
 | `foldrun storage put <file>` | upload a file into a workspace's storage (`--as <path>` names it) — also `rm <path>` |
 | `foldrun storage share <path>` | a public link to one produced file (`--ttl <days>`, default 7; `--forever`) — also `shares` (`--all`) and `unshare <token>` |
 | `foldrun billing` | the account's balance and its recent ledger entries, with what each was for |
+| `foldrun billing plans` | the plans and this cycle's credits — also `plan <id>`, `plan cancel`, `plan resume`, `top-up <usd>`, `card` (Stripe's own pages for anything with a card) |
 | `foldrun account` | the account's defaults: timezone, notify, budget, concurrency — also `set <key> <value>` and `clear <key>` |
 | `foldrun account providers` | which model providers the account's files use and whether each key still answers (`--check` asks now) |
 | `foldrun secrets set NAME` | store a secret, prompted and never echoed |
+| `foldrun secrets clients` | OAuth clients saved on the platform — `add`, `rm`; `connect NAME --client <name>` runs a consent from one. `secrets set NAME --kind file\|ssh\|api\|service-account\|m2m` for the other shapes |
 | `foldrun deploy [dir]` | push the whole account — or `deploy <workspace>` for one of them |
 | `foldrun pull [workspace]` | bring the platform's account down here (refuses to clobber local edits) |
 | `foldrun status [workspace]` | per workspace: added, changed, and what moved on the platform since your last deploy |
 | `foldrun workspaces` | what exists here and there — also `rm <name>` (`--platform --yes` to delete it there) |
+| `foldrun library` | the account's shared library on the platform: `ls`, `cat`, `put`, `rm` |
+| `foldrun find <words>` | the dashboard's ⌘K search, across the account |
+| `foldrun history restore <path> --id <rev>` | one file back as a revision left it, as a new revision |
 | `foldrun invoke <flow>` | start a flow on a running platform (`--watch` streams its trace; `--once <key>` makes a retry a no-op rather than a second run) |
 | `foldrun open [page]` | the dashboard for this workspace, in the browser |
 | `foldrun login` | sign this machine in from the browser — no key to copy |
 | `foldrun whoami` | who you are on the platform: account, role, workspaces |
+| `foldrun preferences` | your theme on the platform — `set theme system\|light\|dark` |
+| `foldrun api version` | the API version pin and rate limits — `pin <date>`, `unpin` |
+| `foldrun changelog` | the platform's release notes |
 | `foldrun doctor` | check the path to the platform: node, CLI, account, DNS, a timed `/api/healthz` — exit 1 if any line fails |
 | `foldrun keys ls` | the account's API keys — also `create <label>`, `revoke <id>` |
 

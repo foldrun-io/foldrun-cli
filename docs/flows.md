@@ -574,10 +574,15 @@ The same edits from a terminal, written by the same code: `foldrun flow add
 <flow> <pattern>` for a palette block (it prints the diff and refuses one
 `foldrun check` would call an error), `foldrun flow rm-step <flow> --step
 <n|agent>` for the delete, `foldrun flow dup-step <flow> --step <n|agent>`
-for Duplicate, `foldrun agent link <agent> --subagent |
---consult | --can-ask` (and `unlink`) for the docks and the toggle, and
-`foldrun flow show <flow>` for the canvas itself, as text. See the
-[CLI reference](cli).
+for Duplicate, `foldrun flow copy-step` and `foldrun flow paste` for Copy
+and Paste, `foldrun flow move-step <flow> --step <n|agent> --group <g> |
+--after <g>` for a drag, `foldrun flow set <flow> --step <n|agent>
+key=value …` for ⚙ Options (call limits included), `foldrun flow trigger`
+for the trigger picker, `foldrun flow draft "…"` for Draft with AI,
+`foldrun agent link <agent> --subagent | --consult | --can-ask` (and
+`unlink`) for the docks and the toggle, and `foldrun flow show <flow>` for
+the canvas itself, as text. Undo's counterpart is `foldrun history restore
+<path> --id <revision>`. See the [CLI reference](cli).
 
 ### History
 
@@ -588,7 +593,9 @@ against the file as it is now. **Restore this version** writes that
 revision's text back as a new revision, `restored <rev> from history`, so a
 restore is undone the same way. It is refused, and nothing is written, if the
 file changed after the drawer opened (a canvas edit in another tab, a
-deploy): reopen History to see the newer version first.
+deploy): reopen History to see the newer version first. From a terminal:
+`foldrun history flows/<file>.md --to <workspace>` lists the revisions and
+`foldrun history restore flows/<file>.md --id <revision>` restores one.
 
 ### Run with saved inputs
 
