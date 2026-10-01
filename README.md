@@ -136,6 +136,9 @@ declared the same way.
 | `foldrun message <run-id> "…"` | say something to a running agent — it hears it after its next tool call |
 | `foldrun rerun <run-id>` | the same flow again from a step — `--from <n>` as the flow numbers them, or `--agent <name>` for the first step that agent runs; `--wait` follows it |
 | `foldrun schedule` | every flow in the account that fires on a clock, its cron line, and the next few times it fires |
+| `foldrun backups` | how the account is backed up and the snapshots it is in; `backups request --what runs --at "<when>" [--to <ws>]` asks the platform team for a restore |
+| `foldrun restore <ws> --to <commit\|time\|3d>` | a workspace's source back as it was then — shows the change, asks for the name typed back (`--dry-run`, `--yes`) |
+| `foldrun onboarding` | the account's getting-started steps, done or not, the next one first |
 | `foldrun triggers` | why nothing ran: per flow, how often its trigger fired, how often that became a run, and every reason for the difference (`--since <days>`, `--to`) |
 | `foldrun storage <verb>` | what a workspace produced: `ls [prefix]`, `cat <path>`, `get <path>` — with when each file was written and which run wrote it. `put <file|folder>...` uploads any files (`--into <folder/>`, `--as <path>` for one), `rm <path>` removes one, and `share`, `shares`, `unshare` manage public links |
 | `foldrun storage put <file>` | upload a file into a workspace's storage (`--as <path>` names it) — also `rm <path>` |

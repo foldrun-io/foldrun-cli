@@ -6881,6 +6881,142 @@ async function repoCmd(positional, flags, layout) {
   return 1;
 }
 
+/**
+ * `foldrun onboarding` — the account's getting-started steps, each worked
+ * out from what is really there, the next one first. Hiding the dashboard
+ * card is a person's own setting, so it is done there, not with a key.
+ */
+async function onboardingCmd(flags) {
+  const url = platformFor(flags, "onboarding");
+  const o = await remoteCall(url, flags, "/api/me/onboarding");
+  if (flags.json === true) {
+    console.log(JSON.stringify(o, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold("Getting started")}  ${c.dim(`${o.done} of ${o.total}${o.complete ? " — all done" : ""}`)}\n`);
+  for (const s of o.steps ?? []) {
+    const mark = s.done ? c.green("✓") : s.id === o.next?.id ? c.yellow("→") : c.dim("○");
+    console.log(`  ${mark} ${s.done ? c.dim(s.title) : c.bold(s.title)}`);
+    if (!s.done) {
+      console.log(`      ${c.dim(s.why)}`);
+      console.log(`      ${c.dim(`${String(url).replace(/\/$/, "")}${s.href}${s.cli ? `  ·  ${s.cli}` : ""}`)}`);
+    }
+  }
+  console.log();
+  return 0;
+}
+
+const BACKUP_KINDS = { files: "files", database: "database", keys: "keys (sealed)" };
+
+/**
+ * `foldrun backups` — how the account is backed up and the snapshots it is
+ * in; `foldrun backups request` asks the platform team to restore runs,
+ * state, storage or everything from one (it restores nothing itself).
+ */
+async function backupsCmd(positional, flags) {
+  const url = platformFor(flags, "backups");
+  const [verb = "ls"] = positional;
+  if (verb === "request") {
+    const what = typeof flags.what === "string" ? flags.what : "";
+    if (!["runs", "state", "storage", "everything"].includes(what)) {
+      throw new Error("`foldrun backups request --what runs|state|storage|everything --at \"<when>\" [--to <workspace>] [--note \"…\"]`");
+    }
+    if (typeof flags.at !== "string" || !flags.at.trim()) throw new Error("--at \"<date and time to restore to>\" — the point you want back");
+    const body = {
+      what,
+      target: flags.at,
+      workspace: typeof flags.to === "string" ? flags.to : null,
+      backupId: typeof flags.backup === "string" ? flags.backup : null,
+      note: typeof flags.note === "string" ? flags.note : null,
+    };
+    const { request } = await remoteCall(url, flags, "/api/account/backups/requests", { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} asked ${c.dim(`· ${request.id} · ${what} in ${request.workspace ?? "every workspace"} as at ${request.target}`)}`);
+    console.log(`  ${request.notified ? c.dim("the platform team has been emailed; nothing is restored until they do it") : c.yellow("recorded, but the email to the platform team did not send — contact them as well")}\n`);
+    return 0;
+  }
+  if (verb !== "ls" && verb !== "list") throw new Error(`unknown backups verb "${verb}" — ls, request`);
+  const b = await remoteCall(url, flags, "/api/account/backups");
+  if (flags.json === true) {
+    console.log(JSON.stringify(b, null, 2));
+    return 0;
+  }
+  const p = b.policy ?? {};
+  console.log(`\n  ${c.bold("Backups")}  ${c.dim(`${p.schedule ?? "—"} · the last ${p.keepLocal ?? "?"} kept on the server${p.keepOffsiteDays ? `, ${p.keepOffsiteDays} days off it` : ""}`)}`);
+  if (b.last) {
+    console.log(`  last  ${when(b.last.at)}  ${b.last.verified ? c.green("verified") : c.yellow("not verified")}  ${b.last.offsite ? c.dim(`copied to ${b.last.offsite}`) : c.yellow("on the server only")}`);
+  } else {
+    console.log(`  ${c.dim("no snapshot recorded for this account yet")}`);
+  }
+  if (b.backups?.length) {
+    console.log(`\n  ${c.dim("snapshots")}`);
+    for (const s of b.backups.slice(0, Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 15)) {
+      console.log(`  ${when(s.at)}  ${pad(typeof s.bytes === "number" ? humanBytes(s.bytes) : "—", 8)}  ${pad((s.kinds ?? []).map((k) => BACKUP_KINDS[k] ?? k).join(", "), 30)}  ${s.verified ? c.green("✓") : c.yellow("?")} ${c.dim(s.offsite ? `server + ${s.offsite}` : "server only")}`);
+    }
+  }
+  if (b.workspaces?.length) {
+    console.log(`\n  ${c.dim("restore a workspace's source yourself — foldrun restore <workspace> --to <commit|time|3d> --dry-run")}`);
+    const w = Math.max(...b.workspaces.map((x) => x.name.length));
+    for (const x of b.workspaces) {
+      console.log(`  ${pad(x.name, w)}  ${x.lastChange ? c.dim(`last change ${when(x.lastChange.at)} — ${firstLine(x.lastChange.message, 50)}`) : c.dim("no history yet")}`);
+    }
+  }
+  if (b.requests?.length) {
+    console.log(`\n  ${c.dim("restore requests")}`);
+    for (const r of b.requests.slice(0, 5)) console.log(`  ${when(r.at)}  ${r.what} · ${r.workspace ?? "all"} · to ${r.target}  ${c.dim(`${r.status} · ${r.by}`)}`);
+  }
+  console.log(`\n  ${c.dim("runs, state/ and storage come back from a snapshot by the platform team: foldrun backups request --what runs --at \"<when>\" [--to <workspace>]")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun restore <workspace> --to <commit|branch|tag|time|age> [--dry-run]`
+ * — the workspace's source as it was then. Always shows the change first;
+ * the restore asks for the workspace's name typed back (or --yes), and
+ * sends the removals it showed, so a file added in between refuses it.
+ */
+async function restoreCmd(positional, flags) {
+  const url = platformFor(flags, "restore");
+  const ws = positional[0];
+  if (!ws) throw new Error("`foldrun restore <workspace> --to <commit|time|3d> [--dry-run]`");
+  if (typeof flags.to !== "string" || !flags.to.trim()) throw new Error("--to <commit, date or age> — the point to restore to, e.g. --to 2026-09-28T14:00 or --to 3d");
+  const base = `/api/workspaces/${enc(ws)}/restore`;
+  const plan = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify({ to: flags.to, dryRun: true }) });
+  console.log(`\n  ${c.bold(ws)} → ${c.bold(String(plan.to.sha).slice(0, 7))}  ${c.dim(`${when(plan.to.at)} · ${plan.to.by} · ${firstLine(plan.to.message, 60)}`)}`);
+  if (plan.noop) {
+    console.log(`  ${c.dim(`${ws} already matches that point — nothing to restore`)}\n`);
+    return 0;
+  }
+  console.log(`  ${c.dim(`${plan.updated.length} changed · ${plan.added.length} brought back · ${plan.removed.length} removed — runs, state/, storage and secrets are not touched`)}\n`);
+  for (const f of plan.files ?? []) {
+    if (flags["dry-run"] === true) {
+      printOps(`${f.path} ${c.dim(`(${f.change})`)}`, f.diff ?? []);
+      console.log();
+    } else {
+      console.log(`  ${f.change === "removed" ? c.red("-") : f.change === "added" ? c.green("+") : c.yellow("~")} ${f.path}`);
+    }
+  }
+  if (plan.blockedBy?.length) console.log(`\n  ${c.yellow("!")} runs in flight (${plan.blockedBy.join(", ")}) — a restore waits for them, as a deploy does`);
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim(`nothing changed — run it without --dry-run to restore`)}\n`);
+    return 0;
+  }
+  console.log();
+  if (!(await confirmed(flags, "restore", `Type ${ws} to restore it: `, ws))) {
+    console.log(`\n  ${c.dim("nothing restored")}\n`);
+    return 1;
+  }
+  const r = await remoteCall(url, flags, base, {
+    method: "POST",
+    body: JSON.stringify({ to: plan.to.sha, confirm: ws, expectRemoved: plan.removed }),
+  });
+  if (r.noop) {
+    console.log(`\n  ${c.dim(`${ws} already matches ${String(plan.to.sha).slice(0, 7)}`)}\n`);
+    return 0;
+  }
+  console.log(`\n  ${c.green("✓")} ${ws} restored to ${String(r.to.sha).slice(0, 7)} ${c.dim(`· main ${String(r.main ?? "").slice(0, 7)} · undo: foldrun restore ${ws} --to ${String(r.from ?? "").slice(0, 7)}`)}\n`);
+  return 0;
+}
+
 /** `foldrun account export` — everything the platform holds about the account, as one JSON file. */
 async function accountExportCmd(url, flags) {
   let got;
@@ -7052,6 +7188,12 @@ export async function run(command, positional, flags, workspace, layout) {
       return historyCmd(positional, flags, layout);
     case "repo":
       return repoCmd(positional, flags, layout);
+    case "restore":
+      return restoreCmd(positional, flags);
+    case "backups":
+      return backupsCmd(positional, flags);
+    case "onboarding":
+      return onboardingCmd(flags);
     case "probe":
       return probeCmd(positional[0]);
     case "connect":

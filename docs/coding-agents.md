@@ -91,6 +91,7 @@ api workspaces/$WS/flows/<flow>/run -X POST   # start one
 | `/storage` · `/storage/download` · `/storage/upload-url` · `/storage/preview` · `/shares` | GET POST PUT DELETE · GET · POST · GET · POST GET DELETE | files agents produced and people uploaded, any type; a file parsed for reading; public links to them |
 | `/triggers?since=` | GET | why nothing ran: fired vs started per flow, with reasons |
 | `/hooks/<f>/rotate` | POST | new webhook token for a flow |
+| `/restore` | POST | the workspace's source back to a point in its history — `dryRun` first, then `confirm` |
 | `/api/secrets` · `/api/schedule` · `/api/account` · `/api/keys` | account-level | the vault, the clock, defaults, API keys |
 
 A key carries a role (viewer, editor, admin) and a workspace scope no wider

@@ -115,6 +115,25 @@ foldrun secrets set STRIPE_KEY          # prompted, never echoed, never in a fil
 Agents name them in `secrets:` and receive the value at run time. They are never
 written into the workspace, so a workspace is always safe to commit.
 
+## The checklist on the dashboard
+
+A new account's home page shows a **Getting started** card: create a
+workspace, write or deploy an agent, run a flow, get a run to finish, add a
+secret, schedule a flow or give it a webhook, invite a teammate, set up
+billing (where the plan asks for it) and install the CLI — "4 of 8", with the
+next step first and a link to where to do it. Each step is worked out from
+the account as it is (a run on record, a secret in the vault, a key minted
+for the CLI), so it ticks itself whichever way you did the thing; there is
+nothing to mark. **Dismiss** hides it for you alone; the line at the foot of
+the page brings it back, and it goes away by itself once every step is done.
+
+```sh
+foldrun onboarding                       # the same steps, in the terminal
+```
+
+The API is `GET /api/me/onboarding`; hiding the card is a person's own
+setting, so it is done from the dashboard, not with a key.
+
 ## Where to go next
 
 - **The grammar** — every field an agent or flow can carry: Help

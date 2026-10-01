@@ -20,6 +20,9 @@
 //   foldrun account        the account's own defaults — timezone, notify, budget, concurrency
 //   foldrun schedule       every flow in the account that fires on a clock, and when it fires next
 //   foldrun triggers       why nothing ran: fired vs started per flow, and each reason
+//   foldrun backups        how the account is backed up, its snapshots — request a restore from one
+//   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
+//   foldrun onboarding     the account's getting-started steps, the next one first
 //   foldrun billing        the balance, and what the money went on
 //   foldrun gallery        the tools the platform ships to every account — list, pull, upgrade <tool>
 //   foldrun storage <verb>  ls / cat / get / put / rm / share / shares / unshare — what the agents produced, and public links to it
@@ -131,6 +134,8 @@ const HELP = `foldrun — agents are just folders
   foldrun notify test       send one test notification from a workspace and say what happened (--to <workspace>)
   foldrun history [path]    every change to a deployed workspace, newest first (--id <revision> for its diff, --limit, --to)
   foldrun repo ls           a workspace's branches and tags — also diff <branch>, deploy <ref>, merge <branch> (both ask first; --to)
+  foldrun restore <ws> --to <commit|time|3d>  put a workspace's source back as it was then — shows the change, asks for the name typed back (--dry-run: the diff only, --yes)
+  foldrun backups           how the account is backed up, when it last was, the snapshots it is in — also request --what runs|state|storage|everything --at "<when>" [--to <ws>] [--note]
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
@@ -150,6 +155,7 @@ Signing in
                             session: cookies, storage and the browser identity it needs
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
+  foldrun onboarding        the account's getting-started steps, done or not, the next one first (--json)
   foldrun doctor            check the path to the platform: node, CLI, account, DNS, a timed /api/healthz
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
