@@ -332,11 +332,10 @@ are what turn a list of clicks into something a flow can trust.
 Around that it carries what a real browser carries: a named `session` so a
 login done once holds for the rest of the run, `state` so it holds for the
 next run too, `cookies` from a secret for sites that sign in without a
-password, five engines (`browser: chrome | firefox | safari | lightpanda |
-obscura` — the last two are light browsers of their own: Lightpanda runs the
-JavaScript and never draws, Obscura draws but cannot intercept requests),
-phone
-emulation, `block` to drop images and trackers on heavy pages, `proxy` and
+password, six engines (`browser=chromium` — the default — `| chrome |
+firefox | safari | lightpanda | obscura`; the last two are light browsers of
+their own, and what each can do is the table under [Engines](#engines)),
+phone emulation, `block` to drop images and trackers on heavy pages, `proxy` and
 `auth` and `headers` from secrets, `capture` to save the JSON a page fetches
 for itself, and `video`, `trace` or `har` when you need to see what happened.
 
@@ -780,7 +779,7 @@ exactly as it always did.
 | `session` | a name; cookies and logins persist across calls in the run |
 | `cookies` | the NAME of a secret holding a site's sign-in cookies |
 | `cookie_domain` | the domain those cookies belong to |
-| `browser` | `chrome` (real Google Chrome; falls back to Chromium where absent), `chromium` (open-source), `firefox`, `safari` — WebKit; `webkit` also works — or `lightpanda`, which runs the JavaScript and never draws: no `screenshot`, `pdf`, `vitals`, `video`, `trace`, `har`, `device` or `session`, and the call says so — or `obscura`, as light and it does draw (screenshots, a raster `pdf`, the live view), but it cannot intercept requests, so no `block`, mocks, `routes`, `allowed_domains`, `video`, `trace`, `har` or `session`. Default `chromium` |
+| `browser` | `chromium` (the default, the open-source build), `chrome` (real Google Chrome; falls back to Chromium where the image lacks it), `firefox`, `safari` (WebKit; `webkit` also works), `lightpanda` (runs the JavaScript, never draws) or `obscura` (as light, draws, cannot intercept requests). What each cannot do is under [Engines](#engines); a call that asks for it is refused by name |
 | `engine` | the same setting, under the name the `web.browse:` block uses; either on a call, both only if they agree |
 | `device` | a device to emulate by Playwright name: `"iPhone 15"`, `"Pixel 7"` |
 | `block` | resource types and host globs not to load: `"image,font,*.doubleclick.net"` |
@@ -989,6 +988,48 @@ Chromium), and anything that helps a page not look automated — `"human":
 true` moves the pointer like a person, and changes nothing else about
 the browser.
 
+### Engines
+
+Six engines, and this table is the one place that says what each can do.
+The agent's file names the engine as `engine:` in its `web.browse:` block;
+a call names it as `browser=` (or `engine=`, the same setting). Both take
+every spelling below, and `webkit` is accepted for `safari`.
+
+| | `chromium` | `chrome` | `firefox` | `safari` | `lightpanda` | `obscura` |
+|---|---|---|---|---|---|---|
+| what it is | the open-source build — **the default** | real Google Chrome; Chromium where the image lacks it | Firefox | WebKit, Safari's engine | runs the JavaScript, never draws | draws, cannot intercept requests |
+| read, drive, `aria`, actions | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `screenshot`, `vitals`, `annotate`, `visual` | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| `pdf` (mode or action) | ✓ | ✓ | — | — | — | ✓ (a raster picture of the page) |
+| `video`, `trace`, `har` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `device` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `session` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `headless: false` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `proxy` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `block`, `routes`, `mock`, `captcha`, `allowed_domains` | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| `live`, `webgpu`, `extensions`, `webmcp`, `cpu_profile` | ✓ | ✓ | — | — | — | — |
+| `foldrun login --engine` | ✓ | ✓ (signs in with Chromium) | ✓ | ✓ | — | — |
+
+A call that asks an engine for something marked — is refused before a browser opens, in a
+sentence naming what and why (`video needs a browser that renders;
+lightpanda reads and drives pages without drawing them — use engine
+chrome`). `foldrun check`, the deploy gate and the run refuse the same pair
+in a `web.browse:` block — the block's own `engine:`, or an identity's —
+in the same words, because both read one table (`BROWSE_ENGINE_LIMITS` in
+core). What only a call can ask for (a `mode`, a `trace`, mocks) is the
+tool's to refuse.
+
+**What the image actually has.** Chrome, Lightpanda and Obscura are
+downloads the runner image's build makes, and Google ships no Linux Chrome
+for arm64. The build writes down what it got, in
+`/opt/browser/engines.json`; the tool reads it, so an engine the image lacks
+is refused with `this runner image was built without …` and the engines it
+has (`chrome` instead falls back to Chromium and says so). The deploy reads
+the same file, and `GET /api/version` reports it as `browsers` —
+`foldrun version` prints it, and so does Settings. On x86_64 every engine
+ships, so a build that is missing one **fails** rather than shipping without
+it; on another arch the gap is recorded and the image ships.
+
 ### How this agent's browser presents itself
 
 Engine, user agent, device, locale and timezone are the browser's identity,
@@ -1003,7 +1044,7 @@ name: publisher
 tools: [web]
 web:
   browse:
-    engine: chrome             # chrome (real Chrome) | chromium | firefox | safari
+    engine: chrome             # chromium (default) | chrome | firefox | safari | lightpanda | obscura
     user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
     cookies: MEDIUM_COOKIES    # the vault NAME, never the cookies
     cookie_domain: .medium.com
@@ -1125,7 +1166,8 @@ Why identity belongs together: a Cloudflare clearance cookie is bound to the
 user agent that earned it. A skill that repeats the UA in every call is one
 edit away from a session that stops working and says nothing about why
 (what happened to Medium on 2026-09-17). `check` refuses an engine that does
-not exist and a setting that is not text, in one sentence, before a run.
+not exist, a setting that is not text, and an engine paired with something
+it cannot do (see [Engines](#engines)), in one sentence, before a run.
 
 ### What this agent's browser may do
 

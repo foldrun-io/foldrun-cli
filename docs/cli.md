@@ -120,7 +120,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `--name`, `--abn`, `--address`, `--email` | `billing details set`: the legal name, the ABN, `"line1, city, state, postcode, AU"` (the last part is the two-letter country), the receipt email |
 | `--days <n>` | `usage`: the window the charges cover (default 56) |
 | `--id <revision>` | `history`: one revision, as diffs |
-| `--engine <e>` | `login <site>`: the browser to sign in with — `chrome` (default), `firefox` or `safari` |
+| `--engine <e>` | `login <site>`: the browser to sign in with — `chrome` (default; it signs in with Chromium, so `chromium` is the same), `firefox` or `safari` (`webkit`). Not `lightpanda` or `obscura`, which keep no profile to sign in with — the full list is [Engines](tools#engines) |
 | `--new-client` | `connect`: enter a new OAuth client even when one is saved for the secret |
 | `--limit <n>` | `runs`, `billing`, `history`: how many rows, newest first (`runs` default 20, `billing` 15). Each workspace is asked for its own newest `n` before the merge, so one busy desk cannot crowd out a quiet one |
 | `--step <n>` | `approve`, `reject`: decide one gate, numbered as `report` prints it. Without it, every step of that run which is waiting |

@@ -1838,6 +1838,9 @@ async function versionCmd(flags) {
   if (platform.released_at) console.log(`  released  ${platform.released_at}`);
   if (platform.api) console.log(`  api       ${platform.api}`);
   if (platform.build) console.log(`  build     ${platform.build}`);
+  // The engines its runner image was built with (Chrome and Lightpanda are
+  // best-effort on some arches), so `engine: chrome` is not a guess.
+  if (Array.isArray(platform.browsers) && platform.browsers.length) console.log(`  browsers  ${platform.browsers.join(", ")}`);
   const comps = Object.entries(platform.components ?? {}).filter(([, v]) => v);
   if (comps.length) {
     console.log(`\n  ${c.dim("component  sha")}`);

@@ -359,7 +359,7 @@ What a platform runs, and what changed. See [Versions and releases](versions).
 
 | Route | Methods | |
 |---|---|---|
-| `/api/version` | GET | open, no key. `{ version, released_at, build, api, components: { core, platform, web, docs, infra, cli }, packages: { core, cli } }` — `version` is `vYYYY.MM.DD.N` (`dev` on an install the deploy did not build); `components` are short commit shas (`cli` is the CLI commit released alongside); `packages.cli` is that CLI's npm version; `api` is the API contract's date version. `Cache-Control: no-store` |
+| `/api/version` | GET | open, no key. `{ version, released_at, build, api, components: { core, platform, web, docs, infra, cli }, packages: { core, cli }, browsers }` — `version` is `vYYYY.MM.DD.N` (`dev` on an install the deploy did not build); `components` are short commit shas (`cli` is the CLI commit released alongside); `packages.cli` is that CLI's npm version; `api` is the API contract's date version; `browsers` is the engines the runner image was built with (its `/opt/browser/engines.json`, read by the deploy — see [Engines](tools#engines)), `null` when the deploy did not say. `Cache-Control: no-store` |
 | `/api/changelog?limit=` | GET | `{ version, releases: [{ version, released_at, previous, components, notes }] }`, newest first — 10 by default, at most 50. `notes` is `{ features, fixes, docs, other }`, each a list of `{ repo, sha, subject }` grouped from commit subjects, or `null` when the deploy could not read what changed. Needs a key or a session |
 
 Every `/api` response carries the version in its headers, refusals included,
