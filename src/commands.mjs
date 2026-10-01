@@ -3384,7 +3384,9 @@ async function doctor(flags) {
  *   keys revoke <id>
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
- *                                      one ends now, or when the grace runs out
+ *                                      one ends now, or when the grace runs out.
+ *                                      A key already rotated is refused (409):
+ *                                      rotate the key that replaced it instead
  *
  * Minting, rotating and revoking need admin, the same as the Settings page.
  */
@@ -3406,6 +3408,9 @@ async function keysCmd(positional, flags) {
       const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
       const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
       console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}`);
+      // A rotated key in its grace: still live, but not to be rotated again.
+      const next = k.replacedBy ? keys.find((n) => n.id === k.replacedBy) : null;
+      if (k.replacedBy) console.log(`  ${" ".repeat(9)}${c.yellow(`rotated → ${k.replacedBy}${next ? ` (${next.prefix}…)` : ""}`)}${c.dim(" — rotate that one, not this")}`);
       console.log(`  ${" ".repeat(9)}${c.dim(`created ${day(k.createdAt)} · last used ${k.lastUsedAt ? `${day(k.lastUsedAt)}${k.lastIp ? ` from ${k.lastIp}` : ""}` : "never"} · expires ${k.expiresAt ? day(k.expiresAt) : "never"}`)}`);
     }
     console.log("");
@@ -3442,7 +3447,18 @@ async function keysCmd(positional, flags) {
     // No grace: whatever uses the old key stops at once — the same question
     // a revoke asks. With a grace, nothing breaks before it runs out.
     if (grace === "0" && !(await sureToDelete(flags, "keys rotate", `API key ${arg} on ${url}, now (anything using it stops working — --grace 1h keeps it for an hour)`))) return 1;
-    const made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}/rotate`, { method: "POST", body: JSON.stringify({ grace }) });
+    let made;
+    try {
+      made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}/rotate`, { method: "POST", body: JSON.stringify({ grace }) });
+    } catch (err) {
+      // Already rotated: the platform names the new key by prefix; the
+      // command takes an id, so say the command — the new key is the one to
+      // rotate, also when its secret was lost.
+      if (!(err instanceof HttpError && err.status === 409 && /already rotated/.test(err.message))) throw err;
+      const { keys = [] } = await remoteCall(url, flags, "/api/keys").catch(() => ({}));
+      const next = keys.find((k) => k.id === arg)?.replacedBy;
+      throw new Error(`${err.message}${next ? `\n  → foldrun keys rotate ${next}${grace === "0" ? "" : ` --grace ${grace}`}` : ""}`);
+    }
     console.log(`\n  ${c.green("✓")} rotated ${arg} → ${c.bold(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
     if (made.key == null) return lostSecret(made.id);
     console.log(`  ${made.key}\n`);

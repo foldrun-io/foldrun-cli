@@ -81,6 +81,13 @@ and ends the old key: at once, or after a grace of an hour or a day so a CI
 job can be moved across first. In the dashboard it is the Rotate button on
 the key; `foldrun keys rotate <id> --grace 1h`; `POST /api/keys/<id>/rotate`.
 
+A key is rotated **once**. While the old key runs out its grace it shows
+**rotated → <new key>** (in `foldrun keys ls` too), and rotating it again is
+refused with `this key was already rotated to <prefix>…; rotate that one`.
+Lost the new key's secret? Rotate the **new** key: that mints another and
+ends the lost one. Rotating the old key again would have left the lost key
+working.
+
 ## Audit log
 
 Settings → Audit log is the account's record of what people did: sign-ins
