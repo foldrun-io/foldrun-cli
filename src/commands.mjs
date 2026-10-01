@@ -6075,6 +6075,20 @@ function patternEdit(pattern, flags, steps, groups, flow) {
  *  the number to whichever step has it now. */
 const textSha = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
 
+/** The local twin of `expect`: write `next` over a desk file only while it
+ *  still reads `before`, the text the edit was made from. Someone may have
+ *  saved it while this waited at y/N or ran check; writing anyway would put
+ *  their edit back as it was. Refuses, writing nothing, instead. */
+function writeIfUnchanged(desk, rel, before, next) {
+  const abs = path.join(desk.dir, rel);
+  let now = null;
+  try {
+    now = fs.readFileSync(abs, "utf8");
+  } catch {}
+  if (now !== before) throw new Error(`${rel} changed since it was read — nothing was written; run the command again on the new text`);
+  fs.writeFileSync(abs, next);
+}
+
 /** Say the problems an edit would add, in check's words; true when any is an error. */
 function reportAdded(added) {
   for (const p of added) {
@@ -6132,7 +6146,7 @@ async function flowAddCmd(positional, flags, layout) {
     await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit, expect: textSha(raw) }) });
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
-    fs.writeFileSync(path.join(desk.dir, rel), next);
+    writeIfUnchanged(desk, rel, raw, next);
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
   }
   return 0;
@@ -6182,7 +6196,7 @@ async function flowDupStepCmd(positional, flags, layout) {
     await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "duplicate", step: i }, expect: textSha(raw) }) });
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
-    fs.writeFileSync(path.join(desk.dir, rel), next);
+    writeIfUnchanged(desk, rel, raw, next);
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
   }
   return 0;
@@ -6237,7 +6251,7 @@ async function flowRmStepCmd(positional, flags, layout) {
     await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "remove", step: i }, expect: textSha(raw) }) });
     console.log(`  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
-    fs.writeFileSync(path.join(desk.dir, rel), next);
+    writeIfUnchanged(desk, rel, raw, next);
     console.log(`  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
   }
   return 0;
