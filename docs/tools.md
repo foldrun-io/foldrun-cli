@@ -1433,7 +1433,7 @@ Every engine is served the same way: `browser=firefox` and `browser=webkit`
 are launched in that same pod, so where a page renders never depends on which
 engine you asked for. What stays in the step is any call whose pod cannot be
 reached — stderr then says `running <engine> inside the step`, and the call
-proceeds.
+proceeds — except on a slim step, below, which has no browser of its own.
 A `session` in the pod is the context's storage state — cookies and
 localStorage, which is what a login is — saved under
 `outputs/.browser/<name>/` between calls; locally it is a profile directory
@@ -1443,6 +1443,66 @@ cross the wire; `proxy`, `auth`, `headers`, `device`, `block`, `mock`,
 axe-core from the runner image (`axe-core@4.13.0`, pinned beside
 Playwright in `run-container.ts`) into the page, so it runs wherever the
 page renders.
+
+### Slim steps and a lost pod
+
+A step needs the full runner image (browsers, about 1.7 GB to pull) only
+when a browser runs inside it. When the account's browser pod serves the
+step, nothing does — so a step whose only reason for the full image is that
+it browses runs on the **slim** image (about 0.3 GB) and every browse call
+renders in the pod. The run page shows `slim · browser pod` beside the step;
+the record says it as `image: {variant: "slim", pod: true}`.
+
+These always run on the full image, as before:
+
+- an **outward** step — one granting a tool marked `outward: true` (it
+  sends, posts, buys, publishes);
+- a [test run](runs#test-runs), a step naming a browser vendor, and a step
+  whose pod the cluster would not give — none has a pod address;
+- a step whose `web.browse` block asks for something only a browser in the
+  step does: `live: true`, `extensions`, `engine: lightpanda` or `obscura`;
+- a step that could launch a browser some other way (a script tool or MCP
+  server that drives one, a runtime that installs one).
+
+A call that picks such an engine itself (`engine=lightpanda` on one call)
+cannot run on slim; it is treated like a lost pod, below.
+
+**When the pod goes mid-step** — drained, reaped, out of memory:
+
+1. **Reconnect.** The tool tries the pod again, three times, 1, 2 and 4
+   seconds apart. If it answers, the call runs again and the step carries
+   on; the step's log and record count the reconnects. A call that may
+   already have acted when its connection dropped (it clicked, filled,
+   typed, uploaded, signed in, ran script) is **not** sent again: the
+   reconnect only checks the pod is back, and the call fails saying it
+   may have acted, so the agent looks at the page before repeating it.
+2. **Still gone, and the step has only read** — it re-runs from the start
+   on the full image, where a browser in the step is always there. The run
+   says `browser pod lost; re-ran on full`, and the step's cost is both
+   goes.
+3. **Still gone, and the step has written anything** — it is not re-run,
+   because doing it again could send or charge twice. It fails with
+   `browser pod died after the step had written <what>`, and `retry:`,
+   `on-fail:` or a person decides.
+
+Read or write is judged from the calls the step had made, its sub-agents'
+included. Reads: `Read`/`Glob`/`Grep`, `web` search, fetch, crawl, map,
+extract and answer, a browse that only looks (navigates, scrolls, waits,
+screenshots, extracts, hovers), a GET or HEAD to an API, the `search`,
+`history` and `desks` tools and a consult. Writes: any file written or
+edited (`state/`, `memory/`, the workspace), Bash, every script tool, an
+API call that is not a GET, a web action a paid provider answers, `web
+action=monitor` (it keeps state), a browse that clicks, fills, types,
+presses, selects, uploads, signs in, accepts a dialog, solves a captcha or
+runs script, a question to a person, and any other MCP tool. When a call
+could be either, it counts as a write. A browse call that never reached the
+pod changed nothing and does not count.
+
+The run page's step card says what happened in one line — `3 reconnects (0
+got through); browser pod lost; re-ran on full (…)` — as does `foldrun
+report <run>`, and each attempt's row in `tries` keeps its own.
+`FOLDRUN_SLIM_BROWSING=0` on the worker puts every browsing step back on
+the full image ([environment](environment)).
 
 A [test run](runs#test-runs) is handed no browser pod at all. The policy
 that denies a test run the internet is on the run pod, and a browser pod it

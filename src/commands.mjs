@@ -5442,6 +5442,28 @@ function published(run) {
   return [...new Set((text.match(/https?:\/\/[^\s)"'<>\]]+/g) ?? []).map((u) => u.replace(/[.,;]+$/, "")))];
 }
 
+/** Which runner image a step ran on, as the run page's chip says it:
+ *  "slim · browser pod" when it browsed through the account's pod. Null on
+ *  a record from before images were recorded. */
+export function imageLabel(step) {
+  const im = step.image;
+  if (!im?.variant) return null;
+  return im.variant === "slim" && im.pod ? "slim · browser pod" : im.variant;
+}
+
+/** The browser pod under a slim step, in one line — the run page's note,
+ *  worded as core's browserPodLine words it. Null when nothing happened. */
+export function podNote(step) {
+  const p = step.browserPod;
+  if (!p || (!p.reconnects && !p.lost && !p.fallback && !p.failure)) return null;
+  const tries = p.reconnects ? `${p.reconnects} reconnect${p.reconnects === 1 ? "" : "s"} (${p.reconnected ?? 0} got through)` : "no reconnects";
+  const line = p.failure ? `${tries}; ${p.failure}`
+    : p.fallback ? `${tries}; ${p.fallback}${p.lost ? ` (${p.lost.detail})` : ""}`
+    : p.lost ? `${tries}; ${p.lost.cause === "needs-full" ? "needed a browser in the step" : "pod lost"}: ${p.lost.detail}`
+    : tries;
+  return { line, bad: Boolean(p.failure), warn: Boolean(p.fallback || p.lost) };
+}
+
 /** Whichever error this step recorded — on the step, or on its last try. */
 const stepError = (step) => step.error ?? [...(step.tries ?? [])].reverse().find((t) => t.error)?.error ?? null;
 
@@ -5491,6 +5513,7 @@ async function reportCmd(runId, flags, layout) {
     const bits = [
       step.status,
       step.attempts > 1 ? `${step.attempts} attempts` : null,
+      imageLabel(step),
       step.costUsd ? `$${step.costUsd.toFixed(4)}` : null,
       step.startedAt && step.finishedAt
         ? humanDuration(Date.parse(step.finishedAt) - Date.parse(step.startedAt))
@@ -5506,6 +5529,10 @@ async function reportCmd(runId, flags, layout) {
       const held = step.status === "completed";
       console.log(`      ${held ? c.green("✓") : c.red("✗")} ${c.dim(`verify: ${firstLine(step.verify, 80)}`)}`);
     }
+    // The account's browser pod under a slim step: reconnects, the re-run
+    // on full after it was lost, or why the step was not re-run.
+    const pod = podNote(step);
+    if (pod) console.log(`      ${pod.bad ? c.red("✗") : pod.warn ? c.amber("↻") : c.dim("·")} ${pod.bad ? c.red(`browser pod: ${pod.line}`) : c.dim(`browser pod: ${pod.line}`)}`);
     if (step.approvedAt) {
       console.log(`      ${c.green("✓")} ${c.dim(`approved ${when(step.approvedAt)}${step.approvalNote ? ` — "${step.approvalNote}"` : ""}`)}`);
     }
