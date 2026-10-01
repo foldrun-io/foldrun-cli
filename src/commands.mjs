@@ -631,6 +631,31 @@ async function platformLibrary(flags) {
 }
 
 /**
+ * The Chrome version in the platform's runner image, from its open
+ * /api/version (`browser_versions.chrome`, which the deploy read out of the
+ * image's engines manifest). null when there is no platform, it cannot be
+ * reached, or it did not say — check then compares nothing. Asked once per
+ * platform per process: an account check walks many workspaces.
+ */
+const platformChromeCache = new Map();
+async function platformChrome(url) {
+  if (!url) return null;
+  if (!platformChromeCache.has(url)) {
+    platformChromeCache.set(url, (async () => {
+      try {
+        const res = await fetch(new URL("/api/version", url), { signal: AbortSignal.timeout(8_000) });
+        if (!res.ok) return null;
+        const v = /** @type {any} */ (await res.json())?.browser_versions?.chrome;
+        return typeof v === "string" && /^\d+(\.\d+)+$/.test(v) ? v : null;
+      } catch {
+        return null;
+      }
+    })());
+  }
+  return platformChromeCache.get(url);
+}
+
+/**
  * `foldrun check` at an account root: every workspace under it, then the
  * library they all share.
  *
@@ -717,6 +742,10 @@ async function checkProblems(workspace, flags = {}) {
   const usable = { ...libraryTools(T), ...tools };
   const platform = await platformLibrary(flags);
   if (platform.warning) note("warn", "library", platform.warning);
+  // The runner image's Chrome, for comparing a pinned user_agent with it. A
+  // core from before webWarnings has neither, and the comparison is skipped.
+  const { webWarnings, runnerEngines } = /** @type {any} */ (await core());
+  const runnerChrome = webWarnings ? (runnerEngines?.()?.chrome ?? (await platformChrome(platform.url))) : null;
   const agentNames = new Set(agents.map((a) => a.name));
   const imported = importedAgentNames(workspace, agentNames);
   for (const n of imported) agentNames.add(n);
@@ -773,6 +802,18 @@ async function checkProblems(workspace, flags = {}) {
     // written into the file. The run would say so in its trail and carry
     // on; the deploy refuses it; this is where a person hears it first.
     for (const w of a.webProblems ?? []) note("error", `agents/${a.name}`, w);
+    // What works but should change: the old `session:` key, and a pinned
+    // user_agent whose Chrome is not the runner image's (the platform's
+    // /api/version says which Chrome; FOLDRUN_RUNNER_ENGINES on a server).
+    if (webWarnings) {
+      try {
+        const matter = (await import("gray-matter")).default;
+        const front = matter(fs.readFileSync(path.join(workspace, "agents", a.name, "agent.md"), "utf8")).data ?? {};
+        for (const w of webWarnings(front, { chrome: runnerChrome })) note("warn", `agents/${a.name}`, w);
+      } catch {
+        // an unreadable agent.md is already reported by the loader
+      }
+    }
     // `schedule:` on an agent fires nothing — only a flow has a clock.
     if (a.scheduleProblem) note("error", `agents/${a.name}`, a.scheduleProblem);
     // `language:` that is not a tag — "Persian" where `fa` was meant.
@@ -1840,7 +1881,12 @@ async function versionCmd(flags) {
   if (platform.build) console.log(`  build     ${platform.build}`);
   // The engines its runner image was built with (Chrome and Lightpanda are
   // best-effort on some arches), so `engine: chrome` is not a guess.
-  if (Array.isArray(platform.browsers) && platform.browsers.length) console.log(`  browsers  ${platform.browsers.join(", ")}`);
+  // Versions beside the names where the image's manifest had them (Chrome's
+  // is what a pinned user_agent is checked against).
+  if (Array.isArray(platform.browsers) && platform.browsers.length) {
+    const v = platform.browser_versions && typeof platform.browser_versions === "object" ? platform.browser_versions : {};
+    console.log(`  browsers  ${platform.browsers.map((b) => (typeof v[b] === "string" ? `${b} ${v[b]}` : b)).join(", ")}`);
+  }
   const comps = Object.entries(platform.components ?? {}).filter(([, v]) => v);
   if (comps.length) {
     console.log(`\n  ${c.dim("component  sha")}`);

@@ -24,6 +24,7 @@ const versionBody = (cliVersion: string | null) => ({
   components: { core: "aaaaaaa", platform: "bbbbbbb", web: "ccccccc", docs: "ddddddd", infra: "eeeeeee", cli: "fffffff" },
   packages: { core: "0.4.3", cli: cliVersion },
   browsers: ["chromium", "chrome", "firefox", "webkit", "lightpanda", "obscura"],
+  browser_versions: { chrome: "154.0.8037.58", lightpanda: "0.4.1" },
 });
 
 test("--version prints the package version and contacts nothing", async () => {
@@ -46,7 +47,7 @@ test("version: cli, core and the platform's release, api and components; no warn
   assert.match(r.out, /api\s+2026-10-01/);
   assert.match(r.out, /web\s+ccccccc/);
   assert.match(r.out, /infra\s+eeeeeee/);
-  assert.match(r.out, /browsers\s+chromium, chrome, firefox, webkit, lightpanda, obscura/, "what the runner image was built with");
+  assert.match(r.out, /browsers\s+chromium, chrome 154\.0\.8037\.58, firefox, webkit, lightpanda 0\.4\.1, obscura/, "what the runner image was built with, versions where known");
   assert.doesNotMatch(r.out, /npm i -g/);
   assert.deepEqual(s.seen.map((x) => x.url), ["/api/version"]);
 });

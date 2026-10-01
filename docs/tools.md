@@ -712,15 +712,18 @@ cookie secret, and opens the vendor's session itself. And **`proxy=` and
 the vendor launched it; ask the vendor's session for them instead, below.
 The tool says so on the run log when both are present.
 
-**What the vendor's session is asked for — `session:`.** The vendor's own
+**What the vendor's session is asked for — `vendor_session:`.** The vendor's own
 options, under one set of names, each mapped onto that vendor's fields as its
-docs name them (read 2026-09-29):
+docs name them (read 2026-09-29). It was called `session:` until 2026-10-01,
+which a call's `session=` — a named saved login, a different thing — also is;
+`session:` is still read, and `foldrun check` and the deploy warn with the
+new name. A file that writes both is refused.
 
 ```yaml
 web:
   browse:
     via: browserbase
-    session:
+    vendor_session:
       proxy: { country: AU, city: Sydney }   # true · { country, state, city } · { own: MY_PROXY_SECRET }
       captcha: true                          # the vendor solves them
       stealth: true
@@ -732,7 +735,7 @@ web:
       options: { browserSettings: { viewport: { width: 1440, height: 900 } } }   # the vendor's own fields, as written
 ```
 
-| `session:` | browserbase | steel | hyperbrowser | browserless | brightdata | zenrows |
+| `vendor_session:` | browserbase | steel | hyperbrowser | browserless | brightdata | zenrows |
 |---|---|---|---|---|---|---|
 | `proxy: true` | `proxies` | `useProxy` | `useProxy` | `proxy=residential` | always on | always on |
 | `proxy.country` · `state` · `city` | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ — ✓ | ✓ — — (user name) | ✓ — — |
@@ -1008,7 +1011,7 @@ every spelling below, and `webkit` is accepted for `safari`.
 | `proxy` | ✓ | ✓ | ✓ | ✓ | — | — |
 | `block`, `routes`, `mock`, `captcha`, `allowed_domains` | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | `live`, `webgpu`, `extensions`, `webmcp`, `cpu_profile` | ✓ | ✓ | — | — | — | — |
-| `foldrun login --engine` | ✓ | ✓ (signs in with Chromium) | ✓ | ✓ | — | — |
+| `foldrun login --engine` | ✓ | ✓ (real Chrome when installed, else Chromium — it says which) | ✓ | ✓ | — | — |
 
 A call that asks an engine for something marked — is refused before a browser opens, in a
 sentence naming what and why (`video needs a browser that renders;
@@ -1019,16 +1022,29 @@ in the same words, because both read one table (`BROWSE_ENGINE_LIMITS` in
 core). What only a call can ask for (a `mode`, a `trace`, mocks) is the
 tool's to refuse.
 
+**Obscura will not open a local or internal page.** It refuses loopback,
+private (RFC 1918) and link-local addresses — `localhost`, `127.0.0.1`,
+the 10/8, 172.16/12 and 192.168/16 ranges — by design, as its guard against a page
+steering the browser at the machine's own network. It is Obscura that
+refuses, at navigation, not the tool before the browser opens; the tool
+words it as `engine obscura refuses private and loopback addresses
+(127.0.0.1) — … use engine chrome or chromium for a local or internal page`.
+A server an agent starts inside its own step is one of those addresses, so
+test it with `chrome` or `chromium`.
+
 **What the image actually has.** Chrome, Lightpanda and Obscura are
-downloads the runner image's build makes, and Google ships no Linux Chrome
+downloads the runner image's build makes, each tried three times (15s,
+then 30s apart) before the build gives up on it, and Google ships no Linux Chrome
 for arm64. The build writes down what it got, in
 `/opt/browser/engines.json`; the tool reads it, so an engine the image lacks
 is refused with `this runner image was built without …` and the engines it
 has (`chrome` instead falls back to Chromium and says so). The deploy reads
-the same file, and `GET /api/version` reports it as `browsers` —
-`foldrun version` prints it, and so does Settings. On x86_64 every engine
-ships, so a build that is missing one **fails** rather than shipping without
-it; on another arch the gap is recorded and the image ships.
+the same file, and `GET /api/version` reports it as `browsers`, with the
+versions it knows as `browser_versions` — `foldrun version` prints them, and
+so does Settings. On x86_64 every engine ships, so a build that is missing
+one **fails** rather than shipping without it, and its first error line
+names the missing engine (`runner image: MISSING ENGINES on x86_64:
+chrome`); on another arch the gap is recorded and the image ships.
 
 ### How this agent's browser presents itself
 
@@ -1045,7 +1061,7 @@ tools: [web]
 web:
   browse:
     engine: chrome             # chromium (default) | chrome | firefox | safari | lightpanda | obscura
-    user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/153.0.0.0 Safari/537.36"
+    user_agent: "Mozilla/5.0 (Macintosh; …) Chrome/154.0.0.0 Safari/537.36"   # optional — see below
     cookies: MEDIUM_COOKIES    # the vault NAME, never the cookies
     cookie_domain: .medium.com
     device: "Pixel 7"          # optional: viewport, scale, touch and its own UA
@@ -1118,6 +1134,27 @@ argument beats the file** — `browser=`, `user_agent=`, `device=`, `locale=`,
 `timezone=` — so the block is a default. The exceptions are what the agent
 may do rather than how it looks: `allowed_domains:` and `deny:` are locks
 (see [What this agent's browser may do](#what-this-agents-browser-may-do)).
+
+**A pinned user agent has to keep up with Chrome.** Leave `user_agent:` out
+and the tool sends a desktop one carrying the version of the Chrome (or
+Chromium) that is actually running, so it always agrees with the browser.
+Pin one and it is a string in a file, while Chrome in the runner image is
+the current stable release, not a pinned one — a new major about every four
+weeks. The day they part, a site sees `Chrome/153` in the User-Agent header
+beside `"Google Chrome";v="154"` in the client hints Chrome still sends, and
+a JavaScript engine that is 154's: exactly the mismatch bot checks look
+for. So `foldrun check` (when signed in, from the platform's
+`/api/version`) and the deploy warn when a pinned `user_agent:` — the
+block's or an identity's — claims another Chrome major than the image's,
+and the run log says so on the call. Drop the pin, or raise it. Pin one only
+where a cookie was earned with that exact string (a Cloudflare clearance),
+and then sign in again when the warning comes.
+
+Chrome is deliberately not pinned in the image: a pinned Chrome falls behind
+on security fixes and still needs someone to raise it, and a pinned user
+agent drifts against it just the same. Following stable, with a default
+user agent that follows Chrome and a warning for a pin that does not, keeps
+sites from seeing a mismatch without anyone updating a version by hand.
 
 `chrome` is **real Google Chrome** (Playwright's `chrome` channel), where the
 image has it — a truer user-agent and brands, and the proprietary codecs
