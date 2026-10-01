@@ -17,6 +17,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { applyPatternEdit, editFrontmatterList, setFrontmatterScalar } from "@foldrun/core/flow-patterns";
 import { serve, at } from "./fake-platform.ts";
+import { createHash } from "node:crypto";
+const sha = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
 
 const ROOT = path.join(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "bin/foldrun.mjs");
@@ -263,6 +265,7 @@ test("--to edits the deployed copy with the canvas's own PATCH { edit }", async 
   assert.ok(patch, "a PATCH was sent");
   assert.deepEqual(JSON.parse(patch!.body), {
     edit: { op: "router", router: "researcher", rail: 3, cases: [{ value: "BUG", target: "writer" }], else: "editor" },
+    expect: sha(d.files["flows/publish.md"]),
   });
   assert.match(r.out, /\+ 5\. \[\[writer\]\]/);
   assert.match(r.out, /in blog-desk — a revision on the platform/);

@@ -85,7 +85,8 @@ GET /api/account/backups
 ```
 
 Each archive the job verifies is recorded with the accounts it holds; an
-account sees only the archives it is in. Each record says `encrypted` and
+account sees only the archives it is in, and its own name as the only entry
+in `accounts`. Each record says `encrypted` and
 names the key it was encrypted to by fingerprint (`recipient`,
 `sha256:` and 16 hex digits of the public key) — a change of fingerprint is
 a change of key. *Not yet verified on the server:*

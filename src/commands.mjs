@@ -6069,6 +6069,12 @@ function patternEdit(pattern, flags, steps, groups, flow) {
   throw new Error(`unknown pattern "${pattern}"`);
 }
 
+/** The sha256 a flow PATCH sends as `expect`: the text its step numbers were
+ *  read from. The platform refuses the edit (409) when the file has changed
+ *  since — someone edited it while this waited at y/N — rather than apply
+ *  the number to whichever step has it now. */
+const textSha = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
+
 /** Say the problems an edit would add, in check's words; true when any is an error. */
 function reportAdded(added) {
   for (const p of added) {
@@ -6123,7 +6129,7 @@ async function flowAddCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit }) });
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit, expect: textSha(raw) }) });
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     fs.writeFileSync(path.join(desk.dir, rel), next);
@@ -6173,7 +6179,7 @@ async function flowDupStepCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "duplicate", step: i } }) });
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "duplicate", step: i }, expect: textSha(raw) }) });
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     fs.writeFileSync(path.join(desk.dir, rel), next);
@@ -6228,7 +6234,7 @@ async function flowRmStepCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "remove", step: i } }) });
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "remove", step: i }, expect: textSha(raw) }) });
     console.log(`  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     fs.writeFileSync(path.join(desk.dir, rel), next);

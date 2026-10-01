@@ -23,7 +23,7 @@ that read the same record:
 | Dashboard and API | the web tier answers and its database does | the request itself; the worker also fetches `/api/healthz` through the public address every five minutes |
 | Run workers | a worker holds the lease and nothing queued has waited over ten minutes | the worker lease and the queue's oldest job |
 | Scheduler | it has ticked in the last fifteen minutes | the samples themselves — they are written from inside the scheduler's tick, so a stale sample *is* a stopped scheduler |
-| Model providers | `api.anthropic.com` answers, and fewer than two step attempts in the last hour failed with a provider error (overloaded, rate limited, authentication) | a reachability check, and the run records |
+| Model providers | `api.anthropic.com` answers, and fewer than two step attempts in the last hour failed with a provider error (overloaded, rate limited, a 5xx; a refused credential only when two accounts saw one — one account's own expired key is that account's) | a reachability check, and the run records |
 | Email | `api.resend.com` answers | a reachability check; `unknown` on an install without a platform mail key |
 | Storage | the database answers and the workspace volume is writable | the same checks `healthz` makes |
 

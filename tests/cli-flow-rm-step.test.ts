@@ -13,6 +13,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { removeStep } from "@foldrun/core/flow-patterns";
 import { serve, at } from "./fake-platform.ts";
+import { createHash } from "node:crypto";
+const sha = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
 
 const ROOT = path.join(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "bin/foldrun.mjs");
@@ -105,5 +107,7 @@ test("--to sends the canvas's PATCH { edit: { op: remove } }", async () => {
   assert.equal(r.code, 0, r.out);
   const patch = s.seen.find((x) => x.method === "PATCH");
   assert.ok(patch, "a PATCH was sent");
-  assert.deepEqual(JSON.parse(patch!.body), { edit: { op: "remove", step: 2 } });
+  // expect: the sha256 of the text the step number was read from — a file
+  // edited while the CLI waited at y/N is refused (409), not hit at step 3.
+  assert.deepEqual(JSON.parse(patch!.body), { edit: { op: "remove", step: 2 }, expect: sha(FLOW) });
 });

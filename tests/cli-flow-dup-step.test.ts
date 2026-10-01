@@ -13,6 +13,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { duplicateStep } from "@foldrun/core/flow-patterns";
 import { serve, at } from "./fake-platform.ts";
+import { createHash } from "node:crypto";
+const sha = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
 
 const ROOT = path.join(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "bin/foldrun.mjs");
@@ -91,5 +93,5 @@ test("--to sends the canvas's PATCH { edit: { op: duplicate } }", async () => {
   assert.equal(r.code, 0, r.out);
   const patch = s.seen.find((x) => x.method === "PATCH");
   assert.ok(patch, "a PATCH was sent");
-  assert.deepEqual(JSON.parse(patch!.body), { edit: { op: "duplicate", step: 2 } });
+  assert.deepEqual(JSON.parse(patch!.body), { edit: { op: "duplicate", step: 2 }, expect: sha(FLOW) });
 });

@@ -180,12 +180,16 @@ webhook deliveries*: every delivery, its status, its attempts, and a
 redeliver <id> --to <ws>`; over HTTP, `GET
 /api/workspaces/<ws>/notify/deliveries` and `POST
 …/deliveries/<id>/redeliver`. A redelivery is one attempt, now, with the
-same id and body, signed afresh.
+same id and body, signed afresh. The log shows a gate's approve and
+reject links as `[redacted]`: they decide without a login, and every role
+can read the log. The receiver still gets them, on a redelivery too.
 
 **An endpoint that stays down is switched off.** When every attempt to a
 workspace's URL has failed for **3 days running** (the operator's
-`FOLDRUN_WEBHOOK_DISABLE_DAYS`), the platform stops sending to it and
-emails the account's owner once. Deliveries made while it is off are
+`FOLDRUN_WEBHOOK_DISABLE_DAYS`), the next delivery to give up after all
+six attempts switches it off, and the platform emails the account's owner
+once. A first attempt that fails does not switch it off on its own, however
+old the last failure: its retries get their chance. Deliveries made while it is off are
 recorded as `skipped`, not attempted. To turn it back on, fix the receiver
 and press Redeliver, or send a test (`foldrun notify test --to <ws>`): the
 first accepted one switches it on. Changing the URL in `notify:` starts it

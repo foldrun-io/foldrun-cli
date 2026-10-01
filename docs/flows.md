@@ -551,7 +551,9 @@ the canvas are the recent runs: click one to colour the canvas by it, × to go
 back. A step's record is found by agent and group order, since a run is not
 the flow one for one: a fan-out's items and an `on-fail:` rescuer count
 towards the step they came from, and a `[[flow:x]]` step stands for the nested
-flow's steps. A step added since that run has no record and shows none.
+flow's steps — the steps after it are matched from the end of the run, so an
+agent the nested flow also runs is not taken for the one after it. A step
+added since that run has no record and shows none.
 
 | Control | What it does |
 |---|---|
