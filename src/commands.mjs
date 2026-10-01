@@ -1715,7 +1715,121 @@ async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = 
     await sleep(retryAfterMs(res, seconds));
     res = await attempt();
   }
+  updateNotice(res);
   return res;
+}
+
+// ---------------------------------------------------------------- versions
+
+/**
+ * a > b as semver (major.minor.patch; a pre-release sorts before its
+ * release). Anything unparseable is never "newer" — a notice that fires on
+ * garbage is worse than no notice.
+ * @param {string} a @param {string} b
+ */
+export function semverNewer(a, b) {
+  const parse = (v) => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?/.exec(String(v ?? "").trim());
+    return m ? { n: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ?? null } : null;
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x.n[i] !== y.n[i]) return x.n[i] > y.n[i];
+  if (x.pre && !y.pre) return false;
+  if (!x.pre && y.pre) return true;
+  return (x.pre ?? "") > (y.pre ?? "");
+}
+
+const UPDATE_EVERY_MS = 24 * 60 * 60 * 1000;
+let noticeDone = false;
+
+/**
+ * One dim line on stderr when the platform says a newer CLI was released
+ * with it (X-Foldrun-Cli). Read off a response the command made anyway — no
+ * extra request — at most once a day (~/.foldrun/version-check.json), only
+ * to a terminal, and never fatal: a notice that broke a command would be
+ * the worst kind of help.
+ * @param {Response} res
+ */
+function updateNotice(res) {
+  try {
+    if (noticeDone) return;
+    if (env("FOLDRUN_NO_UPDATE_NOTICE")) return;
+    if (!(process.stderr.isTTY || env("FOLDRUN_FORCE_TTY") === "1")) return;
+    const latest = res.headers.get("x-foldrun-cli");
+    if (!latest || !semverNewer(latest, CLI_VERSION)) return;
+    noticeDone = true;
+    const file = path.join(credentialsDir(), "version-check.json");
+    try {
+      const last = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (Date.now() - Date.parse(last.notifiedAt) < UPDATE_EVERY_MS) return;
+    } catch {}
+    const platform = res.headers.get("x-foldrun-version");
+    console.error(`  ${c.dim(`foldrun ${latest} is out (this is ${CLI_VERSION})${platform ? `, released with platform ${platform}` : ""} — npm i -g foldrun@latest`)}`);
+    fs.mkdirSync(credentialsDir(), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ notifiedAt: new Date().toISOString(), cli: latest, platform }) + "\n");
+  } catch {}
+}
+
+/**
+ * `foldrun version` — this CLI, the core it runs, and (when a platform is
+ * known) what that platform is running: its release, API version and the
+ * component shas behind it. Asks /api/version, which is open, so a machine
+ * that is not signed in can still see what it would be talking to.
+ */
+async function versionCmd(flags) {
+  noticeDone = true; // this command says it itself, louder
+  let core = null;
+  try {
+    core = JSON.parse(fs.readFileSync(path.join(coreRoot(), "package.json"), "utf8")).version ?? null;
+  } catch {}
+  const url = remoteUrl(flags);
+  /** @type {Record<string, any> | null} */
+  let platform = null;
+  let unreachable = null;
+  if (url) {
+    try {
+      const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token ?? undefined;
+      const res = await remoteFetch(url, "/api/version", {}, { token, seconds: timeoutSeconds(flags) });
+      if (!res.ok) throw new Error(`/api/version → HTTP ${res.status}`);
+      platform = { url, .../** @type {Record<string, any>} */ (await res.json()) };
+    } catch (err) {
+      unreachable = explain(err);
+    }
+  }
+  const latestCli = platform?.packages?.cli ?? null;
+  const behind = latestCli ? semverNewer(latestCli, CLI_VERSION) : false;
+  if (flags.json === true) {
+    console.log(JSON.stringify({ cli: CLI_VERSION, core, platform: platform ?? (url ? { url, error: unreachable } : null) }, null, 2));
+    if (behind) console.error(`foldrun ${latestCli} is out (this is ${CLI_VERSION}) — npm i -g foldrun@latest`);
+    return 0;
+  }
+  console.log();
+  console.log(`  cli       foldrun ${CLI_VERSION}`);
+  console.log(`  core      @foldrun/core ${core ?? c.dim("cannot be resolved")}`);
+  if (!url) {
+    console.log(`  ${c.dim("platform: none — sign in (`foldrun login`), or pass --url / set FOLDRUN_URL")}\n`);
+    return 0;
+  }
+  if (!platform) {
+    console.log(`  ${c.dim(`platform: unreachable (${unreachable}) — ${url}`)}\n`);
+    return 0;
+  }
+  console.log(`  platform  ${c.bold(String(platform.version ?? "?"))}  ${c.dim(url)}`);
+  if (platform.released_at) console.log(`  released  ${platform.released_at}`);
+  if (platform.api) console.log(`  api       ${platform.api}`);
+  if (platform.build) console.log(`  build     ${platform.build}`);
+  const comps = Object.entries(platform.components ?? {}).filter(([, v]) => v);
+  if (comps.length) {
+    console.log(`\n  ${c.dim("component  sha")}`);
+    for (const [k, v] of comps) console.log(`  ${k.padEnd(10)} ${v}`);
+  }
+  const pkgs = Object.entries(platform.packages ?? {}).filter(([, v]) => v);
+  if (pkgs.length) console.log(`\n  ${c.dim(`released with ${pkgs.map(([k, v]) => `${k === "cli" ? "foldrun" : `@foldrun/${k}`} ${v}`).join(" · ")}`)}`);
+  if (behind) console.error(`\n  ${c.yellow("!")} this CLI is ${CLI_VERSION} and the platform was released with ${latestCli} — npm i -g foldrun@latest`);
+  console.log();
+  return 0;
 }
 
 /**
@@ -6813,6 +6927,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return whoami(flags);
     case "doctor":
       return doctor(flags);
+    case "version":
+      return versionCmd(flags);
     case "keys":
       return keysCmd(positional, flags);
     case "accounts":

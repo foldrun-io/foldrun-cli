@@ -33,7 +33,10 @@ export interface Fake {
  * two verbs. Anything unrouted is a 404 with the platform's own wording, so
  * a command that probes for a run gets the answer it would really get.
  */
-export function serve(routes: Record<string, (body: string, query: URLSearchParams) => unknown>): Promise<Fake> {
+export function serve(
+  routes: Record<string, (body: string, query: URLSearchParams) => unknown>,
+  opts: { headers?: Record<string, string> } = {},
+): Promise<Fake> {
   const seen: Seen[] = [];
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -43,6 +46,8 @@ export function serve(routes: Record<string, (body: string, query: URLSearchPara
         const [url, search] = (req.url ?? "").split("?");
         const query = new URLSearchParams(search ?? "");
         seen.push({ method: req.method ?? "", url, query, body });
+        // Headers every answer carries — the platform's X-Foldrun-Version, say.
+        for (const [k, v] of Object.entries(opts.headers ?? {})) res.setHeader(k, v);
         const route = routes[`${req.method} ${url}`] ?? routes[url];
         if (!route) {
           res.writeHead(404, { "content-type": "application/json" });

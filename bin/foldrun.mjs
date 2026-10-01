@@ -61,6 +61,18 @@ process.on("warning", () => {});
 
 const [, , command, ...rest] = process.argv;
 
+// `foldrun --version`: the package's own number and nothing else — no core,
+// no network, no account. Before every import below, so it stays instant.
+// `foldrun version` is the long form that also asks the platform.
+if (command === "--version" || command === "-v") {
+  try {
+    console.log(`foldrun ${JSON.parse(fs.readFileSync(path.join(HERE, "../package.json"), "utf8")).version}`);
+  } catch {
+    console.log("foldrun (unknown version)");
+  }
+  process.exit(0);
+}
+
 const HELP = `foldrun — agents are just folders
 
   foldrun init [dir]        create an account folder: AGENTS.md, library/ and workspaces/<name>
@@ -128,6 +140,7 @@ const HELP = `foldrun — agents are just folders
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run; --tag <t> repeatable)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
+  foldrun version           this CLI's version, its core's, and the platform's: release, API version, component shas — warns when the platform ships a newer CLI (--json)
 
 Signing in
   foldrun login             sign this machine in from the browser (--token <key> to skip it)
@@ -140,6 +153,7 @@ Signing in
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys — also create <label>, revoke <id>
+  foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
   foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)
 
 Options
@@ -188,7 +202,7 @@ Options
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
   --yes                     approve, stop, rerun (bulk), flow rotate-hook, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
-  --json                    report: the raw run record instead of the report; observe, usage: the raw document
+  --json                    report: the raw run record instead of the report; observe, usage: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --limit <n>               runs, billing, history: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)

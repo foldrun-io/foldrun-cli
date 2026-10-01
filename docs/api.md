@@ -12,7 +12,7 @@ proof instead of a key: a token or signature (`/s/<token>`, `/api/hooks`,
 `/api/inbox`, `/api/events`, `/api/approve`, `/api/git`, `/api/billing/stripe`,
 `/api/billing/confirm`), the sign-in and recovery steps (`/api/auth/signup`,
 `login`, `forgot`, `reset`, `verify`, `mfa/verify`, `/api/cli/login`,
-`/api/cli/authorize` GET, `/api/oauth/callback`), and `/api/healthz`.
+`/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz` and `/api/version`.
 
 ```
 Authorization: Bearer <api-key>      # machines. Settings → API keys
@@ -337,6 +337,24 @@ person: a key names an account, never a who.
 | `/api/billing/plans` | GET | the catalogue (four plans: fee, credits, per-credit price, runs at once, workspaces, lane), where this account stands (plan, status, this cycle's credits and what is left, when it resets), the balance in dollars and credits, and any overdraft the platform has allowed |
 | `/api/billing/subscribe` | POST, DELETE | POST `plan` — starter, creator, pro or scale. With no subscription yet, answers `url`: a Stripe Checkout in subscription mode; the return trip starts the first cycle. With a live one, changes it at Stripe at once, prorated (an upgrade is invoiced today and the bigger bundle lands with it; a downgrade comes back as credit on the next invoice), and answers `changed: true`. POST `resume: true` takes a pending cancellation off — nothing is charged and no cycle moves. DELETE ends the plan with the current cycle: the credits stand until then, and credits bought on top are kept |
 | `/api/billing/stripe` | POST | Stripe's webhook — signature-verified, not for you. Every delivery is logged (see `/api/admin/stripe-events`). Beside top-ups it turns plan cycles: one grant per (subscription, plan, period), whichever of the checkout, `invoice.paid` (either invoice shape) or `customer.subscription.updated` arrives first; `invoice.payment_failed` marks the plan past due and starts dunning (an email, a grace period, then new runs paused — see budgets-and-billing.md), `invoice.paid` and `invoice.voided` end it, `customer.subscription.deleted` ends the plan that subscription paid for — what is left of the bundle expires, the levers come off, money the customer added stays. `charge.refunded` debits a refunded top-up (never a plan fee), `charge.dispute.created` debits a chargeback and `charge.dispute.closed` returns it when won. Answers 500 — so Stripe redelivers — only when a lookup the event needs failed. The full event list is in budgets-and-billing.md |
+
+## Versions
+
+What a platform runs, and what changed. See [Versions and releases](versions).
+
+| Route | Methods | |
+|---|---|---|
+| `/api/version` | GET | open, no key. `{ version, released_at, build, api, components: { core, platform, web, docs, infra, cli }, packages: { core, cli } }` — `version` is `vYYYY.MM.DD.N` (`dev` on an install the deploy did not build); `components` are short commit shas (`cli` is the CLI commit released alongside); `packages.cli` is that CLI's npm version; `api` is the API contract's date version. `Cache-Control: no-store` |
+| `/api/changelog?limit=` | GET | `{ version, releases: [{ version, released_at, previous, components, notes }] }`, newest first — 10 by default, at most 50. `notes` is `{ features, fixes, docs, other }`, each a list of `{ repo, sha, subject }` grouped from commit subjects, or `null` when the deploy could not read what changed. Needs a key or a session |
+
+Every `/api` response carries the version in its headers, refusals included,
+so a client learns what it is talking to without a second request:
+
+```
+X-Foldrun-Version: v2026.10.01.3   # the platform's version
+X-Foldrun-Api: 2026-10-01          # the API contract — moves only on a breaking change
+X-Foldrun-Cli: 0.6.0               # the CLI released with this version (absent when unknown)
+```
 
 ## Authentication routes
 
