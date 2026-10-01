@@ -25,7 +25,8 @@
     "release": "node scripts/release.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "docs:sync": "node scripts/sync-docs.mjs",
-    "prepack": "node scripts/sync-docs.mjs --check"
+    "prepack": "node scripts/sync-docs.mjs --check",
+    "prepare": "(test ! -f .githooks/install.sh || sh .githooks/install.sh)"
   },
   "repository": {
     "type": "git",
