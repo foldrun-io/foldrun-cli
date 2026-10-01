@@ -166,7 +166,8 @@ Signing in
   foldrun doctor            check the path to the platform: node, CLI, account, DNS, a timed /api/healthz
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
-  foldrun keys ls           the account's API keys — also create <label>, revoke <id>
+  foldrun keys ls           the account's API keys: created, last used, expires, scope — also create <label> [--expires 90d], rotate <id> [--grace 1h], revoke <id>
+  foldrun audit             the account's audit log, newest first: sign-ins, keys, invites, secrets by name, deploys, support views (--since 7d, --action, --actor, --to, --all, --csv)
   foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
   foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)
 
@@ -181,6 +182,9 @@ Options
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
   --since <span>            runs, stop, rerun: only runs started within 24h, 7d, 90m, 2w
+  --since <span>            audit: entries from 24h, 7d, 30d ago, or a date (default 7d); --until <date> ends the window
+  --action <a>              audit: one action (apikey.created) or a family (apikey, secret, member, support)
+  --actor <who>             audit: one person or key — an email, key:<label>, support:<email>
   --since <days>            observe, triggers: the window in days (observe default 30, triggers 7)
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
   --flow <name>             stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs
@@ -207,6 +211,7 @@ Options
   --inputs <set>            invoke, flow run: the task is a saved input set (evals/<flow>-inputs.md, or an eval case for the flow)
   --preview                 storage cat: the platform reads the file and prints what is in it
   --csv                     billing statement: the CSV file instead of the table
+  --csv                     audit: the log as CSV, for an auditor (--file <path> to save it)
   --threshold / --amount    billing wallet set: auto top-up refills --amount (5-500 USD) when the balance falls below --threshold
   --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
   --days <n>                usage: the window the charges cover (default 56)
@@ -238,6 +243,8 @@ Options
   --authorize-url / --token-url  connect: a provider with no preset
   --role <r>                keys create: viewer, editor (default) or admin
   --for <workspace>         keys create: a deploy key for one workspace (--access read|write)
+  --expires <span>          keys create: when it stops working — 30d, 90d, 365d or never (default never)
+  --grace <span>            keys rotate: keep the old key working for 1h or 24h while you swap the new one in (default 0: revoked now)
 
 Platform options (deploy, invoke, secrets, logs, keys)
   --to <workspace>          workspace on the platform (deploy default: folder name); flow add/show, agent link: edit or show the deployed copy instead of this folder

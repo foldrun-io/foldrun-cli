@@ -3290,8 +3290,11 @@ async function doctor(flags) {
  *   keys create <label> --for <ws> [--access read|write]
  *                                    a deploy key: git clone/push for one workspace
  *   keys revoke <id>
+ *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
+ *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
+ *                                      one ends now, or when the grace runs out
  *
- * Minting and revoking need admin, the same as the Settings page.
+ * Minting, rotating and revoking need admin, the same as the Settings page.
  */
 async function keysCmd(positional, flags) {
   const [verb, arg] = positional;
@@ -3305,10 +3308,13 @@ async function keysCmd(positional, flags) {
       return 0;
     }
     console.log("");
+    const day = (iso) => (iso ? iso.slice(0, 10) : "");
     for (const k of keys) {
-      const what = k.scope ? `deploy · ${k.scope.workspace} (${k.scope.access})` : k.role ?? "admin";
-      const state = k.revokedAt ? c.red("revoked") : c.green("live");
-      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}  ${c.dim(k.createdAt.slice(0, 10))}`);
+      const what = k.scope ? `deploy · ${k.scope.workspace} (${k.scope.access})` : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
+      const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
+      const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
+      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}`);
+      console.log(`  ${" ".repeat(9)}${c.dim(`created ${day(k.createdAt)} · last used ${k.lastUsedAt ? `${day(k.lastUsedAt)}${k.lastIp ? ` from ${k.lastIp}` : ""}` : "never"} · expires ${k.expiresAt ? day(k.expiresAt) : "never"}`)}`);
     }
     console.log("");
     return 0;
@@ -3319,11 +3325,13 @@ async function keysCmd(positional, flags) {
     if (typeof flags.for === "string") body.workspace = flags.for;
     if (typeof flags.access === "string") body.access = flags.access;
     if (typeof flags.role === "string") body.role = flags.role;
+    // --expires 30d|90d|365d|never; unsaid, the key never expires.
+    if (typeof flags.expires === "string") body.expires = flags.expires;
     // --workspaces a,b narrows the key to those; --workspaces all opens
     // every one you can. Unsaid, the key inherits your own scope.
     if (typeof flags.workspaces === "string") body.workspaces = flags.workspaces === "all" ? null : flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
     const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
-    console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}\n`);
+    console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
     console.log(`  ${made.key}\n`);
     console.log(`  ${c.dim("Shown once. FOLDRUN_TOKEN=<key> uses it; `foldrun keys revoke " + made.id + "` ends it.")}\n`);
     return 0;
@@ -3335,7 +3343,77 @@ async function keysCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} revoked ${arg}\n`);
     return 0;
   }
-  throw new Error(`keys: unknown verb "${verb}" — ls, create, revoke`);
+  if (verb === "rotate") {
+    if (!arg) throw new Error("which key? foldrun keys rotate <id> [--grace 1h] — ids are in `foldrun keys ls`");
+    const grace = typeof flags.grace === "string" ? flags.grace : "0";
+    // No grace: whatever uses the old key stops at once — the same question
+    // a revoke asks. With a grace, nothing breaks before it runs out.
+    if (grace === "0" && !(await sureToDelete(flags, "keys rotate", `API key ${arg} on ${url}, now (anything using it stops working — --grace 1h keeps it for an hour)`))) return 1;
+    const made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}/rotate`, { method: "POST", body: JSON.stringify({ grace }) });
+    console.log(`\n  ${c.green("✓")} rotated ${arg} → ${c.bold(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+    console.log(`  ${made.key}\n`);
+    const ends = made.replaced?.endsAt;
+    console.log(`  ${c.dim(`Shown once. The old key ${grace === "0" ? "is revoked" : `keeps working until ${String(ends).slice(0, 16).replace("T", " ")} UTC`}.`)}\n`);
+    return 0;
+  }
+  throw new Error(`keys: unknown verb "${verb}" — ls, create, rotate, revoke`);
+}
+
+/**
+ * `foldrun audit` — the account's audit log: who signed in, minted a key,
+ * invited someone, set a secret (by name), deployed, and when support
+ * viewed the account. Newest first. The owner's and unscoped admins'.
+ *
+ *   audit [--since 7d] [--until <date>] [--action apikey] [--actor <who>] [--to <workspace>] [--limit n] [--all]
+ *   audit --csv [--file audit.csv]
+ */
+async function auditCmd(positional, flags) {
+  const url = remoteUrl(flags);
+  if (!url) throw new Error(NOT_SIGNED_IN);
+  const q = new URLSearchParams();
+  q.set("since", typeof flags.since === "string" ? flags.since : "7d");
+  for (const [flag, param] of [["until", "until"], ["action", "action"], ["actor", "actor"], ["to", "workspace"], ["limit", "limit"]]) {
+    if (typeof flags[flag] === "string") q.set(param, flags[flag]);
+  }
+  if (positional[0]) q.set("action", positional[0]);
+  if (flags.csv === true) {
+    q.set("format", "csv");
+    const { bytes, name } = await remoteBytes(url, flags, `/api/audit?${q}`, "the audit log");
+    if (typeof flags.file !== "string") {
+      process.stdout.write(bytes);
+      return 0;
+    }
+    return writeDownload(bytes, name ?? "audit.csv", flags, "the audit log");
+  }
+  // --all follows the cursor to the start of the window; otherwise one page.
+  const entries = [];
+  let next = null;
+  for (let page = 0; page < 100; page++) {
+    if (next) q.set("cursor", next);
+    const got = await remoteCall(url, flags, `/api/audit?${q}`);
+    entries.push(...(got.entries ?? []));
+    next = got.next ?? null;
+    if (!next || flags.all !== true) break;
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify({ entries, next }, null, 2));
+    return 0;
+  }
+  if (!entries.length) {
+    console.log(`\n  ${c.dim(`nothing in the audit log since ${q.get("since")}${q.get("action") ? ` for ${q.get("action")}` : ""}`)}\n`);
+    return 0;
+  }
+  console.log("");
+  for (const e of entries) {
+    const d = e.detail ?? {};
+    const about = e.action.startsWith("support.")
+      ? `support viewed your account: ${d.reason ?? ""}`
+      : [d.label, d.name, d.workspace, d.prefix ? `${d.prefix}…` : null, d.role, d.reason].filter((x) => typeof x === "string" && x).join(" · ") || e.subject || "";
+    const mark = e.action.startsWith("support.") ? c.amber("!") : /refused|revoked|deleted|removed|disabled/.test(e.action) ? c.red("·") : c.dim("·");
+    console.log(`  ${mark} ${c.dim(when(e.at))}  ${pad(e.action, 22)}  ${pad(firstLine(e.actor, 28), 28)}  ${firstLine(about, 70)}`);
+  }
+  console.log(`\n  ${c.dim(`${entries.length} entr${entries.length === 1 ? "y" : "ies"}${next ? " — more: --all, or --since further back" : ""} · --csv for the file an auditor wants`)}\n`);
+  return 0;
 }
 
 /**
@@ -7297,6 +7375,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return apiCmd(positional, flags);
     case "keys":
       return keysCmd(positional, flags);
+    case "audit":
+      return auditCmd(positional, flags);
     case "accounts":
     case "profiles":
       return accountsCmd(positional);

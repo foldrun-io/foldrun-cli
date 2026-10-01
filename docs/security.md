@@ -121,7 +121,12 @@ its record.
 
 Four roles, least privilege by route, one owner. See
 [Team and access](team-and-access). Sessions are revocable; API keys carry a
-role and cannot act as a named person.
+role, can be given an end and rotated, show when they were last used, and
+cannot act as a named person. The account's
+[audit log](team-and-access#audit-log) records who did what — secrets by
+name only — for the owner and admins to read or export. Support can view an
+account only [read-only, for thirty minutes, with a reason the customer
+reads](team-and-access#support-access).
 
 ## What is still yours to think about
 

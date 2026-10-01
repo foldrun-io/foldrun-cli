@@ -62,6 +62,61 @@ several accounts — an agency, a reseller — holds one key per account and
 switches between them; the CLI stores each as a named profile. See
 [More than one account](cli#more-than-one-account).
 
+### Expiry, last use and rotation
+
+A key can be given an end when it is minted — 30, 90 or 365 days, or never
+(Settings → API keys offers 90 days first; `foldrun keys create ci --expires
+90d`; the API's `expires`). After it, the key is refused with a 401 that
+says it expired and on which day. The owner is emailed seven days before any
+key ends, once per key.
+
+Every key shows when it was created, when it was **last used** and roughly
+from where — the address cut to its /24 (or /48 for IPv6), never the whole
+of it. Last use is written at most once a minute per key, so a busy CI key
+does not turn every request into a write.
+
+**Rotate** mints a new key with the old one's label, role, workspaces and
+deploy scope — and, if the old one had an end, the same lifetime from today —
+and ends the old key: at once, or after a grace of an hour or a day so a CI
+job can be moved across first. In the dashboard it is the Rotate button on
+the key; `foldrun keys rotate <id> --grace 1h`; `POST /api/keys/<id>/rotate`.
+
+## Audit log
+
+Settings → Audit log is the account's record of what people did: sign-ins
+(and refused ones), sign-outs and session revokes, password and email
+changes, MFA turned on or off, keys minted, rotated and revoked, invites,
+joins, role and scope changes, removals and ownership transfers, secrets
+set and deleted — **by name, never the value** — deploys, workspace deletes,
+plan and billing changes, the account export and a close request, and every
+time support viewed the account. Filter by time, action, person or
+workspace, page back, and download it as CSV for an auditor.
+
+The owner and admins who can open every workspace read it — people, or an
+`admin` key. A member or key scoped to some workspaces cannot: the log is
+the whole account's. It is the caller's own account, always; another
+account's entries are never in it. Entries are kept for the life of the
+account (no plan sets a shorter retention) and go when the account is
+deleted. Also `GET /api/audit` and `foldrun audit --since 7d --csv`.
+
+What agents did is a different record: every run's trail, under Runs.
+
+## Support access
+
+When you ask for help, foldrun support may open your account **read-only**
+to look: your dashboard as the owner sees it, for thirty minutes at most.
+They must give a reason, and it lands in your audit log word for word —
+"support viewed your account: Ticket 42: daily flow not starting" — with
+another line when the view ends. While it is open every change is refused,
+in one place for every route: nothing can be run, deployed, edited,
+invited, revoked or paid for, and the account export is refused too. The
+support person sees a bar on every page saying whose account it is, that it
+is read-only, how many minutes are left, and an Exit.
+
+There is no API key or CLI command for this, on purpose: looking inside a
+customer's account is an act a named person owns, from a browser, with a
+reason you can read.
+
 ## Sessions
 
 Signing in creates a session; your Profile page lists them and revokes any

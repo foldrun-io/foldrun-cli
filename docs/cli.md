@@ -85,7 +85,9 @@ so the key is the way, or any other model provider named with `provider:`
 | `foldrun backups` | how the account is backed up: the schedule, how many are kept, the last snapshot (verified? copied off the server?), the snapshots that hold the account, each workspace's last change, and earlier restore requests (`--limit`, `--json`). `backups request --what runs\|state\|storage\|everything --at "<when>" [--to <workspace>] [--backup <id>] [--note "…"]` asks the platform team for a restore from a snapshot — recorded and emailed; nothing is restored until they do it |
 | `foldrun accounts` | every account signed in on this machine, and which one a bare command acts as. `foldrun profiles` is the same command |
 | `foldrun use <name>` | act as one of them from here on. `foldrun switch <name>` is the same command |
-| `foldrun keys ls` | the account's API keys — also `create <label>`, `revoke <id>` |
+| `foldrun keys ls` | the account's API keys, each with its role and scope, when it was created, when it was last used and from where (a /24 or /48), and when it expires — also `create <label>` (`--expires 30d\|90d\|365d\|never`), `rotate <id>` and `revoke <id>` |
+| `foldrun keys rotate <id>` | a new key with the old one's label, role, workspaces and deploy scope, printed once; the old key is revoked at once (asks first; `--yes` on a pipe), or keeps working for `--grace 1h` / `24h` while you swap the new one in. The owner is emailed a week before any key expires |
+| `foldrun audit` | the account's audit log, newest first — sign-ins and refusals, sessions, MFA, keys minted, rotated and revoked, invites and role changes, secrets set and deleted (by name), deploys, workspace deletes, plan and billing changes, and every time support viewed the account, with the reason. `--since 7d` (default) or a date, `--until`, `--action apikey` (a family or one action), `--actor <email\|key:label\|support:email>`, `--to <workspace>`, `--limit`, `--all` to follow every page, `--json`, `--csv [--file audit.csv]`. The owner's and unscoped admins'. There is no `audit` for support's view-as: that is a person's act in the browser, never a key's |
 
 ## Options
 
@@ -101,6 +103,9 @@ so the key is the way, or any other model provider named with `provider:`
 | `--follow` | `logs`: keep tailing a live run — locally, or on the platform with `--url` |
 | `--status <s>` | `runs`, and a bulk `stop` or `rerun`: only these statuses, comma-separated — `failed`, `completed`, `awaiting-approval`, `running`, `queued` |
 | `--since <span>` | `runs`, and a bulk `stop` or `rerun`: only runs started within `24h`, `7d`, `90m`, `2w`. `observe` and `triggers` take a number of days instead |
+| `--since <span>` (audit) | `audit`: entries from `24h`, `7d` (default), `30d` ago or a date; `--until <date>` ends the window |
+| `--action <a>` | `audit`: one action (`apikey.created`) or a family (`apikey`, `secret`, `member`, `support`) |
+| `--actor <who>` | `audit`: one person or key — an email, `key:<label>`, `support:<email>` |
 | `--verdict <v>` | `runs`: only completed runs whose summary leads with it — `good`, `bad`, `quiet`, `blocked`, comma-separated |
 | `--flow <name>` | a bulk `stop` or `rerun`: only that flow's runs. `flow add … subflow`: the other flow to run as a step |
 | `--agent`, `--instruction`, `--after`/`--before`, `--group`, `--step`, `--cases`/`--else`, `--each`/`--max`, `--loop`/`--until`/`--judge`, `--question`, `--wait`, `--on-fail`, `--off` | `flow add`: see the patterns above. `--agent` on `rerun` is the first step that agent runs; `--question` on `answer` picks one of several questions; `--wait` alone stays the switch `invoke` and `agent run` read |
@@ -110,6 +115,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `--inputs <name>` | `invoke`, `flow run`: the task is that saved input set; not with `--task` |
 | `--preview` | `storage cat`: the platform reads the file and prints what is in it |
 | `--csv` | `billing statement`: the CSV instead of the table |
+| `--csv` (audit) | `audit`: the log as CSV, for an auditor — `--file <path>` saves it |
 | `--threshold`, `--amount` | `billing wallet set auto-top-up`: refill `--amount` (5–500 USD) when the balance falls below `--threshold` |
 | `--name`, `--abn`, `--address`, `--email` | `billing details set`: the legal name, the ABN, `"line1, city, state, postcode, AU"` (the last part is the two-letter country), the receipt email |
 | `--days <n>` | `usage`: the window the charges cover (default 56) |
@@ -135,6 +141,8 @@ so the key is the way, or any other model provider named with `provider:`
 | `--port <n>` | `connect`: the loopback port (default 8642) |
 | `--role <r>` | `keys create`: `viewer`, `editor` (default) or `admin` |
 | `--for <workspace>` | `keys create`: a deploy key for one workspace; `--access read` or `write` |
+| `--expires <span>` | `keys create`: when it stops working — `30d`, `90d`, `365d` or `never` (default) |
+| `--grace <span>` | `keys rotate`: keep the old key working for `1h` or `24h` (default `0`: revoked now) |
 | `--force` | `deploy`: deploy while runs are in flight. `pull`, `storage get`: overwrite local files |
 | `--no-runtimes` | `deploy`: do not wait for the workspace's environments to be built, or print them |
 | `--platform` / `--yes` | `workspaces rm`: delete it on the platform, said twice because it cannot be undone |
