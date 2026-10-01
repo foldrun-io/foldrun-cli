@@ -74,6 +74,12 @@ At rest, each account has its own encryption key; the account keys are
 wrapped by one root key the platform holds. A stolen copy of an account's
 secrets opens nothing without it.
 
+Backups are encrypted before they leave the server. The nightly archive —
+every workspace, run record and the database — and the server's key file
+are encrypted with age to a public key whose private half is not on the
+server, so a copy of the backup bucket opens nothing; the job refuses to run
+rather than ship anything unencrypted. See [Backups and restore](backups-and-restore).
+
 Wherever a step's children run on the host itself rather than in a sandbox
 — a script tool, a `verify:` shell, the model's own Bash tool on a laptop
 or the host executor, a tool test in the dashboard — they start from an

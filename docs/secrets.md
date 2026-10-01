@@ -124,8 +124,8 @@ it in `secrets:` like any other.
 Every account has its own encryption key. Secrets are sealed under it, and
 the account keys are wrapped by one root key the platform holds. A stolen
 copy of one account's secrets file opens nothing without the root key, and
-the root key is not in any backup — the sealed backup of the platform's own
-configuration is encrypted to a key the platform does not hold. See
+the root key is not in any backup — every backup file, the platform's own
+configuration included, is encrypted to a key the platform does not hold. See
 [Security](security) and, for the CLI on your machine, [Running it yourself](self-hosting).
 
 Rotating a secret is setting it again. The next run reads the new value; runs

@@ -21,20 +21,37 @@ together:
   encrypted secrets (the vault) and the storage index;
 - the database (`pg_dump`): people, API keys, sessions, the ledger and every
   balance, the queue, the audit log;
-- the server's key file, sealed to a key that is **not** on the server — so
-  one stolen archive does not open the vault.
+- the server's key file.
+
+**Encrypted before it leaves the server.** Every file the job writes — the
+archive (with the database dump inside it), the list of what it holds, and
+the key file — is encrypted with [age](https://age-encryption.org) to a
+public key whose private half is **not** on the server: the server can make
+a backup and cannot open one, and neither can anyone holding the object
+storage it is copied to. The archive is encrypted as it is written, so it is
+never stored unencrypted, even on the server. The job refuses to run rather
+than copy anything unencrypted. Snapshots taken before this change
+(October 2026) were copied off the server unencrypted, all but the key file:
+the first encrypted run deletes those copies from object storage, and the
+server's own copies of those nights age out of the 14 kept.
 
 Before an archive is kept it is checked: the database dump must be readable
 by `pg_restore --list` and list table data, row counts are taken from the
-live database at the same moment, and the archive is listed in full. An
-archive that fails the check is deleted and the older ones are kept.
+live database at the same moment, and the archive is listed in full and
+its checksum recorded — of the very bytes being encrypted, in the same pass.
+An archive that fails the check is deleted and the older ones are kept.
+That an encrypted archive decrypts, with the private key, to exactly that
+checksum is proved by an automated test of the whole job on every change to
+it; the server cannot prove it nightly, because it does not have the key.
 
 **Kept:** the last 14 on the server, and 15 days in object storage off it
 (Cloudflare R2).
 
 A full restore from one of these archives was performed on 2026-09-05, from
 the R2 copy: the archive matched the server's byte for byte and restored the
-workspaces, run records, the database and the sealed key file.
+workspaces, run records, the database and the sealed key file. That was
+before the archive itself was encrypted; *not yet performed* on an encrypted
+one — the next restore drill is.
 
 ### What it does not hold
 
@@ -48,13 +65,16 @@ workspaces, run records, the database and the sealed key file.
 
 A self-hosted install backs up however its operator set it up; this page
 describes the hosted platform. `foldrun-infra/dev/backup.sh` is the job, if
-you want the same for yours.
+you want the same for yours: it needs `age` and `FOLDRUN_BACKUP_RECIPIENT`
+(your age public key) and will not run without them.
 
 ## Seeing your snapshots
 
 Settings → **Backups** shows how often, how many are kept, when the last one
-was taken and whether it was verified and copied off the server, and each
-snapshot that holds your account, newest first.
+was taken and whether it was verified, copied off the server and
+**encrypted**, and each snapshot that holds your account, newest first —
+each one marked encrypted or not (the ones from before October 2026 are
+not).
 
 ```sh
 foldrun backups                          # the same, in the terminal
@@ -65,7 +85,10 @@ GET /api/account/backups
 ```
 
 Each archive the job verifies is recorded with the accounts it holds; an
-account sees only the archives it is in. *Not yet verified on the server:*
+account sees only the archives it is in. Each record says `encrypted` and
+names the key it was encrypted to by fingerprint (`recipient`,
+`sha256:` and 16 hex digits of the public key) — a change of fingerprint is
+a change of key. *Not yet verified on the server:*
 the recording landed on 2026-10-01, so the list starts with the first
 nightly run after that deploy — older archives exist but are not listed.
 

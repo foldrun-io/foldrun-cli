@@ -36,9 +36,12 @@ test("onboarding lists every step, marks the next, and links it", async () => {
 });
 
 const backups = {
-  policy: { schedule: "nightly at 03:30, the server's time", keepLocal: 14, keepOffsiteDays: 15, covers: [], excludes: [] },
-  last: { id: "a", at: "2026-09-30T17:30:00Z", verified: true, offsite: "r2", bytes: 52428800, kinds: ["files", "database", "keys"] },
-  backups: [{ id: "a", at: "2026-09-30T17:30:00Z", verified: true, offsite: "r2", bytes: 52428800, kinds: ["files", "database", "keys"] }],
+  policy: { schedule: "nightly at 03:30, the server's time", keepLocal: 14, keepOffsiteDays: 15, encrypted: true, covers: [], excludes: [] },
+  last: { id: "b", at: "2026-10-01T17:30:00Z", verified: true, offsite: "r2", bytes: 52428800, kinds: ["files", "database", "keys"], encrypted: true, recipient: "sha256:0123456789abcdef" },
+  backups: [
+    { id: "b", at: "2026-10-01T17:30:00Z", verified: true, offsite: "r2", bytes: 52428800, kinds: ["files", "database", "keys"], encrypted: true, recipient: "sha256:0123456789abcdef" },
+    { id: "a", at: "2026-09-30T17:30:00Z", verified: true, offsite: "r2", bytes: 52428800, kinds: ["files", "database", "keys"] },
+  ],
   requests: [],
   workspaces: [{ name: "desk", head: "abc", history: true, lastChange: { at: "2026-09-30T00:00:00Z", message: "edited 1 file" } }],
 };
@@ -52,6 +55,9 @@ test("backups prints the policy, the last snapshot and the list", async () => {
   assert.match(r.out, /verified/);
   assert.match(r.out, /50\.0MB/);
   assert.match(r.out, /server \+ r2/);
+  assert.match(r.out, /encrypted before they leave the server/);
+  assert.match(r.out, /last .*copied to r2\s+encrypted/);
+  assert.match(r.out, /server \+ r2\s+not encrypted/);
   assert.match(r.out, /desk\s+last change/);
 });
 

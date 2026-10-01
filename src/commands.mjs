@@ -7271,16 +7271,16 @@ async function backupsCmd(positional, flags) {
     return 0;
   }
   const p = b.policy ?? {};
-  console.log(`\n  ${c.bold("Backups")}  ${c.dim(`${p.schedule ?? "—"} · the last ${p.keepLocal ?? "?"} kept on the server${p.keepOffsiteDays ? `, ${p.keepOffsiteDays} days off it` : ""}`)}`);
+  console.log(`\n  ${c.bold("Backups")}  ${c.dim(`${p.schedule ?? "—"} · the last ${p.keepLocal ?? "?"} kept on the server${p.keepOffsiteDays ? `, ${p.keepOffsiteDays} days off it` : ""}${p.encrypted ? " · encrypted before they leave the server" : ""}`)}`);
   if (b.last) {
-    console.log(`  last  ${when(b.last.at)}  ${b.last.verified ? c.green("verified") : c.yellow("not verified")}  ${b.last.offsite ? c.dim(`copied to ${b.last.offsite}`) : c.yellow("on the server only")}`);
+    console.log(`  last  ${when(b.last.at)}  ${b.last.verified ? c.green("verified") : c.yellow("not verified")}  ${b.last.offsite ? c.dim(`copied to ${b.last.offsite}`) : c.yellow("on the server only")}  ${b.last.encrypted ? c.green("encrypted") : c.yellow("not encrypted")}`);
   } else {
     console.log(`  ${c.dim("no snapshot recorded for this account yet")}`);
   }
   if (b.backups?.length) {
     console.log(`\n  ${c.dim("snapshots")}`);
     for (const s of b.backups.slice(0, Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 15)) {
-      console.log(`  ${when(s.at)}  ${pad(typeof s.bytes === "number" ? humanBytes(s.bytes) : "—", 8)}  ${pad((s.kinds ?? []).map((k) => BACKUP_KINDS[k] ?? k).join(", "), 30)}  ${s.verified ? c.green("✓") : c.yellow("?")} ${c.dim(s.offsite ? `server + ${s.offsite}` : "server only")}`);
+      console.log(`  ${when(s.at)}  ${pad(typeof s.bytes === "number" ? humanBytes(s.bytes) : "—", 8)}  ${pad((s.kinds ?? []).map((k) => BACKUP_KINDS[k] ?? k).join(", "), 30)}  ${s.verified ? c.green("✓") : c.yellow("?")} ${pad(c.dim(s.offsite ? `server + ${s.offsite}` : "server only"), 14)}  ${s.encrypted ? c.green("encrypted") : c.yellow("not encrypted")}`);
     }
   }
   if (b.workspaces?.length) {

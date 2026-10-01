@@ -141,7 +141,7 @@ const HELP = `foldrun — agents are just folders
   foldrun history [path]    every change to a deployed workspace, newest first (--id <revision> for its diff, --limit, --to)
   foldrun repo ls           a workspace's branches and tags — also diff <branch>, deploy <ref>, merge <branch> (both ask first; --to)
   foldrun restore <ws> --to <commit|time|3d>  put a workspace's source back as it was then — shows the change, asks for the name typed back (--dry-run: the diff only, --yes)
-  foldrun backups           how the account is backed up, when it last was, the snapshots it is in — also request --what runs|state|storage|everything --at "<when>" [--to <ws>] [--note]
+  foldrun backups           how the account is backed up (encrypted?), when it last was, the snapshots it is in — also request --what runs|state|storage|everything --at "<when>" [--to <ws>] [--note]
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
