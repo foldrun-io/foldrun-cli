@@ -3855,7 +3855,8 @@ async function runtimesCmd(flags, layout) {
 const LEVEL_PAINT = { operational: (t) => c.green(t), maintenance: (t) => c.amber(t), degraded: (t) => c.amber(t), outage: (t) => c.red(t), unknown: (t) => c.dim(t) };
 
 /** GET /api/status — open, so no key is sent or needed. Null when the
- *  platform does not answer, which is itself the answer. */
+ *  platform does not answer, which is itself the answer.
+ *  @returns {Promise<{ report?: any, error?: string }>} */
 async function fetchPlatformStatus(url, flags) {
   try {
     const res = await remoteFetch(url, "/api/status", {}, { seconds: timeoutSeconds(flags) });

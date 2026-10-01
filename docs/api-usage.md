@@ -100,7 +100,7 @@ rerun, deploy, upload an asset, create a flow, set a secret, mint a key,
 approve, answer or message a run, billing actions — accept
 
 ```
-Idempotency-Key: 6f1c0f0e-8d1b-4c55-9f0e-2b0d7c1d2a10
+Idempotency-Key: <a UUID you generate, one per operation>
 ```
 
 - The **same key with the same body** within 24 hours answers with the first
