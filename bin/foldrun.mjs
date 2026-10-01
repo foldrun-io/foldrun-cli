@@ -20,6 +20,8 @@
 //   foldrun account        the account's own defaults — timezone, notify, budget, concurrency
 //   foldrun schedule       every flow in the account that fires on a clock, and when it fires next
 //   foldrun triggers       why nothing ran: fired vs started per flow, and each reason
+//   foldrun webhooks <verb> deliveries / redeliver <id> — the notify: webhooks a workspace sent, and each attempt
+//   foldrun notifications  what mail you get, per category — set <category> on|off
 //   foldrun backups        how the account is backed up, its snapshots — request a restore from one
 //   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
 //   foldrun onboarding     the account's getting-started steps, the next one first
@@ -132,6 +134,10 @@ const HELP = `foldrun — agents are just folders
   foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
   foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|notify> <value>, clear <key>
   foldrun notify test       send one test notification from a workspace and say what happened (--to <workspace>)
+  foldrun webhooks deliveries  the notify: webhooks a workspace sent, newest first — status, attempts, last answer (--failed, --status <s>, --event <e>, --limit, --offset, --to)
+  foldrun webhooks redeliver <id>  send one delivery again now, same X-Foldrun-Delivery id; exits 1 when refused (--to)
+  foldrun notifications     what mail you get, category by category, and which are always sent (--json)
+  foldrun notifications set <category> on|off  turn one off or back on — account-wide, or --to <workspace> for run-alerts and approvals
   foldrun history [path]    every change to a deployed workspace, newest first (--id <revision> for its diff, --limit, --to)
   foldrun repo ls           a workspace's branches and tags — also diff <branch>, deploy <ref>, merge <branch> (both ask first; --to)
   foldrun restore <ws> --to <commit|time|3d>  put a workspace's source back as it was then — shows the change, asks for the name typed back (--dry-run: the diff only, --yes)
@@ -212,6 +218,7 @@ Options
   --yes                     approve, stop, rerun (bulk), flow rotate-hook, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
   --json                    report: the raw run record instead of the report; observe, usage: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
+  --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --out <file>              api spec: where to write the OpenAPI document (default: stdout)
@@ -264,7 +271,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

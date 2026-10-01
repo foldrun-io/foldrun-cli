@@ -6853,6 +6853,104 @@ async function notifyCmd(positional, flags, layout) {
 }
 
 /**
+ * `foldrun webhooks deliveries [--failed] --to <workspace>` — every notify:
+ * webhook the workspace sent, newest first: event, status, attempts, the
+ * last answer. `--failed` (or `--status failed|pending|delivered|skipped`)
+ * and `--event <e>` narrow it; `--limit`/`--offset` page it.
+ * `foldrun webhooks redeliver <id> --to <workspace>` sends one again now,
+ * with the same X-Foldrun-Delivery id, and exits 1 when it was refused.
+ */
+async function webhooksCmd(positional, flags, layout) {
+  const verb = positional[0] ?? "deliveries";
+  const url = platformFor(flags, `webhooks ${verb}`);
+  const ws = platformWorkspace(flags, layout, `webhooks ${verb}`);
+  const base = `/api/workspaces/${enc(ws)}/notify/deliveries`;
+  if (verb === "redeliver") {
+    const id = positional[1];
+    if (!id) throw new Error("`foldrun webhooks redeliver <delivery-id> --to <workspace>` — the id is in `foldrun webhooks deliveries`");
+    const r = await remoteCall(url, flags, `${base}/${enc(id)}/redeliver`, { method: "POST" });
+    const a = r.attempt ?? {};
+    if (flags.json === true) {
+      console.log(JSON.stringify(r, null, 2));
+      return r.ok ? 0 : 1;
+    }
+    console.log(`\n  ${r.ok ? c.green("✓") : c.red("✗")} ${c.bold(id)}  ${c.dim(`attempt ${a.n ?? "?"} · ${a.durationMs ?? "?"} ms`)}`);
+    console.log(`  ${a.statusCode ? `HTTP ${a.statusCode}` : a.error ?? "no answer"}${a.response ? c.dim(` — ${firstLine(a.response, 100)}`) : ""}\n`);
+    return r.ok ? 0 : 1;
+  }
+  if (verb !== "deliveries" && verb !== "ls") throw new Error("`foldrun webhooks deliveries [--failed]` or `foldrun webhooks redeliver <id>` (--to <workspace>)");
+  const q = new URLSearchParams();
+  const status = flags.failed === true ? "failed" : typeof flags.status === "string" ? flags.status : "";
+  if (status) q.set("status", status);
+  if (typeof flags.event === "string") q.set("event", flags.event);
+  q.set("limit", String(Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 30));
+  if (Number(flags.offset) > 0) q.set("offset", String(Math.floor(Number(flags.offset))));
+  const r = await remoteCall(url, flags, `${base}?${q}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const rows = r.deliveries ?? [];
+  console.log();
+  if (r.endpoint?.disabledAt) {
+    console.log(`  ${c.red("✗ switched off")} since ${when(r.endpoint.disabledAt)} — ${r.endpoint.disabledReason ?? ""}`);
+    console.log(`  ${c.dim(`an accepted redeliver (or \`foldrun notify test --to ${ws}\`) switches it back on`)}\n`);
+  }
+  if (!rows.length) {
+    console.log(`  ${c.dim(`no ${status ? `${status} ` : ""}webhook deliveries in ${ws}`)}\n`);
+    return 0;
+  }
+  const tone = { delivered: c.green, failed: c.red, pending: c.yellow, skipped: c.dim };
+  const ew = Math.max(...rows.map((d) => String(d.event).length));
+  for (const d of rows) {
+    const label = d.status === "pending" ? "retrying" : d.status;
+    const last = d.lastStatusCode ? `HTTP ${d.lastStatusCode}` : d.lastError ?? "";
+    const next = d.status === "pending" && d.nextAttemptAt ? c.dim(` next ${when(d.nextAttemptAt)}`) : "";
+    console.log(`  ${c.dim(when(d.createdAt))}  ${pad(d.event, ew)}  ${(tone[d.status] ?? ((x) => x))(pad(label, 9))}  ${c.dim(`${d.attempts}×`)}  ${firstLine(last, 50)}${next}  ${c.dim(d.id)}`);
+  }
+  const shown = (r.offset ?? 0) + rows.length;
+  console.log(`\n  ${c.dim(`${shown < r.total ? `${shown} of ${r.total} · --offset ${shown} for more · ` : ""}foldrun webhooks redeliver <id> --to ${ws} sends one again`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun notifications` — what mail you get, category by category, and
+ * which are required. `foldrun notifications set <category> on|off`
+ * changes one, account-wide or for one workspace with `--to <workspace>`.
+ * Required mail (security, invites, billing, account) is refused with the
+ * platform's reason.
+ */
+async function notificationsCmd(positional, flags) {
+  const url = platformFor(flags, "notifications");
+  if (positional[0] === "set") {
+    const [, category, value] = positional;
+    if (!category || !["on", "off"].includes(value ?? "")) {
+      throw new Error("`foldrun notifications set <category> on|off` (--to <workspace> for one workspace) — `foldrun notifications` lists the categories");
+    }
+    const body = { category, enabled: value === "on", ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) };
+    const r = await remoteCall(url, flags, "/api/me/notifications", { method: "PATCH", body: JSON.stringify(body) });
+    const cat = (r.categories ?? []).find((x) => x.category === category);
+    console.log(`\n  ${c.green("✓")} ${c.bold(cat?.label ?? category)} ${value}${typeof flags.to === "string" ? ` for ${flags.to}` : ""}  ${c.dim(`for ${r.email}`)}\n`);
+    return 0;
+  }
+  if (positional[0]) throw new Error("`foldrun notifications` or `foldrun notifications set <category> on|off`");
+  const r = await remoteCall(url, flags, "/api/me/notifications");
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const w = Math.max(...(r.categories ?? []).map((x) => x.category.length));
+  console.log(`\n  ${c.bold(r.email)}\n`);
+  for (const x of r.categories ?? []) {
+    const state = x.required ? c.dim("always") : x.enabled ? c.green("on    ") : c.red("off   ");
+    const ws = Object.entries(x.workspaces ?? {}).map(([k, v]) => `${k} ${v ? "on" : "off"}`);
+    console.log(`  ${pad(x.category, w)}  ${state}  ${x.description}${ws.length ? c.dim(`  (${ws.join(", ")})`) : ""}`);
+  }
+  console.log(`\n  ${c.dim("foldrun notifications set <category> on|off [--to <workspace>] · required ones cannot be turned off")}\n`);
+  return 0;
+}
+
+/**
  * `foldrun history [path] --to <workspace>` — every change to a deployed
  * workspace, newest first: who, what, which files. `--id <revision>` shows
  * one in full, as diffs.
@@ -7251,6 +7349,10 @@ export async function run(command, positional, flags, workspace, layout) {
       return workspaceCmd(positional, flags, layout);
     case "notify":
       return notifyCmd(positional, flags, layout);
+    case "webhooks":
+      return webhooksCmd(positional, flags, layout);
+    case "notifications":
+      return notificationsCmd(positional, flags);
     case "history":
       return historyCmd(positional, flags, layout);
     case "repo":

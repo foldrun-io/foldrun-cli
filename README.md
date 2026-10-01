@@ -140,6 +140,8 @@ declared the same way.
 | `foldrun restore <ws> --to <commit\|time\|3d>` | a workspace's source back as it was then — shows the change, asks for the name typed back (`--dry-run`, `--yes`) |
 | `foldrun onboarding` | the account's getting-started steps, done or not, the next one first |
 | `foldrun triggers` | why nothing ran: per flow, how often its trigger fired, how often that became a run, and every reason for the difference (`--since <days>`, `--to`) |
+| `foldrun webhooks deliveries` | the `notify:` webhooks a workspace sent: status, attempts, the last answer (`--failed`, `--to`) — and `redeliver <id>` to send one again |
+| `foldrun notifications` | what mail you get, per category; `set <category> on\|off` (`--to <workspace>` for run alerts and approvals) — security, invites, billing and account mail are always sent |
 | `foldrun storage <verb>` | what a workspace produced: `ls [prefix]`, `cat <path>`, `get <path>` — with when each file was written and which run wrote it. `put <file|folder>...` uploads any files (`--into <folder/>`, `--as <path>` for one), `rm <path>` removes one, and `share`, `shares`, `unshare` manage public links |
 | `foldrun storage put <file>` | upload a file into a workspace's storage (`--as <path>` names it) — also `rm <path>` |
 | `foldrun storage share <path>` | a public link to one produced file (`--ttl <days>`, default 7; `--forever`) — also `shares` (`--all`) and `unshare <token>` |

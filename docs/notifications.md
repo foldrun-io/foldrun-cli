@@ -40,7 +40,8 @@ signed string, so a captured delivery cannot be replayed later with a fresh
 one. Beside it, `x-signature` is the plain HMAC of the body — the scheme an
 inbound `signature: hmac` flow verifies — so one foldrun install can notify
 another's webhook flow and be accepted. Name no secret and nothing is
-signed, which is what every existing destination keeps doing.
+signed, which is what every existing destination keeps doing. How to check
+it is under [Verifying a delivery](#verifying-a-delivery).
 
 The default events are `failed` and `awaiting-approval`. `completed` is
 opt-in on purpose: a schedule that works is the quiet kind of good news, and
@@ -139,6 +140,107 @@ The body, and the webhook's JSON:
 that wants the data. A webhook URL is the one integration: those services,
 and every phone-push relay, all accept a POST of that shape.
 
+## Webhook deliveries, retries and redelivery
+
+Every webhook send is a **delivery**: recorded first, attempted at once,
+and — when the receiver is down, slow or answers anything but 2xx — tried
+again on a backoff from the platform's worker:
+
+| attempt | when |
+|---|---|
+| 1 | at once |
+| 2 | 1 minute after the first failed |
+| 3 | 5 minutes after that |
+| 4 | 30 minutes |
+| 5 | 2 hours |
+| 6 | 6 hours |
+
+After the sixth the delivery is `failed` and stays in the log, one press
+from a redelivery. Each attempt has an 8-second timeout and is written down:
+the status code, how long it took, the first 500 characters of the answer
+and the error. The log is kept 30 days.
+
+Every attempt carries these headers:
+
+| header | |
+|---|---|
+| `X-Foldrun-Delivery` | the delivery's id, `dlv_…` — **the same on every attempt and every redelivery**. Dedupe on it: a receiver that took attempt 2 but timed out answering may see attempt 3 |
+| `X-Foldrun-Event` | `failed`, `completed`, `blocked`, `awaiting-approval`, `quarantined`, `sla`, `budget`, or `test` |
+| `X-Foldrun-Attempt` | 1, 2, … |
+| `X-Foldrun-Timestamp`, `X-Foldrun-Signature` | when `signing_secret:` is set — see below |
+
+The URL is read from `notify:` at each attempt, so fixing a typo in it is
+picked up by the next retry. The body is kept as first sent, so a retry is
+the same bytes.
+
+**Where to see it.** The workspace's Triggers page ends with *Outbound
+webhook deliveries*: every delivery, its status, its attempts, and a
+**Redeliver** button. From a terminal, `foldrun webhooks deliveries --to
+<ws>` (`--failed` for the ones that gave up) and `foldrun webhooks
+redeliver <id> --to <ws>`; over HTTP, `GET
+/api/workspaces/<ws>/notify/deliveries` and `POST
+…/deliveries/<id>/redeliver`. A redelivery is one attempt, now, with the
+same id and body, signed afresh.
+
+**An endpoint that stays down is switched off.** When every attempt to a
+workspace's URL has failed for **3 days running** (the operator's
+`FOLDRUN_WEBHOOK_DISABLE_DAYS`), the platform stops sending to it and
+emails the account's owner once. Deliveries made while it is off are
+recorded as `skipped`, not attempted. To turn it back on, fix the receiver
+and press Redeliver, or send a test (`foldrun notify test --to <ws>`): the
+first accepted one switches it on. Changing the URL in `notify:` starts it
+fresh.
+
+A laptop install has no worker to retry from: there a webhook is one
+attempt, with the same headers, and no log.
+
+## Verifying a delivery
+
+With `signing_secret:` set, check every delivery before acting on it:
+
+1. Read `X-Foldrun-Timestamp` (Unix seconds) and refuse it when it is more
+   than five minutes from your clock — a captured delivery replayed later
+   carries an old one, and the timestamp is inside the signature, so it
+   cannot be swapped for a fresh one.
+2. Compute the hex HMAC-SHA256 of `"<timestamp>.<raw body>"` with the
+   secret's value, and compare it to `X-Foldrun-Signature` after its
+   `sha256=` prefix, in constant time. Use the raw bytes of the body —
+   re-serialised JSON will not match.
+3. Dedupe on `X-Foldrun-Delivery`.
+
+Node:
+
+```js
+import crypto from "node:crypto";
+
+export function verifyFoldrun(rawBody, headers, secret, toleranceSec = 300) {
+  const ts = headers["x-foldrun-timestamp"];
+  const sig = (headers["x-foldrun-signature"] ?? "").replace(/^sha256=/, "");
+  if (!ts || !sig) return false;
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > toleranceSec) return false;
+  const want = crypto.createHmac("sha256", secret).update(`${ts}.${rawBody}`).digest("hex");
+  return sig.length === want.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want));
+}
+```
+
+Python:
+
+```python
+import hashlib, hmac, time
+
+def verify_foldrun(raw_body: bytes, headers, secret: str, tolerance=300) -> bool:
+    ts = headers.get("X-Foldrun-Timestamp")
+    sig = (headers.get("X-Foldrun-Signature") or "").removeprefix("sha256=")
+    if not ts or not sig or abs(time.time() - int(ts)) > tolerance:
+        return False
+    want = hmac.new(secret.encode(), f"{ts}.".encode() + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, want)
+```
+
+Answer 2xx as soon as it is verified and recorded; do the work after. A
+receiver that takes longer than 8 seconds is counted as failed and is
+sent the delivery again.
+
 ## Approve and reject links
 
 A run parked on a person sends its notification with two links per waiting
@@ -170,3 +272,45 @@ An account that has set neither still gets its notifications: they fall
 back to the platform's connection and come from `foldrun <hello@foldrun.io>`.
 An invite and a low-balance warning are the platform's own mail and always
 come from foldrun; the platform never sends those through your key.
+
+## Choosing what mail you get
+
+Every mail the platform sends belongs to a category, and each person
+chooses which they take — under **Profile → Notifications**, with `foldrun
+notifications` / `foldrun notifications set <category> on|off`, or through
+`GET`/`PATCH /api/me/notifications`. The choice is asked at the moment of
+sending, so it holds for every mail, from every part of the platform.
+
+| category | what | can be turned off |
+|---|---|---|
+| `security` | password resets, email confirmations, a login moved, an account made for you | no |
+| `invites` | an invitation to join an account | no |
+| `billing` | a payment failed, and the grace before runs stop | no |
+| `account` | a notification webhook switched off after days of failures; a close request | no |
+| `run-alerts` | a workspace's `notify:` email: failed, completed, blocked, quarantined, `sla`, `budget` | yes — per workspace |
+| `approvals` | a run waiting for you, with approve and reject links | yes — per workspace |
+| `low-balance` | credits below the warning level | yes |
+| `product-updates` | what changed in foldrun | yes |
+
+The four that cannot be turned off are how you get back into the account
+and how you hear that something you rely on has stopped; the page shows
+them, switched on and locked, with that reason. `run-alerts` and
+`approvals` can be off for one workspace and on for the rest (`foldrun
+notifications set run-alerts off --to seo-desk`).
+
+**Unsubscribing from a mail.** Every mail in an optional category carries a
+one-click unsubscribe, as RFC 8058 describes: `List-Unsubscribe:
+<https://…/api/unsubscribe?token=…>` and `List-Unsubscribe-Post:
+List-Unsubscribe=One-Click`, so the mail client's own Unsubscribe button
+works, plus a "Stop …" link at the bottom that opens a page asking first
+(opening a link never unsubscribes — inbox scanners open links). The token
+is signed by the install, names one address, one category and — for run
+alerts and approvals — one workspace, and works for 180 days. No login is
+needed, and the address need not belong to anyone with one: a `notify:
+email` that reaches a shared inbox can be unsubscribed by whoever reads it.
+A choice made this way shows on that person's Profile → Notifications, and
+is turned back on there.
+
+The links need the install to know its public address
+(`FOLDRUN_PUBLIC_URL`); without it mail goes out without them, and
+preferences are still honoured.

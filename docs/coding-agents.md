@@ -92,7 +92,9 @@ api workspaces/$WS/flows/<flow>/run -X POST   # start one
 | `/triggers?since=` | GET | why nothing ran: fired vs started per flow, with reasons |
 | `/hooks/<f>/rotate` | POST | new webhook token for a flow |
 | `/restore` | POST | the workspace's source back to a point in its history — `dryRun` first, then `confirm` |
+| `/notify/deliveries` · `/notify/deliveries/<id>/redeliver` | GET · POST | every notify: webhook sent and each attempt; send one again |
 | `/api/secrets` · `/api/schedule` · `/api/account` · `/api/keys` | account-level | the vault, the clock, defaults, API keys |
+| `/api/me/notifications` | GET PATCH | what mail you get, per category; a key acts for whoever minted it |
 
 A key carries a role (viewer, editor, admin) and a workspace scope no wider
 than the person who minted it. Team, profile and MFA routes are a person's
