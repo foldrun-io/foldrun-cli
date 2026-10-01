@@ -5456,7 +5456,13 @@ export function imageLabel(step) {
 export function podNote(step) {
   const p = step.browserPod;
   if (!p || (!p.reconnects && !p.lost && !p.fallback && !p.failure)) return null;
-  const tries = p.reconnects ? `${p.reconnects} reconnect${p.reconnects === 1 ? "" : "s"} (${p.reconnected ?? 0} got through)` : "no reconnects";
+  // A lost pod never let a reconnect "through"; one that reached the pod
+  // only for the call to drop again says so.
+  const count = `${p.reconnects} reconnect${p.reconnects === 1 ? "" : "s"}`;
+  const tries = !p.reconnects ? "no reconnects"
+    : !p.lost ? `${count} (${p.reconnected ?? 0} got through)`
+    : p.closedAgain ? `${count}, ${p.reconnects === 1 ? "which" : "the last"} reached the pod but it closed again`
+    : count;
   const line = p.failure ? `${tries}; ${p.failure}`
     : p.fallback ? `${tries}; ${p.fallback}${p.lost ? ` (${p.lost.detail})` : ""}`
     : p.lost ? `${tries}; ${p.lost.cause === "needs-full" ? "needed a browser in the step" : "pod lost"}: ${p.lost.detail}`

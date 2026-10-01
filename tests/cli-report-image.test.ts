@@ -22,8 +22,8 @@ const run = {
       image: { variant: "full", why: "re-run after the browser pod was lost" },
       browserPod: { reconnects: 3, reconnected: 0, lost: { cause: "lost", detail: "ECONNREFUSED" }, writes: [], fallback: "browser pod lost; re-ran on full" },
       tries: [
-        { n: 1, status: "lost", costUsd: 0.01, tokens: null, computeSecs: 3, startedAt: "2026-10-01T01:00:00.000Z", finishedAt: "2026-10-01T01:01:00.000Z", image: "slim", browserPod: "3 reconnects (0 got through); pod lost: ECONNREFUSED" },
-        { n: 1, status: "completed", costUsd: 0.02, tokens: null, computeSecs: 5, startedAt: "2026-10-01T01:01:00.000Z", finishedAt: "2026-10-01T01:02:00.000Z", image: "full", browserPod: "3 reconnects (0 got through); browser pod lost; re-ran on full (ECONNREFUSED)" },
+        { n: 1, status: "lost", costUsd: 0.01, tokens: null, computeSecs: 3, startedAt: "2026-10-01T01:00:00.000Z", finishedAt: "2026-10-01T01:01:00.000Z", image: "slim", browserPod: "3 reconnects; pod lost: ECONNREFUSED" },
+        { n: 2, attempt: 1, status: "completed", costUsd: 0.02, tokens: null, computeSecs: 5, startedAt: "2026-10-01T01:01:00.000Z", finishedAt: "2026-10-01T01:02:00.000Z", image: "full", browserPod: "3 reconnects; browser pod lost; re-ran on full (ECONNREFUSED)" },
       ],
     },
     {
@@ -43,10 +43,11 @@ test("report shows the image and the pod's story per step", async () => {
   const r = await at(s.url, "report", "run-pod", "--to", "blog-desk");
   s.close();
   assert.match(r.out, /reader .*completed · full/);
-  assert.match(r.out, /browser pod: 3 reconnects \(0 got through\); browser pod lost; re-ran on full \(ECONNREFUSED\)/);
-  assert.match(r.out, /tries: slim · lost · \$0\.0100 → full · completed · \$0\.0200/, "the lost slim go and the full re-run, apart");
+  assert.match(r.out, /browser pod: 3 reconnects; browser pod lost; re-ran on full \(ECONNREFUSED\)/);
+  assert.doesNotMatch(r.out, /got through/, "a lost pod never let a reconnect through");
+  assert.match(r.out, /tries: #1 slim · lost · \$0\.0100 → #2 full · completed · \$0\.0200/, "the lost slim go and the full re-run, apart and numbered");
   assert.match(r.out, /filler .*failed · slim · browser pod/);
-  assert.match(r.out, /browser pod: 3 reconnects \(0 got through\); browser pod died after the step had written state\/x\.csv \(Write\)/);
+  assert.match(r.out, /browser pod: 3 reconnects; browser pod died after the step had written state\/x\.csv \(Write\)/);
   assert.match(r.out, /plain .*skipped · slim/);
 });
 
@@ -56,9 +57,15 @@ test("the CLI's wording is core's", () => {
     assert.equal(podNote(step)!.line, browserPodLine(step.browserPod as never));
   }
   assert.equal(podNote({ browserPod: { reconnects: 1, reconnected: 1 } })!.line, browserPodLine({ reconnects: 1, reconnected: 1 }));
+  for (const p of [
+    { reconnects: 1, reconnected: 0, closedAgain: 1, lost: { cause: "lost", detail: "browser has been closed" } },
+    { reconnects: 2, reconnected: 0, closedAgain: 1, lost: { cause: "lost", detail: "gone" }, fallback: "browser pod lost; re-ran on full" },
+    { reconnects: 4, reconnected: 1, lost: { cause: "lost", detail: "ECONNREFUSED" } },
+    { reconnects: 0, reconnected: 0, lost: { cause: "lost", detail: "gone" } },
+  ] as const) assert.equal(podNote({ browserPod: p })!.line, browserPodLine(p as never), JSON.stringify(p));
   assert.equal(podNote({ browserPod: { reconnects: 0, reconnected: 0 } }), null);
   assert.equal(imageLabel({}), null);
   for (const step of run.steps) assert.equal(podTries(step), podTriesLine((step as { tries?: never }).tries));
-  const many = [{ n: 1, status: "failed", image: "full", costUsd: null }, { n: 2, status: "lost", image: "slim", costUsd: 0.01 }, { n: 2, status: "completed", image: "full", costUsd: 0.02 }] as const;
+  const many = [{ n: 1, status: "failed", image: "full", costUsd: null }, { n: 2, status: "lost", image: "slim", costUsd: 0.01 }, { n: 3, attempt: 2, status: "completed", image: "full", costUsd: 0.02 }] as const;
   assert.equal(podTries({ tries: many }), podTriesLine(many as never));
 });

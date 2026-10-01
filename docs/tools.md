@@ -1486,13 +1486,19 @@ cannot run on slim; it is treated like a lost pod, below.
    agent looks at the page before repeating it. Each try is a line on the
    run — `browser pod: reconnect failed (try 1 of 3, at 10:15:15Z)` — the
    time is when the try happened; the lines reach the run when the call
-   returns.
+   returns. A pod that is shutting down can still answer for a moment, so
+   a reconnect may reach it and the call drop again at once; the run says
+   `reconnected (try 1 of 3, …), but the pod closed again`, then `lost —
+   the call dropped again after the reconnect`. A reconnect counts as
+   **got through** only when the call went on after it, and a pod that was
+   lost in the end is never said to have let one through.
 2. **Still gone, and the step has only read** — it re-runs from the start
    on the full image, where a browser in the step is always there. The run
    says `browser pod lost; re-ran on full`. The slim go is a try of its own
    in `tries` — `image: "slim"`, `status: "lost"`, its own cost, tokens and
-   seconds, and its `browserPod` line — followed by the full re-run's row;
-   the step's cost is both.
+   seconds, and its `browserPod` line — followed by the full re-run's row,
+   the next try (`n: 2` after a lost try 1, with `attempt: 1`: the re-run
+   is part of the attempt, not a `retry:`); the step's cost is both.
 3. **Still gone, and the step has written anything** — it is not re-run,
    because doing it again could send or charge twice. It fails with
    `browser pod died after the step had written <what>`, and `retry:`,
@@ -1511,11 +1517,12 @@ runs script, a question to a person, and any other MCP tool. When a call
 could be either, it counts as a write. A browse call that never reached the
 pod changed nothing and does not count.
 
-The run page's step card says what happened in one line — `3 reconnects (0
-got through); browser pod lost; re-ran on full (…)` — and, under it, the
-tries: `slim · lost · $0.0040 → full · completed · $0.0060`. `foldrun
-report <run>` prints the same two lines, and each row in `tries` keeps its
-own image and pod line.
+The run page's step card says what happened in one line — `3 reconnects;
+browser pod lost; re-ran on full (…)`, or `1 reconnect, which reached the
+pod but it closed again; …` — and, under it, the tries: `#1 slim · lost ·
+$0.0040 → #2 full · completed · $0.0060`. A pod that stayed says `2
+reconnects (2 got through)`. `foldrun report <run>` prints the same two
+lines, and each row in `tries` keeps its own image and pod line.
 
 A deleted browser pod stops serving within about two seconds: its server
 closes every browser on SIGTERM but would otherwise keep accepting new
