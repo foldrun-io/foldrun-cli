@@ -17,7 +17,7 @@ proof instead of a key: a token or signature (`/s/<token>`, `/api/hooks`,
 `/api/inbox`, `/api/events`, `/api/approve`, `/api/git`, `/api/billing/stripe`,
 `/api/billing/confirm`), the sign-in and recovery steps (`/api/auth/signup`,
 `login`, `forgot`, `reset`, `verify`, `mfa/verify`, `/api/cli/login`,
-`/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz`, `/api/version` and `/api/openapi.json`.
+`/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz`, `/api/status`, `/api/status/history`, `/api/version` and `/api/openapi.json`.
 
 ```
 Authorization: Bearer <api-key>      # machines. Settings → API keys

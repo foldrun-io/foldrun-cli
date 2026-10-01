@@ -3773,10 +3773,77 @@ async function runtimesCmd(flags, layout) {
  * you find out somebody edited a flow in the dashboard before you overwrite
  * it.
  */
+/** Levels as the status page colours them. */
+const LEVEL_PAINT = { operational: (t) => c.green(t), maintenance: (t) => c.amber(t), degraded: (t) => c.amber(t), outage: (t) => c.red(t), unknown: (t) => c.dim(t) };
+
+/** GET /api/status — open, so no key is sent or needed. Null when the
+ *  platform does not answer, which is itself the answer. */
+async function fetchPlatformStatus(url, flags) {
+  try {
+    const res = await remoteFetch(url, "/api/status", {}, { seconds: timeoutSeconds(flags) });
+    if (!res.ok && res.status !== 503) return { error: `/api/status → HTTP ${res.status}` };
+    return { report: await res.json() };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The live incidents and windows, one line each with the latest update. */
+function printIncidents(report) {
+  for (const i of [...(report.incidents ?? []), ...(report.maintenance ?? [])]) {
+    const last = i.updates?.at(-1);
+    const upcoming = i.kind === "maintenance" && Date.parse(i.startsAt) > Date.now();
+    const label = i.kind === "maintenance" ? (upcoming ? `maintenance ${i.startsAt.slice(0, 16).replace("T", " ")}Z` : "maintenance") : `${i.impact} incident`;
+    const paint = i.kind === "incident" && i.impact === "major" ? c.red : c.amber;
+    console.log(`  ${paint("!")} ${c.bold(i.title)}  ${c.dim(`${label} · ${String(i.status).replace("_", " ")}`)}`);
+    if (last?.body) console.log(`      ${last.body.split("\n")[0].slice(0, 160)}`);
+  }
+}
+
+/**
+ * `foldrun status --platform` — is the platform up: overall, each
+ * component, and any incident or maintenance the operator posted. Reads the
+ * open GET /api/status; exits 1 when the platform does not answer.
+ */
+async function platformStatusCmd(flags) {
+  const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
+  const { report, error } = await fetchPlatformStatus(url, flags);
+  if (flags.json === true) {
+    console.log(JSON.stringify(report ?? { url, error }, null, 2));
+    return report ? 0 : 1;
+  }
+  if (!report) {
+    console.log(`\n  ${c.red("✗")} status unavailable — ${url} did not answer (${error}); the platform may be down\n`);
+    return 1;
+  }
+  const paint = LEVEL_PAINT[report.status] ?? LEVEL_PAINT.unknown;
+  console.log(`\n  ${paint("●")} ${c.bold(report.description ?? report.status)}  ${c.dim(url)}\n`);
+  const wide = Math.max(...(report.components ?? []).map((x) => x.name.length), 0);
+  for (const comp of report.components ?? []) {
+    const p = LEVEL_PAINT[comp.status] ?? LEVEL_PAINT.unknown;
+    console.log(`  ${comp.name.padEnd(wide)}  ${p(comp.status.padEnd(11))} ${c.dim(comp.detail ?? "")}`);
+  }
+  if ((report.incidents?.length ?? 0) + (report.maintenance?.length ?? 0)) {
+    console.log();
+    printIncidents(report);
+  }
+  console.log(`\n  ${c.dim("history and past incidents: https://foldrun.io/status/")}\n`);
+  return 0;
+}
+
 async function statusCmd(layout, flags, only) {
+  if (flags.platform === true) return platformStatusCmd(flags);
   const { isSourcePath, accountTreeFrom } = await core();
   const url = remoteUrl(flags);
   if (!url) throw new Error("status compares this folder with a platform — pass --url, or `foldrun login` first");
+  // The platform's own state first, one line: a diff read during an
+  // incident should say so before it says anything else.
+  {
+    const { report, error } = await fetchPlatformStatus(url, flags);
+    const paint = report ? (LEVEL_PAINT[report.status] ?? LEVEL_PAINT.unknown) : c.red;
+    console.log(`\n  ${paint("●")} ${report ? `platform: ${report.description}` : `platform status unavailable (${error})`}${report && report.status !== "operational" ? c.dim("  — foldrun status --platform") : ""}`);
+    if (report) printIncidents(report);
+  }
   const { tree } = accountTreeFrom(layout.kind === "account" ? layout.accountRoot : layout.workspaceDir, only);
   const live = new Set(await remoteWorkspaceNames(url, flags));
   const stamps = readStamps(layout)[url] ?? {};

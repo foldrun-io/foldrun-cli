@@ -141,6 +141,7 @@ const HELP = `foldrun — agents are just folders
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
   foldrun pull [workspace]  bring the platform's account down here (refuses to clobber; --force overrides)
   foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
+  foldrun status --platform  is the platform up: each component, and any incident or maintenance posted (--json)
   foldrun workspaces        what exists here and on the platform — also rm <name> (--platform --yes)
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run; --tag <t> repeatable)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)

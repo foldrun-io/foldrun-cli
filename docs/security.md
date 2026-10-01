@@ -134,3 +134,23 @@ role and cannot act as a named person.
 - The CLI on your machine runs steps as you, in your workspace, unless
   `FOLDRUN_RUN_ISOLATION=container` is set. That is your laptop and your
   call. See [Running it yourself](self-hosting).
+
+## Reporting a vulnerability
+
+Write to **hello@foldrun.io** with "security" in the subject. Do not open a
+public issue. The same address is in `/.well-known/security.txt` on
+foldrun.io and on the platform. Scope, what we will not pursue you for, and
+the response targets are on the
+[security page](https://foldrun.io/security/#report).
+
+## Subprocessors and the DPA
+
+The vendors that process customer data for the hosted platform — and the
+integrations that only run when *you* configure them with your own key —
+are listed at [foldrun.io/subprocessors](https://foldrun.io/subprocessors/).
+A data processing agreement is drafted at
+[foldrun.io/dpa](https://foldrun.io/dpa/); it is under legal review and not
+yet offered for signature.
+
+Whether the platform is up, and any incident, is on the status page — see
+[Status and incidents](status).
