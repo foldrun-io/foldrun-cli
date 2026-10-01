@@ -216,7 +216,7 @@ Options
   --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
   --days <n>                usage: the window the charges cover (default 56)
   --id <revision>           history: one revision in full, as diffs
-  --engine <e>              login: (with a site) the browser to sign in with — chrome (default), firefox or safari
+  --engine <e>              login: (with a site) the browser to sign in with — chrome (default: real Google Chrome, Chromium when it is not installed), chromium, firefox or safari
   --new-client              connect: enter a new OAuth client even when one is saved for the secret
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal

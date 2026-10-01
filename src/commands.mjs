@@ -2211,8 +2211,13 @@ export function cookieDomainFor(url) {
 /** The block to paste into the agent, printed rather than written: which agent
  *  wants this session is the person's decision, and a command that edits files
  *  it was not pointed at is a command nobody trusts twice. */
-export function renderBrowseBlock({ secret, url, identity, hasStorage, engine }) {
+/** @param {{ secret: string, url: string, identity: any, hasStorage: boolean, engine: string, browser?: { name: string, channel?: string | null, version?: string | null } | null }} o */
+export function renderBrowseBlock({ secret, url, identity, hasStorage, engine, browser = null }) {
   const lines = [
+    // Which browser minted the session, beside the cookies it minted. The
+    // cookies secret is a JSON array the web tool reads as-is, so there is
+    // no room in it for a note; a YAML comment in the block costs nothing.
+    ...(browser ? [`# signed in with ${browser.name} ${browser.version ?? ""}`.trimEnd()] : []),
     "web:",
     "  browse:",
     `    engine: ${engine}`,
@@ -2296,6 +2301,39 @@ async function loadPlaywright() {
   );
 }
 
+/** The browser a sign-in runs in. `--engine chrome` means what an agent's
+ *  `engine: chrome` means: real Google Chrome (Playwright's "chrome" channel),
+ *  because a site ties a session to the browser that earned it — a
+ *  Cloudflare clearance to its user agent, a fingerprint check to the
+ *  build — and a cookie minted in Chromium can be challenged when Chrome
+ *  replays it. Without Chrome installed it falls back to Playwright's
+ *  Chromium and says so. Every other engine is unchanged. `pw` is the
+ *  Playwright module, injected so the choice is testable without a window. */
+export async function launchForLogin(pw, asked, { headless = false, log = (/** @type {string} */ m) => console.log(m) } = {}) {
+  const engines = { chrome: "chromium", chromium: "chromium", firefox: "firefox", safari: "webkit", webkit: "webkit" };
+  const engine = engines[asked];
+  if (!engine) throw new Error(`--engine is chrome, firefox or safari`);
+  const names = { chromium: "Chromium", firefox: "Firefox", webkit: "WebKit" };
+  const args = engine === "chromium" ? ["--no-first-run"] : [];
+  if (asked === "chrome") {
+    try {
+      const browser = await pw.chromium.launch({ headless, channel: "chrome", args });
+      return { browser, used: { name: "Google Chrome", channel: "chrome", version: browser.version() }, fallback: false };
+    } catch (err) {
+      const why = String(/** @type {any} */ (err)?.message ?? err).split("\n")[0];
+      log(
+        `  ${c.yellow("!")} Google Chrome is not installed here (or would not start: ${why}) — signing in with Chromium instead.\n` +
+          `    ${c.dim("agents with engine: chrome run real Google Chrome, so a site that ties its session to the browser may challenge this cookie;")}\n` +
+          `    ${c.dim("install Chrome (https://www.google.com/chrome/) and sign in again to match.")}`,
+      );
+      const browser = await pw.chromium.launch({ headless, args });
+      return { browser, used: { name: "Chromium", channel: null, version: browser.version() }, fallback: true };
+    }
+  }
+  const browser = await pw[engine].launch({ headless, args });
+  return { browser, used: { name: names[engine], channel: null, version: browser.version() }, fallback: false };
+}
+
 /** The command itself. Playwright drives the window; it is not a dependency of
  *  this CLI because 99% of what the CLI does needs no browser, so it is
  *  imported when asked for and its absence is a sentence, not a stack trace. */
@@ -2311,18 +2349,16 @@ async function siteLogin(positional, flags, layout) {
   }
   // The names people use, mapped to the ones Playwright answers to. Old
   // spellings keep working, so a script written before this still runs.
-  const engines = { chrome: "chromium", chromium: "chromium", firefox: "firefox", safari: "webkit", webkit: "webkit" };
   const asked = typeof flags.engine === "string" ? flags.engine.toLowerCase() : "chrome";
-  const engine = engines[asked];
-  if (!engine) throw new Error(`--engine is chrome, firefox or safari`);
+  if (!["chrome", "chromium", "firefox", "safari", "webkit"].includes(asked)) throw new Error(`--engine is chrome, firefox or safari`);
 
   const pw = await loadPlaywright();
+  const { browser, used } = await launchForLogin(pw, asked);
 
-  console.log(`\n  opening ${c.bold(url)} in ${asked}`);
+  console.log(`\n  opening ${c.bold(url)} in ${used.name} ${used.version}`);
   console.log(`  ${c.dim("sign in by hand — password, MFA, whatever the site asks. foldrun never sees it.")}`);
   console.log(`  ${c.dim("then close the window (or press Enter here) and the session is stored.")}\n`);
 
-  const browser = await pw[engine].launch({ headless: false, args: engine === "chromium" ? ["--no-first-run"] : [] });
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(url, { waitUntil: "domcontentloaded" }).catch(() => {});
@@ -2399,6 +2435,7 @@ async function siteLogin(positional, flags, layout) {
 
   const httpOnly = cookies.filter((ck) => ck.httpOnly).map((ck) => ck.name);
   console.log(`  ${c.green("✓")} ${c.bold(`${secret}_COOKIES`)} — ${cookies.length} cookies for ${cookieDomainFor(url)}`);
+  console.log(`    ${c.dim(`signed in with ${used.name} ${used.version}, as ${identity.user_agent || "an unread user agent"}`)}`);
   if (httpOnly.length) console.log(`    ${c.dim(`HttpOnly (a console cannot read these): ${httpOnly.join(", ")}`)}`);
   if (login) console.log(`    ${c.dim(`the login looks like ${login.name}, good until ${whenItDies(login)}`)}`);
   if (storageJson) {
@@ -2410,7 +2447,7 @@ async function siteLogin(positional, flags, layout) {
   }
   console.log(`\n  ${c.dim("paste this into the agent that uses it:")}\n`);
   console.log(
-    renderBrowseBlock({ secret, url, identity, hasStorage: Boolean(storageJson), engine: asked })
+    renderBrowseBlock({ secret, url, identity, hasStorage: Boolean(storageJson), engine: asked, browser: used })
       .split("\n")
       .map((l) => "    " + l)
       .join("\n"),
