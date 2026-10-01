@@ -750,6 +750,12 @@ async function checkProblems(workspace, flags = {}) {
     const m = fs.readFileSync(agentsMd, "utf8").match(/^foldrun_version:\s*["']?([\d.]+)/m);
     const { warning } = checkFormatVersion(m?.[1]);
     if (warning) note("warn", "AGENTS.md", warning);
+    // `limits:` here are defaults for every agent below; the keys are not
+    // checked against grants (a default applies only where it can), the
+    // values are.
+    const { readAgentsMd } = await core();
+    const { readLimits } = await import("@foldrun/core/limits");
+    for (const w of readLimits(readAgentsMd(workspace)?.data?.limits).problems) note("error", "AGENTS.md", w);
   }
 
   for (const a of agents) {
@@ -858,6 +864,17 @@ async function checkProblems(workspace, flags = {}) {
           note("warn", `agents/${a.name}`, `subagents: [${s}] — none of ${s}'s tools are in ${a.name}'s, and a sub-agent never gets more than its parent: it would have no tools`);
         }
       }
+    }
+
+    // `limits:` — a count nobody can read runs uncapped, and a key that
+    // names no tool caps nothing. Shape from core's reader; the keys against
+    // what this agent can reach and what it holds.
+    for (const w of a.limitProblems ?? []) note("error", `agents/${a.name}`, w);
+    if (a.limits && Object.keys(a.limits).length) {
+      const { limitKeyProblems } = await import("@foldrun/core/limits");
+      const known = [...Object.keys(usable), ...platform.tools, ...a.inlineTools, ...a.consults, ...a.tools, ...a.apis.map((x) => x.name)];
+      const granted = [...a.tools, ...a.inlineTools, ...a.consults, ...a.apis.map((x) => x.name)];
+      for (const p of limitKeyProblems(a.limits, { known, granted })) note(p.level, `agents/${a.name}`, p.message);
     }
 
     // `skills:` present is an allowlist. A name that matches nothing silently

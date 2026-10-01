@@ -63,6 +63,7 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `apis` | an HTTP API declared inline, as one tool |
 | `mcpServers` | an MCP server declared inline |
 | `secrets` | vault entries its tools may use — names only, never values |
+| `limits` | the most calls one step may make — per tool, per web action, or in all: `limits: {web.search: 40, crm: 20, calls: 300}`. A call past a limit is refused, never run ([Tools](tools#limits--how-many-calls-a-step-may-make)) |
 | `permissionMode` | `plan` makes the run read-only, whatever else was granted |
 | `web` | the `web` tool's settings: `actions:` — which of its eight it may use (all when absent) — and who does each, `web: {search: brave, fetch: jina, browse: browserbase, crawl: firecrawl}`, with the key named in the vault. Unset is foldrun's own. `search:` also takes a block of the own engine's settings — engines, categories, safesearch, plugins ([Tools](tools#tuning-the-accounts-own-engine)); `browse:` a block of the browser's ([below](#webbrowse--which-browser-and-how-it-presents-itself)), and `browse:` alone cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#reaching-the-web). A per-action key outside the block is not read — `check` errors on it |
 
@@ -444,6 +445,8 @@ from here), `notify:`, `budget:` (a cap in USD over
 a month — `60` — or a day or week — `60/day`, `60/week`; unset is no limit),
 `concurrency:` (in the account's file: how many of its runs go at once — the
 next one waits its turn; see [Budgets and billing](budgets-and-billing)),
+`limits:` (per-step call limits, as defaults — the one key that merges: an
+agent's `limits: {web.search: 40}` overrides that key and keeps the rest),
 `web.browse:` (see above),
 `foldrun_version:` — and the body is context every agent works under.
 

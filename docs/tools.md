@@ -1494,6 +1494,65 @@ real is in the sandbox for it. The gallery's `web action=search` does, because i
 needs no secret at all; the `web action=browse` does not, because a cookie has to be
 seeded into a real browser. See [Secrets](secrets#where-the-value-actually-is).
 
+## Limits — how many calls a step may make
+
+`limits:` on an agent caps how many times one step may call a tool. A call
+past a limit is **refused before it runs** — the tool never sees it — and the
+model is told, in words it can act on:
+
+```
+limit reached: web.search 40 of 40 in this step — work with what you have, or say what more you would need
+```
+
+```yaml
+limits:
+  web.search: 40      # one web action — search fetch browse crawl map extract answer monitor
+  web.fetch: 100
+  web: 150            # every web action together
+  crm: 20             # a tool by the name it is granted as
+  calls: 300          # every tool call in the step, any tool
+```
+
+| key | counts |
+|---|---|
+| `web.<action>` | one action of the `web` tool; a model provider's own search or fetch (`web: {search: zai}`) counts as `web.search` / `web.fetch` |
+| `web` | every web action together |
+| an HTTP tool's name | every call to it — each operation of an `openapi:` tool, and its generic `call_`, all under the one name |
+| a script tool's name | every run of it (`desk-email` and `desk_email` are the same key) |
+| an MCP server's name | every tool the server exposes |
+| `read` · `write` · `code` | Read/Glob/Grep · Write/Edit · Bash. An exact SDK name (`Bash`) works too |
+| `search` · `history` · `desks` · `ask` | the platform's own groups; a consulted colleague by its name |
+| `calls` | everything — including a delegation to a sub-agent |
+
+Values are whole numbers, 1 or more; to withhold a tool, leave it out of
+`tools:`. How the count works:
+
+- **Per step.** A retry of the step starts from zero, and so does each
+  instance of an `each:` fan-out — each is its own step. A step's
+  sub-agents count toward the step that delegated: their calls pass the same
+  check.
+- **A refused call counts toward nothing**, and neither does one another
+  check refused (a path outside the workspace, a tool not granted).
+- **Nearest wins, per key.** The account's `AGENTS.md`, then the
+  workspace's, then the agent's own, then a flow step's
+  `limits: {web.search: 10}` option. A key set nearer replaces that key;
+  the others stand.
+- **On the trace.** The step lists its limits when it starts, each refusal
+  as it happens, and at the end what it used: `limits: web.search 40/40, crm 3/20 — 2 calls refused`.
+
+**With a search API, the cost is capped exactly.** A capped call never
+reaches the tool, so it never reaches the provider behind it: `web.search: 40`
+on an agent whose `web: {search: brave}` is at most 40 Brave queries a step,
+whatever the model tries. Fan-out multiplies it — forty instances of a step
+with `web.search: 40` may search 1,600 times — so cap the run as well with
+`budget:` where that matters. A limit counts calls, not what a call asks
+for: `fetch` with `urls=` of twenty pages is one call.
+
+`foldrun check` errors on a key that names nothing (and lists the keys that
+would work) or a value that is not a whole number above zero, and warns on a
+limit for a tool the agent is not granted. The deploy refuses an unreadable
+value.
+
 ## Skills — procedure, not capability
 
 A skill is a folder with a `SKILL.md`, in the open
