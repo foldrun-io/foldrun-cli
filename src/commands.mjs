@@ -1385,7 +1385,7 @@ async function deployOverHttp(url, workspace, files, flags, expectRemoved) {
   try {
     res = await fetch(endpoint, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "user-agent": USER_AGENT },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "user-agent": USER_AGENT, "foldrun-version": API_VERSION, "idempotency-key": crypto.randomUUID() },
       body: JSON.stringify({
         files,
         commit: flags.commit ?? null,
@@ -1613,6 +1613,18 @@ const CLI_VERSION = (() => {
 const USER_AGENT = `foldrun-cli/${CLI_VERSION}`;
 
 /**
+ * The HTTP API version this CLI was written against, sent as
+ * `Foldrun-Version` on every call. A platform that moves its API on keeps
+ * answering this CLI in the shape it reads (foldrun-docs/api-usage.md).
+ * Bump it — and fix what changed — when the CLI is updated to a newer one.
+ */
+export const API_VERSION = "2026-10-01";
+
+/** Methods that change something: each invocation sends one Idempotency-Key,
+ *  and its own retry sends the same one, so a retry never acts twice. */
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
  * A clock the caller asked for, in seconds, or undefined.
  *
  * `--timeout` first, then FOLDRUN_TIMEOUT. Separated from the default so a
@@ -1695,6 +1707,8 @@ async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = 
   const method = (init.method ?? "GET").toUpperCase();
   const headers = {
     "user-agent": USER_AGENT,
+    "foldrun-version": API_VERSION,
+    ...(WRITE_METHODS.has(method) ? { "idempotency-key": crypto.randomUUID() } : {}),
     ...(token ? { authorization: `Bearer ${token}` } : {}),
     ...(init.headers ?? {}),
   };
@@ -1711,7 +1725,11 @@ async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = 
     }
   };
   let res = await attempt();
-  if (method === "GET" && RETRY_STATUS.has(res.status)) {
+  // A 429 is retried once for any method that is safe to send twice: every
+  // read, and a write that carries its Idempotency-Key (all of ours do — the
+  // platform answers the second with the first's result, never a second run).
+  const repeatable = !WRITE_METHODS.has(method) || method === "PUT" || method === "DELETE" || Boolean(/** @type {any} */ (headers)["idempotency-key"]);
+  if ((method === "GET" && RETRY_STATUS.has(res.status)) || (res.status === 429 && repeatable)) {
     await sleep(retryAfterMs(res, seconds));
     res = await attempt();
   }
@@ -1866,10 +1884,21 @@ async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
     // run that failed with 500 and a full record of why — status, steps, the
     // agent's last words — and a caller that prints only "HTTP 500" sends the
     // reader hunting for an outage that never happened.
-    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : "";
+    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : res.status === 429 ? rateLimitHint(res, body) : "";
     throw new HttpError(`${body.error ?? `${apiPath} → HTTP ${res.status}`}${hint}`, res.status, body);
   }
   return body;
+}
+
+/**
+ * What to say when the platform still refuses after the one wait: how long,
+ * and that the CLI already waited once, so nobody wraps it in a tight loop.
+ * @param {Response} res @param {any} body
+ */
+function rateLimitHint(res, body) {
+  const after = body?.retry_after ?? res.headers.get("retry-after");
+  const limit = res.headers.get("x-ratelimit-limit");
+  return ` — rate limited${limit ? ` (${limit} a minute)` : ""}; already waited once${after ? `, try again in ${after}s` : ""}. Settings → API shows this account's limits`;
 }
 
 /** The glyph an event leads with: a fault, a tool, or a plain line. */
@@ -1968,7 +1997,7 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
     let res;
     try {
       res = await fetch(target, {
-        headers: { authorization: `Bearer ${token}`, accept: "text/event-stream", "user-agent": USER_AGENT },
+        headers: { authorization: `Bearer ${token}`, accept: "text/event-stream", "user-agent": USER_AGENT, "foldrun-version": API_VERSION },
         signal: ctrl.signal,
       });
     } catch (err) {
@@ -6340,6 +6369,40 @@ function writeDownload(bytes, fallback, flags, from) {
   return 0;
 }
 
+/**
+ * `foldrun api spec [--out <file>]` — the platform's OpenAPI 3.1 document
+ * (GET /api/openapi.json, open: no sign-in needed), to stdout or a file.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function apiCmd(positional, flags) {
+  const [verb] = positional;
+  if (verb !== "spec") {
+    console.error("usage: foldrun api spec [--out <file>]   the platform's OpenAPI document");
+    return 1;
+  }
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("no platform to ask — foldrun login, or --url / FOLDRUN_URL");
+  const res = await remoteFetch(url, "/api/openapi.json", {}, { seconds: timeoutSeconds(flags) });
+  const text = await res.text();
+  if (!res.ok) throw new HttpError(`/api/openapi.json → HTTP ${res.status}: ${text.slice(0, 160)}`, res.status, {});
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    throw new Error(`/api/openapi.json did not answer JSON — is ${new URL(url).host} a foldrun platform new enough to publish one?`);
+  }
+  const out = typeof flags.out === "string" ? flags.out : typeof flags.file === "string" ? flags.file : "-";
+  const pretty = JSON.stringify(doc, null, 2) + "\n";
+  if (out === "-") {
+    process.stdout.write(pretty);
+    return 0;
+  }
+  fs.writeFileSync(out, pretty);
+  const ops = Object.values(doc.paths ?? {}).reduce((n, item) => n + Object.keys(/** @type {any} */ (item)).length, 0);
+  console.log(`  ${c.green("✓")} wrote ${out} — OpenAPI ${doc.openapi}, API version ${doc.info?.version ?? "?"}, ${Object.keys(doc.paths ?? {}).length} paths, ${ops} operations`);
+  return 0;
+}
+
 /** A GET whose answer is a file, not JSON — the error body still is. */
 async function remoteBytes(url, flags, apiPath, what) {
   const token = tokenFor(url, flags);
@@ -6929,6 +6992,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return doctor(flags);
     case "version":
       return versionCmd(flags);
+    case "api":
+      return apiCmd(positional, flags);
     case "keys":
       return keysCmd(positional, flags);
     case "accounts":

@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 const ROOT = path.join(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "bin/foldrun.mjs");
 
-export type Seen = { method: string; url: string; query: URLSearchParams; body: string };
+export type Seen = { method: string; url: string; query: URLSearchParams; body: string; headers: http.IncomingHttpHeaders };
 
 /** An answer with a status other than 200. `__status` and not `status`,
  *  because a run record HAS a status and reading it as the HTTP one turned
@@ -45,7 +45,7 @@ export function serve(
       req.on("end", () => {
         const [url, search] = (req.url ?? "").split("?");
         const query = new URLSearchParams(search ?? "");
-        seen.push({ method: req.method ?? "", url, query, body });
+        seen.push({ method: req.method ?? "", url, query, body, headers: req.headers });
         // Headers every answer carries — the platform's X-Foldrun-Version, say.
         for (const [k, v] of Object.entries(opts.headers ?? {})) res.setHeader(k, v);
         const route = routes[`${req.method} ${url}`] ?? routes[url];

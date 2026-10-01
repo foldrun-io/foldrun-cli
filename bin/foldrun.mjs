@@ -140,6 +140,7 @@ const HELP = `foldrun — agents are just folders
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run; --tag <t> repeatable)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun open [page]       the dashboard for this workspace, in the browser
+  foldrun api spec          the platform's OpenAPI 3.1 document (GET /api/openapi.json) — stdout, or --out <file>
   foldrun version           this CLI's version, its core's, and the platform's: release, API version, component shas — warns when the platform ships a newer CLI (--json)
 
 Signing in
@@ -206,6 +207,7 @@ Options
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --limit <n>               runs, billing, history: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
+  --out <file>              api spec: where to write the OpenAPI document (default: stdout)
   --file <path>             source put: the local file to send (default: stdin); storage get, report get, account export, billing statement: where to write it (- for stdout)
   --message "<why>"         source put: recorded on the file's revision
   --account                 secrets: account scope instead of the workspace's
