@@ -7,8 +7,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { serve, at, WORKSPACES } from "./fake-platform.ts";
-import { imageLabel, podNote } from "../src/commands.mjs";
-import { browserPodLine } from "../../foldrun-core/src/browser-pod.ts";
+import { imageLabel, podNote, podTries } from "../src/commands.mjs";
+import { browserPodLine, podTriesLine } from "../../foldrun-core/src/browser-pod.ts";
 
 const run = {
   id: "run-pod",
@@ -21,6 +21,10 @@ const run = {
       agent: "reader", group: 1, status: "completed", attempts: 1, costUsd: 0.03, events: [], result: "read it",
       image: { variant: "full", why: "re-run after the browser pod was lost" },
       browserPod: { reconnects: 3, reconnected: 0, lost: { cause: "lost", detail: "ECONNREFUSED" }, writes: [], fallback: "browser pod lost; re-ran on full" },
+      tries: [
+        { n: 1, status: "lost", costUsd: 0.01, tokens: null, computeSecs: 3, startedAt: "2026-10-01T01:00:00.000Z", finishedAt: "2026-10-01T01:01:00.000Z", image: "slim", browserPod: "3 reconnects (0 got through); pod lost: ECONNREFUSED" },
+        { n: 1, status: "completed", costUsd: 0.02, tokens: null, computeSecs: 5, startedAt: "2026-10-01T01:01:00.000Z", finishedAt: "2026-10-01T01:02:00.000Z", image: "full", browserPod: "3 reconnects (0 got through); browser pod lost; re-ran on full (ECONNREFUSED)" },
+      ],
     },
     {
       agent: "filler", group: 2, status: "failed", attempts: 1, costUsd: 0.01, events: [], result: null,
@@ -40,6 +44,7 @@ test("report shows the image and the pod's story per step", async () => {
   s.close();
   assert.match(r.out, /reader .*completed · full/);
   assert.match(r.out, /browser pod: 3 reconnects \(0 got through\); browser pod lost; re-ran on full \(ECONNREFUSED\)/);
+  assert.match(r.out, /tries: slim · lost · \$0\.0100 → full · completed · \$0\.0200/, "the lost slim go and the full re-run, apart");
   assert.match(r.out, /filler .*failed · slim · browser pod/);
   assert.match(r.out, /browser pod: 3 reconnects \(0 got through\); browser pod died after the step had written state\/x\.csv \(Write\)/);
   assert.match(r.out, /plain .*skipped · slim/);
@@ -53,4 +58,7 @@ test("the CLI's wording is core's", () => {
   assert.equal(podNote({ browserPod: { reconnects: 1, reconnected: 1 } })!.line, browserPodLine({ reconnects: 1, reconnected: 1 }));
   assert.equal(podNote({ browserPod: { reconnects: 0, reconnected: 0 } }), null);
   assert.equal(imageLabel({}), null);
+  for (const step of run.steps) assert.equal(podTries(step), podTriesLine((step as { tries?: never }).tries));
+  const many = [{ n: 1, status: "failed", image: "full", costUsd: null }, { n: 2, status: "lost", image: "slim", costUsd: 0.01 }, { n: 2, status: "completed", image: "full", costUsd: 0.02 }] as const;
+  assert.equal(podTries({ tries: many }), podTriesLine(many as never));
 });

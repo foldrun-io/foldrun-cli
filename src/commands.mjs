@@ -5464,6 +5464,18 @@ export function podNote(step) {
   return { line, bad: Boolean(p.failure), warn: Boolean(p.fallback || p.lost) };
 }
 
+/** The step's tries when the browser pod was lost under one — "slim · lost ·
+ *  $0.0040 → full · completed · $0.0060" — worded as core's podTriesLine.
+ *  Null when no try was lost. */
+export function podTries(step) {
+  const tries = step.tries;
+  if (!tries?.some((t) => t.status === "lost")) return null;
+  const many = new Set(tries.map((t) => t.n)).size > 1;
+  return tries
+    .map((t) => [`${many ? `#${t.n} ` : ""}${t.image ?? "?"}`, t.status, typeof t.costUsd === "number" ? `$${t.costUsd.toFixed(4)}` : null].filter(Boolean).join(" · "))
+    .join(" → ");
+}
+
 /** Whichever error this step recorded — on the step, or on its last try. */
 const stepError = (step) => step.error ?? [...(step.tries ?? [])].reverse().find((t) => t.error)?.error ?? null;
 
@@ -5533,6 +5545,9 @@ async function reportCmd(runId, flags, layout) {
     // on full after it was lost, or why the step was not re-run.
     const pod = podNote(step);
     if (pod) console.log(`      ${pod.bad ? c.red("✗") : pod.warn ? c.amber("↻") : c.dim("·")} ${pod.bad ? c.red(`browser pod: ${pod.line}`) : c.dim(`browser pod: ${pod.line}`)}`);
+    // The slim go the pod was lost under is a try of its own.
+    const tries = podTries(step);
+    if (tries) console.log(`      ${c.dim("·")} ${c.dim(`tries: ${tries}`)}`);
     if (step.approvedAt) {
       console.log(`      ${c.green("✓")} ${c.dim(`approved ${when(step.approvedAt)}${step.approvalNote ? ` — "${step.approvalNote}"` : ""}`)}`);
     }

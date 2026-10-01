@@ -1467,19 +1467,32 @@ These always run on the full image, as before:
 A call that picks such an engine itself (`engine=lightpanda` on one call)
 cannot run on slim; it is treated like a lost pod, below.
 
-**When the pod goes mid-step** — drained, reaped, out of memory:
+**When the pod goes mid-step** — deleted, drained, reaped, out of memory:
 
-1. **Reconnect.** The tool tries the pod again, three times, 1, 2 and 4
-   seconds apart. If it answers, the call runs again and the step carries
-   on; the step's log and record count the reconnects. A call that may
-   already have acted when its connection dropped (it clicked, filled,
-   typed, uploaded, signed in, ran script) is **not** sent again: the
-   reconnect only checks the pod is back, and the call fails saying it
-   may have acted, so the agent looks at the page before repeating it.
+1. **Reconnect.** A pod that is stopping usually closes its browser before
+   its connection, so a call in flight meets `Target page, context or
+   browser has been closed` (or `Browser closed`, a closed WebSocket,
+   `ECONNRESET`). On the pod, that is a dropped call, not an ordinary error:
+   the tool asks the call's context once more, and if it no longer answers
+   the pod is treated as gone. (A page the agent itself closed leaves the
+   context answering, so that stays the agent's error.) The tool then
+   reconnects: three tries, 1, 2 and 4 seconds apart. A call that never
+   reached the pod is simply tried again. A call that dropped mid-way and
+   **only read** (navigated, waited, scrolled, screenshotted, extracted) is
+   run once more when the pod answers, and that answer is the answer. A
+   call that may already have acted (it clicked, filled, typed, uploaded,
+   signed in, ran script) is **not** sent again: the reconnect only checks
+   the pod is back, and the call fails saying it may have acted, so the
+   agent looks at the page before repeating it. Each try is a line on the
+   run — `browser pod: reconnect failed (try 1 of 3, at 10:15:15Z)` — the
+   time is when the try happened; the lines reach the run when the call
+   returns.
 2. **Still gone, and the step has only read** — it re-runs from the start
    on the full image, where a browser in the step is always there. The run
-   says `browser pod lost; re-ran on full`, and the step's cost is both
-   goes.
+   says `browser pod lost; re-ran on full`. The slim go is a try of its own
+   in `tries` — `image: "slim"`, `status: "lost"`, its own cost, tokens and
+   seconds, and its `browserPod` line — followed by the full re-run's row;
+   the step's cost is both.
 3. **Still gone, and the step has written anything** — it is not re-run,
    because doing it again could send or charge twice. It fails with
    `browser pod died after the step had written <what>`, and `retry:`,
@@ -1499,8 +1512,17 @@ could be either, it counts as a write. A browse call that never reached the
 pod changed nothing and does not count.
 
 The run page's step card says what happened in one line — `3 reconnects (0
-got through); browser pod lost; re-ran on full (…)` — as does `foldrun
-report <run>`, and each attempt's row in `tries` keeps its own.
+got through); browser pod lost; re-ran on full (…)` — and, under it, the
+tries: `slim · lost · $0.0040 → full · completed · $0.0060`. `foldrun
+report <run>` prints the same two lines, and each row in `tries` keeps its
+own image and pod line.
+
+A deleted browser pod stops serving within about two seconds: its server
+closes every browser on SIGTERM but would otherwise keep accepting new
+sessions until it is killed, so the pod's grace period is 2 seconds, not
+Kubernetes' default 30. The next browse call meets a pod that is gone,
+not one that is half-there. A pod already running when this changed keeps
+the old grace period until it is replaced.
 `FOLDRUN_SLIM_BROWSING=0` on the worker puts every browsing step back on
 the full image ([environment](environment)).
 
