@@ -438,6 +438,15 @@ someone else, and what you are buying is **an index we cannot crawl** — not
 a faster endpoint. Name who answers and the tool the model sees does not
 change: same name, same arguments, same shape back.
 
+The call's options hold whoever answers. `count` trims to at most that
+many. `site=` is checked on what comes back, so a result from another
+domain is never shown, even from an API with no domain filter of its own
+(Brave also gets `site:` in the query). `time_range=` goes to every API
+that can filter by date; Parallel, Jina and DataForSEO cannot, and a call
+that asks them for one is refused with that reason rather than answered
+for every date. `engines=`, `categories=` and `page=` are the account's
+own engine's, and an API agent that passes them is told so.
+
 ```yaml
 ---
 name: researcher
