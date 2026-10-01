@@ -124,3 +124,16 @@ one of them, which signs that device out without touching the others.
 Changing your password or email signs out every other session, and says
 how many. Sign-
 ins, key use and role changes are written to the account's audit log.
+
+## Appearance
+
+The dashboard comes in light and dark. **Profile → Appearance** picks one:
+**System** (the default) follows your computer's light or dark setting,
+**Light** and **Dark** stay put whatever it says. The choice is yours alone
+— it is kept on your profile, not in the browser, so it follows you to every
+browser you sign in on, and the page is drawn in it from the first paint.
+The sign-in pages, before anyone is signed in, follow the computer.
+
+The API is `GET` / `PATCH /api/me/preferences` with `{ theme }`. There is no
+CLI verb: a theme is how a browser draws the dashboard, and a terminal
+already draws in its own colours.
