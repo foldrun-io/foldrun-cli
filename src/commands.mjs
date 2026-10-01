@@ -631,28 +631,31 @@ async function platformLibrary(flags) {
 }
 
 /**
- * The Chrome version in the platform's runner image, from its open
- * /api/version (`browser_versions.chrome`, which the deploy read out of the
- * image's engines manifest). null when there is no platform, it cannot be
- * reached, or it did not say — check then compares nothing. Asked once per
- * platform per process: an account check walks many workspaces.
+ * The Google Chrome and Playwright Chromium versions in the platform's runner
+ * image, from its open /api/version (`browser_versions.chrome` and
+ * `.chromium`, which the deploy read out of the image's engines manifest).
+ * Each null when there is no platform, it cannot be reached, or it did not
+ * say — check then compares nothing for that engine. Asked once per platform
+ * per process: an account check walks many workspaces.
  */
-const platformChromeCache = new Map();
-async function platformChrome(url) {
-  if (!url) return null;
-  if (!platformChromeCache.has(url)) {
-    platformChromeCache.set(url, (async () => {
+const platformBrowsersCache = new Map();
+async function platformBrowsers(url) {
+  const none = { chrome: null, chromium: null };
+  if (!url) return none;
+  if (!platformBrowsersCache.has(url)) {
+    platformBrowsersCache.set(url, (async () => {
       try {
         const res = await fetch(new URL("/api/version", url), { signal: AbortSignal.timeout(8_000) });
-        if (!res.ok) return null;
-        const v = /** @type {any} */ (await res.json())?.browser_versions?.chrome;
-        return typeof v === "string" && /^\d+(\.\d+)+$/.test(v) ? v : null;
+        if (!res.ok) return none;
+        const bv = /** @type {any} */ (await res.json())?.browser_versions;
+        const pick = (v) => (typeof v === "string" && /^\d+(\.\d+)+$/.test(v) ? v : null);
+        return { chrome: pick(bv?.chrome), chromium: pick(bv?.chromium) };
       } catch {
-        return null;
+        return none;
       }
     })());
   }
-  return platformChromeCache.get(url);
+  return platformBrowsersCache.get(url);
 }
 
 /**
@@ -742,10 +745,13 @@ async function checkProblems(workspace, flags = {}) {
   const usable = { ...libraryTools(T), ...tools };
   const platform = await platformLibrary(flags);
   if (platform.warning) note("warn", "library", platform.warning);
-  // The runner image's Chrome, for comparing a pinned user_agent with it. A
-  // core from before webWarnings has neither, and the comparison is skipped.
+  // The runner image's Chrome and Chromium, for comparing a pinned user_agent
+  // with the engine that sends it. A core from before webWarnings has
+  // neither, and the comparison is skipped.
   const { webWarnings, runnerEngines } = /** @type {any} */ (await core());
-  const runnerChrome = webWarnings ? (runnerEngines?.()?.chrome ?? (await platformChrome(platform.url))) : null;
+  const localEngines = webWarnings ? runnerEngines?.() : null;
+  const remote = webWarnings && !(localEngines?.chrome && localEngines?.chromium) ? await platformBrowsers(platform.url) : { chrome: null, chromium: null };
+  const runnerBrowsers = { chrome: localEngines?.chrome ?? remote.chrome, chromium: localEngines?.chromium ?? remote.chromium };
   const agentNames = new Set(agents.map((a) => a.name));
   const imported = importedAgentNames(workspace, agentNames);
   for (const n of imported) agentNames.add(n);
@@ -809,7 +815,7 @@ async function checkProblems(workspace, flags = {}) {
       try {
         const matter = (await import("gray-matter")).default;
         const front = matter(fs.readFileSync(path.join(workspace, "agents", a.name, "agent.md"), "utf8")).data ?? {};
-        for (const w of webWarnings(front, { chrome: runnerChrome })) note("warn", `agents/${a.name}`, w);
+        for (const w of webWarnings(front, runnerBrowsers)) note("warn", `agents/${a.name}`, w);
       } catch {
         // an unreadable agent.md is already reported by the loader
       }

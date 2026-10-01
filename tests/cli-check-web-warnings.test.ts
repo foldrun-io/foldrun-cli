@@ -24,7 +24,7 @@ ${browse}
 You read the site.
 `;
 
-function deployed(agent: string, chrome: string | null) {
+function deployed(agent: string, chrome: string | null, chromium: string | null = null) {
   const files: Record<string, string> = {
     "AGENTS.md": "# desk\n\nOne desk.\n",
     "agents/reader/agent.md": agent,
@@ -37,7 +37,7 @@ function deployed(agent: string, chrome: string | null) {
     },
     "/api/library/tools": () => ({ entries: [] }),
     "/api/library/skills": () => ({ entries: [] }),
-    "/api/version": () => ({ version: "v2026.10.01.9", browsers: ["chromium", "chrome"], browser_versions: chrome ? { chrome } : null }),
+    "/api/version": () => ({ version: "v2026.10.01.9", browsers: ["chromium", "chrome"], browser_versions: chrome || chromium ? { ...(chrome ? { chrome } : {}), ...(chromium ? { chromium } : {}) } : null }),
   };
 }
 
@@ -69,4 +69,16 @@ test("web.browse.session: is a warning naming vendor_session:", async () => {
   const r2 = await at(t.url, "check", "--to", "desk");
   t.close();
   assert.doesNotMatch(r2.out, /vendor_session/);
+});
+
+test("engine chromium (the default) is compared with the platform's Chromium, not its Google Chrome", async () => {
+  const s = await serve(deployed(reader(`    user_agent: "${UA153}"`), "154.0.8037.58", "153.0.8010.12"));
+  const r = await at(s.url, "check", "--to", "desk");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /pins Chrome/, "Chrome/153 on Chromium 153 agrees");
+  const t = await serve(deployed(reader(`    user_agent: "${UA153}"`), "153.0.7999.1", "154.0.8037.58"));
+  const r2 = await at(t.url, "check", "--to", "desk");
+  t.close();
+  assert.match(r2.out, /web\.browse\.user_agent pins Chrome 153, and the runner image's Chromium is 154/);
 });

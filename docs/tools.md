@@ -1145,8 +1145,10 @@ beside `"Google Chrome";v="154"` in the client hints Chrome still sends, and
 a JavaScript engine that is 154's: exactly the mismatch bot checks look
 for. So `foldrun check` (when signed in, from the platform's
 `/api/version`) and the deploy warn when a pinned `user_agent:` — the
-block's or an identity's — claims another Chrome major than the image's,
-and the run log says so on the call. Drop the pin, or raise it. Pin one only
+block's or an identity's — claims another Chrome major than the browser
+that sends it: on `engine: chrome` the image's Google Chrome, on
+`chromium` (the default) the image's Playwright Chromium, which is often a
+major behind stable. The run log says so on the call. Drop the pin, or raise it. Pin one only
 where a cookie was earned with that exact string (a Cloudflare clearance),
 and then sign in again when the warning comes.
 
