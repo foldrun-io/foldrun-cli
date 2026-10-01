@@ -440,7 +440,10 @@ change: same name, same arguments, same shape back.
 The call's options hold whoever answers. `count` trims to at most that
 many. `site=` is checked on what comes back, so a result from another
 domain is never shown, even from an API with no domain filter of its own
-(Brave also gets `site:` in the query). `time_range=` goes to every API
+(Brave also gets `site:` in the query; Parallel is asked for 20 so enough
+are left after the check). `site=` is a domain: `https://www.Example.com/`
+is read as `example.com`, its subdomains included, and one with a path
+(`example.com/blog`) is refused. `time_range=` goes to every API
 that can filter by date; Parallel, Jina and DataForSEO cannot, and a call
 that asks them for one is refused with that reason rather than answered
 for every date. `engines=`, `categories=` and `page=` are the account's
