@@ -46,6 +46,21 @@ export function bundle() {
   return files;
 }
 
+// The release job checks out this repository alone, and foldrun-docs is
+// private, so there is nothing to compare docs/ against there. What ships is
+// docs/ as committed — which the pre-push hook has already checked against
+// the sibling. A check with no source passes on a docs/ that has pages and
+// fails on an empty one; a sync with no source is an error.
+if (!fs.existsSync(SOURCE)) {
+  const pages = fs.existsSync(TARGET) ? fs.readdirSync(TARGET).filter((n) => n.endsWith(".md")).length : 0;
+  if (process.argv.includes("--check") && pages > 0) {
+    console.log(`no ../foldrun-docs beside this checkout — docs/ ships as committed (${pages} pages)`);
+    process.exit(0);
+  }
+  console.error(`no ../foldrun-docs beside this checkout${pages ? "" : ", and docs/ is empty"} — nothing to sync from`);
+  process.exit(1);
+}
+
 const want = bundle();
 const have = fs.existsSync(TARGET) ? Object.fromEntries(fs.readdirSync(TARGET).filter((n) => n.endsWith(".md")).map((n) => [n, fs.readFileSync(path.join(TARGET, n), "utf8")])) : {};
 const stale = [...new Set([...Object.keys(want), ...Object.keys(have)])].filter((n) => want[n] !== have[n]);
