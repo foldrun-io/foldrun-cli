@@ -10,6 +10,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [0.7.2] — 2026-10-02
+
+The first 0.7 on npm. 0.7.0 and 0.7.1 were tagged but their release jobs
+failed before publishing (a test that read the sibling core checkout, then
+prepack's docs check with no docs checkout). The changes are listed under
+0.7.0 below.
+
+- sync-docs --check passes with no ../foldrun-docs when docs/ has pages — the release job has no docs checkout (private), and its prepack failed v0.7.1 unpublished ([c29e505](https://github.com/foldrun-io/foldrun-cli/commit/c29e505))
+
 ## [0.7.1] — 2026-10-02
 
 0.7.0 was tagged but never reached npm: its release job failed on a test that
