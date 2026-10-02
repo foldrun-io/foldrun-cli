@@ -10,6 +10,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [0.7.1] — 2026-10-02
+
+0.7.0 was tagged but never reached npm: its release job failed on a test that
+read the sibling core checkout. 0.7.1 is 0.7.0 with that test fixed; the
+changes are listed under 0.7.0 below.
+
+### report test
+
+- core's wording through @foldrun/core, not the sibling checkout — the release job has no sibling, and v0.7.0 failed there unpublished ([f8ac942](https://github.com/foldrun-io/foldrun-cli/commit/f8ac942))
+
 ## [0.7.0] — 2026-10-02
 
 - workspace/storage/ is the spelling the agent rules and the docs teach; check notes ../../ as info ([6e82932](https://github.com/foldrun-io/foldrun-cli/commit/6e82932))
