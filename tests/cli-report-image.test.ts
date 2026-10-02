@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { serve, at, WORKSPACES } from "./fake-platform.ts";
 import { imageLabel, podNote, podTries } from "../src/commands.mjs";
-import { browserPodLine, podTriesLine } from "../../foldrun-core/src/browser-pod.ts";
+import { browserPodLine, podTriesLine } from "@foldrun/core/browser-pod";
 
 const run = {
   id: "run-pod",
