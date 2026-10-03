@@ -245,11 +245,11 @@ test("flow draft shows the files and saves them only on --yes, each with ifMatch
   const pipe = await at(s.url, "flow", "draft", "a weekly digest", "--to", "blog-desk");
   const yes = await at(s.url, "flow", "draft", "a weekly digest", "--to", "blog-desk", "--yes", "--flow", "weekly");
   s.close();
-  assert.equal(pipe.code, 0, pipe.out);
+  assert.equal(pipe.code, 1, "a draft paid for and not saved is not a success");
   assert.match(pipe.out, /A weekly flow\./);
   assert.match(pipe.out, /\+ 1\. \[\[writer\]\] — write it/);
   assert.match(pipe.out, /warn\s+flows\/weekly\.md\s+no evals/);
-  assert.match(pipe.out, /nothing saved — run it again with --yes/);
+  assert.match(pipe.out, /the draft call was made[\s\S]*nothing saved — run it again with --yes/);
   assert.equal(yes.code, 0, yes.out);
   const w = writes(s);
   assert.deepEqual(w.filter((x) => x.method === "POST").map((x) => x.body), [{ description: "a weekly digest" }, { description: "a weekly digest", flow: "weekly" }]);

@@ -7812,8 +7812,9 @@ async function flowDraftCmd(positional, flags, layout) {
     return 0;
   }
   if (flags.yes !== true && !process.stdin.isTTY) {
-    console.log(`  ${c.dim(`nothing saved — run it again with --yes to save ${files.length === 1 ? "this file" : `these ${files.length} files`} (the draft will differ), or save them with \`foldrun source put\``)}\n`);
-    return 0;
+    // The model call was made and charged; a script must not read that as done.
+    console.log(`  ${c.dim(`the draft call was made (charged like a step), but this is not a terminal to ask — nothing saved — run it again with --yes to save ${files.length === 1 ? "this file" : `these ${files.length} files`} (the draft will differ), or save them with \`foldrun source put\``)}\n`);
+    return 1;
   }
   if (!(await confirmed(flags, "flow draft", `Save ${files.length} file${files.length === 1 ? "" : "s"} to ${ws}${files.some((f) => f.before !== null) ? " (replacing what is there)" : ""}? [y/N] `))) {
     console.log(`\n  ${c.dim("nothing saved")}\n`);
