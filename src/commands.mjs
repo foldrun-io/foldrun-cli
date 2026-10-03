@@ -1124,16 +1124,22 @@ function bundleDirs(workspace, kind) {
 
 // ---------------------------------------------------------------- run
 
-// An API key, and only that. A claude.ai login on this machine is not a
-// credential foldrun may run on: Anthropic does not allow products built on
-// its Agent SDK to use claude.ai subscriptions, so the CLI neither looks
-// for one nor suggests it. An agent that names its own `provider:` needs
-// no Anthropic key at all — that is checked where the agent is read.
+// A model credential, named, and never the machine's own login by default:
+// an API key (ANTHROPIC_API_KEY), a gateway bearer (ANTHROPIC_AUTH_TOKEN),
+// or a Claude login token (CLAUDE_CODE_OAUTH_TOKEN, from `claude
+// setup-token`) — in that order, and the run says which (core
+// model-credential.ts). Before, the key was checked here and then never
+// reached the step, which ran on whatever login the machine had. An agent
+// that names its own `provider:` needs none of these — that is checked where
+// the agent is read. Terms: Anthropic does not allow products built on its
+// Agent SDK to offer claude.ai login unless it has approved them.
+const MODEL_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"];
 function assertCredentials() {
-  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return;
+  if (MODEL_CREDENTIALS.some((v) => (process.env[v] ?? "").trim())) return;
   throw new Error(
-    "no credentials — set ANTHROPIC_API_KEY (an API key from console.anthropic.com),\n" +
-      "  or give the agent its own `provider:`. `foldrun check` works without either.",
+    "no model credential — set ANTHROPIC_API_KEY (an API key from console.anthropic.com),\n" +
+      "  or CLAUDE_CODE_OAUTH_TOKEN (a Claude login token: `claude setup-token`),\n" +
+      "  or give the agent its own `provider:`. `foldrun check` works without any.",
   );
 }
 
@@ -3321,6 +3327,20 @@ async function doctor(flags) {
   // Set or unset, never the value: two of these are a key and a proxy URL
   // that may carry one.
   line(true, "env", ["FOLDRUN_URL", "FOLDRUN_TOKEN", "FOLDRUN_TIMEOUT", "HTTPS_PROXY"].map((v) => (env(v) ? `${v} set` : c.dim(`${v} unset`))).join(" · "));
+  // Which model credential a local run would use — said, not judged: a
+  // machine that only drives the platform needs none.
+  try {
+    const { resolveModelCredential } = await core();
+    const m = resolveModelCredential(process.env);
+    console.log(
+      `  ${m.kind === "none" ? c.dim("·") : c.green("✓")} ${"model".padEnd(9)} ` +
+        (m.kind === "none"
+          ? c.dim("no credential for local runs — ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`")
+          : `${m.label} — what \`foldrun run\` uses here`),
+    );
+  } catch {
+    // core unresolvable is already its own line above
+  }
 
   let url;
   let token;

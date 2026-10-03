@@ -1,11 +1,28 @@
 # CLI reference
 
-`foldrun` needs no account. `ANTHROPIC_API_KEY` — an API key from
-console.anthropic.com — is enough to run agents; `init` and `check` need
-nothing at all. A claude.ai subscription is not a credential here: Anthropic
-does not allow products built on its Agent SDK to run on claude.ai logins,
-so the key is the way, or any other model provider named with `provider:`
-(see [Providers](providers)).
+`foldrun` needs no account, and `init` and `check` need no credential at
+all. To run agents, set one model credential. The first one set is used:
+
+| | |
+|---|---|
+| `ANTHROPIC_API_KEY` | an API key from console.anthropic.com |
+| `ANTHROPIC_AUTH_TOKEN` | a bearer token for a gateway, with `ANTHROPIC_BASE_URL` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | a Claude login token: run `claude setup-token` and set what it prints |
+
+An agent that names its own `provider:` needs none of these (see
+[Providers](providers)). Every step says which credential it ran on, in the
+run's trail and on the run page, and `foldrun doctor` says which one this
+machine would use. Whatever login Claude Code has on the machine is never
+picked up by itself: with nothing set, `run` stops and says so.
+
+Anthropic does not allow products built on its Agent SDK to offer claude.ai
+login unless Anthropic has approved them. A login token is supported here for
+the account that runs foldrun; check that the terms cover your use before you
+rely on it.
+
+An agent's own shell can read an API key, as it can when you run Claude Code
+with one in your shell; it cannot read a login token, which Claude Code keeps
+to itself. Script tools and `verify:` commands see neither.
 
 An agent gets the tools its files grant and nothing of the machine it runs
 on: a local run does not load the MCP connectors of whoever is signed in to
@@ -82,7 +99,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun api version` | Settings → API: the API version this account's requests get when they send no `Foldrun-Version`, whether it is pinned, every version still served and the rate limits. `api version pin <YYYY-MM-DD>` pins it, `unpin` goes back to current (`PATCH /api/account/api`; an admin's) |
 | `foldrun changelog` | What's new: the platform's release notes, newest first — features, fixes, docs — and which release this install runs (`GET /api/changelog`; `--limit <n>` up to 50, `--json`) |
 | `foldrun version` | this CLI's version, its `@foldrun/core`'s, and — when a platform is known (`--url`, `--profile`, `FOLDRUN_URL` or where you signed in) — that platform's: version, release time, API version, each component's commit and the browsers its runner image has (with versions where known: `chrome 154.0.8037.58`), from `GET /api/version` (no key needed). Warns when the platform was released with a newer CLI than this one. An unreachable platform is a dim line, not a failure. `--json` prints `{ cli, core, platform }`. `foldrun --version` (or `-v`) prints only the CLI's version, offline. See [Versions and releases](versions) |
-| `foldrun doctor` | check the road to the platform, one line each: Node (22 or newer), the CLI and core versions, which of `FOLDRUN_URL`, `FOLDRUN_TOKEN`, `FOLDRUN_TIMEOUT`, `HTTPS_PROXY` are set (never their values), the account it would act as, DNS for the platform's host, and a timed `GET /api/healthz`. The first thing to run when a command cannot reach the platform |
+| `foldrun doctor` | check the road to the platform, one line each: Node (22 or newer), the CLI and core versions, which of `FOLDRUN_URL`, `FOLDRUN_TOKEN`, `FOLDRUN_TIMEOUT`, `HTTPS_PROXY` are set (never their values), which model credential a local run would use (by its variable, never its value), the account it would act as, DNS for the platform's host, and a timed `GET /api/healthz`. The first thing to run when a command cannot reach the platform |
 | `foldrun storage <verb>` | what a workspace PRODUCED, as opposed to what you wrote — `source` is the other half. `ls [prefix]` lists every file with its size, when it was written, how long ago and which run wrote it (`run:<id>`, `user:<email>` for an upload, `api-key` for a key), newest first, plus what the store holds against its quota. `cat <path>` prints a text file and refuses one that is not text; `cat <path> --preview` asks the platform to read it instead and prints what is in it — a PDF or Word document as paragraphs, a spreadsheet or CSV as a table, a deck as slides, an archive as its listing. `get <path>` downloads it beside you — `--file <path>` names somewhere else, `--force` overwrites. `put <file|folder>...` uploads any files, of any type, into storage under their own names, walking folders whole (`.git`, `node_modules` and `.DS_Store` are skipped); `--into <folder/>` puts them under a folder, `--as <path>` renames a single file, and large files go straight to the bucket by a presigned URL, so size is not capped by the platform's request limit; `rm <path>` removes one. `share <path>` mints a public link to one produced file (7 days; `--ttl <days>`, `--forever`) and prints the URL; `shares` lists the live links (`--all` includes expired and revoked); `unshare <token>` revokes one — the link answers 404 from then on and the token is never reused. `--to <workspace>` from anywhere; inside a workspace folder it is already known |
 | `foldrun runtimes` | the environments a deployed workspace's agents need — each distinct `runtime:` (an agent's own merged with its tools'), the packages in it, which agents use it, and whether the platform has built it: ready, building, or failed with the installer's own error. `foldrun deploy` prints the same thing after a deploy and waits up to two minutes for builds in progress (`--no-runtimes` skips the wait); this asks again later, and `--wait` holds on while any is building. Exits 1 when one has failed. `--to <workspace>` from anywhere |
 | `foldrun schedule` | every flow in the account whose `trigger:` is a clock: workspace, flow, the cron line, its timezone, how many steps, whether the scheduler can parse it, and the next three times it fires. The times are the point — `0 5 1-7 * 5` reads as "the first Friday" and fires eight times in twenty-eight days, because day-of-month and day-of-week are OR'd. Exits 1 if any line is unparseable, since an invalid schedule errors nowhere and simply never runs. `--to <workspace>` narrows it |

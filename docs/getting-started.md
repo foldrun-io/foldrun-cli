@@ -8,6 +8,7 @@ files are the program — so the loop is edit, check, run, deploy.
 ```sh
 npm install -g foldrun
 export ANTHROPIC_API_KEY=sk-ant-...     # an API key from console.anthropic.com
+# or: export CLAUDE_CODE_OAUTH_TOKEN=...  from `claude setup-token` (see the CLI reference)
 
 foldrun init my-account
 cd my-account

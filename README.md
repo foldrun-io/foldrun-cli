@@ -13,7 +13,7 @@ beyond the model call itself.
 
 ```sh
 npm install -g foldrun
-export ANTHROPIC_API_KEY=sk-ant-…
+export ANTHROPIC_API_KEY=sk-ant-…   # or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
 
 foldrun init competitor-watch
 cd competitor-watch

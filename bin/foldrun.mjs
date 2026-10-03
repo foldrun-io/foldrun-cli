@@ -187,7 +187,7 @@ Signing in
   foldrun whoami            who you are on the platform: account, role, workspaces
   foldrun onboarding        the account's getting-started steps, done or not, the next one first (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
-  foldrun doctor            check the path to the platform: node, CLI, account, DNS, a timed /api/healthz
+  foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /api/healthz
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys: created, last used, expires, scope — also create <label> [--expires 90d], rotate <id> [--grace 1h], revoke <id>
