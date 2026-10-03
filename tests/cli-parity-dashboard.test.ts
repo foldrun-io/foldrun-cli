@@ -145,6 +145,13 @@ test("flow set to what the step already says changes nothing — no reordering d
   assert.deepEqual(writes(s), []);
 });
 
+test("flow with an unknown verb names every flow verb the dispatcher has", () => {
+  const { root } = desk();
+  const r = run(root, ["flow", "wibble"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /new, add, rm-step, dup-step, show, run, rotate-hook, set, trigger, move-step, copy-step, paste, draft are the verbs, not "wibble"/);
+});
+
 test("flow trigger writes the trigger picker's lines; a schedule needs its cron; --dry-run writes nothing", () => {
   const { root, ws } = desk();
   const dry = run(root, ["flow", "trigger", "publish", "schedule", "--schedule", "0 9 * * 1", "--timezone", "Australia/Sydney", "--dry-run"]);

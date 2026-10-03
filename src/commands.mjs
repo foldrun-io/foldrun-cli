@@ -328,7 +328,7 @@ async function scaffoldCmd(kind, positional, flags, layout) {
 
   // The other verbs are dispatched before this — `agent run` and `tool test`
   // go to the platform — so anything left here should have been `new`.
-  const alsoVerbs = { agents: ["run", "link", "unlink"], tools: ["test"], flows: ["add", "rm-step", "dup-step", "show", "run", "rotate-hook"] }[kind] ?? [];
+  const alsoVerbs = { agents: ["run", "link", "unlink"], tools: ["test"], flows: ["add", "rm-step", "dup-step", "show", "run", "rotate-hook", "set", "trigger", "move-step", "copy-step", "paste", "draft"] }[kind] ?? [];
   const verb = positional[0];
   if (verb !== "new") {
     const verbs = ["new", ...alsoVerbs].join(", ");
