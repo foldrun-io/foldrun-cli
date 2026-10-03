@@ -127,6 +127,24 @@ test("flow set refuses a value core's rewriter would drop or zero: effort, timeo
   assert.equal(flowOf(ws), updateFlowStep(before, 1, { timeout: "1800", effort: "deep", retry: "0", loop: "5", max: "20" }));
 });
 
+test("flow set to what the step already says changes nothing — no reordering diff, no platform revision", async () => {
+  const { root, ws } = desk();
+  const before = FLOW.replace("   retry: 1\n", "   verify: judge: cites a source\n   retry: 1\n");
+  fs.writeFileSync(path.join(ws, "flows/publish.md"), before);
+  const r = run(root, ["flow", "set", "publish", "--step", "2", "retry=1", "instruction=draft it"]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /nothing to change/);
+  assert.equal(flowOf(ws), before);
+  const d = platformDesk();
+  d.files["flows/publish.md"] = before;
+  const s = await serve(d.routes);
+  const p = await at(s.url, "flow", "set", "publish", "--to", "blog-desk", "--step", "2", "retry=1");
+  s.close();
+  assert.equal(p.code, 0, p.out);
+  assert.match(p.out, /nothing to change/);
+  assert.deepEqual(writes(s), []);
+});
+
 test("flow trigger writes the trigger picker's lines; a schedule needs its cron; --dry-run writes nothing", () => {
   const { root, ws } = desk();
   const dry = run(root, ["flow", "trigger", "publish", "schedule", "--schedule", "0 9 * * 1", "--timezone", "Australia/Sydney", "--dry-run"]);

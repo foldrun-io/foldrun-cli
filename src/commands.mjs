@@ -7571,6 +7571,16 @@ async function flowEditCmd(flags, layout, { flow, what, label, compute, bodies }
   return 0;
 }
 
+/** Two parsed flows that run the same: equal but for key order and the
+ *  line numbers a reflow moves. */
+function sameFlow(a, b) {
+  const canon = (v) =>
+    Array.isArray(v) ? v.map(canon)
+    : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).filter((k) => k !== "line").sort().map((k) => [k, canon(v[k])]))
+    : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+
 /** The step options the dashboard's step editor writes (core updateFlowStep). */
 const STEP_OPTION_KEYS = ["model", "effort", "retry", "timeout", "verify", "when", "case", "else", "loop", "until", "each", "max", "limits"];
 
@@ -7619,7 +7629,7 @@ async function flowSetCmd(positional, flags, layout) {
     }
     options[key] = value === "" ? null : value;
   }
-  const { updateFlowStep, updateFlowStepInstruction } = await core();
+  const { updateFlowStep, updateFlowStepInstruction, parseFlow } = await core();
   return flowEditCmd(flags, layout, {
     flow,
     what: "flow set",
@@ -7631,6 +7641,10 @@ async function flowSetCmd(positional, flags, layout) {
       const afterInstruction = instruction !== undefined ? updateFlowStepInstruction(next, i, instruction) : next;
       next = afterInstruction;
       if (Object.keys(options).length) next = updateFlowStep(next, i, options);
+      // The rewriter re-emits the managed lines at the top of the step, so a
+      // value the step already has still came back reordered — a diff, and on
+      // the platform a revision, for no change. Same flow when parsed: none.
+      if (next !== raw && sameFlow(parseFlow("flow.md", raw), parseFlow("flow.md", next))) next = raw;
       return { next, meta: { i, afterInstruction, label: `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}` } };
     },
     bodies: (raw, m) => [
