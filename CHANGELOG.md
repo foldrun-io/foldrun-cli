@@ -10,6 +10,39 @@ edited by a person.
 
 <!-- releases -->
 
+## [0.8.0] — 2026-10-03
+
+- --help shows each verb exactly its options — `api --help` listed secrets' --kind (its text has "api (… Name: value"), `restore --help` listed nothing ([2c0a447](https://github.com/foldrun-io/foldrun-cli/commit/2c0a447))
+- flow <unknown verb> names set, trigger, move-step, copy-step, paste and draft — the dispatcher had them since b87c9b5, the error's list did not ([bed1887](https://github.com/foldrun-io/foldrun-cli/commit/bed1887))
+- flow draft on a pipe without --yes exits 1 — it printed "nothing saved" and returned 0 after a paid model call, so a script read an unsaved draft as done ([2cfc76f](https://github.com/foldrun-io/foldrun-cli/commit/2cfc76f))
+- flow set to a value the step already has is "nothing to change" — core re-emits the managed lines at the top of the step, so the old next === raw test never fired and the reorder was written (a platform revision for no change) ([a3122ab](https://github.com/foldrun-io/foldrun-cli/commit/a3122ab))
+- flow set refuses effort, timeout, retry, loop and max values core's rewriter would drop or clamp — timeout=15m deleted `timeout: 900` and exited 0, retry=abc wrote 0 ([8c55222](https://github.com/foldrun-io/foldrun-cli/commit/8c55222))
+
+### credentials
+
+- a Claude login token (CLAUDE_CODE_OAUTH_TOKEN, from claude setup-token) is accepted beside an API key; doctor says which a local run uses ([2c03143](https://github.com/foldrun-io/foldrun-cli/commit/2c03143))
+
+### deps
+
+- @foldrun/core ^0.6.0 — model credentials, docker script fixes, workspace/ prompts ([d9cc3cd](https://github.com/foldrun-io/foldrun-cli/commit/d9cc3cd))
+
+### docs
+
+- sync — a test run's later steps see its earlier steps' writes ([24bb26a](https://github.com/foldrun-io/foldrun-cli/commit/24bb26a))
+- sync — local runs load no claude.ai connectors or on-disk MCP config ([8d3db4e](https://github.com/foldrun-io/foldrun-cli/commit/8d3db4e))
+
+### e2e
+
+- reads the account layout init makes, and skips without an API key instead of failing ([e3734ac](https://github.com/foldrun-io/foldrun-cli/commit/e3734ac))
+
+### release automation
+
+- every push to main keeps a "release X.Y.Z" pull request open; merging it publishes and tags ([9c12bb0](https://github.com/foldrun-io/foldrun-cli/commit/9c12bb0))
+
+### release-pr
+
+- approve the release pull request's own ci run — it waits for approval, and the required checks are its jobs ([f174f9a](https://github.com/foldrun-io/foldrun-cli/commit/f174f9a))
+
 ## [0.7.2] — 2026-10-02
 
 The first 0.7 on npm. 0.7.0 and 0.7.1 were tagged but their release jobs
