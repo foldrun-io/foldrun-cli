@@ -16,9 +16,10 @@
 //
 //   FOLDRUN_E2E=1 node --test tests/e2e.test.ts
 //
-// Credentials come from ANTHROPIC_API_KEY or an existing Claude Code login —
-// the Agent SDK spawns the Claude Code executable, so a local subscription is
-// enough and no key needs to be set.
+// Credentials: ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN), as for any
+// `foldrun run`. A claude.ai login on this machine is not one — the CLI has
+// refused it since f7b5b36 — so without a key the test skips and says so,
+// rather than failing at the CLI's credential check.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -34,7 +35,14 @@ const CLI = path.join(ROOT, "bin/foldrun.mjs");
 
 // Opt-in: `npm test` must stay free and offline.
 const enabled = process.env.FOLDRUN_E2E === "1";
-const opts = { skip: enabled ? false : "set FOLDRUN_E2E=1 to run (spends money)" };
+const keyed = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+const opts = {
+  skip: !enabled
+    ? "set FOLDRUN_E2E=1 to run (spends money)"
+    : keyed
+      ? false
+      : "set ANTHROPIC_API_KEY as well — `foldrun run` needs an API key, not a claude.ai login",
+};
 
 const foldrun = (...args: string[]) =>
   spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", cwd: ROOT });
@@ -56,9 +64,12 @@ test("a template runs, and leaves a conformant workspace behind", opts, () => {
     // agent's *behaviour* is checked loosely — it did the work at all — and
     // the platform's *guarantees* about whatever it produced are checked hard.
 
-    const outputs = path.join(ws, "agents/notetaker/outputs");
+    // `init` makes an account folder: the template lands as its one
+    // workspace, workspaces/main/ (a --flat init would be the folder itself).
+    const home = fs.existsSync(path.join(ws, "workspaces/main")) ? path.join(ws, "workspaces/main") : ws;
+    const outputs = path.join(home, "agents/notetaker/outputs");
     const wrote = fs.existsSync(outputs) ? fs.readdirSync(outputs) : [];
-    const memory = path.join(ws, "memory");
+    const memory = path.join(home, "memory");
     const concepts = readBundle(memory);
 
     assert.ok(
@@ -70,10 +81,10 @@ test("a template runs, and leaves a conformant workspace behind", opts, () => {
 
     // Whatever it produced is archived under the run, so a later run's reset
     // cannot take the history with it.
-    const runs = fs.readdirSync(path.join(ws, "runs")).filter((f) => !f.endsWith(".json"));
+    const runs = fs.readdirSync(path.join(home, "runs")).filter((f) => !f.endsWith(".json"));
     assert.equal(runs.length, 1, "the run left no archive directory");
     if (wrote.length) {
-      const archived = path.join(ws, "runs", runs[0], "outputs/notetaker");
+      const archived = path.join(home, "runs", runs[0], "outputs/notetaker");
       assert.deepEqual(
         fs.readdirSync(archived).sort(),
         [...wrote].sort(),
