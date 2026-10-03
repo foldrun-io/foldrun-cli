@@ -7,6 +7,10 @@ does not allow products built on its Agent SDK to run on claude.ai logins,
 so the key is the way, or any other model provider named with `provider:`
 (see [Providers](providers)).
 
+An agent gets the tools its files grant and nothing of the machine it runs
+on: a local run does not load the MCP connectors of whoever is signed in to
+claude.ai or Claude Code there, nor any MCP configuration on disk.
+
 ## Commands
 
 | | |
