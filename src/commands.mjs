@@ -7586,6 +7586,11 @@ async function flowSetCmd(positional, flags, layout) {
   const pairs = positional.slice(2);
   const usage = `\`foldrun flow set <flow> --step <n|agent> key=value …\` — keys: ${STEP_OPTION_KEYS.join(", ")}, instruction (key= clears)`;
   if (!flow || !pairs.length) throw new Error(usage);
+  const { resolveEffort, EFFORT_LEVELS, parseDuration } = await core();
+  // The counted options, in the ranges core's rewriter and parseFlow share.
+  // Outside them the rewriter clamps, zeroes (retry=abc wrote 0) or drops
+  // the line (timeout=15m deleted timeout: 900) and the edit "succeeded".
+  const COUNTS = { retry: [0, 5, "extra attempts"], loop: [1, 5, "extra cycles"], max: [1, 20, "items"] };
   const options = {};
   let instruction;
   for (const p of pairs) {
@@ -7603,6 +7608,15 @@ async function flowSetCmd(positional, flags, layout) {
     // dropped without a word. Refuse it here and say where it lives.
     if (key === "each" && value && value !== "lines") throw new Error(`each=${value}: flow set writes \`each: lines\` only — \`foldrun flow add <flow> fan-out --each "${value}"\` writes the rest`);
     if (key === "else" && value && !["true", "1"].includes(value)) throw new Error("else=true, or else= to clear it");
+    if (key === "effort" && value && !resolveEffort(value)) throw new Error(`effort=${value} is not an effort — ${EFFORT_LEVELS.join(", ")} (or effort= to clear it)`);
+    if (key === "timeout" && value && !/^[1-9]\d*$/.test(value)) {
+      const secs = parseDuration(value);
+      throw new Error(`timeout=${value}: flow set writes a whole number of seconds — ${secs ? `timeout=${secs}` : "e.g. timeout=900 for 15 minutes"} (or timeout= to clear it)`);
+    }
+    if (key in COUNTS && value) {
+      const [lo, hi, what] = COUNTS[key];
+      if (!/^\d+$/.test(value) || Number(value) < lo || Number(value) > hi) throw new Error(`${key}=${value}: a whole number of ${what}, ${lo} to ${hi} (or ${key}= to clear it)`);
+    }
     options[key] = value === "" ? null : value;
   }
   const { updateFlowStep, updateFlowStepInstruction } = await core();

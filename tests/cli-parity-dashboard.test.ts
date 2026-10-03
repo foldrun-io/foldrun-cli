@@ -103,6 +103,30 @@ test("flow set refuses what the editor would silently drop, and unknown keys", (
   assert.equal(flowOf(ws), FLOW);
 });
 
+test("flow set refuses a value core's rewriter would drop or zero: effort, timeout, retry, loop, max", () => {
+  const { root, ws } = desk();
+  const before = FLOW.replace("   retry: 1\n", "   retry: 1\n   timeout: 900\n   loop: 2\n   max: 5\n   effort: low\n");
+  fs.writeFileSync(path.join(ws, "flows/publish.md"), before);
+  for (const [pair, why] of [
+    ["timeout=15m", /timeout=15m.*seconds.*timeout=900/],
+    ["timeout=0", /timeout=0.*whole number of seconds/],
+    ["effort=hihg", /effort=hihg.*low, medium, high, xhigh, max/],
+    ["retry=abc", /retry=abc.*0 to 5/],
+    ["retry=9", /retry=9.*0 to 5/],
+    ["loop=0", /loop=0.*1 to 5/],
+    ["loop=2.5", /loop=2\.5.*1 to 5/],
+    ["max=50", /max=50.*1 to 20/],
+  ] as const) {
+    const r = run(root, ["flow", "set", "publish", "--step", "2", pair]);
+    assert.equal(r.status, 1, `${pair}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, why, pair);
+    assert.equal(flowOf(ws), before, `${pair} left the file as it was`);
+  }
+  const ok = run(root, ["flow", "set", "publish", "--step", "2", "timeout=1800", "effort=deep", "retry=0", "loop=5", "max=20"]);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.equal(flowOf(ws), updateFlowStep(before, 1, { timeout: "1800", effort: "deep", retry: "0", loop: "5", max: "20" }));
+});
+
 test("flow trigger writes the trigger picker's lines; a schedule needs its cron; --dry-run writes nothing", () => {
   const { root, ws } = desk();
   const dry = run(root, ["flow", "trigger", "publish", "schedule", "--schedule", "0 9 * * 1", "--timezone", "Australia/Sydney", "--dry-run"]);
