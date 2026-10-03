@@ -150,7 +150,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `--limit <n>` | `runs`, `billing`, `history`: how many rows, newest first (`runs` default 20, `billing` 15). Each workspace is asked for its own newest `n` before the merge, so one busy desk cannot crowd out a quiet one |
 | `--step <n>` | `approve`, `reject`: decide one gate, numbered as `report` prints it. Without it, every step of that run which is waiting |
 | `--note "<text>"` | `approve`: guidance the approved step reads in its prompt — "approve, but skip the Sydney batch". `reject`: the reason, recorded on the trace |
-| `--yes` | skip the confirmation, deliberately: `approve`, `stop`, `deploy` (when it would delete files), and a bulk `stop` or `rerun`, `flow rotate-hook`, `flow draft`, `history restore`, `billing plan`, `repo deploy`/`merge`, `workspace set name`, and every delete — `runs rm`, `storage rm`, `storage unshare`, `source rm`, `secrets rm`, `keys revoke`, `workspaces rm`. Required when there is no terminal to ask; without it nothing is deleted |
+| `--yes` | skip the confirmation, deliberately: `approve`, `stop`, `deploy` (when it would delete files), and a bulk `stop` or `rerun`, `flow rotate-hook`, `flow draft`, `history restore`, `restore`, `billing plan`, `repo deploy`/`merge`, `workspace set name`, and every delete — `runs rm`, `storage rm`, `storage unshare`, `source rm`, `secrets rm`, `keys revoke`, `workspaces rm`. Required when there is no terminal to ask; without it nothing is deleted |
 | `--json` | `report`: the raw run record instead of the report. `observe`, `usage`: the raw document |
 | `--events <a,b>` | `account set notify`: which events are notified on — `failed`, `awaiting-approval`, `completed` |
 | `--watch` | `invoke`: follow the run's trace here as it happens; the exit code is the run's |
@@ -175,7 +175,7 @@ so the key is the way, or any other model provider named with `provider:`
 | `--timeout <s>` | how many seconds one request to the platform may take — or `FOLDRUN_TIMEOUT`. Default 30, and 300 for `tool test`, where the tool itself is the thing being waited on |
 | `--local` | `deploy`, `secrets`, `logs`: the installation on this machine, even when signed in |
 | `--quiet` | leave out the dim "acting as …" line a platform command prints on stderr |
-| `--dry-run` | `extract`: list what would move, change nothing. `flow add`, `flow rm-step`, `flow dup-step`, `flow set`, `flow trigger`, `flow move-step`, `flow paste`, `flow draft`, `history restore`, `agent link`/`unlink`: show the diff, write nothing. A bulk `stop`/`rerun`: list what matches, touch nothing |
+| `--dry-run` | `extract`: list what would move, change nothing. `flow add`, `flow rm-step`, `flow dup-step`, `flow set`, `flow trigger`, `flow move-step`, `flow paste`, `flow draft`, `history restore`, `agent link`/`unlink`: show the diff, write nothing. `restore`: the diff only, restore nothing. A bulk `stop`/`rerun`: list what matches, touch nothing |
 | `--out <file>` | `api spec`: where to write the OpenAPI document (default stdout) |
 | `--file <path>` | `source put`: the file to send. `storage get`, `report get`, `account export`, `billing statement --csv`: where to write — `-` for stdout |
 

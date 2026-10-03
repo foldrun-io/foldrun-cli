@@ -542,6 +542,17 @@ test("help names every new verb, and never runs one", async () => {
   }
 });
 
+test("each verb's --help lists exactly its own options: restore gets --dry-run/--yes, api not secrets' --kind", async () => {
+  const restore = (await cli(["restore", "--help"])).out;
+  assert.match(restore, /^\s*--dry-run\s/m);
+  assert.match(restore, /^\s*--yes\s/m);
+  const api = (await cli(["api", "--help"])).out;
+  assert.doesNotMatch(api, /--kind/);
+  assert.match(api, /--out <file>\s+api spec/);
+  const secrets = (await cli(["secrets", "--help"])).out;
+  assert.match(secrets, /--kind <k>/);
+});
+
 test("source ls / cat / put / mv / rm — the editor's file door, which had no test of its own", async () => {
   const s = await serve({
     "GET /api/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { path: q.get("path"), content: "# hi" } : { files: ["AGENTS.md", "flows/publish.md"] }),

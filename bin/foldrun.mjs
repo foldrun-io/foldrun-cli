@@ -247,7 +247,7 @@ Options
   --new-client              connect: enter a new OAuth client even when one is saved for the secret
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
-  --yes                     approve, stop, rerun (bulk), flow rotate-hook, flow draft, history restore, billing plan, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
+  --yes                     approve, stop, rerun (bulk), flow rotate-hook, flow draft, history restore, restore <ws>, billing plan, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
   --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
@@ -274,7 +274,7 @@ Options
   --grace <span>            keys rotate: keep the old key working for 1h or 24h while you swap the new one in (default 0: revoked now)
 
 Platform options (deploy, invoke, secrets, logs, keys)
-  --to <workspace>          workspace on the platform (deploy default: folder name); flow add/show, agent link: edit or show the deployed copy instead of this folder
+  --to <workspace>          workspace on the platform (deploy default: folder name); flow add/show, agent link: edit or show the deployed copy instead of this folder; restore <ws>: the commit, date or age to put it back to (3d, 2026-09-28T14:00)
   --tenant <name>           account to deploy into (default: default, local only)
   --data <dir>              the installation's data directory
   --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
@@ -285,7 +285,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --quiet                   leave out the dim "acting as …" line a platform command prints on stderr
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
-  --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow move-step, flow paste, flow draft, history restore, agent link, agent unlink: show the diff, write nothing; stop, rerun (bulk): list what matches, touch nothing
+  --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow move-step, flow paste, flow draft, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; stop, rerun (bulk): list what matches, touch nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
   --yes                     deploy: allow deleting files this folder no longer has (asked otherwise; required with no terminal)
@@ -346,12 +346,21 @@ function helpFor(which) {
   if (!which) return HELP;
   const esc = which.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const usage = new RegExp(`^\\s*foldrun ${esc}(\\s|$)`);
-  // "approve, reject: …" names approve too — a comma after the name is
-  // part of a list of commands, not the end of it.
-  const option = new RegExp(`(^|[;,]\\s*)${esc}([\\s,][^;:]*)?:`);
+  // An option's text is clauses split by ";", each "<commands>: what it
+  // does there". Only the part before a clause's first colon names
+  // commands, as a comma list — "approve, reject: …" names approve too.
+  // Matching anywhere up to a colon let prose in the text name a command:
+  // secrets' --kind reads "api (--base-url, --header "Name: value"…" and
+  // showed under `api --help`.
+  const item = new RegExp(`^${esc}(\\s|$)`);
+  const names = (text) =>
+    text.split(";").some((clause) => {
+      const colon = clause.indexOf(":");
+      return colon > 0 && clause.slice(0, colon).split(",").some((x) => item.test(x.trim()));
+    });
   const lines = HELP.split("\n");
   const own = lines.filter((l) => usage.test(l));
-  const opts = lines.filter((l) => /^\s*--/.test(l) && option.test(l.replace(/^\s*--\S+(\s+(\/\s+)?--\S+)*(\s"?<[^>]+>"?)?\s+/, "")));
+  const opts = lines.filter((l) => /^\s*--/.test(l) && names(l.replace(/^\s*--\S+(\s+(\/\s+)?--\S+)*(\s"?<[^>]+>"?)?\s+/, "")));
   if (!own.length && !opts.length) return HELP;
   return ["", ...own, ...(opts.length ? ["", "Options:", ...opts] : []), "", "`foldrun --help` for everything."].join("\n");
 }
