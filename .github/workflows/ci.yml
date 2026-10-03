@@ -25,8 +25,9 @@ jobs:
         with:
           path: foldrun-cli
       # The sibling: the CLI is developed against foldrun-core's source
-      # (`../foldrun-core`, the layout is the wiring), and its e2e test
-      # reaches core's src directly. Public, so no token.
+      # (`../foldrun-core`, the layout is the wiring). Tests import
+      # @foldrun/core, never the sibling's path, because release.yml has no
+      # sibling and tests against the published core. Public, so no token.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: foldrun-io/foldrun-core

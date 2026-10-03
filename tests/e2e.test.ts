@@ -28,7 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import matter from "gray-matter";
-import { conformanceIssues, readBundle, provenanceMarks, PRODUCER } from "../../foldrun-core/src/okf.ts";
+import { conformanceIssues, readBundle, provenanceMarks, PRODUCER } from "@foldrun/core";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "bin/foldrun.mjs");
