@@ -25,6 +25,31 @@ dashboard and the API), `docs` and `infra` — recorded when it was deployed.
 The `foldrun` CLI and `@foldrun/core` on npm are packages a person publishes,
 and keep ordinary semver (`0.6.0`).
 
+## Rollback and the database
+
+A rollback redeploys older code, but not an older database: the schema stays
+where the newest release left it, because migrations only run forwards. So
+every migration has to work with the code of the release before it — the
+expand/contract rule. A release only expands: a new table, a nullable column,
+a column with a `DEFAULT`, an index. Taking something away that released code
+still uses — dropping or renaming a table or column, changing a column's
+type, making a column `NOT NULL` with no default, dropping a constraint or a
+default, `TRUNCATE`, a `DELETE` with no `WHERE` — is the contract half, and
+ships a release later, once no deployed version reads it. A migration that
+has been released is never edited; the next change is a new file.
+
+The platform enforces this. `scripts/migration-guard.mjs` in
+`foldrun-platform` reads the migrations added since the deployed version (in
+CI, since the commit a push or pull request started from) and refuses those
+statements, in CI and in the pre-push hook. A deliberate contract step says so
+on the line above the statement, with a reason, and is reported rather than
+refused:
+
+```sql
+-- migration-guard: contract api_keys.label unread since v2026.09.30.1
+ALTER TABLE "api_keys" DROP COLUMN "label";
+```
+
 ## Where to see it
 
 | Where | What |

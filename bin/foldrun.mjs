@@ -22,6 +22,7 @@
 //   foldrun triggers       why nothing ran: fired vs started per flow, and each reason
 //   foldrun webhooks <verb> deliveries / redeliver <id> — the notify: webhooks a workspace sent, and each attempt
 //   foldrun notifications  what mail you get, per category — set <category> on|off
+//   foldrun flags          the feature flags for this account — on or off, and why (read-only)
 //   foldrun backups        how the account is backed up, its snapshots — request a restore from one
 //   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
 //   foldrun onboarding     the account's getting-started steps, the next one first
@@ -154,6 +155,7 @@ const HELP = `foldrun — agents are just folders
   foldrun webhooks redeliver <id>  send one delivery again now, same X-Foldrun-Delivery id; exits 1 when refused (--to)
   foldrun notifications     what mail you get, category by category, and which are always sent (--json)
   foldrun notifications set <category> on|off  turn one off or back on — account-wide, or --to <workspace> for run-alerts and approvals
+  foldrun flags             the feature flags for this account: each on or off, and why — set for this account, for every account, a staged rollout, or the default (--json). Read-only: the platform's super admin changes them
   foldrun history [path]    every change to a deployed workspace, newest first (--id <revision> for its diff, --limit, --to)
   foldrun history restore <path> --id <revision>  put one file back as that revision left it, as a new revision — diff, asks (--yes, --dry-run, --to)
   foldrun repo ls           a workspace's branches and tags — also diff <branch>, deploy <ref>, merge <branch> (both ask first), rm-branch <branch>, mirror <git-url|off>, mirror-now (--to)
@@ -248,7 +250,7 @@ Options
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
   --yes                     approve, stop, rerun (bulk), flow rotate-hook, flow draft, history restore, restore <ws>, billing plan, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
-  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary: the raw document; version: {cli, core, platform}
+  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history, changelog: how many rows

@@ -7253,6 +7253,49 @@ async function notificationsCmd(positional, flags) {
   return 0;
 }
 
+/** Why a flag is what it is, as `foldrun flags` says it. */
+const FLAG_SOURCES = {
+  account: "set for this account",
+  global: "set for every account",
+  rollout: "staged rollout",
+  default: "default",
+};
+
+/**
+ * `foldrun flags` — the feature flags as they stand for this account: on or
+ * off, and what decided it (this account's override, the install-wide
+ * setting, a percentage rollout, or the default). Read-only: only the
+ * platform's super admin changes a flag, in the console, with a session —
+ * an API key never reaches those routes, so the CLI has no verb for them.
+ */
+async function flagsCmd(positional, flags) {
+  const url = platformFor(flags, "flags");
+  if (positional[0]) throw new Error("`foldrun flags` lists this account's feature flags — they are changed by the platform's super admin, not from here");
+  const r = await remoteCall(url, flags, "/api/account/flags");
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const list = r.flags ?? [];
+  if (!list.length) {
+    console.log(`\n  ${c.dim("no feature flags on this platform")}\n`);
+    return 0;
+  }
+  const w = Math.max(...list.map((f) => f.name.length));
+  const sw = Math.max(...list.map((f) => why(f).length));
+  console.log("");
+  for (const f of list) {
+    const state = f.on ? c.green("on ") : c.dim("off");
+    console.log(`  ${pad(f.name, w)}  ${state}  ${c.dim(pad(why(f), sw))}  ${f.description}`);
+  }
+  console.log(`\n  ${c.dim("read-only — the platform's super admin turns flags on and off")}\n`);
+  return 0;
+  function why(f) {
+    const base = FLAG_SOURCES[f.source] ?? String(f.source ?? "");
+    return f.source === "rollout" && typeof f.rollout === "number" ? `${base} ${f.rollout}%` : base;
+  }
+}
+
 /**
  * `foldrun history [path] --to <workspace>` — every change to a deployed
  * workspace, newest first: who, what, which files. `--id <revision>` shows
@@ -8528,6 +8571,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return webhooksCmd(positional, flags, layout);
     case "notifications":
       return notificationsCmd(positional, flags);
+    case "flags":
+      return flagsCmd(positional, flags);
     case "history":
       if (positional[0] === "restore") return historyRestoreCmd(positional, flags, layout);
       return historyCmd(positional, flags, layout);
