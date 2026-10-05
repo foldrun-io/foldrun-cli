@@ -267,7 +267,7 @@ function workspaceDirFor(flags, layout) {
   if (typeof flags.to === "string") {
     if (!layout.workspacesDir || !layout.workspaces.includes(flags.to)) {
       throw new Error(
-        `no workspace called "${flags.to}" here — this ${layout.kind === "flat" ? "is a single workspace" : `account has ${layout.workspaces.join(", ") || "none"}`}`,
+        `no workspace called "${flags.to}" here — this ${layout.kind === "flat" ? "is a single workspace" : `account has ${layout.workspaces.join(", ") || "none"}`} (--platform makes it in the deployed one)`,
       );
     }
     return path.join(layout.workspacesDir, flags.to);
@@ -343,7 +343,7 @@ async function scaffoldCmd(kind, positional, flags, layout) {
 
   // The other verbs are dispatched before this — `agent run` and `tool test`
   // go to the platform — so anything left here should have been `new`.
-  const alsoVerbs = { agents: ["run", "link", "unlink"], tools: ["test"], flows: ["add", "rm-step", "dup-step", "show", "run", "rotate-hook", "set", "trigger", "move-step", "copy-step", "paste", "draft"] }[kind] ?? [];
+  const alsoVerbs = { agents: ["run", "link", "unlink", "import", "ls"], tools: ["test"], flows: ["ls", "add", "rm-step", "dup-step", "show", "run", "rotate-hook", "set", "trigger", "move-step", "copy-step", "paste", "draft"] }[kind] ?? [];
   const verb = positional[0];
   if (verb !== "new") {
     const verbs = ["new", ...alsoVerbs].join(", ");
@@ -356,6 +356,10 @@ async function scaffoldCmd(kind, positional, flags, layout) {
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
     throw new Error(`"${name}" is not a ${one} name — kebab-case only, e.g. ${KINDS[kind].placeholder}`);
   }
+  // --platform: the dashboard's New button, on the deployed workspace —
+  // nothing is written here. `--to` alone still names a workspace of this
+  // folder, as it always has.
+  if (flags.platform === true) return platformScaffold(kind, name, flags, layout);
 
   const dir = workspaceDirFor(flags, layout);
   let files;
@@ -387,6 +391,74 @@ async function scaffoldCmd(kind, positional, flags, layout) {
   console.log(`\n  ${c.bold("Next")}
     edit ${path.join(where, files[0].path)}
     foldrun check${where === "." ? "" : ` ${where}`}${" ".repeat(4)}${c.dim("validate it — offline, costs nothing")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun agent new <name> --platform`, `flow new … --platform`, `tool new
+ * … --platform` — the dashboard's New button on a deployed workspace: the
+ * platform writes its own template (POST …/agents, …/flows, …/assets), so
+ * what lands is what the canvas would have made, as a revision.
+ */
+async function platformScaffold(kind, name, flags, layout) {
+  const one = { agents: "agent", flows: "flow", tools: "tool" }[kind];
+  const url = platformFor(flags, `${one} new --platform`);
+  const ws = platformWorkspace(flags, layout, `${one} new ${name} --platform`);
+  let route = `/api/workspaces/${enc(ws)}/${kind}`;
+  let body;
+  if (kind === "agents") {
+    body = { name, ...(typeof flags.description === "string" ? { description: flags.description } : {}), ...(typeof flags.model === "string" ? { model: flags.model } : {}) };
+  } else if (kind === "flows") {
+    if (flags.pattern !== undefined && !NEW_FLOW_SHAPES.includes(flags.pattern)) {
+      throw new Error(`--pattern takes ${NEW_FLOW_SHAPES.join(", ")} — not "${flags.pattern}"`);
+    }
+    body = { name, ...(typeof flags.pattern === "string" ? { pattern: flags.pattern } : {}) };
+  } else {
+    // A script tool, as `tool new` makes here — the platform's own default
+    // with no template is an http one.
+    route = `/api/workspaces/${enc(ws)}/assets`;
+    const template = typeof flags.template === "string" ? flags.template : typeof flags.transport === "string" ? flags.transport : "script";
+    body = { kind: "tools", name, template, ...(typeof flags.language === "string" ? { language: flags.language } : {}) };
+  }
+  const r = await remoteCall(url, flags, route, { method: "POST", body: JSON.stringify(body) });
+  console.log(`\n  ${c.green("created")} ${one} ${c.bold(name)} in ${ws} ${c.dim(`on ${url}`)}`);
+  console.log(`    ${c.dim(r.path ?? "")}${r.pattern ? c.dim(` · ${r.pattern}`) : ""}`);
+  console.log(`\n  ${c.dim(`foldrun source cat ${r.path ?? "<path>"} --to ${ws} · foldrun check --to ${ws} · foldrun pull ${ws} brings it here`)}\n`);
+  return 0;
+}
+
+/** The shapes the platform's New flow offers (core's store FLOW_PATTERNS). */
+const NEW_FLOW_SHAPES = ["pipeline", "review-loop", "fan-out", "debate", "router"];
+
+/**
+ * `foldrun agent ls` / `flow ls` — what is deployed in a workspace (GET
+ * …/agents, …/flows): the list the dashboard draws, from a terminal.
+ */
+async function remoteListCmd(kind, flags, layout) {
+  const one = kind === "agents" ? "agent" : "flow";
+  const url = platformFor(flags, `${one} ls`);
+  const ws = platformWorkspace(flags, layout, `${one} ls`);
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/${kind}`);
+  const list = r[kind] ?? [];
+  if (flags.json === true) {
+    console.log(JSON.stringify(list, null, 2));
+    return 0;
+  }
+  if (!list.length) {
+    console.log(`\n  ${c.dim(`no ${kind} in ${ws} on ${url} — \`foldrun ${one} new <name> --platform --to ${ws}\` makes one`)}\n`);
+    return 0;
+  }
+  const w = Math.max(...list.map((x) => x.name.length));
+  console.log();
+  for (const x of list) {
+    if (kind === "agents") {
+      console.log(`  ${c.bold(pad(x.name, w))}  ${pad(x.model ?? "", 8)} ${c.dim(firstLine(x.description ?? "", 80))}`);
+    } else {
+      const when = x.trigger === "schedule" && x.schedule ? `schedule ${x.schedule}${x.timezone ? ` ${x.timezone}` : ""}` : (x.trigger ?? "manual");
+      console.log(`  ${c.bold(pad(x.name, w))}  ${c.dim(when)}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`${list.length} ${list.length === 1 ? one : kind} · ${ws} · ${url}`)}\n`);
   return 0;
 }
 
@@ -3654,7 +3726,25 @@ async function sourceCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} removed ${a}\n`);
     return 0;
   }
-  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, mv, rm`);
+  if (verb === "new") {
+    // The dashboard's New button for any document (POST …/assets): the
+    // platform writes the template — a tool folder, a skill, knowledge,
+    // memory, a script — at workspace scope, or inside one agent (--agent).
+    const kinds = ["tools", "knowledge", "memory", "skills", "scripts", "agents", "flows", "evals"];
+    if (!kinds.includes(a) || !b) throw new Error(`\`foldrun source new <kind> <name> --to <workspace>\` — kind is ${kinds.join(", ")} (--agent <name>, --template, --language)`);
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(b)) throw new Error(`"${b}" is not a name — kebab-case only`);
+    const body = {
+      kind: a,
+      name: b,
+      ...(typeof flags.agent === "string" ? { agent: flags.agent } : {}),
+      ...(typeof flags.template === "string" ? { template: flags.template } : {}),
+      ...(typeof flags.language === "string" ? { language: flags.language } : {}),
+    };
+    const r = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/assets`, { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} ${ws}/${r.path ?? b}  ${c.dim(`a new ${a.replace(/s$/, "")}${flags.agent ? ` for ${flags.agent}` : ""} · revision recorded`)}\n`);
+    return 0;
+  }
+  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, new, mv, rm`);
 }
 
 // ------------------------------------------------- the account, as a whole
@@ -4058,6 +4148,7 @@ function printIncidents(report) {
  * open GET /api/status; exits 1 when the platform does not answer.
  */
 async function platformStatusCmd(flags) {
+  if (flags.history === true) return platformHistoryCmd(flags);
   const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
   const { report, error } = await fetchPlatformStatus(url, flags);
   if (flags.json === true) {
@@ -4080,6 +4171,43 @@ async function platformStatusCmd(flags) {
     printIncidents(report);
   }
   console.log(`\n  ${c.dim("history and past incidents: https://foldrun.io/status/")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun status --platform --history [--days n]` — what the status page
+ * draws as bars: each component's uptime per day over the window (1–90,
+ * default 90), and the incidents in it. The open GET /api/status/history.
+ */
+async function platformHistoryCmd(flags) {
+  const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
+  const days = flags.days === undefined ? 90 : Number(flags.days);
+  if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error(`--days is a whole number from 1 to 90 — not "${flags.days}"`);
+  const res = await remoteFetch(url, `/api/status/history?days=${days}`, {}, { seconds: timeoutSeconds(flags) });
+  /** @type {any} */
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new HttpError(body.error ?? `/api/status/history → HTTP ${res.status}`, res.status, body);
+  if (flags.json === true) {
+    console.log(JSON.stringify(body, null, 2));
+    return 0;
+  }
+  const share = (u) => (u === null || u === undefined ? "  —   " : `${(u * 100).toFixed(u === 1 ? 0 : 2)}%`.padStart(6));
+  const mark = (d) => (d.uptime === null ? c.dim("·") : d.outage ? c.red("▮") : d.degraded || d.maintenance ? c.amber("▮") : c.green("▮"));
+  const comps = body.components ?? [];
+  const wide = Math.max(0, ...comps.map((x) => x.name.length));
+  console.log(`\n  ${c.bold(`last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}`)}  ${c.dim(`${url} · a sample every ${body.sampleMinutes ?? 5} minutes · uptime is the share not in outage`)}\n`);
+  for (const comp of comps) console.log(`  ${comp.name.padEnd(wide)}  ${share(comp.uptime)}  ${(comp.days ?? []).map(mark).join("")}`);
+  const incidents = body.incidents ?? [];
+  if (incidents.length) {
+    console.log(`\n  ${c.dim("incidents and maintenance")}`);
+    for (const i of incidents) {
+      const span = `${String(i.startsAt).slice(0, 16).replace("T", " ")}Z${i.resolvedAt ? ` → ${String(i.resolvedAt).slice(0, 16).replace("T", " ")}Z` : " · open"}`;
+      console.log(`  ${i.kind === "incident" ? (i.impact === "major" ? c.red("!") : c.amber("!")) : c.dim("~")} ${c.bold(i.title)}  ${c.dim(`${i.kind === "incident" ? `${i.impact} incident` : "maintenance"} · ${span}`)}`);
+    }
+  } else {
+    console.log(`\n  ${c.dim("no incidents in the window")}`);
+  }
+  console.log(`\n  ${c.dim("▮ a day: green up, amber degraded or maintenance, red an outage, · no samples · --days <n>, --json")}\n`);
   return 0;
 }
 
@@ -4215,7 +4343,21 @@ async function workspacesCmd(positional, flags, layout) {
   const [verb, name] = positional;
   const url = flags.local === true ? undefined : remoteUrl(flags);
 
-  if (verb === "new" || verb === "add") return newWorkspace(name, flags, layout);
+  if (verb === "new" || verb === "add") {
+    if (flags.platform !== true) return newWorkspace(name, flags, layout);
+    // The dashboard's Create workspace: blank (an AGENTS.md), or with
+    // --starter the example researcher, writer and publish flow.
+    if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
+    if (!name) throw new Error("which workspace? `foldrun workspaces new <name> --platform`");
+    assertName(name);
+    const r = await remoteCall(url, flags, "/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify(flags.starter === true ? { name, starter: true } : { name, template: true }),
+    });
+    console.log(`\n  ${c.green("✓")} ${c.bold(r.name ?? name)} ${c.dim(`on ${url} — ${r.agents ?? 0} agent${r.agents === 1 ? "" : "s"}, ${r.flows ?? 0} flow${r.flows === 1 ? "" : "s"}`)}`);
+    console.log(`  ${c.dim(`foldrun agent new <name> --platform --to ${r.name ?? name} · foldrun pull ${r.name ?? name}`)}\n`);
+    return 0;
+  }
 
   if (verb === "rm" || verb === "remove" || verb === "delete") {
     if (!name) throw new Error("which workspace? `foldrun workspaces rm <name>`");
@@ -4244,7 +4386,7 @@ async function workspacesCmd(positional, flags, layout) {
     return 0;
   }
   if (verb && verb !== "ls" && verb !== "list") {
-    throw new Error(`workspaces: unknown verb "${verb}" — ls, new <name>, rm <name>`);
+    throw new Error(`workspaces: unknown verb "${verb}" — ls, show <name>, new <name>, rm <name>, demo`);
   }
 
   const here = layout.workspaces;
@@ -4667,7 +4809,7 @@ async function triggersCmd(flags, layout) {
   const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
   if (!ws) throw new Error("which workspace? `foldrun triggers --to <workspace>` — or run it inside one");
   const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
-  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/triggers?since=${days}`);
+  const body = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/triggers?days=${days}`);
   const rows = body.flows ?? [];
   if (!rows.length) {
     console.log(`\n  ${c.dim(`no trigger fired in ${ws} in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"} — a flow fires when its frontmatter says trigger: schedule, webhook, watch, storage or email`)}\n`);
@@ -5184,6 +5326,12 @@ const waitingSteps = (run) =>
     .map((s, i) => ({ step: s, index: i }))
     .filter(({ step }) => step.status === "awaiting-approval" && step.waitFor !== "event");
 
+/** The steps of a run parked on `wait: event` — what `approve --payload` releases. */
+const eventSteps = (run) =>
+  (run.steps ?? [])
+    .map((s, i) => ({ step: s, index: i }))
+    .filter(({ step }) => step.status === "awaiting-approval" && step.waitFor === "event");
+
 // ------------------------------------------------------------- approvals
 
 /**
@@ -5276,17 +5424,23 @@ async function decideCmd(decision, runId, flags, layout) {
   }
   const ws = await workspaceOfRun(url, flags, layout, runId);
   const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
-  const waiting = waitingSteps(run);
+  // --payload releases a `wait: event` step as its event URL would, so those
+  // are the steps it chooses from; every other decision is a person's gate.
+  const payload = flags.payload === undefined ? undefined : eventPayload(flags.payload);
+  if (payload !== undefined && decision !== "approve") throw new Error("--payload releases a `wait: event` step — it cannot go with reject");
+  const waiting = payload === undefined ? waitingSteps(run) : eventSteps(run);
   if (!waiting.length) {
     throw new Error(
-      `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person. \`foldrun approvals\` lists the ones that are`,
+      payload === undefined
+        ? `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person. \`foldrun approvals\` lists the ones that are`
+        : `${runId} in ${ws} is ${run.status} — no step of it is waiting on \`wait: event\`, which is what --payload releases`,
     );
   }
 
   const only = flags.step === undefined ? null : Number(flags.step) - 1;
   if (only !== null && !waiting.some(({ index }) => index === only)) {
     throw new Error(
-      `step ${flags.step} of ${runId} is not waiting on a person — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
+      `step ${flags.step} of ${runId} is not waiting on ${payload === undefined ? "a person" : "`wait: event`"} — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
     );
   }
   const chosen = only === null ? waiting : waiting.filter(({ index }) => index === only);
@@ -5311,7 +5465,12 @@ async function decideCmd(decision, runId, flags, layout) {
     return 1;
   }
 
-  const body = { decision, ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}), ...(only === null ? {} : { step: only }) };
+  const body = {
+    decision,
+    ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}),
+    ...(only === null ? {} : { step: only }),
+    ...(payload === undefined ? {} : { payload }),
+  };
   const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -5322,6 +5481,23 @@ async function decideCmd(decision, runId, flags, layout) {
       `\n  ${c.dim(`foldrun report ${runId} --to ${ws} — or logs ${runId} --to ${ws} --follow`)}\n`,
   );
   return 0;
+}
+
+/** `--payload` for a `wait: event` step: text, or `@file`; JSON is sent as
+ *  JSON, anything else as the text it is — what the event URL would take. */
+function eventPayload(value) {
+  if (value === true) throw new Error("--payload needs a value — text, JSON, or @file");
+  let text = String(value);
+  if (text.startsWith("@")) {
+    const file = path.resolve(text.slice(1));
+    if (!fs.existsSync(file)) throw new Error(`--payload ${text}: no such file`);
+    text = fs.readFileSync(file, "utf8");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
 
 // ------------------------------------------------------------------ stop
@@ -6404,6 +6580,28 @@ const NOT_IMPORTED = /^(memory|outputs|state|workspace|\.claude)(\/|$)|^\.claude
  * in (or `--workspace <name>`).
  */
 async function agentImportCmd(positional, flags, layout) {
+  // --list: what could be imported into a deployed workspace — every other
+  // workspace this key may read, and its agents (GET …/agents/import).
+  if (flags.list === true) {
+    const url = platformFor(flags, "agent import --list");
+    const ws = platformWorkspace(flags, layout, "agent import --list");
+    const { workspaces = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/import`);
+    if (flags.json === true) {
+      console.log(JSON.stringify(workspaces, null, 2));
+      return 0;
+    }
+    if (!workspaces.length) {
+      console.log(`\n  ${c.dim(`nothing to import into ${ws} — no other workspace you can read has an agent`)}\n`);
+      return 0;
+    }
+    const w = Math.max(...workspaces.flatMap((x) => (x.agents ?? []).map((a) => `${x.name}/${a.name}`.length)));
+    console.log();
+    for (const x of workspaces) {
+      for (const a of x.agents ?? []) console.log(`  ${c.bold(pad(`${x.name}/${a.name}`, w))}  ${c.dim(firstLine(a.description ?? "", 80))}`);
+    }
+    console.log(`\n  ${c.dim(`foldrun agent import <workspace>/<agent> --to ${ws} [--as <name>] copies one in`)}\n`);
+    return 0;
+  }
   const ref = positional[1];
   const m = typeof ref === "string" ? /^([^/]+)\/([^/]+)$/.exec(ref) : null;
   if (!m) throw new Error("which agent? `foldrun agent import <workspace>/<agent> [--as <name>] [--to <workspace>]`");
@@ -6754,9 +6952,20 @@ function bulkFilter(flags) {
   if (typeof flags.status === "string") body.status = flags.status.split(",").map((s) => s.trim()).filter(Boolean);
   if (typeof flags.flow === "string") body.flow = flags.flow;
   if (flags.since !== undefined) body.since = new Date(Date.now() - parseSince(flags.since)).toISOString();
+  if (flags.until !== undefined) body.until = untilInstant(flags.until);
   return body;
 }
-const hasBulkFilter = (flags) => typeof flags.status === "string" || typeof flags.flow === "string" || flags.since !== undefined;
+const hasBulkFilter = (flags) => typeof flags.status === "string" || typeof flags.flow === "string" || flags.since !== undefined || flags.until !== undefined;
+
+/** `--until 2h` (runs started at least that long ago) or a date — as the
+ *  ISO instant runs/bulk reads. A value that is neither refuses: a clause
+ *  that silently fell out would widen the filter. */
+function untilInstant(spec) {
+  if (/^\d+(\.\d+)?\s*[smhdw]$/i.test(String(spec).trim())) return new Date(Date.now() - parseSince(spec)).toISOString();
+  const t = typeof spec === "string" ? Date.parse(spec) : NaN;
+  if (Number.isNaN(t)) throw new Error(`--until wants a span like 2h (runs started before then) or a date, 2026-10-05T09:00 — not "${spec}"`);
+  return new Date(t).toISOString();
+}
 
 /**
  * `foldrun stop|rerun --status … --since … --flow …` — one decision, many
@@ -6955,7 +7164,7 @@ async function observeCmd(flags, layout) {
   const obs = (
     await pool(names, 8, async (ws) => {
       try {
-        return await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/observe?since=${since}`);
+        return await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/observe?days=${since}`);
       } catch (err) {
         if (typeof flags.to === "string") throw err;
         unreachable.push([ws, explain(err)]);
@@ -7160,7 +7369,27 @@ async function billingVerbCmd(positional, flags) {
     return 0;
   }
 
-  throw new Error(`unknown billing verb "${verb}" — statement, wallet, details or portal (bare \`foldrun billing\` is the balance)`);
+  if (verb === "credit") {
+    // A manual credit (POST /api/billing): what a self-hosted or dev install
+    // without Stripe uses to put money on the balance. Once billing is live
+    // the platform refuses it — top-ups go through checkout.
+    const amount = Number(sub);
+    if (!(amount > 0) || !Number.isFinite(amount)) throw new Error("`foldrun billing credit <usd> [--note \"…\"]` — a positive amount in USD");
+    let r;
+    try {
+      r = await remoteCall(url, flags, "/api/billing", { method: "POST", body: JSON.stringify({ usd: amount, ...(typeof flags.note === "string" ? { note: flags.note } : {}) }) });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403 && /checkout/.test(err.message)) {
+        throw new Error(`billing is live on this platform, so credit is not added by hand — \`foldrun billing top-up ${amount}\` (${err.message})`);
+      }
+      if (err instanceof HttpError && err.status === 403) throw new Error(`billing credit is the account owner's alone (billing:manage) — ${err.message}`);
+      throw err;
+    }
+    const bal = r.balanceUsd;
+    console.log(`\n  ${c.green("✓")} credited ${usd(amount)}${bal !== undefined ? c.dim(` · balance ${usd(bal)}`) : ""}${typeof flags.note === "string" ? c.dim(` · "${flags.note}"`) : ""}\n`);
+    return 0;
+  }
+  throw new Error(`unknown billing verb "${verb}" — statement, wallet, details, portal or credit (bare \`foldrun billing\` is the balance)`);
 }
 
 /** The defaults a workspace's AGENTS.md sets, read from its source. */
@@ -7570,7 +7799,27 @@ async function backupsCmd(positional, flags) {
     console.log(`  ${request.notified ? c.dim("the platform team has been emailed; nothing is restored until they do it") : c.yellow("recorded, but the email to the platform team did not send — contact them as well")}\n`);
     return 0;
   }
-  if (verb !== "ls" && verb !== "list") throw new Error(`unknown backups verb "${verb}" — ls, request`);
+  if (verb === "requests") {
+    // Every restore this account has asked the platform team for, and where
+    // each stands (GET /api/account/backups/requests) — `backups` shows five.
+    const { requests = [] } = await remoteCall(url, flags, "/api/account/backups/requests");
+    if (flags.json === true) {
+      console.log(JSON.stringify(requests, null, 2));
+      return 0;
+    }
+    if (!requests.length) {
+      console.log(`\n  ${c.dim("no restore requests — foldrun backups request --what runs --at \"<when>\" asks for one")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const r of requests) {
+      console.log(`  ${when(r.at)}  ${c.bold(r.status)}  ${r.what} · ${r.workspace ?? "every workspace"} · to ${r.target}  ${c.dim(`${r.id} · ${r.by}${r.notified ? "" : " · platform team not emailed"}`)}`);
+      if (r.note) console.log(`      ${c.dim(firstLine(r.note, 100))}`);
+    }
+    console.log(`\n  ${c.dim(`${requests.length} request${requests.length === 1 ? "" : "s"} · the platform team restores; nothing here changes until they do`)}\n`);
+    return 0;
+  }
+  if (verb !== "ls" && verb !== "list") throw new Error(`unknown backups verb "${verb}" — ls, request, requests`);
   const b = await remoteCall(url, flags, "/api/account/backups");
   if (flags.json === true) {
     console.log(JSON.stringify(b, null, 2));
@@ -8053,7 +8302,7 @@ async function scheduleTickCmd(flags) {
   return 0;
 }
 
-const LIBRARY_KINDS_CLI = ["skills", "tools", "scripts", "knowledge"];
+const LIBRARY_KINDS_CLI = ["skills", "tools", "scripts", "knowledge", "memory"];
 
 /**
  * `foldrun library [ls [kind]] | cat <kind>/<path> | put <kind>/<path> | rm
@@ -8080,7 +8329,7 @@ async function libraryCmd(positional, flags) {
       console.log(`  ${c.bold(kinds[n])} ${c.dim(`${entries.length}`)}`);
       for (const e of entries) console.log(`    ${pad(e.name ?? e.path ?? "", 28)} ${c.dim(firstLine(e.description ?? "", 70))}`);
     });
-    console.log(`\n  ${c.dim("foldrun library cat <kind>/<path> · put <kind>/<path> (--file, else stdin) · rm <kind>/<path>")}\n`);
+    console.log(`\n  ${c.dim("foldrun library cat <kind>/<path> · put <kind>/<path> (--file, else stdin) · new <kind>/<name> · rm <kind>/<path>")}\n`);
     return 0;
   }
   if (verb === "cat") {
@@ -8099,6 +8348,17 @@ async function libraryCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} library/${kind}/${rel} ${c.dim(`${humanBytes(Buffer.byteLength(content))} — every workspace in the account sees it`)}\n`);
     return 0;
   }
+  if (verb === "new") {
+    // The Library page's New (POST /api/library/<kind>): the platform writes
+    // the template — a blank one, a tool of a transport, or a gallery entry
+    // under this name (--template).
+    const { kind, rel: name } = split(spec);
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw new Error(`"${name}" is not a name — kebab-case only, e.g. skills/house-style`);
+    const body = { name, ...(typeof flags.template === "string" ? { template: flags.template } : {}), ...(typeof flags.language === "string" ? { language: flags.language } : {}) };
+    const r = await remoteCall(url, flags, `/api/library/${kind}`, { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} library/${kind}/${r.path ?? name} ${c.dim("— every workspace in the account sees it")}\n`);
+    return 0;
+  }
   if (verb === "rm") {
     const { kind, rel } = split(spec);
     if (!(await sureToDelete(flags, "library rm", `library/${kind}/${rel} — every workspace that names it loses it`))) return 1;
@@ -8106,7 +8366,7 @@ async function libraryCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} removed library/${kind}/${rel}\n`);
     return 0;
   }
-  throw new Error(`unknown library verb "${verb}" — ls [kind], cat, put, rm`);
+  throw new Error(`unknown library verb "${verb}" — ls [kind], cat, put, new, rm`);
 }
 
 /**
@@ -8435,6 +8695,95 @@ async function findCmd(positional, flags) {
 }
 
 /** `foldrun workspaces demo` — "Try the demo pipeline": the demo workspace, made on the platform. */
+/**
+ * `foldrun workspaces show <name>` — what is deployed in one workspace (GET
+ * /api/workspaces/<name>): its agents, its flows and how they fire, and its
+ * files, counted by top-level folder.
+ */
+async function workspacesShowCmd(name, flags) {
+  const url = platformFor(flags, "workspaces show");
+  if (!name) throw new Error("which workspace? `foldrun workspaces show <name>`");
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(name)}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const agents = r.agents ?? [];
+  const flows = r.flows ?? [];
+  const files = r.files ?? [];
+  console.log(`\n  ${c.bold(r.name ?? name)}  ${c.dim(`on ${url} — ${agents.length} agent${agents.length === 1 ? "" : "s"}, ${flows.length} flow${flows.length === 1 ? "" : "s"}, ${files.length} file${files.length === 1 ? "" : "s"}`)}`);
+  if (agents.length) {
+    const w = Math.max(...agents.map((a) => a.name.length));
+    console.log(`\n  ${c.dim("agents")}`);
+    for (const a of agents) console.log(`  ${c.bold(pad(a.name, w))}  ${pad(a.model ?? "", 8)} ${c.dim(firstLine(a.description ?? "", 70))}`);
+  }
+  if (flows.length) {
+    const w = Math.max(...flows.map((f) => f.name.length));
+    console.log(`\n  ${c.dim("flows")}`);
+    for (const f of flows) {
+      const fires = f.trigger === "schedule" && f.schedule ? `schedule ${f.schedule}${f.timezone ? ` ${f.timezone}` : ""}` : (f.trigger ?? "manual");
+      console.log(`  ${c.bold(pad(f.name, w))}  ${c.dim(fires)}`);
+    }
+  }
+  if (files.length) {
+    const by = new Map();
+    for (const f of files) {
+      const top = f.includes("/") ? `${f.slice(0, f.indexOf("/"))}/` : f;
+      by.set(top, (by.get(top) ?? 0) + 1);
+    }
+    console.log(`\n  ${c.dim("files")}`);
+    console.log(`  ${[...by].map(([k, n]) => (n > 1 || k.endsWith("/") ? `${k} ${c.dim(String(n))}` : k)).join("  ")}`);
+  }
+  console.log(`\n  ${c.dim(`foldrun source ls --to ${r.name ?? name} lists every file · --json for the whole document`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun eval new <name> --to <workspace>` — the Evals page's New: the
+ * platform writes an eval whose agent is the workspace's first (POST
+ * …/evals). Edit the cases, then `foldrun eval <name> --to` runs it.
+ */
+async function evalNewCmd(name, flags, layout) {
+  const url = platformFor(flags, "eval new");
+  const ws = platformWorkspace(flags, layout, `eval new ${name}`);
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw new Error(`"${name}" is not an eval name — kebab-case only, e.g. researcher-quality`);
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`, { method: "POST", body: JSON.stringify({ name }) });
+  console.log(`\n  ${c.green("created")} eval ${c.bold(name)} in ${ws} ${c.dim(`on ${url}`)}`);
+  console.log(`    ${c.dim(r.path ?? `evals/${name}.md`)}`);
+  console.log(`\n  ${c.dim(`its cases are placeholders: foldrun source cat ${r.path ?? `evals/${name}.md`} --to ${ws}, then foldrun eval ${name} --to ${ws}`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun team` — who is in the account, their role and which workspaces
+ * they may open (GET /api/team). Read-only on purpose: inviting, changing a
+ * role, removing someone and transferring the account are a person's acts,
+ * and the platform refuses them from a key.
+ */
+async function teamCmd(positional, flags) {
+  if (positional[0]) {
+    throw new Error("`foldrun team` lists the members — invites, role changes, removals and transfer are done by a signed-in person in Settings → Team; the platform refuses them from a key");
+  }
+  const url = platformFor(flags, "team");
+  const { members = [] } = await remoteCall(url, flags, "/api/team");
+  if (flags.json === true) {
+    console.log(JSON.stringify(members, null, 2));
+    return 0;
+  }
+  if (!members.length) {
+    console.log(`\n  ${c.dim("no members visible to this key")}\n`);
+    return 0;
+  }
+  const w = Math.max(...members.map((m) => m.email.length));
+  console.log();
+  for (const m of members) {
+    const scope = m.workspaces === null || m.workspaces === undefined ? "every workspace" : m.workspaces.length ? m.workspaces.join(", ") : "no workspaces";
+    console.log(`  ${c.bold(pad(m.email, w))}  ${pad(m.owner ? "owner" : m.role, 7)} ${c.dim(scope)}  ${c.dim(m.createdAt ? `joined ${String(m.createdAt).slice(0, 10)}` : "")}`);
+  }
+  console.log(`\n  ${c.dim(`${members.length} member${members.length === 1 ? "" : "s"} · invites, roles and removals: Settings → Team in the dashboard (a person's, never a key's)`)}\n`);
+  return 0;
+}
+
 async function workspacesDemoCmd(flags) {
   const url = platformFor(flags, "workspaces demo");
   const r = await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ demo: true }) });
@@ -8645,6 +8994,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return statusCmd(layout, flags, positional[0]);
     case "workspaces":
       if (positional[0] === "demo") return workspacesDemoCmd(flags);
+      if (positional[0] === "show") return workspacesShowCmd(positional[1], flags);
       return workspacesCmd(positional, flags, layout);
     case "extract":
       return extract(workspace, flags);
@@ -8654,6 +9004,9 @@ export async function run(command, positional, flags, workspace, layout) {
       needsOne(layout, "run");
       return runTarget(positional[0], flags);
     case "eval":
+      // `eval new <name>` makes one on the platform; an eval called "new"
+      // still runs as `foldrun eval new` with nothing after it.
+      if (positional[0] === "new" && positional[1]) return evalNewCmd(positional[1], flags, layout);
       // --to names a deployed workspace: its evals run there.
       if (typeof flags.to === "string") return remoteEvalsCmd(positional[0], flags, layout);
       needsOne(layout, "eval");
@@ -8684,6 +9037,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return restoreCmd(positional, flags);
     case "backups":
       return backupsCmd(positional, flags);
+    case "team":
+      return teamCmd(positional, flags);
     case "onboarding":
       return onboardingCmd(flags);
     case "probe":
@@ -8757,6 +9112,7 @@ export async function run(command, positional, flags, workspace, layout) {
       // thing in both cases, which is why they share a command.
       if (positional[0] === "link" || positional[0] === "unlink") return agentLinkCmd(positional, flags, layout);
       if (positional[0] === "import") return agentImportCmd(positional, flags, layout);
+      if (positional[0] === "ls" || positional[0] === "list") return remoteListCmd("agents", flags, layout);
       return positional[0] === "run"
         ? agentRunCmd(positional, flags, layout)
         : scaffoldCmd("agents", positional, flags, layout);
@@ -8775,6 +9131,7 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "copy-step") return flowCopyStepCmd(positional, flags, layout);
       if (positional[0] === "paste") return flowPasteCmd(positional, flags, layout);
       if (positional[0] === "draft") return flowDraftCmd(positional, flags, layout);
+      if (positional[0] === "ls" || positional[0] === "list") return remoteListCmd("flows", flags, layout);
       return scaffoldCmd("flows", positional, flags, layout);
     case "tool":
       return positional[0] === "test"

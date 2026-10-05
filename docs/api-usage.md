@@ -98,8 +98,9 @@ behind its own gateway).
 ## Retrying safely: Idempotency-Key
 
 The `POST`s that start or change something — run a flow, agent or eval,
-rerun, deploy, upload an asset, create a flow, set a secret, mint a key,
-approve, answer or message a run, billing actions — accept
+rerun, stop, deploy, upload an asset, create, draft or append to a flow,
+set a secret, mint a key, rotate a webhook, send a test notify, connect an
+OAuth client, approve, answer or message a run, billing actions — accept
 
 ```
 Idempotency-Key: <a UUID you generate, one per operation>
@@ -117,7 +118,7 @@ Idempotency-Key: <a UUID you generate, one per operation>
   key for at most two minutes, then the key is free for a real retry.
 - Minting or rotating a key: a replay says what was done but its `key` is
   `null` — the secret is shown once and never stored. Revoke that key and
-  mint another.
+  mint another. Rotating a webhook is the same: a replay's `path` is `null`.
 
 Keys belong to the caller — your account and the API key or person sending
 them; another key of the same account never gets your stored answer — and to

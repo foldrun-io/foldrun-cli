@@ -211,6 +211,67 @@ test("a step that is not waiting is refused, with the ones that are", async () =
   assert.equal(s.seen.filter((x) => x.method === "POST").length, 0);
 });
 
+// ------------------------------------------------- approve --payload (wait: event)
+
+const eventRun = {
+  ...waitingRun,
+  id: "run-evt",
+  steps: [
+    waitingRun.steps[0],
+    { agent: "writer", group: 2, status: "awaiting-approval", waitFor: "event", attempts: 0, costUsd: null, events: [], result: null, instruction: "draft once the brief arrives" },
+  ],
+};
+
+test("approve --payload releases the wait: event step with the body, JSON as JSON", async () => {
+  const s = await serve({
+    "/api/workspaces": () => WORKSPACES,
+    "/api/workspaces/blog-desk/runs/run-evt": () => eventRun,
+    "POST /api/workspaces/blog-desk/runs/run-evt/approve": () => ({ ok: true, decision: "approve", steps: [1] }),
+  });
+  const r = await at(s.url, "approve", "run-evt", "--to", "blog-desk", "--yes", "--payload", '{"brief":"spring sale"}');
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "POST")!.body), { decision: "approve", payload: { brief: "spring sale" } });
+});
+
+test("approve --payload @file sends the file; plain text stays text", async () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-payload-")), "brief.txt");
+  fs.writeFileSync(file, "the spring sale brief");
+  const s = await serve({
+    "/api/workspaces": () => WORKSPACES,
+    "/api/workspaces/blog-desk/runs/run-evt": () => eventRun,
+    "POST /api/workspaces/blog-desk/runs/run-evt/approve": () => ({ ok: true, decision: "approve", steps: [1] }),
+  });
+  const r = await at(s.url, "approve", "run-evt", "--to", "blog-desk", "--yes", "--payload", `@${file}`);
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "POST")!.body), { decision: "approve", payload: "the spring sale brief" });
+});
+
+test("approve --payload on a run with no wait: event step is refused, nothing posted", async () => {
+  const s = await serve({
+    "/api/workspaces": () => WORKSPACES,
+    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+  });
+  const r = await at(s.url, "approve", "run-aaa", "--to", "blog-desk", "--yes", "--payload", "hi");
+  s.close();
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /no step of it is waiting on `wait: event`/);
+  assert.equal(s.seen.filter((x) => x.method === "POST").length, 0);
+});
+
+test("reject --payload is refused before anything is sent", async () => {
+  const s = await serve({
+    "/api/workspaces": () => WORKSPACES,
+    "/api/workspaces/blog-desk/runs/run-evt": () => eventRun,
+  });
+  const r = await at(s.url, "reject", "run-evt", "--to", "blog-desk", "--payload", "hi");
+  s.close();
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /cannot go with reject/);
+  assert.equal(s.seen.filter((x) => x.method === "POST").length, 0);
+});
+
 test("a finished run has no gate, and says so instead of approving", async () => {
   const s = await serve({
     "/api/workspaces": () => WORKSPACES,

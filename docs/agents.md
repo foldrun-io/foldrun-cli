@@ -238,7 +238,7 @@ none — no environment is built for them.
 On a platform, a deploy builds the environments its agents need before any
 step does: `foldrun deploy` waits for them and prints each one, ready or
 failed with the installer's own error, and `foldrun runtimes` asks again
-later. A package that will not install is heard at deploy, not from the
+later — as does the **Runtimes** panel on the workspace's overview page. A package that will not install is heard at deploy, not from the
 first scheduled run.
 
 ## Its own model credential

@@ -23,24 +23,27 @@
 //   foldrun webhooks <verb> deliveries / redeliver <id> — the notify: webhooks a workspace sent, and each attempt
 //   foldrun notifications  what mail you get, per category — set <category> on|off
 //   foldrun flags          the feature flags for this account — on or off, and why (read-only)
-//   foldrun backups        how the account is backed up, its snapshots — request a restore from one
+//   foldrun backups        how the account is backed up, its snapshots — request a restore from one, requests lists them
+//   foldrun team           who is in the account, their roles and workspaces (read-only)
 //   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
 //   foldrun onboarding     the account's getting-started steps, the next one first
-//   foldrun billing        the balance, and what the money went on
+//   foldrun billing        the balance, and what the money went on — credit <usd> on an install without Stripe
 //   foldrun gallery        the tools the platform ships to every account — list, pull, upgrade <tool>
 //   foldrun storage <verb>  ls / cat / get / put / rm / share / shares / unshare — what the agents produced, and public links to it
 //   foldrun runtimes        the environments a workspace's agents need, and whether each is built
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
-//   foldrun agent new <name>  one more agent in this workspace — also flow new, tool new
+//   foldrun agent new <name>  one more agent in this workspace — also flow new, tool new (--platform: in the deployed one)
+//   foldrun agent ls        the agents deployed in a workspace — also flow ls
+//   foldrun eval new <name> a new eval in a deployed workspace
 //   foldrun agent run <name>  run one agent once on a platform, no flow
 //   foldrun tool test <name>  exercise one tool alone — no model, no run
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
 //   foldrun pull            bring the platform's account down into this folder
-//   foldrun status          what differs here from what is deployed
-//   foldrun workspaces      what exists here, and there
+//   foldrun status          what differs here from what is deployed — --platform [--history]: is the platform up
+//   foldrun workspaces      what exists here, and there — show <name>, new <name> --platform
 //   foldrun invoke <flow>   start a flow on a running platform
-//   foldrun source <verb>   ls / cat / put / mv / rm one workspace file on a platform
+//   foldrun source <verb>   ls / cat / put / new / mv / rm one workspace file on a platform
 //   foldrun open  [page]    the dashboard for this workspace
 //   foldrun login           sign this machine in from the browser
 //   foldrun login <site>    a browser window to sign in to a site by hand; the session
@@ -49,7 +52,7 @@
 //   foldrun doctor          what is between this terminal and the platform, checked
 //   foldrun accounts        every account signed in here; `use <name>` switches
 //   foldrun keys  <verb>    ls / create / revoke — the account's API keys
-//   foldrun library <verb>  ls / cat / put / rm — the account's shared shelf on the platform
+//   foldrun library <verb>  ls / cat / put / new / rm — the account's shared shelf on the platform
 //   foldrun find  <words>   search the account the way the dashboard's ⌘K does
 //   foldrun changelog       what each release of the platform changed
 //   foldrun preferences     your own settings on the platform — the theme
@@ -88,14 +91,18 @@ const HELP = `foldrun — agents are just folders
   foldrun init [dir]        create an account folder: AGENTS.md, library/ and workspaces/<name>
   foldrun new <name>        another workspace in this account — blank (--starter for the example researcher, writer and flow)
   foldrun agent new <name>  one more agent in this workspace (--to <workspace> in an account)
+  foldrun agent new <name> --platform  make it in the DEPLOYED workspace, as the dashboard's New agent does (--to, --description, --model)
   foldrun flow new <name>   one more flow — its first step names an agent you already have
-  foldrun tool new <name>   one more tool: a folder with its program beside it (--transport, --language)
+  foldrun flow new <name> --platform  make it in the deployed workspace from a shape (--pattern pipeline|review-loop|fan-out|debate|router, --to)
+  foldrun tool new <name>   one more tool: a folder with its program beside it (--transport, --language; --platform in the deployed workspace, --template <gallery entry>)
+  foldrun agent ls          the agents deployed in a workspace: model, description (--to, --json) — flow ls the flows and how each fires
   foldrun check [dir]       validate every workspace here, and the shared library
   foldrun check --to <ws>   validate the DEPLOYED copy instead — fetched from the platform, checked here
   foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker>, --consult <agent> or --can-ask (--description for a worker with none)
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
   foldrun agent import <workspace>/<agent>  copy an agent you already have in another workspace into this one — its agent.md, own skills and scripts, not its memory (--as <name>, --workspace <name>; --to <ws> on the platform)
+  foldrun agent import --list  what could be imported into a deployed workspace: every other workspace you can read, and its agents (--to, --json)
   foldrun flow add <flow> <pattern>  one canvas block as a markdown edit: chain, parallel, router, fan-out, loop, approval, ask, wait, rescue, subflow — diff shown, checked, --dry-run
   foldrun flow rm-step <flow> --step <n|agent>  delete one step (its options too); groups renumber, agent file untouched — says what else changes, diff, checked, asks (--yes), --dry-run
   foldrun flow dup-step <flow> --step <n|agent>  copy one step (marker and options) directly under it, in parallel with it — diff, checked, --dry-run
@@ -112,6 +119,7 @@ const HELP = `foldrun — agents are just folders
   foldrun extract [dir]     move single-file script tools into folders (tool.md + run.*)
   foldrun run <target>      run an agent or flow HERE (target: name, or flow:name) — on the platform: flow run / invoke a flow, agent run one agent
   foldrun eval [name]       run one eval, or all of them (--to <workspace>: the deployed evals, run on the platform)
+  foldrun eval new <name>   a new eval in the deployed workspace, its agent the first one there — edit its cases, then eval <name> --to (--to)
   foldrun promote <run-id>  keep a finished run as a regression case in evals/ (--eval <name>, --expect "contains: …" repeatable, --case <name>)
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs in one workspace, or one run's full event trail (--local: this machine's)
@@ -121,14 +129,14 @@ const HELP = `foldrun — agents are just folders
   foldrun report <run-id> get <agent>/<path>  download a file the run archived from that agent's outputs/ (--file <path>|-, --force)
   foldrun report <run-id> live  the live browser view: which agents have a frame; --agent <name> saves the newest as a JPEG (--file <path>|-)
   foldrun approvals         every gate waiting on a person, with its question (--to <workspace> for one)
-  foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step
+  foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step; --payload releases a wait: event step
   foldrun reject <run-id>   refuse one, with --note as the reason
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
-  foldrun stop --status running [--since 2h] [--flow f]  every run a filter matches (runs/bulk): lists them, asks, stops only those (--dry-run, --to)
+  foldrun stop --status running [--since 2h] [--until 1h] [--flow f]  every run a filter matches (runs/bulk): lists them, asks, stops only those (--dry-run, --to)
   foldrun answer <run-id> "…"  answer the question an agent is asking mid-step (--option <n> picks a choice)
   foldrun message <run-id> "…" say something to a running agent — it hears it after its next tool call
   foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --wait
-  foldrun rerun --status failed [--since 24h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
+  foldrun rerun --status failed [--since 24h] [--until 2h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
   foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
@@ -146,6 +154,7 @@ const HELP = `foldrun — agents are just folders
   foldrun billing plans     the plans, which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
   foldrun billing top-up <usd>  Stripe's checkout page for adding credit (owner only; --no-browser prints it)
   foldrun billing card      Stripe's page for saving a card for auto top-up (owner only)
+  foldrun billing credit <usd>  put credit on the balance by hand (--note "…") — only on an install without Stripe (self-hosted, dev); refused once billing is live
   foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun account           the account's defaults — also set <key> <value>, clear <key>, providers (--check) (singular; accounts lists logins)
   foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
@@ -162,6 +171,7 @@ const HELP = `foldrun — agents are just folders
   foldrun repo ls           a workspace's branches and tags — also diff <branch>, deploy <ref>, merge <branch> (both ask first), rm-branch <branch>, mirror <git-url|off>, mirror-now (--to)
   foldrun restore <ws> --to <commit|time|3d>  put a workspace's source back as it was then — shows the change, asks for the name typed back (--dry-run: the diff only, --yes)
   foldrun backups           how the account is backed up (encrypted?), when it last was, the snapshots it is in — also request --what runs|state|storage|everything --at "<when>" [--to <ws>] [--note]
+  foldrun backups requests  every restore asked of the platform team, and where each stands (--json)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status; --kind file|ssh|api|service-account|m2m for the other shapes
   foldrun secrets clients   the OAuth clients saved on the platform — also add <name> (--provider or --authorize-url/--token-url, --client-id, --scopes), rm <name>
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret — --client <saved> runs it from a saved client through the platform
@@ -169,12 +179,17 @@ const HELP = `foldrun — agents are just folders
   foldrun pull [workspace]  bring the platform's account down here (refuses to clobber; --force overrides)
   foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
   foldrun status --platform  is the platform up: each component, and any incident or maintenance posted (--json)
+  foldrun status --platform --history  uptime per component per day and the incidents in the window, as the status page's bars (--days 1-90, default 90; --json)
   foldrun workspaces        what exists here and on the platform — also rm <name> (--platform --yes)
+  foldrun workspaces show <name>  what is deployed in one: its agents, flows and how each fires, its files by folder (--json)
+  foldrun workspaces new <name> --platform  make it on the platform: blank (an AGENTS.md), or --starter for the example researcher, writer and flow
   foldrun workspaces demo   make the demo pipeline workspace on the platform — "Try the demo pipeline"
-  foldrun library           the account's shared library on the platform: ls [skills|tools|scripts|knowledge], cat <kind>/<path>, put <kind>/<path> (--file, else stdin), rm <kind>/<path> (asks)
+  foldrun library           the account's shared library on the platform: ls [skills|tools|scripts|knowledge|memory], cat <kind>/<path>, put <kind>/<path> (--file, else stdin), rm <kind>/<path> (asks)
+  foldrun library new <kind>/<name>  a new one from the platform's template, as the Library page's New (--template <transport or gallery entry>, --language)
   foldrun find <words>      search the account as the dashboard's ⌘K does: workspaces, agents, flows, tools, skills, knowledge, memory, runs (--json)
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run; --tag <t> repeatable)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
+  foldrun source new <kind> <name>  the dashboard's New for any document — tools, knowledge, memory, skills, scripts (agents, flows, evals too): the platform writes the template (--agent <a> inside one agent, --template, --language, --to)
   foldrun open [page]       the dashboard for this workspace, in the browser
   foldrun api spec          the platform's OpenAPI 3.1 document (GET /api/openapi.json) — stdout, or --out <file>
   foldrun api version       the API version this account's requests get, the versions served, the rate limits — also pin <YYYY-MM-DD>, unpin (admin; --json)
@@ -188,6 +203,7 @@ Signing in
                             session: cookies, storage and the browser identity it needs
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
+  foldrun team              who is in the account: role, the workspaces each may open, when they joined (--json). Read-only: invites, roles, removal and transfer are a signed-in person's, in Settings → Team
   foldrun onboarding        the account's getting-started steps, done or not, the next one first (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
   foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /api/healthz
@@ -202,9 +218,9 @@ Options
   --workspace <dir>         the workspace folder (default: .) — on init, the first workspace's name
   --flat                    init: the old single-folder shape, no account around it
   --from <template>         init: start from a shipped template, e.g. templates/hello (new takes it too)
-  --starter                 new: include the example researcher, writer and publish flow (a new workspace is blank)
+  --starter                 new, workspaces new: include the example researcher, writer and publish flow (a new workspace is blank)
   --transport <k>           tool new: script (default), http or mcp
-  --language <l>            tool new: the script's language — javascript, python, bash
+  --language <l>            tool new, source new, library new: the script's language — javascript, python, bash
   --task "<text>"           the instruction for a manual run
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)
@@ -214,9 +230,10 @@ Options
   --action <a>              audit: one action (apikey.created) or a family (apikey, secret, member, support)
   --actor <who>             audit: one person or key — an email, key:<label>, support:<email>
   --since <days>            observe, triggers: the window in days (observe default 30, triggers 7)
+  --until <span|date>       stop, rerun (bulk): only runs started before then — 2h ago, or a date
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
   --flow <name>             stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
-  --agent <name>            flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame
+  --agent <name>            flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame; source new: the agent the document belongs to
   --instruction "<text>"    flow add: what a new step (chain, parallel, router) is told to do
   --after <n>               flow add, flow move-step, flow paste: put the new group after the nth (0 = first); --before <n> before it (flow add); default last
   --group <n>               flow add, flow move-step, flow paste: the group a step joins, in parallel
@@ -234,7 +251,12 @@ Options
   --subagent <name>         agent link, agent unlink: a worker it delegates to (subagents:)
   --consult <name>          agent link, agent unlink: a colleague it asks (agents:)
   --can-ask                 agent link, agent unlink: ask in its tools — it may ask you mid-step
-  --description "<text>"    agent link: what a --subagent is for, when its file has no description:
+  --description "<text>"    agent link: what a --subagent is for, when its file has no description:; agent new --platform: its one line
+  --model <tier>            agent new --platform: fast, default or max
+  --pattern <p>             flow new --platform: pipeline (default), review-loop, fan-out, debate or router
+  --template <t>            tool new --platform, source new, library new: a transport (script, http, mcp) or a gallery entry to start from
+  --list                    agent import: list what could be imported, import nothing
+  --history                 status --platform: the daily uptime and incidents, not just now
   --eval <name>             promote: the eval file to write to (default <target>-regressions)
   --expect "<line>"         promote: an assertion in eval syntax (contains: …, judge: …) — repeatable
   --case <name>             promote: the case's name
@@ -245,14 +267,15 @@ Options
   --csv                     audit: the log as CSV, for an auditor (--file <path> to save it)
   --threshold / --amount    billing wallet set: auto top-up refills --amount (5-500 USD) when the balance falls below --threshold
   --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
-  --days <n>                usage: the window the charges cover (default 56)
+  --days <n>                usage: the window the charges cover (default 56); status --platform --history: 1-90 (default 90)
   --id <revision>           history: one revision in full, as diffs
   --engine <e>              login: (with a site) the browser to sign in with — chrome (default: real Google Chrome, Chromium when it is not installed), chromium, firefox or safari
   --new-client              connect: enter a new OAuth client even when one is saved for the secret
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
-  --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal
+  --payload <json|text|@f>  approve: release a step waiting on wait: event with this body, recorded as you
+  --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal; billing credit: the ledger line's note
   --yes                     approve, stop, rerun (bulk), flow rotate-hook, flow draft, history restore, restore <ws>, billing plan, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
-  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags: the raw document; version: {cli, core, platform}
+  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces show, agent ls, flow ls, agent import --list, backups requests, team: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history, changelog: how many rows
@@ -294,6 +317,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
   --yes                     deploy: allow deleting files this folder no longer has (asked otherwise; required with no terminal)
   --platform --yes          workspaces rm: delete it on the platform, deliberately
+  --platform                workspaces new, agent new, flow new, tool new: make it on the platform, not in this folder
 
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
 work without one. \`foldrun login\` is for the hosted platform, or your own.`;
@@ -309,7 +333,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

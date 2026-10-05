@@ -167,7 +167,7 @@ test("observe, account-wide: one row per workspace and the recent failures", asy
   assert.match(r.out, /✗ blog-desk\s+10\s+2 20%/);
   assert.match(r.out, /✓ rank-desk/);
   assert.match(r.out, /HTTP 500 from serp/);
-  assert.ok(s.seen.filter((x) => x.url.endsWith("/observe")).every((x) => x.query.get("since") === "7"));
+  assert.ok(s.seen.filter((x) => x.url.endsWith("/observe")).every((x) => x.query.get("days") === "7"));
 });
 
 test("observe --to prints the flows, agents and tools of one workspace", async () => {

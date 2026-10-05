@@ -87,7 +87,11 @@ run until a person decides. Three doors open it, and the trace says which:
 - **the emailed link** — the notification carries approve and reject links
   when the install has a public URL;
 - **an external event** — a `wait: event` step is released by a POST to the
-  run's event URL, and what was posted reaches the next step.
+  run's event URL, and what was posted reaches the next step. A person can
+  release it the same way from the run page (or `approve` with a `payload`):
+  the payload reaches the step just the same, and the trace names them, not
+  "an external event". The approvers and self-approval rules below are for
+  gates that ask a person; a `wait: event` release asks for `run:start`.
 
 The answer typed at an `ask:` gate reaches the next step's prompt, so "GO,
 but skip the third one" is an instruction the publisher reads.
@@ -155,7 +159,8 @@ flow, a time window, or an explicit list of ids. It is the tool for the
 morning when one broken thing failed seventy runs. A call naming no filter is
 refused rather than treated as everything, `dryRun: true` shows what would be
 touched, and each run is its own outcome so one that cannot be stopped does
-not abort the rest.
+not abort the rest. On the runs pages, tick runs and choose **Stop** or
+**Rerun**: the bar makes this call, once per workspace in the selection.
 
 **Re-run from a group** (`from: N`) starts a new run at group N with the
 earlier groups recorded as skipped, not invented — the step reads what earlier

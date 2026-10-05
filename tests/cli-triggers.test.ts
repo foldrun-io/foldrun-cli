@@ -29,7 +29,7 @@ test("one row per flow: fired vs started, each reason with its count, and a quar
   assert.match(r.out, /nightly.*0\/3 started.*never became a run/);
   assert.match(r.out, /3× quarantined/);
   assert.match(r.out, /1 switched off by disable_after/);
-  assert.equal(s.seen[0].query.get("since"), "7");
+  assert.equal(s.seen[0].query.get("days"), "7");
 });
 
 test("--since widens the window, and a quiet workspace says so", async () => {
@@ -37,6 +37,6 @@ test("--since widens the window, and a quiet workspace says so", async () => {
   const r = await at(s.url, "triggers", "--since", "30", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.equal(s.seen[0].query.get("since"), "30");
+  assert.equal(s.seen[0].query.get("days"), "30");
   assert.match(r.out, /no trigger fired in rank-desk in the last 30 days/);
 });

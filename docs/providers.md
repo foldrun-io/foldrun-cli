@@ -178,6 +178,8 @@ what would be checked; `POST` forces one, for the minute after rotating a
 key. From the terminal, `foldrun account providers` prints the same table
 (✓, ✗ with the verdict, or · for never checked) and `--check` forces one;
 a dead key is a non-zero exit, so a deploy script can refuse to continue.
+In the dashboard, Settings → Model provider shows the same check per
+provider, with **Check now** (editor and above, since it spends a request).
 
 ## When a provider says no, the run says why
 

@@ -68,7 +68,11 @@ is its commit.
 
 A rollback is a deploy of an earlier ref (`POST …/repo {action: deploy, ref}`
 or the History page), and it lands as a **new commit on `main`** — history
-moves forward, never rewrites.
+moves forward, never rewrites. **Preview** beside "Deploy this commit" (and
+"Preview deploy" beside a branch's "Merge & deploy" on the Repository page)
+shows first what it would change, add and remove, with diffs, and any run in
+flight that would hold it — the restore dry run
+(`POST …/restore {to, dryRun: true}`), which is the same operation.
 
 ## Mirroring
 
