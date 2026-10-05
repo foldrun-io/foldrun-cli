@@ -109,7 +109,7 @@ begins.
 | `limits:` | this step's call limits, on one line — `limits: {web.search: 10, calls: 50}` — over the agent's, key by key. A call past one is refused, never run ([Tools](tools#limits--how-many-calls-a-step-may-make)) |
 | `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`). The shell runs in the agent's folder and gets the step's final turn in the file `$FOLDRUN_REPLY_FILE`; `workspace/…` reaches the workspace root there, and in `file: workspace/storage/x.md`; `node workspace/tools/x/check.mjs` runs as its own main module, so a check it makes counts ([Agents](agents#where-files-live-from-the-agents-point-of-view)). The check runs on what is left of the step's `timeout:` (at least 30 s of it); with no `timeout:` it has no clock either. A stop ends it |
 | `approve:` | park until a person releases it |
-| `ask:` | the same gate carrying a question; the typed answer reaches the prompt |
+| `ask:` | the same gate carrying a question; the typed answer reaches the prompt (a plain approval with no note reaches it as "approved with no note") |
 | `preview:` | what the gate shows: paths under `storage/` (a `workspace/storage/` prefix is accepted), comma-separated, globs allowed — `draft/*.mdx, draft/images/*.webp`; at most 12 files |
 | `wait:` | `3d` (`s`/`m`/`h`/`d`, capped at 30 days) or `event` |
 | `on-fail:` | another agent takes the step over, with the failure as context |
