@@ -793,7 +793,13 @@ async function checkProblems(workspace, flags = {}) {
     for (const w of readLimits(readAgentsMd(workspace)?.data?.limits).problems) note("error", "AGENTS.md", w);
   }
 
+  const { unopenedFrontmatter } = /** @type {any} */ (await core());
   for (const a of agents) {
+    // A frontmatter block with no opening `---` is read as prose: no tools,
+    // the default model (seo-digest's editor, 20 Sep to 5 Oct 2026).
+    const agentFile = path.join(workspace, "agents", a.name, "agent.md");
+    const unopened = unopenedFrontmatter && fs.existsSync(agentFile) ? unopenedFrontmatter(fs.readFileSync(agentFile, "utf8")) : null;
+    if (unopened) note("error", `agents/${a.name}/agent.md`, unopened, 1);
     if (!a.description) note("warn", `agents/${a.name}`, "no description — other agents and people read it");
 
     // A timezone nobody can read. The deploy already refuses it; check has to
