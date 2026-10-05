@@ -54,6 +54,38 @@ pulled, only edited in Settings.
 A single folder with `agents/` and `flows/` at its root is still a workspace
 and still works everywhere; `foldrun init --flat` makes one.
 
+## A new workspace starts blank
+
+**Create workspace** on the dashboard, `POST /api/workspaces` with
+`template: true`, and `foldrun new <name>` all make a workspace with nothing in
+it to delete: an `AGENTS.md` (plus, on a laptop, the `.gitignore` that keeps
+its secret key out of git and a `CLAUDE.md` for your coding tool). No example
+agents, no flow. `foldrun new <name> --starter` and `starter: true` still make
+the example researcher, writer and `publish` flow; `foldrun init` makes it for
+an account's first workspace, which the getting-started guide runs.
+
+A workspace with no agents yet deploys; `check` and the deploy say so as a
+warning. A flow that names an agent the workspace lacks is still an error.
+
+### Importing an agent you already have
+
+The agents worth having in a new workspace are often ones already written in
+another: **Import agent** on the Agents page (and in the empty state of a blank
+workspace) lists every agent in the account's other workspaces you can read,
+and copies the one you pick. From a terminal, `foldrun agent import
+<workspace>/<agent>` does it between workspaces of an account folder, or on the
+platform with `--to <workspace>`; the route is `POST
+/api/workspaces/<ws>/agents/import` with `{ from, agent, as? }`.
+
+What is copied is what the agent **is**: `agent.md` and its own `skills/`,
+`scripts/` and `knowledge/`. What it **accumulated** stays where it was learned:
+`memory/`, `outputs/`, `state/` and session files. A name already taken is
+refused — import it under another name with `--as` / `as`, which rewrites its
+`name:`. The import then says what the copy uses that this workspace lacks —
+tools, skills, scripts, secrets — without refusing: set the secret, import the
+tool, and it runs. The copy is independent; editing one does not change the
+other.
+
 ## `AGENTS.md` — context and defaults
 
 The body is prose every agent in the workspace sees before its own prompt.

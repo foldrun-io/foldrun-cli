@@ -100,7 +100,10 @@ test("new adds a second workspace beside the first", () => {
   foldrun("init", root);
   const r = foldrunIn(root, "new", "ads-desk");
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.ok(exists(root, "workspaces", "ads-desk", "flows", "publish.md"));
+  // Blank: the folders, no example agents or flow (`--starter` brings them).
+  assert.ok(exists(root, "workspaces", "ads-desk", "AGENTS.md"));
+  assert.ok(exists(root, "workspaces", "ads-desk", "flows"));
+  assert.ok(!exists(root, "workspaces", "ads-desk", "flows", "publish.md"));
   assert.equal(foldrunIn(root, "new", "ads-desk").status, 1, "twice is a refusal");
 });
 

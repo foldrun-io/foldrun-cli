@@ -65,7 +65,7 @@ api workspaces/$WS/flows/publish/run -X POST   # start a flow
 
 | Route | Methods | |
 |---|---|---|
-| `/api/workspaces` | GET, POST | list; create (`name`, `template`, `demo`, `files`) |
+| `/api/workspaces` | GET, POST | list; create (`name`, plus one of: `template: true` — blank, just an AGENTS.md, what the dashboard sends; `starter: true` — the example researcher, writer and publish flow; `demo: true`; `files`) |
 | `/api/workspaces/<ws>` | GET, PATCH, DELETE | read; rename or re-describe (`name`, `description`), or set its defaults (`timezone`, `budget`, `notify` — null clears one, edited in AGENTS.md in place); delete |
 | `/api/workspaces/<ws>/vocabulary` | GET | which document kinds this workspace admits — its `docs` list is what `[[ ]]` resolves: knowledge, memory, `state/` and `storage/` files, plus the folders themselves |
 
@@ -145,6 +145,7 @@ everywhere else a run is live.
 |---|---|---|
 | `/api/workspaces/<ws>/agents` | GET, POST | list; create (`name`) |
 | `/api/workspaces/<ws>/agents/<agent>/run` | POST | run one agent alone (`task`; `test: true` for a test run) |
+| `/api/workspaces/<ws>/agents/import` | GET, POST | copy an agent in from another workspace of the account. GET lists what could be imported (every other workspace you can read, with its agents). POST `{ from, agent, as? }` copies `agents/<agent>/` — its agent.md and own skills/, scripts/, knowledge/; never memory/, outputs/, state/ — and answers `{ name, files, warnings }`; `warnings` names tools, skills, scripts and secrets the copy uses that this workspace lacks. 409 on a name clash (pass `as`), 404 for an unknown workspace or agent, 403 when `from` is outside your key's scope. Idempotent |
 | `/api/workspaces/<ws>/evals` | GET, POST | list; create (`name`) |
 | `/api/workspaces/<ws>/evals/<eval>/run` | POST | run one eval |
 | `/api/workspaces/<ws>/tools/<tool>/test` | POST | exercise one tool (`args`, `path`). An http tool with an `operations:` allowlist is probed only with a GET to one of its operations (no `path`: the first GET without parameters), and fails if the allowlist resolves nothing, as a run does |

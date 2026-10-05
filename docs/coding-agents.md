@@ -85,7 +85,7 @@ api workspaces/$WS/flows/<flow>/run -X POST   # start one
 | `/runs/<id>/stream` | GET | live events, server-sent |
 | `/runs/<id>/stop` · `/rerun` · `/approve` | POST | kill it; again from a step; release a gate |
 | `/flows` · `/flows/<f>` · `/flows/<f>/run` | GET POST · POST DELETE PATCH · POST | list, create, edit, start |
-| `/agents` · `/agents/<a>/run` | GET POST · POST | list agents, run one |
+| `/agents` · `/agents/<a>/run` · `/agents/import` | GET POST · POST · GET POST | list agents, run one, copy one in from another workspace |
 | `/evals` · `/evals/<e>/run` | GET POST · POST | list evals, run one |
 | `/tools/<t>/test` | POST | exercise one tool alone |
 | `/storage` · `/storage/download` · `/storage/upload-url` · `/storage/preview` · `/shares` | GET POST PUT DELETE · GET · POST · GET · POST GET DELETE | files agents produced and people uploaded, any type; a file parsed for reading; public links to them |

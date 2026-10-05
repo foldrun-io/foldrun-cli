@@ -78,7 +78,7 @@ function shippedTemplates() {
 }
 
 /** The files of one workspace: a template if asked for, else the starter. */
-async function workspaceFiles(name, from) {
+async function workspaceFiles(name, from, starter = true) {
   const { starterFiles } = await core();
   // A template is a source, a workspace is a destination. Keeping the two
   // words apart is the whole reason `templates/` is not called `examples/`:
@@ -91,7 +91,15 @@ async function workspaceFiles(name, from) {
   if (from && !source) {
     throw new Error(`no template at ${from} — pass a directory, or one that ships with foldrun: ${shippedTemplates().join(", ") || "none found"}`);
   }
-  const files = source ? templateFilesFrom(source) : starterFiles(name);
+  // Blank unless asked: the example researcher and writer met people as
+  // clutter in a workspace made for real work (owner, 2026-10-05). --starter
+  // brings them back; --from copies a template.
+  const { blankWorkspaceFiles } = /** @type {any} */ (await core());
+  const files = source
+    ? templateFilesFrom(source)
+    : starter || !blankWorkspaceFiles
+      ? starterFiles(name)
+      : blankWorkspaceFiles(name);
 
   // Whatever the source, the new workspace must ignore the key that decrypts
   // its secrets. A template does not carry one — it is a source, not a
@@ -206,7 +214,11 @@ function report(where, written, outside, wsDir, files) {
   console.log(`
   ${c.bold("Next")}
     foldrun check ${rel}${" ".repeat(Math.max(1, 16 - rel.length))}${c.dim("validate it — costs nothing")}
-    foldrun run ${flow ?? "publish"} --workspace ${path.relative(process.cwd(), wsDir) || "."}   ${c.dim("run the flow")}
+    ${
+      flow
+        ? `foldrun run ${flow} --workspace ${path.relative(process.cwd(), wsDir) || "."}   ${c.dim("run the flow")}`
+        : `foldrun agent import <workspace>/<agent>   ${c.dim("bring in an agent you already have — or `foldrun agent new <name>`")}`
+    }
 `);
 }
 
@@ -231,8 +243,11 @@ async function newWorkspace(name, flags, layout) {
   }
   const dir = path.join(layout.workspacesDir, name);
   if (fs.existsSync(dir)) throw new Error(`${dir} already exists`);
-  const files = await workspaceFiles(name, flags.from);
+  const files = await workspaceFiles(name, flags.from, flags.starter === true);
   writeFiles(dir, files);
+  // A workspace is a folder holding agents/ or flows/; a blank one has
+  // neither file yet, so the folders are made for it to be found as one.
+  for (const sub of ["agents", "flows"]) fs.mkdirSync(path.join(dir, sub), { recursive: true });
   syncWorkspaceBundles(dir);
   report(dir, files.map((f) => f.path), [], dir, files);
   return 0;
@@ -777,7 +792,10 @@ async function checkProblems(workspace, flags = {}) {
   }
   for (const s of platform.skills) skillNames.add(s);
 
-  if (agentNames.size === 0) note("error", "agents/", "no agents — a workspace needs at least one");
+  // A blank workspace is legal — `foldrun new` and the dashboard make one —
+  // so this is a nudge, as the deploy's warning is; a flow naming a missing
+  // agent is still an error below.
+  if (agentNames.size === 0) note("warn", "agents/", "no agents yet — `foldrun agent new <name>`, or `foldrun agent import <workspace>/<agent>`");
 
   // What format does this workspace target?
   const agentsMd = path.join(workspace, "AGENTS.md");
@@ -6373,6 +6391,84 @@ function hasDescription(raw) {
   return /^\s+\S/.test(lines[at + 1] ?? "");
 }
 
+/** What an import leaves behind: what the agent accumulated, not what it is.
+ *  The same rule as core's agent-import.ts. */
+const NOT_IMPORTED = /^(memory|outputs|state|workspace|\.claude)(\/|$)|^\.claude\.json$/;
+
+/**
+ * `foldrun agent import <workspace>/<agent> [--as <name>]` — bring an agent
+ * you already have in another workspace into this one: its agent.md and its
+ * own skills/, scripts/, knowledge/ — never its memory. With `--to <ws>` it
+ * is the platform's POST /api/workspaces/<ws>/agents/import; without, it
+ * copies between workspaces of this account folder, into the one you stand
+ * in (or `--workspace <name>`).
+ */
+async function agentImportCmd(positional, flags, layout) {
+  const ref = positional[1];
+  const m = typeof ref === "string" ? /^([^/]+)\/([^/]+)$/.exec(ref) : null;
+  if (!m) throw new Error("which agent? `foldrun agent import <workspace>/<agent> [--as <name>] [--to <workspace>]`");
+  const [, from, agent] = m;
+  const as = typeof flags.as === "string" && flags.as.trim() ? flags.as.trim() : null;
+
+  if (typeof flags.to === "string") {
+    const url = platformFor(flags, "agent import");
+    const body = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(flags.to)}/agents/import`, {
+      method: "POST",
+      body: JSON.stringify({ from, agent, ...(as ? { as } : {}) }),
+    });
+    console.log(`\n  ${c.green("✓")} ${c.bold(body.name)}  ${c.dim(`from ${from} → ${flags.to}`)}`);
+    for (const f of body.files ?? []) console.log(`  ${c.dim(f)}`);
+    for (const w of body.warnings ?? []) console.log(`  ${c.amber("!")} ${w}`);
+    console.log();
+    return 0;
+  }
+
+  if (!layout.workspacesDir) {
+    throw new Error("not in an account folder — pass --to <workspace> to import on the platform");
+  }
+  const name = as ?? agent;
+  assertName(name);
+  const src = path.join(layout.workspacesDir, from, "agents", agent);
+  if (!fs.existsSync(path.join(src, "agent.md"))) {
+    throw new Error(`no agent "${agent}" in ${from} — ${layout.workspaces.includes(from) ? "" : `this account has ${layout.workspaces.join(", ") || "no workspaces"}`}`.replace(/ — $/, ""));
+  }
+  const target =
+    typeof flags.workspace === "string"
+      ? path.join(layout.workspacesDir, flags.workspace)
+      : layout.workspaceDir && layout.kind !== "empty"
+        ? layout.workspaceDir
+        : null;
+  if (!target || !fs.existsSync(target)) throw new Error("into which workspace? cd into it, or --workspace <name>");
+  if (path.resolve(target) === path.resolve(path.join(layout.workspacesDir, from)) && name === agent) {
+    throw new Error(`${agent} is already in ${from} — give the copy another name with --as`);
+  }
+  const dest = path.join(target, "agents", name);
+  if (fs.existsSync(dest)) throw new Error(`${path.basename(target)} already has an agent called "${name}" — import it under another name with --as`);
+
+  const written = [];
+  const walk = (dir, rel = "") => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (NOT_IMPORTED.test(r) || e.isSymbolicLink()) continue;
+      if (e.isDirectory()) walk(path.join(dir, e.name), r);
+      else if (e.isFile()) {
+        let content = fs.readFileSync(path.join(dir, e.name));
+        if (r === "agent.md" && name !== agent) {
+          content = Buffer.from(content.toString("utf8").replace(/^(---\r?\n(?:[\s\S]*?\r?\n)?)name:[^\n]*$/m, `$1name: ${name}`));
+        }
+        fs.mkdirSync(path.dirname(path.join(dest, r)), { recursive: true });
+        fs.writeFileSync(path.join(dest, r), content);
+        written.push(`agents/${name}/${r}`);
+      }
+    }
+  };
+  walk(src);
+  console.log(`\n  ${c.green("✓")} ${c.bold(name)}  ${c.dim(`from ${from} → ${path.basename(target)}`)}`);
+  for (const f of written) console.log(`  ${c.dim(f)}`);
+  console.log(`  ${c.dim("its memory stayed in")} ${from}${c.dim(" — `foldrun check` names any tool, skill or secret it uses that this workspace lacks")}\n`);
+  return 0;
+}
+
 /**
  * `foldrun agent link <agent> --subagent <worker> | --consult <agent> |
  * --can-ask`, and `unlink` — an agent's team, edited in its frontmatter
@@ -8660,6 +8756,7 @@ export async function run(command, positional, flags, workspace, layout) {
       // `new` scaffolds one here; `run` runs one there. The noun is the same
       // thing in both cases, which is why they share a command.
       if (positional[0] === "link" || positional[0] === "unlink") return agentLinkCmd(positional, flags, layout);
+      if (positional[0] === "import") return agentImportCmd(positional, flags, layout);
       return positional[0] === "run"
         ? agentRunCmd(positional, flags, layout)
         : scaffoldCmd("agents", positional, flags, layout);

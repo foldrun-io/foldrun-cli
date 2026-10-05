@@ -86,7 +86,7 @@ if (command === "--version" || command === "-v") {
 const HELP = `foldrun — agents are just folders
 
   foldrun init [dir]        create an account folder: AGENTS.md, library/ and workspaces/<name>
-  foldrun new <name>        another workspace in this account
+  foldrun new <name>        another workspace in this account — blank (--starter for the example researcher, writer and flow)
   foldrun agent new <name>  one more agent in this workspace (--to <workspace> in an account)
   foldrun flow new <name>   one more flow — its first step names an agent you already have
   foldrun tool new <name>   one more tool: a folder with its program beside it (--transport, --language)
@@ -95,6 +95,7 @@ const HELP = `foldrun — agents are just folders
   foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker>, --consult <agent> or --can-ask (--description for a worker with none)
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
+  foldrun agent import <workspace>/<agent>  copy an agent you already have in another workspace into this one — its agent.md, own skills and scripts, not its memory (--as <name>, --workspace <name>; --to <ws> on the platform)
   foldrun flow add <flow> <pattern>  one canvas block as a markdown edit: chain, parallel, router, fan-out, loop, approval, ask, wait, rescue, subflow — diff shown, checked, --dry-run
   foldrun flow rm-step <flow> --step <n|agent>  delete one step (its options too); groups renumber, agent file untouched — says what else changes, diff, checked, asks (--yes), --dry-run
   foldrun flow dup-step <flow> --step <n|agent>  copy one step (marker and options) directly under it, in parallel with it — diff, checked, --dry-run
@@ -200,7 +201,8 @@ Signing in
 Options
   --workspace <dir>         the workspace folder (default: .) — on init, the first workspace's name
   --flat                    init: the old single-folder shape, no account around it
-  --from <template>         init: start from a shipped template, e.g. templates/hello
+  --from <template>         init: start from a shipped template, e.g. templates/hello (new takes it too)
+  --starter                 new: include the example researcher, writer and publish flow (a new workspace is blank)
   --transport <k>           tool new: script (default), http or mcp
   --language <l>            tool new: the script's language — javascript, python, bash
   --task "<text>"           the instruction for a manual run
@@ -307,7 +309,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes
