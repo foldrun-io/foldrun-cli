@@ -98,6 +98,10 @@ per-seat fee would tax the approver the safety story depends on.
 **Bring your own model key** and tokens cost no credits at all — the model
 is billed to your own provider account — so a plan then buys sandbox time
 and the platform, which is most of what a BYOK customer's credits go on.
+A step counts as BYOK when it ran on a key of the account's own (Settings →
+Model, or a `provider:` block); the run page says which credential each step
+used. On a hosted platform every customer account brings one
+([providers](providers.md#your-accounts-own-model-key)).
 
 **Going into minus.** Ordinarily an empty balance starts no run. The
 platform can allow an account to run below zero — to a floor, or with none —

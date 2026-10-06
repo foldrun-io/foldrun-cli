@@ -158,6 +158,7 @@ const HELP = `foldrun — agents are just folders
   foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun account           the account's defaults — also set <key> <value>, clear <key>, providers (--check) (singular; accounts lists logins)
   foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
+  foldrun account model     the account's own model key — set <provider> --key <api key> (--key - reads stdin; custom --base-url --format), remove
   foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|notify> <value>, clear <key>
   foldrun workspace vocabulary  the names the dashboard's editor completes in a workspace: agents, flows, skills, tools, secrets, scripts, types, documents (--to, --json)
   foldrun notify test       send one test notification from a workspace and say what happened (--to <workspace>)

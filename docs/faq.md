@@ -13,8 +13,11 @@ with a team.
 **Which models does it use?** Whatever you point it at. `model:` takes a
 tier — `fast`, `default`, `max` — and the platform resolves the tier to a
 model. Bring your own key for any provider that speaks the Anthropic or the
-Chat Completions API, per account or per workspace, and the platform bills
-you nothing for those tokens. See [Providers](providers).
+Chat Completions API — once for the whole account in Settings → Model
+(`foldrun account model set`), or per workspace or agent with a `provider:`
+block — and the platform bills you nothing for those tokens. On a hosted
+platform every account brings its own API key; Claude login tokens are not
+accepted. See [Providers](providers).
 
 **Can agents reach the internet?** Yes — the public internet, as themselves,
 with the secrets they were granted. Not private networks, not the cloud

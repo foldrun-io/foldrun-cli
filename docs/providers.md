@@ -1,5 +1,31 @@
 # Providers, by name
 
+## Your account's own model key
+
+The simplest way to bring a key: **Settings → Model provider**, or
+`foldrun account model set <provider> --key <api key>`, or
+`PUT /api/account/model`. Pick a name from the table below (or `custom`
+with a base URL and a format), paste an **API key**, and every step in
+every workspace runs on it. No `provider:` block is needed; one written in
+an agent, a workspace or the account's AGENTS.md still wins over it.
+
+The key is stored in the account's vault, encrypted under the account's own
+key, as `FOLDRUN_MODEL_PROVIDER`, `FOLDRUN_MODEL_API_KEY` and, for a custom
+endpoint, `FOLDRUN_MODEL_BASE_URL` and `FOLDRUN_MODEL_FORMAT`. The dashboard
+and the API show only its last four characters.
+
+**On a hosted platform every account brings its own key.** The platform's
+own model credential is for the operator's accounts
+(`FOLDRUN_PLATFORM_KEY_ACCOUNTS`); a step in any other account with no key
+of its own is refused before it starts — "no model key: …" on the run — and
+an eval's judge or "draft with AI" says the same. A **Claude login token**
+(`sk-ant-oat…`, from `claude setup-token`) is refused as a customer's key:
+Anthropic's terms do not let a third-party product run its customers on
+claude.ai logins. Use an API key from the provider.
+
+Tokens on your own key are billed by your provider, not by the platform
+([budgets and billing](budgets-and-billing.md)).
+
 What `provider: { name: … }` resolves to. Mirrors `foldrun-core/src/providers.ts`,
 checked against each provider's own documentation on 2026-09-02 and again on
 2026-09-06; the table below is what the runtime believes, and

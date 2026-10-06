@@ -4916,6 +4916,65 @@ async function providersCmd(url, flags) {
   return broken ? 1 : 0;
 }
 
+/**
+ * `foldrun account model` — the account's own model key: what every step
+ * runs on unless a provider: block names another (/api/account/model).
+ *
+ *   foldrun account model                                   what is set, what runs
+ *   foldrun account model set <provider> --key <api key>    a preset (anthropic,
+ *       openrouter, openai, groq, …) or `custom --base-url https://… --format openai`
+ *   foldrun account model remove
+ *
+ * `--key -` reads the key from stdin, so it stays out of the shell's history.
+ * The platform refuses a Claude login token for any account not allowed its
+ * own credential: bring an API key.
+ */
+async function accountModelCmd(url, positional, flags) {
+  const verb = positional[0];
+  const show = (r) => {
+    const runs =
+      r.runsOn === "account"
+        ? `${c.green("✓")} your own key — ${c.bold(r.provider ?? "custom")} ${c.dim(`${r.keyHint ?? ""} · ${r.baseUrl ?? ""} · ${r.format ?? ""}`)}`
+        : r.runsOn === "platform"
+          ? `${c.yellow("·")} the platform's credential ${c.dim("(this account is allowed it)")}`
+          : `${c.red("✗")} no key — runs on this account are refused until one is set`;
+    console.log(`\n  ${runs}`);
+    console.log(`\n  ${c.dim("foldrun account model set <provider> --key <api key> · remove · a provider: block in AGENTS.md wins over it")}\n`);
+  };
+  if (!verb) {
+    const r = await remoteCall(url, flags, "/api/account/model");
+    if (flags.json === true) console.log(JSON.stringify(r, null, 2));
+    else show(r);
+    return r.runsOn === "none" ? 1 : 0;
+  }
+  if (verb === "remove") {
+    const r = await remoteCall(url, flags, "/api/account/model", { method: "DELETE" });
+    if (flags.json === true) console.log(JSON.stringify(r, null, 2));
+    else show(r);
+    return 0;
+  }
+  if (verb !== "set") throw new Error("`foldrun account model`, `foldrun account model set <provider> --key <api key>`, or `foldrun account model remove`");
+  const provider = positional[1];
+  if (!provider) throw new Error("which provider? `foldrun account model set anthropic --key …` (a preset name, or `custom --base-url https://… --format openai`)");
+  let apiKey = typeof flags.key === "string" ? flags.key : "";
+  if (apiKey === "-") apiKey = fs.readFileSync(0, "utf8").trim();
+  if (!apiKey) throw new Error("--key <api key> (or --key - to read it from stdin)");
+  const body = {
+    provider,
+    apiKey,
+    ...(typeof flags["base-url"] === "string" ? { baseUrl: flags["base-url"] } : {}),
+    ...(typeof flags.format === "string" ? { format: flags.format } : {}),
+  };
+  const r = await remoteCall(url, flags, "/api/account/model", {
+    method: "PUT",
+    body: JSON.stringify(body),
+    headers: { "idempotency-key": crypto.randomUUID() },
+  });
+  if (flags.json === true) console.log(JSON.stringify(r, null, 2));
+  else show(r);
+  return 0;
+}
+
 // --------------------------------------------------------------- billing
 
 /**
@@ -5013,9 +5072,10 @@ async function accountCmd(positional, flags) {
     return 0;
   }
   if (verb === "providers") return providersCmd(url, flags);
+  if (verb === "model") return accountModelCmd(url, positional.slice(1), flags);
   if (verb === "export") return accountExportCmd(url, flags);
   if (verb !== "set" && verb !== "clear") {
-    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one, \`providers\` checks the model keys, \`export\` downloads everything`);
+    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one, \`model\` is the account's own model key, \`providers\` checks the model keys, \`export\` downloads everything`);
   }
 
   const key = positional[1];
