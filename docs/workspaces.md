@@ -95,7 +95,8 @@ installation — or to hand someone a flow — export it as a `.zip`:
 - **A flow:** **Export** on its card on the Flows page. The package holds the
   flow, every flow it runs as a step, every agent those steps name (with
   `on-fail:`, `delegate:` and the colleagues those agents consult or delegate to),
-  and the workspace tools, skills and scripts they grant.
+  and the workspace tools, skills and scripts they grant — including the
+  script a single-file tool's `run:` names.
 - **An agent:** **Export** on its page: its folder (what agent import copies)
   and the workspace tools, skills and scripts it grants. Colleagues it consults
   are named, not carried.
