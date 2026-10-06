@@ -179,6 +179,14 @@ memory an agent wrote that your push does not mention. Those belong to the
 platform, not to git, and a deploy that reverted what an agent learned would
 make every run a little dumber.
 
+The agent engine's own files are not workspace content either. Each step
+runs in a sandbox on the Claude Agent SDK — the engine, whichever model
+answers — and the engine writes its settings and session transcripts in the
+agent's folder there (`agents/<name>/.claude.json`, `agents/<name>/.claude/`).
+They stay in the sandbox: never copied back, never copied in. (Your own
+`.claude/agents/*.md` at the workspace root is different — a Claude Code
+subagent you wrote, deployed as an agent.)
+
 A push while a run is in flight is accepted and applied when the run
 finishes; git tells you so at push time. A run parked at an approval gate
 counts as in flight. See [Deploying](deploying).
