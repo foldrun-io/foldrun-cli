@@ -178,6 +178,8 @@ const HELP = `foldrun — agents are just folders
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret — --client <saved> runs it from a saved client through the platform
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
   foldrun pull [workspace]  bring the platform's account down here (refuses to clobber; --force overrides)
+  foldrun export [workspace]  a deployed workspace as a .zip — agents, flows, tools, skills, scripts, evals, knowledge; never memory, state or secret values (--flow <name> or --agent <name> for one, with what it needs; --file <path>|-, --force)
+  foldrun import <file.zip>  take a package in: shows what it adds, would replace and still needs, then asks (--to <workspace>; a new name makes a workspace; --dry-run, --overwrite, --yes, --json)
   foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
   foldrun status --platform  is the platform up: each component, and any incident or maintenance posted (--json)
   foldrun status --platform --history  uptime per component per day and the incidents in the window, as the status page's bars (--days 1-90, default 90; --json)
@@ -233,8 +235,8 @@ Options
   --since <days>            observe, triggers: the window in days (observe default 30, triggers 7)
   --until <span|date>       stop, rerun (bulk): only runs started before then — 2h ago, or a date
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
-  --flow <name>             stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
-  --agent <name>            flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame; source new: the agent the document belongs to
+  --flow <name>             export: that flow and everything it runs; stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
+  --agent <name>            export: that agent and what it grants; flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame; source new: the agent the document belongs to
   --instruction "<text>"    flow add: what a new step (chain, parallel, router) is told to do
   --after <n>               flow add, flow move-step, flow paste: put the new group after the nth (0 = first); --before <n> before it (flow add); default last
   --group <n>               flow add, flow move-step, flow paste: the group a step joins, in parallel
@@ -275,14 +277,14 @@ Options
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --payload <json|text|@f>  approve: release a step waiting on wait: event with this body, recorded as you
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal; billing credit: the ledger line's note
-  --yes                     approve, stop, rerun (bulk), flow rotate-hook, flow draft, history restore, restore <ws>, billing plan, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
+  --yes                     approve, stop, rerun (bulk), flow rotate-hook, flow draft, history restore, restore <ws>, import, billing plan, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
   --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces show, agent ls, flow ls, agent import --list, backups requests, team: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history, changelog: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --out <file>              api spec: where to write the OpenAPI document (default: stdout)
-  --file <path>             source put, library put, flow paste: the local file to send (default: stdin); secrets set --kind file|service-account: the file it holds; storage get, report get, report live, account export, billing statement: where to write it (- for stdout)
+  --file <path>             source put, library put, flow paste: the local file to send (default: stdin); secrets set --kind file|service-account: the file it holds; storage get, report get, report live, account export, export, billing statement: where to write it (- for stdout)
   --message "<why>"         source put: recorded on the file's revision
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke, agent run: hold on and print the result
@@ -313,7 +315,8 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --quiet                   leave out the dim "acting as …" line a platform command prints on stderr
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
-  --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow move-step, flow paste, flow draft, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; stop, rerun (bulk): list what matches, touch nothing
+  --overwrite               import: replace files the workspace already has with different text (refused otherwise)
+  --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow move-step, flow paste, flow draft, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; import: the preview only, write nothing; stop, rerun (bulk): list what matches, touch nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
   --yes                     deploy: allow deleting files this folder no longer has (asked otherwise; required with no terminal)

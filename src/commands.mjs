@@ -7163,6 +7163,99 @@ async function remoteBytes(url, flags, apiPath, what) {
 }
 
 /**
+ * `foldrun export [workspace] [--flow <name> | --agent <name>]` — a deployed
+ * workspace, one flow or one agent as a .zip: the authored source it needs,
+ * never memory, state, storage or a secret's value (GET …/export). The same
+ * file the dashboard's Export downloads and `foldrun import` takes in.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function exportCmd(positional, flags, layout) {
+  const url = platformFor(flags, "export");
+  const ws = positional[0] ?? platformWorkspace(flags, layout, "export");
+  if (typeof flags.flow === "string" && typeof flags.agent === "string") throw new Error("one at a time: --flow <name> or --agent <name>");
+  const kind = typeof flags.flow === "string" ? "flow" : typeof flags.agent === "string" ? "agent" : "workspace";
+  const name = kind === "flow" ? flags.flow : kind === "agent" ? flags.agent : null;
+  const qs = name ? `?kind=${kind}&name=${enc(name)}` : "";
+  const { bytes, name: served } = await remoteBytes(url, flags, `/api/workspaces/${enc(ws)}/export${qs}`, `export ${name ? `${kind} ${name} from ` : ""}${ws}`);
+  return writeDownload(bytes, served ?? (name ? `${ws}-${kind}-${name}.zip` : `${ws}.zip`), flags, name ? `${ws} · ${kind} ${name}` : ws);
+}
+
+/**
+ * `foldrun import <file.zip> [--to <workspace>]` — take a package in: shows
+ * what it adds, would replace and still needs (POST …/import?dryRun=1), then
+ * asks, then applies. Never deletes; replacing a file needs --overwrite. A
+ * workspace package into a name that does not exist makes that workspace.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function importCmd(positional, flags, layout) {
+  const file = positional[0];
+  if (!file) throw new Error("which package? `foldrun import <file.zip> [--to <workspace>]` — `foldrun export` or the dashboard's Export makes one");
+  if (!fs.existsSync(file)) throw new Error(`${file} does not exist`);
+  const url = platformFor(flags, "import");
+  const ws = platformWorkspace(flags, layout, "import");
+  const bytes = fs.readFileSync(file);
+  const token = tokenFor(url, flags);
+  const send = async (query) => {
+    const res = await remoteFetch(
+      url,
+      `/api/workspaces/${enc(ws)}/import${query}`,
+      { method: "POST", body: bytes, headers: { "content-type": "application/zip" } },
+      { token, seconds: timeoutSeconds(flags) },
+    );
+    const text = await res.text();
+    let body = {};
+    try {
+      body = text.trim() ? JSON.parse(text) : {};
+    } catch {
+      /* not JSON — the status says enough */
+    }
+    if (!res.ok) throw new HttpError(`${body.error ?? `import → HTTP ${res.status}`}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, body);
+    return body;
+  };
+
+  const plan = await send("?dryRun=1");
+  const what = `${plan.kind === "workspace" ? "workspace" : `${plan.kind} ${plan.name}`}${plan.from ? ` from ${plan.from}` : ""}`;
+  if (flags.json === true && flags["dry-run"] === true) {
+    console.log(JSON.stringify(plan, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(what)} → ${c.bold(ws)}${plan.creates ? c.dim("  (a new workspace)") : ""}`);
+  console.log(`  ${plan.added.length} new · ${plan.unchanged.length} identical · ${plan.overwritten.length ? c.amber(`${plan.overwritten.length} would be replaced`) : "0 replaced"}`);
+  for (const p of plan.overwritten.slice(0, 20)) console.log(`    ${c.amber("~")} ${p}`);
+  const needs = [
+    ["secrets to set", plan.needs?.secrets],
+    ["tools not here or in the library", plan.needs?.tools],
+    ["skills not found", plan.needs?.skills],
+    ["scripts not found", plan.needs?.scripts],
+    ["agents it names that are not here", plan.needs?.agents],
+    ["flows it runs that are not here", plan.needs?.flows],
+  ].filter(([, v]) => v?.length);
+  for (const [k, v] of needs) console.log(`  ${c.amber("!")} ${k}: ${v.join(", ")}`);
+
+  if (flags["dry-run"] === true) {
+    console.log(`\n  ${c.dim("(--dry-run: nothing written)")}\n`);
+    return 0;
+  }
+  if (plan.added.length + plan.overwritten.length === 0) {
+    console.log(`\n  ${c.dim("nothing to import — every file is already identical")}\n`);
+    return 0;
+  }
+  if (plan.overwritten.length && flags.overwrite !== true) {
+    console.log(`\n  ${c.dim(`nothing written — ${plan.overwritten.length} file${plan.overwritten.length === 1 ? "" : "s"} would be replaced; --overwrite replaces them (History can restore them)`)}\n`);
+    return 1;
+  }
+  if (!(await confirmed(flags, "import", `Import into ${ws}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing written")}\n`);
+    return 0;
+  }
+  const done = await send(flags.overwrite === true ? "?overwrite=1" : "");
+  console.log(`\n  ${c.green("✓")} ${(done.written ?? []).length} file${(done.written ?? []).length === 1 ? "" : "s"} written to ${c.bold(ws)}${done.revision ? c.dim(`  revision ${done.revision}`) : ""}`);
+  if (needs.length) console.log(`  ${c.dim("set what it still needs before its first run — `foldrun secrets set <NAME>` for secrets")}`);
+  console.log();
+  return 0;
+}
+
+/**
  * `foldrun report <run-id> get <agent>/<path>` — one file a run archived:
  * whatever an agent left in outputs/, copied under the run when it ended.
  */
@@ -9050,6 +9143,10 @@ export async function run(command, positional, flags, workspace, layout) {
           : check(workspace, flags);
     case "pull":
       return pullCmd(layout, flags, positional[0]);
+    case "export":
+      return exportCmd(positional, flags, layout);
+    case "import":
+      return importCmd(positional, flags, layout);
     case "status":
       return statusCmd(layout, flags, positional[0]);
     case "workspaces":

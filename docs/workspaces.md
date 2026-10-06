@@ -86,6 +86,45 @@ tools, skills, scripts, secrets — without refusing: set the secret, import the
 tool, and it runs. The copy is independent; editing one does not change the
 other.
 
+### Export and import
+
+Agent import works inside one account. To move a desk to another account or
+installation — or to hand someone a flow — export it as a `.zip`:
+
+- **A workspace:** Settings → **Export and import** → **Export workspace**.
+- **A flow:** **Export** on its card on the Flows page. The package holds the
+  flow, every flow it runs as a step, every agent those steps name (with
+  `on-fail:`, `delegate:` and the colleagues those agents consult or delegate to),
+  and the workspace tools, skills and scripts they grant.
+- **An agent:** **Export** on its page: its folder (what agent import copies)
+  and the workspace tools, skills and scripts it grants. Colleagues it consults
+  are named, not carried.
+
+A package is authored source only. It never holds `memory/`, `state/`,
+`outputs/`, storage, runs or a secret's value, and an import that contains any
+of those is refused. The secrets it uses travel by **name**, so the importer
+knows what to set.
+
+To import, use **Import .zip** on the Flows or Agents page or in Settings, or
+**Add new → Import workspace** on the home page. You pick the file and first
+see a preview, with nothing written yet:
+
+- what it adds;
+- what is already identical;
+- which files it would **replace** (only with a tick);
+- what it needs that this account lacks: secrets, library tools and skills,
+  scripts, agents and flows it names.
+
+An import never deletes anything. It lands as one revision, so History can
+restore what it replaced. A workspace package imported under a new name makes
+that workspace. A `.zip` of a workspace folder made by hand (a Mac's
+Compress included) imports the same way.
+
+From a terminal: `foldrun export [workspace] [--flow <name> | --agent <name>]`
+and `foldrun import <file.zip> --to <workspace> [--dry-run] [--overwrite]`.
+The routes are `GET /api/workspaces/<ws>/export` and
+`POST /api/workspaces/<ws>/import` (`?dryRun=1`, `?overwrite=1`).
+
 ## `AGENTS.md` — context and defaults
 
 The body is prose every agent in the workspace sees before its own prompt.
