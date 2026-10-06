@@ -112,7 +112,7 @@ begins.
 | `ask:` | the same gate carrying a question; the typed answer reaches the prompt (a plain approval with no note reaches it as "approved with no note") |
 | `preview:` | what the gate shows: paths under `storage/` (a `workspace/storage/` prefix is accepted), comma-separated, globs allowed — `draft/*.mdx, draft/images/*.webp`; at most 12 files |
 | `wait:` | `3d` (`s`/`m`/`h`/`d`, capped at 30 days) or `event` — the run page shows the event URL and can release it with a payload, recorded as released by you (approve with `payload`) |
-| `on-fail:` | another agent takes the step over, with the failure as context |
+| `on-fail:` | another agent takes the step over, with the failure as context. The rescuer owes what the step owed: its `verify:` and its `output:` |
 | `delegate:` | the step's agent picks who runs next, from this set |
 
 ### Routing
