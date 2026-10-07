@@ -183,7 +183,7 @@ const HELP = `foldrun — agents are just folders
   foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
   foldrun status --platform  is the platform up: each component, and any incident or maintenance posted (--json)
   foldrun status --platform --history  uptime per component per day and the incidents in the window, as the status page's bars (--days 1-90, default 90; --json)
-  foldrun workspaces        what exists here and on the platform — also rm <name> (--platform --yes)
+  foldrun workspaces        what exists here and on the platform (--json for a script) — also rm <name> (--platform --yes)
   foldrun workspaces show <name>  what is deployed in one: its agents, flows and how each fires, its files by folder (--json)
   foldrun workspaces new <name> --platform  make it on the platform: blank (an AGENTS.md), or --starter for the example researcher, writer and flow
   foldrun workspaces demo   make the demo pipeline workspace on the platform — "Try the demo pipeline"
@@ -278,7 +278,7 @@ Options
   --payload <json|text|@f>  approve: release a step waiting on wait: event with this body, recorded as you
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal; billing credit: the ledger line's note
   --yes                     approve, stop, rerun (bulk), flow rotate-hook, flow draft, history restore, restore <ws>, import, billing plan, repo, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
-  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces show, agent ls, flow ls, agent import --list, backups requests, team: the raw document; version: {cli, core, platform}
+  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces, workspaces show, agent ls, flow ls, agent import --list, backups requests, team: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history, changelog: how many rows

@@ -105,3 +105,25 @@ test("import with no terminal and no --yes is refused after the preview", async 
   assert.match(r.out, /--yes/);
   assert.equal(s.seen.length, 1);
 });
+
+test("workspaces --json is JSON on stdout, nothing else — what a loop over workspaces reads", async () => {
+  const { WORKSPACES } = await import("./fake-platform.ts");
+  const s = await serve({ "GET /api/workspaces": () => WORKSPACES });
+  const r = await at(s.url, "workspaces", "--json");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  const body = JSON.parse(r.out.slice(r.out.indexOf("{")));
+  assert.deepEqual(body.workspaces.map((w: { name: string }) => w.name), ["blog-desk", "rank-desk"]);
+  assert.equal(body.workspaces[0].platform, true);
+  assert.equal(body.workspaces.some((w: { name: string }) => w.name === "is"), false);
+});
+
+test("workspaces --json says when the platform could not be read, and exits 1", async () => {
+  const s = await serve({});
+  const url = s.url;
+  s.close();
+  const r = await at(url, "workspaces", "--json");
+  assert.equal(r.code, 1, r.out);
+  const body = JSON.parse(r.out.slice(r.out.indexOf("{")));
+  assert.ok(body.error, "an error field");
+});

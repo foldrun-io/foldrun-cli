@@ -4400,6 +4400,23 @@ async function workspacesCmd(positional, flags, layout) {
     }
   }
   const all = [...new Set([...here, ...there])].sort();
+  // --json: for a script — `foldrun workspaces --json | jq -r '.workspaces[].name'`.
+  // The table's footer once read as a workspace called "is" to a loop that
+  // parsed it. Unreachable platform: still the list, with `error`, exit 1.
+  if (flags.json === true) {
+    console.log(
+      JSON.stringify(
+        {
+          platform: url ?? null,
+          workspaces: all.map((n) => ({ name: n, here: here.includes(n), platform: there.includes(n) })),
+          ...(reach ? { error: reach } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+    return reach ? 1 : 0;
+  }
   if (!all.length) {
     console.log(`\n  ${c.dim("no workspaces — `foldrun new <name>` makes one")}\n`);
     return 0;
