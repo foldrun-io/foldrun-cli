@@ -101,10 +101,15 @@ installation — or to hand someone a flow — export it as a `.zip`:
   and the workspace tools, skills and scripts it grants. Colleagues it consults
   are named, not carried.
 
-A package is authored source only. It never holds `memory/`, `state/`,
-`outputs/`, storage, runs or a secret's value, and an import that contains any
-of those is refused. The secrets it uses travel by **name**, so the importer
-knows what to set.
+A package is authored source only: `AGENTS.md` and the `agents/`, `flows/`,
+`evals/`, `knowledge/`, `skills/`, `tools/` and `scripts/` folders. It never holds
+`memory/`, `state/`, `outputs/`, storage, runs, `.env` files or a secret's
+value. The secrets it uses travel by **name**, so the importer knows what to
+set. An agent with no `skills:` line gets every skill in scope at run time, so
+its package carries every workspace skill.
+
+Anything else in a zip — memory, state, a `.gitignore` or `CLAUDE.md` beside a
+folder you zipped yourself — is **not imported**, and the preview lists it.
 
 To import, use **Import .zip** on the Flows or Agents page or in Settings, or
 **Add new → Import workspace** on the home page. You pick the file and first
@@ -116,7 +121,9 @@ see a preview, with nothing written yet:
 - what it needs that this account lacks: secrets, library tools and skills,
   scripts, agents and flows it names.
 
-An import never deletes anything. It lands as one revision, so History can
+An import never deletes anything, and it is all or nothing: a file it cannot
+write (a folder already in its place, a link on the way) refuses the whole
+import before anything is written. It lands as one revision, so History can
 restore what it replaced. A workspace package imported under a new name makes
 that workspace. A `.zip` of a workspace folder made by hand (a Mac's
 Compress included) imports the same way.

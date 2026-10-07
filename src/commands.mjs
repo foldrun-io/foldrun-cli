@@ -7239,6 +7239,7 @@ async function importCmd(positional, flags, layout) {
   console.log(`\n  ${c.bold(what)} → ${c.bold(ws)}${plan.creates ? c.dim("  (a new workspace)") : ""}`);
   console.log(`  ${plan.added.length} new · ${plan.unchanged.length} identical · ${plan.overwritten.length ? c.amber(`${plan.overwritten.length} would be replaced`) : "0 replaced"}`);
   for (const p of plan.overwritten.slice(0, 20)) console.log(`    ${c.amber("~")} ${p}`);
+  if (plan.skipped?.length) console.log(`  ${c.dim(`${plan.skipped.length} not imported (memory, state, or outside the authored folders): ${plan.skipped.slice(0, 6).join(", ")}${plan.skipped.length > 6 ? " …" : ""}`)}`);
   const needs = [
     ["secrets to set", plan.needs?.secrets],
     ["tools not here or in the library", plan.needs?.tools],

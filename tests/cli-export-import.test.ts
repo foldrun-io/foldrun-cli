@@ -52,7 +52,7 @@ test("export refuses --flow and --agent together, before asking", async () => {
 test("import --dry-run previews and writes nothing", async () => {
   const file = path.join(tmp, "p.zip");
   fs.writeFileSync(file, ZIP);
-  const s = await serve({ "POST /api/workspaces/fresh/import": () => plan() });
+  const s = await serve({ "POST /api/workspaces/fresh/import": () => plan({ skipped: ["memory/x.md", ".gitignore"] }) });
   const r = await at(s.url, "import", file, "--to", "fresh", "--dry-run");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -62,6 +62,7 @@ test("import --dry-run previews and writes nothing", async () => {
   assert.ok(s.seen[0]!.body.startsWith("PK"), "the zip is the body");
   assert.match(r.out, /flow publish from blog → fresh/);
   assert.match(r.out, /secrets to set: CMS_TOKEN/);
+  assert.match(r.out, /2 not imported .*memory\/x\.md, \.gitignore/);
   assert.match(r.out, /nothing written/);
 });
 
