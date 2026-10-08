@@ -221,6 +221,14 @@ the agent — which is already the model — to answer from; `extract` by
 `schema=` or `prompt=`, which needs a model to read the page, needs a
 provider.
 
+Granting `web` grants **Read** with it: several actions write what they
+found to a file and say so (a screenshot, a crawl, a page saved whole), and
+an agent told to read a file it could not open was refused. `disallowedTools:
+[Read]` takes it away again. A provider that times out or answers busy (429,
+5xx) is asked twice more, about 2 s and 6 s apart, before the action reports
+it unreachable — a fan-out of many steps asking one provider at once is the
+usual cause.
+
 ```yaml
 tools: [web]
 web:

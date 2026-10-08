@@ -115,6 +115,25 @@ begins.
 | `on-fail:` | another agent takes the step over, with the failure as context. The rescuer owes what the step owed: its `verify:` and its `output:` |
 | `delegate:` | the step's agent picks who runs next, from this set |
 
+### What is retried without a `retry:`
+
+Some failures are the platform's or the network's, not the step's, and are
+tried again whoever wrote the flow:
+
+| what went wrong | what happens |
+|---|---|
+| the step's model connection was cut (the worker or the egress proxy restarted) | the step runs again, up to twice |
+| the model wrote a tool call out as text instead of making it, so nothing ran | the step runs again once, told what went wrong |
+| a connected account's token (`oauth2` secret) could not be refreshed for a network blip, a 5xx or a 429 | tried three times, about 1 s and 3 s apart; a refusal (revoked, wrong client) is not retried and mails the reconnect link |
+| a `web` provider timed out or answered busy | tried three times, about 2 s and 6 s apart (see the web tool) |
+
+None of the step-level ones runs again once a tool that can act outside the
+workspace has run in that attempt: the post may already be up. When a step
+still fails, the run says so — `notify:` sends `failed` (and `blocked`, for a
+run that finished but refused), and the run page's **Re-run from here**,
+`foldrun rerun <run-id> --from <n>` or `POST …/runs/<id>/rerun` start it
+again once the cause is fixed.
+
 ### Routing
 
 ```markdown
