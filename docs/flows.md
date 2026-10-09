@@ -294,7 +294,7 @@ that narrated between tool calls and then opened its answer with `BAD — …`
 passes `matches: ^BAD\b`. `judge:` grades the whole result.
 
 The command sees what the step's scripts saw — its secrets, `FOLDRUN_RUN_ID`,
-`FOLDRUN_AGENT`, `FOLDRUN_WORKSPACE`, `FOLDRUN_DATE`, `TZ` — so a marker a step leaves on disk can
+`FOLDRUN_AGENT`, `FOLDRUN_WORKSPACE`, `FOLDRUN_DATE`, `TZ`, and `FOLDRUN_API_URL` (this install's own API, when it has a public address) — so a marker a step leaves on disk can
 be checked to name *this* run. That matters: a run's copy-back never
 propagates a deletion, so a marker from an earlier run rides into every later
 sandbox. `judge:` is a toolless fast-tier grading call; the other four cost

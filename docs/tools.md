@@ -54,7 +54,7 @@ headers:
 
 | field | |
 |---|---|
-| `base` | the URL every call is relative to |
+| `base` | the URL every call is relative to. `${FOLDRUN_API_URL}` is this install's own API (`base: ${FOLDRUN_API_URL}`), so a tool that reads the account's runs never names a host; a base naming it on an install that has no public address is reported unavailable |
 | `methods` | the verb allowlist — a tool that declares none is read-only |
 | `headers` | `${SECRET}` placeholders, resolved host-side at call time |
 | `query` | query parameters appended to every call — for an API that carries its key in the query string; a `${SECRET}` is resolved host-side |
