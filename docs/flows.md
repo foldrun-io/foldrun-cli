@@ -291,7 +291,7 @@ decided by a number belongs in a command that can be tested:
 `contains:`, `not-contains:` and `matches:` test the step's **conclusion** —
 its final reply, the same text the run's headline is read from — so a step
 that narrated between tool calls and then opened its answer with `BAD — …`
-passes `matches: ^BAD\b`. `judge:` grades the whole result.
+passes `matches: ^BAD\b`. `judge:` grades the same conclusion as "the reply", with everything the step wrote before it shown alongside as context, so a claim about the work can still be checked.
 
 The command sees what the step's scripts saw — its secrets, `FOLDRUN_RUN_ID`,
 `FOLDRUN_AGENT`, `FOLDRUN_WORKSPACE`, `FOLDRUN_DATE`, `TZ`, and `FOLDRUN_API_URL` (this install's own API, when it has a public address) — so a marker a step leaves on disk can
