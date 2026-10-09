@@ -63,6 +63,13 @@ headers:
 | `openapi` | a URL or file; turns one generic tool into typed ones, one per operation |
 | `operations` | only these operations, by `operationId` or `METHOD /path`; the generic tool is withheld. It fails closed: if the document does not load or none of them resolve, the API has no tools that run, never the generic one. Keep an allowlisted document in the workspace, so a vendor renaming an operation cannot empty it |
 
+**The body is the manual.** Everything under a `tool.md`'s frontmatter goes
+to the model with the tool, after `description:` — how to call it, what it
+refuses, what its output means, examples of a call (up to 6,000 characters;
+a longer body is cut there and says so). A single-file tool's fenced program
+is code, not guidance, and stays out. This holds for script and HTTP tools
+alike, workspace or library.
+
 The model never sees a credential — the host substitutes it as the request
 goes out. The method allowlist protects against the agent; the key's own scopes
 protect against everyone else, so pair a read-only tool with a read-only key.
