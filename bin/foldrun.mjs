@@ -108,6 +108,7 @@ const HELP = `foldrun — agents are just folders
   foldrun flow dup-step <flow> --step <n|agent>  copy one step (marker and options) directly under it, in parallel with it — diff, checked, --dry-run
   foldrun flow show <flow>  the flow as the canvas draws it: trigger, groups, step chips, each agent's team, check problems in place
   foldrun flow run <flow>   start a flow on the platform — the same command as invoke
+  foldrun flow hook <flow>  the flow's webhook URL as it is now, changing nothing (--json) — the URL is a credential
   foldrun flow rotate-hook <flow>  a new webhook URL for a flow; the old one stops at once — asks first, --yes means it
   foldrun flow set <flow> --step <n|agent> key=value …  the step editor: model, effort, retry, timeout, verify, when, case, else, loop, until, each, max, limits, instruction (key= clears) — diff, checked, --dry-run
   foldrun flow trigger <flow> manual|webhook|schedule  the trigger picker (--schedule "<cron>", --timezone <zone>) — diff, checked, --dry-run

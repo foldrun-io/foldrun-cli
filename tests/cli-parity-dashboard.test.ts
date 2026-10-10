@@ -149,7 +149,7 @@ test("flow with an unknown verb names every flow verb the dispatcher has", () =>
   const { root } = desk();
   const r = run(root, ["flow", "wibble"]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /new, ls, add, rm-step, dup-step, show, run, rotate-hook, set, trigger, move-step, copy-step, paste, draft are the verbs, not "wibble"/);
+  assert.match(r.stderr, /new, ls, add, rm-step, dup-step, show, run, hook, rotate-hook, set, trigger, move-step, copy-step, paste, draft are the verbs, not "wibble"/);
 });
 
 test("flow trigger writes the trigger picker's lines; a schedule needs its cron; --dry-run writes nothing", () => {

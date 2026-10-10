@@ -343,7 +343,7 @@ async function scaffoldCmd(kind, positional, flags, layout) {
 
   // The other verbs are dispatched before this — `agent run` and `tool test`
   // go to the platform — so anything left here should have been `new`.
-  const alsoVerbs = { agents: ["run", "link", "unlink", "import", "ls"], tools: ["test"], flows: ["ls", "add", "rm-step", "dup-step", "show", "run", "rotate-hook", "set", "trigger", "move-step", "copy-step", "paste", "draft"] }[kind] ?? [];
+  const alsoVerbs = { agents: ["run", "link", "unlink", "import", "ls"], tools: ["test"], flows: ["ls", "add", "rm-step", "dup-step", "show", "run", "hook", "rotate-hook", "set", "trigger", "move-step", "copy-step", "paste", "draft"] }[kind] ?? [];
   const verb = positional[0];
   if (verb !== "new") {
     const verbs = ["new", ...alsoVerbs].join(", ");
@@ -4078,6 +4078,7 @@ async function reportRuntimes(url, workspace, flags, { waitSeconds = 0 } = {}) {
       r.python && r.python !== true ? `python ${r.python}` : null,
       ...(r.packages ?? []),
       ...(r.npm ?? []).map((n) => `npm:${n}`),
+      ...(r.system ?? []).map((n) => `apt:${n}`),
     ].filter(Boolean).join(", ") || "python";
     const who = c.dim(`(${(r.agents ?? []).join(", ")})`);
     const mark =
@@ -6938,6 +6939,27 @@ async function flowShowCmd(positional, flags, layout) {
 }
 
 /**
+ * `foldrun flow hook <flow>` — the flow's webhook URL as it is now, changing
+ * nothing. Before this the only way to learn it from here was rotate-hook,
+ * which broke the URL whoever was already posting to it had.
+ */
+async function flowHookCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("which flow? `foldrun flow hook <flow> --to <workspace>`");
+  const url = platformFor(flags, "flow hook");
+  const ws = platformWorkspace(flags, layout, `flow hook ${flow}`);
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/hooks/${enc(flow)}`);
+  const full = r.url ?? new URL(r.path, url).toString();
+  if (flags.json) {
+    console.log(JSON.stringify({ flow, url: full, path: r.path }));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(full)}`);
+  console.log(`  ${c.dim("a credential — whoever has it can start this flow; `foldrun flow rotate-hook " + flow + "` replaces it")}\n`);
+  return 0;
+}
+
+/**
  * `foldrun flow rotate-hook <flow>` — a new webhook URL for one flow. The
  * old one stops working the moment this returns, so it asks first.
  */
@@ -9300,6 +9322,7 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
       if (positional[0] === "run") return invoke(positional[1], flags);
       if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);
+      if (positional[0] === "hook") return flowHookCmd(positional, flags, layout);
       if (positional[0] === "set") return flowSetCmd(positional, flags, layout);
       if (positional[0] === "trigger") return flowTriggerCmd(positional, flags, layout);
       if (positional[0] === "move-step") return flowMoveStepCmd(positional, flags, layout);

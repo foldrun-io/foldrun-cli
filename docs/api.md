@@ -120,10 +120,11 @@ agent wrote that the push does not mention.
 
 `GET /api/workspaces/<ws>/runtimes` answers what a deploy started on the
 platform: every distinct `runtime:` the workspace's agents need
-(`fingerprint`, `agents`, `python`, `packages`, `npm`, and `rejected` for
-entries that are not requirements), each with the `state` of the build the
+(`fingerprint`, `agents`, `python`, `packages`, `npm`, `system` — the Debian
+packages it apt-installs — and `rejected` for entries that are not
+requirements), each with the `state` of the build the
 platform ran for it — `pending`, `building`, `ready`, or `failed` with the
-installer's own `error`. `foldrun deploy` polls it after a deploy.
+installer's `error`, its cause on the first line. `foldrun deploy` polls it after a deploy.
 
 ## Flows
 
@@ -444,5 +445,6 @@ signed-in person, never by a key — mints an ordinary API key at their role.
 | `/api/inbox/<tenant>/<ws>/<flow>` | POST | the token as for a hook (`Authorization: Bearer`, `X-Foldrun-Token`, or `?token=`). An inbound email for a `trigger: email` flow — JSON (`from`, `to`, `subject`, `text` or `html`; Resend's `data` wrapper understood) or an inbound-parse form (Mailgun, SendGrid). Same token as the hook |
 | `/api/events/<tenant>/<ws>/<id>?token=` | POST | release a run parked on `wait: event`; the body becomes the step's event payload. The token is derived from the run id, and the URL is printed in the waiting step's trace. `409` when the run is not waiting on an event |
 | `/api/approve/<tenant>/<ws>/<id>?token=` | GET, POST | decide a run parked on a human, from the link in its notification. GET shows what is waiting and two buttons — it never decides, because inbox link-checkers follow GETs. POST `decision` (`approve` or `reject`) and an optional `note`, form-encoded or JSON; answers JSON when `Accept` prefers it. The token is derived from the run id under the install key, not stored, so a key rotation kills every link. Needs `FOLDRUN_PUBLIC_URL` to be minted at all |
+| `/api/workspaces/<ws>/hooks/<flow>` | GET | read the flow's webhook URL without changing it: `{ ok, flow, path, url }` — `path` carries the token, `url` is it made absolute with `FOLDRUN_PUBLIC_URL` (null when that is unset). `workspace:manage`, as rotate and the settings page that shows it, since the URL is a credential. `404` for no such flow, `409` for a flow that is not `trigger: webhook` |
 | `/api/workspaces/<ws>/hooks/<flow>/rotate` | POST | new token, old URLs stop working |
 | `/api/git/<tenant>/<ws>?branch=&dir=` | POST | GitHub push webhook — HMAC-signed, fetches the tarball at that commit and deploys it |

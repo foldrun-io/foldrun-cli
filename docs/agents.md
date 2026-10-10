@@ -75,7 +75,7 @@ only Web takes a provider:
 | **Web** | `web` | eight actions — search, fetch, browse, crawl, map, extract, answer, monitor | one per action under `web:` — unset is ours |
 | **Files** | `read` | Read, Glob, Grep — inspect but never modify | — |
 | | `write` | Read, Write, Edit, Glob, Grep | — |
-| **Code** | `code` | Bash — runs anything in the sandbox: Python and Node (packages via `runtime:`), or a binary you ship | — |
+| **Code** | `code` | Bash — runs anything in the sandbox: Python and Node (packages via `runtime:`), Debian programs (`runtime: system:`), or a binary you ship | — |
 | **Memory** | `search` | `search_files(query)` over knowledge, memory, state and storage at every scope | — |
 | | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs | — |
 | | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
@@ -197,7 +197,7 @@ its tools inside the delegating agent's.
 | field | |
 |---|---|
 | `size` | `small` \| `large` (default) \| `heavy` — the sandbox reservation |
-| `runtime` | language runtimes and packages the agent's own scripts need |
+| `runtime` | language runtimes, packages and Debian system packages the agent's own scripts need |
 
 `size` is a price, not just a limit. Memory is a **hard ceiling** because it is
 not compressible: a step over it is killed, which on a single-node host
@@ -212,14 +212,39 @@ runtime:
   packages: [pandas]        # pip, installed with uv
   node: true
   npm: [cheerio]
+  system: [ffmpeg, libcairo2-dev]   # Debian packages, installed with apt
 ```
+
+`system:` takes Debian (trixie) package names — a program (`ffmpeg`), a
+library's headers for a pip package that compiles (`libcairo2-dev`,
+`python3-dev`), a compiler (`build-essential`), `pkg-config`. They are
+installed by the run container's start-up, as root, **before** anything the
+model directs runs, and the step then runs as the unprivileged agent user as
+always. A name is checked against Debian's own naming rule, so it can never
+become an apt option. Each `.deb` is downloaded once into the account's
+runtime cache; later steps only unpack it, which takes seconds. The run log
+says `system packages ready: … (apt, 12s)`, or fails the step with apt's own
+reason. On a laptop (`foldrun run` with no container) there is nothing to
+install into: the list is reported as assumed present.
+
+Manim, for one, needs all four of its kinds at once:
+
+```yaml
+runtime:
+  system: [build-essential, pkg-config, python3-dev, libcairo2-dev, libpango1.0-dev]
+  packages: [manim]
+```
+
+A package that fails to install says why on the first line of the run log —
+`` `pycairo` has to be compiled and this runner has no C compiler — add
+`system: [build-essential]` … `` — with the installer's last lines under it.
 
 An agent's own runtime and the runtimes of the tools it grants merge into one
 environment per step, so a tool carries its own dependencies and the agent
 does not repeat them.
 
 The image a step runs in is small on purpose: an interpreter, `uv`, `npm`,
-and none of the world's packages. What a step needs arrives through
+and none of the world's packages — no compiler, no media tools. What a step needs arrives through
 `runtime:` — built once per distinct declaration, kept in the account's
 cache, and reused by every later step and every agent that declares the same
 thing. The environment comes first on `PATH`, so a tool file that says

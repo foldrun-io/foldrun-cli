@@ -194,6 +194,7 @@ provider: {}                # BYOK: your own model credential
 permissionMode: plan        # plan first, act once approved
 runtime:                    # only if scripts need packages
   packages: [requests]
+  system: [ffmpeg]          # Debian packages, apt-installed before the step
 ---
 
 You research a topic and report what you found...
@@ -203,8 +204,10 @@ Only `name` and the prose are required. Every other field widens or narrows
 what the agent can reach, and the default is narrow.
 
 `runtime:` installs pip/npm packages in the sandbox each agent runs in. Pin
-versions the normal way (`pandas>=2`, `lodash@^4`). Python and Node are
-supported; anything else should ship as a committed binary.
+versions the normal way (`pandas>=2`, `lodash@^4`). `system:` adds Debian
+packages — a program (`ffmpeg`), a library's headers for a pip package that
+compiles (`libcairo2-dev`, `python3-dev`), `build-essential` — installed with
+apt before the step starts and cached, so later runs only unpack them.
 
 Link documents to each other with `[[wikilinks]]` — the name, not the path.
 

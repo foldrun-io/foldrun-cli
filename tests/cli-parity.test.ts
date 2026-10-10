@@ -358,6 +358,19 @@ test("flow rotate-hook asks, then prints the new URL", async () => {
   assert.equal(posts(s).length, 1);
 });
 
+test("flow hook prints the current URL with a GET and rotates nothing; --json is machine-readable", async () => {
+  const s = await serve({
+    "GET /api/workspaces/blog-desk/hooks/inbound": () => ({ ok: true, flow: "inbound", path: "/api/hooks/acme/blog-desk/inbound?token=cur", url: "https://dev.example/api/hooks/acme/blog-desk/inbound?token=cur" }),
+  });
+  const r = await at(s.url, "flow", "hook", "inbound", "--to", "blog-desk");
+  const j = await at(s.url, "flow", "hook", "inbound", "--to", "blog-desk", "--json");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /https:\/\/dev\.example\/api\/hooks\/acme\/blog-desk\/inbound\?token=cur/);
+  assert.equal(posts(s).length, 0, "reading a hook must never POST (rotate)");
+  assert.deepEqual(JSON.parse(j.out.trim().split("\n").pop() ?? ""), { flow: "inbound", url: "https://dev.example/api/hooks/acme/blog-desk/inbound?token=cur", path: "/api/hooks/acme/blog-desk/inbound?token=cur" });
+});
+
 test("account export writes the file and counts what is in it; a 403 says owner only", async () => {
   let refuse = false;
   const body = JSON.stringify({ account: "acme", workspaces: [{}], members: [{}, {}], runs: [{}, {}, {}], ledger: [] });
@@ -427,7 +440,7 @@ test("help: every flag the CLI reads is listed, --from once per context, gallery
 
 test("--help on the new platform verbs contacts nothing", async () => {
   const s = await serve({});
-  for (const args of [["observe"], ["usage"], ["billing", "portal"], ["repo", "deploy", "x"], ["runs", "rm", "run-1"], ["stop", "--status", "running"], ["account", "export"], ["workspace", "set", "name", "x"], ["notify", "test"], ["flow", "rotate-hook", "x"]]) {
+  for (const args of [["observe"], ["usage"], ["billing", "portal"], ["repo", "deploy", "x"], ["runs", "rm", "run-1"], ["stop", "--status", "running"], ["account", "export"], ["workspace", "set", "name", "x"], ["notify", "test"], ["flow", "rotate-hook", "x"], ["flow", "hook", "x"]]) {
     const r = await at(s.url, ...args, "--help");
     assert.equal(r.code, 0, `${args.join(" ")}: ${r.out}`);
   }
