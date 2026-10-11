@@ -10,6 +10,52 @@ edited by a person.
 
 <!-- releases -->
 
+## [0.9.0] — 2026-10-11
+
+- flow hook prints a flow's webhook URL without rotating it; runtimes list apt: packages ([8138a74](https://github.com/foldrun-io/foldrun-cli/commit/8138a74))
+- foldrun workspaces --json ([5948ccd](https://github.com/foldrun-io/foldrun-cli/commit/5948ccd))
+- foldrun export / foldrun import — a workspace, flow or agent as a .zip (FOL-23) ([93d7029](https://github.com/foldrun-io/foldrun-cli/commit/93d7029))
+
+### check
+
+- error on an agent.md whose frontmatter has no opening --- ([be1ee5c](https://github.com/foldrun-io/foldrun-cli/commit/be1ee5c))
+
+### cli
+
+- a verb for every API route — workspaces show/new --platform, agent ls/new --platform/import --list, flow ls/new --platform, eval new, tool new --platform, source new, library new + memory kind, backups requests, status --history, team (read), stop/rerun --until, billing credit, approve --payload for wait: event; observe/triggers send days; docs synced ([47bfd73](https://github.com/foldrun-io/foldrun-cli/commit/47bfd73))
+- foldrun new makes a blank workspace (--starter for the example); foldrun agent import <ws>/<agent> ([7cc3967](https://github.com/foldrun-io/foldrun-cli/commit/7cc3967))
+
+### deps
+
+- @modelcontextprotocol/sdk 1.32.1 (and sharp 0.35.5 in web) for new advisories ([b65b930](https://github.com/foldrun-io/foldrun-cli/commit/b65b930))
+
+### docs
+
+- sync tool.md body note from foldrun-docs ([a0b59f2](https://github.com/foldrun-io/foldrun-cli/commit/a0b59f2))
+- sync judge: wording from foldrun-docs ([cc54349](https://github.com/foldrun-io/foldrun-cli/commit/cc54349))
+- sync FOLDRUN_API_URL from foldrun-docs ([fbd8415](https://github.com/foldrun-io/foldrun-cli/commit/fbd8415))
+- sync (automatic retries, web brings Read) ([b720ebe](https://github.com/foldrun-io/foldrun-cli/commit/b720ebe))
+- sync (export carries a tool's run script) ([c6ca6ae](https://github.com/foldrun-io/foldrun-cli/commit/c6ca6ae))
+- synced (flows: rescuer owes verify) ([b238575](https://github.com/foldrun-io/foldrun-cli/commit/b238575))
+- synced (workspaces: engine files) ([2366869](https://github.com/foldrun-io/foldrun-cli/commit/2366869))
+- sync flows.md (plain approval of an ask: gate) ([f3103d3](https://github.com/foldrun-io/foldrun-cli/commit/f3103d3))
+
+### Docs sync
+
+- system package snapshots ([29ed322](https://github.com/foldrun-io/foldrun-cli/commit/29ed322))
+
+### flags
+
+- foldrun flags — the account's feature flags, on or off and why (--json); docs synced ([cbf8a07](https://github.com/foldrun-io/foldrun-cli/commit/cbf8a07))
+
+### foldrun account model
+
+- show, set <provider> --key, remove ([b98da6e](https://github.com/foldrun-io/foldrun-cli/commit/b98da6e))
+
+### foldrun import
+
+- list what the zip held that is not imported ([3bd1835](https://github.com/foldrun-io/foldrun-cli/commit/3bd1835))
+
 ## [0.8.0] — 2026-10-03
 
 - --help shows each verb exactly its options — `api --help` listed secrets' --kind (its text has "api (… Name: value"), `restore --help` listed nothing ([2c0a447](https://github.com/foldrun-io/foldrun-cli/commit/2c0a447))
