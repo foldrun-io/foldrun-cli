@@ -221,10 +221,13 @@ library's headers for a pip package that compiles (`libcairo2-dev`,
 installed by the run container's start-up, as root, **before** anything the
 model directs runs, and the step then runs as the unprivileged agent user as
 always. A name is checked against Debian's own naming rule, so it can never
-become an apt option. Each `.deb` is downloaded once into the account's
-runtime cache; later steps only unpack it, which takes seconds. The run log
-says `system packages ready: … (apt, 12s)`, or fails the step with apt's own
-reason. On a laptop (`foldrun run` with no container) there is nothing to
+become an apt option. The first step that needs a set installs it with apt and
+saves the result as a snapshot in the account's runtime cache; every later
+step restores the snapshot instead, in about a second (154 packages, 432 MB:
+30 s through apt, under 1 s from the snapshot). A new runner image gets new
+snapshots of its own, never the old one's files. The run log says
+`system packages ready: … (snapshot, 1s)` or `(apt, 30s)`, or fails the step
+with apt's own reason. On a laptop (`foldrun run` with no container) there is nothing to
 install into: the list is reported as assumed present.
 
 Manim, for one, needs all four of its kinds at once:
