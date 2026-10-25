@@ -1,0 +1,288 @@
+# Workspaces
+
+A workspace is a folder, and the folder is the unit of everything: it is what
+you edit, deploy, permission, budget and back up. An account holds several —
+one per job, in practice — and they share nothing unless it is put in the
+account's library on purpose.
+
+## The layout
+
+```
+my-desk/
+  AGENTS.md            context every agent here sees, and the workspace's defaults
+  agents/<name>/       one folder per role
+    agent.md           frontmatter, then the prompt
+    knowledge/         given to this agent only
+    memory/            what this agent learned
+    outputs/           this step's scratch — archived with the run
+    scripts/           code this agent's tools run
+  flows/<name>.md      a numbered list of steps
+  tools/<name>.md      what may be called — an API, a script, an MCP server
+  skills/<name>/       a capability, in the open Agent Skills format
+  evals/<name>.md      tests
+  knowledge/           given to every agent in the workspace
+  memory/              what they learned, shared
+  state/               what the next run needs from this one
+  storage/             files a person reads or downloads
+  scripts/             code shared by this workspace's tools
+```
+
+Every one of those is optional except `AGENTS.md` and at least one agent.
+
+## The account around it
+
+On the platform a workspace never stands alone: it lives under an account,
+beside the account's own `AGENTS.md` and the library every workspace there
+shares.
+
+```
+my-account/
+  AGENTS.md            config and context every workspace here inherits
+  library/             tools, skills, scripts, knowledge, memory — shared
+  workspaces/
+    my-desk/           the tree above
+    ads-desk/
+```
+
+`foldrun init` makes exactly that on a laptop, and `foldrun new <name>` adds
+another workspace to it, so the folder you edit is the folder that runs. See
+[the CLI reference](cli#the-shape-of-a-folder) for the commands that act on the
+whole account — `check`, `deploy`, `pull`, `status`, `workspaces` — and for the
+one scope that has no API: the account's own `AGENTS.md` is not pushed or
+pulled, only edited in Settings.
+
+A single folder with `agents/` and `flows/` at its root is still a workspace
+and still works everywhere; `foldrun init --flat` makes one.
+
+## A new workspace starts blank
+
+**Create workspace** on the dashboard, `POST /api/workspaces` with
+`template: true`, and `foldrun new <name>` all make a workspace with nothing in
+it to delete: an `AGENTS.md` (plus, on a laptop, the `.gitignore` that keeps
+its secret key out of git and a `CLAUDE.md` for your coding tool). No example
+agents, no flow. `foldrun new <name> --starter` and `starter: true` still make
+the example researcher, writer and `publish` flow; `foldrun init` makes it for
+an account's first workspace, which the getting-started guide runs.
+
+A workspace with no agents yet deploys; `check` and the deploy say so as a
+warning. A flow that names an agent the workspace lacks is still an error.
+
+### Importing an agent you already have
+
+The agents worth having in a new workspace are often ones already written in
+another: **Import agent** on the Agents page (and in the empty state of a blank
+workspace) lists every agent in the account's other workspaces you can read,
+and copies the one you pick. From a terminal, `foldrun agent import
+<workspace>/<agent>` does it between workspaces of an account folder, or on the
+platform with `--to <workspace>`; the route is `POST
+/api/workspaces/<ws>/agents/import` with `{ from, agent, as? }`.
+
+What is copied is what the agent **is**: `agent.md` and its own `skills/`,
+`scripts/` and `knowledge/`. What it **accumulated** stays where it was learned:
+`memory/`, `outputs/`, `state/` and session files. A name already taken is
+refused — import it under another name with `--as` / `as`, which rewrites its
+`name:`. The import then says what the copy uses that this workspace lacks —
+tools, skills, scripts, secrets — without refusing: set the secret, import the
+tool, and it runs. The copy is independent; editing one does not change the
+other.
+
+### Export and import
+
+Agent import works inside one account. To move a desk to another account or
+installation — or to hand someone a flow — export it as a `.zip`:
+
+- **A workspace:** Settings → **Export and import** → **Export workspace**.
+- **A flow:** **Export** on its card on the Flows page. The package holds the
+  flow, every flow it runs as a step, every agent those steps name (with
+  `on-fail:`, `delegate:` and the colleagues those agents consult or delegate to),
+  and the workspace tools, skills and scripts they grant — including the
+  script a single-file tool's `run:` names.
+- **An agent:** **Export** on its page: its folder (what agent import copies)
+  and the workspace tools, skills and scripts it grants. Colleagues it consults
+  are named, not carried.
+
+A package is authored source only: `AGENTS.md` and the `agents/`, `flows/`,
+`evals/`, `knowledge/`, `skills/`, `tools/` and `scripts/` folders. It never holds
+`memory/`, `state/`, `outputs/`, storage, runs, `.env` files or a secret's
+value. The secrets it uses travel by **name**, so the importer knows what to
+set. An agent with no `skills:` line gets every skill in scope at run time, so
+its package carries every workspace skill.
+
+Anything else in a zip — memory, state, a `.gitignore` or `CLAUDE.md` beside a
+folder you zipped yourself — is **not imported**, and the preview lists it.
+
+To import, use **Import .zip** on the Flows or Agents page or in Settings, or
+**Add new → Import workspace** on the home page. You pick the file and first
+see a preview, with nothing written yet:
+
+- what it adds;
+- what is already identical;
+- which files it would **replace** (only with a tick);
+- what it needs that this account lacks: secrets, library tools and skills,
+  scripts, agents and flows it names.
+
+An import never deletes anything, and it is all or nothing: a file it cannot
+write (a folder already in its place, a link on the way) refuses the whole
+import before anything is written. It lands as one revision, so History can
+restore what it replaced. A workspace package imported under a new name makes
+that workspace. A `.zip` of a workspace folder made by hand (a Mac's
+Compress included) imports the same way.
+
+From a terminal: `foldrun export [workspace] [--flow <name> | --agent <name>]`
+and `foldrun import <file.zip> --to <workspace> [--dry-run] [--overwrite]`.
+The routes are `GET /api/workspaces/<ws>/export` and
+`POST /api/workspaces/<ws>/import` (`?dryRun=1`, `?overwrite=1`).
+
+## `AGENTS.md` — context and defaults
+
+The body is prose every agent in the workspace sees before its own prompt.
+Put the things that are true of the whole desk there: the business, the
+standing rules, what the reader is like.
+
+The frontmatter is the workspace's defaults:
+
+```yaml
+---
+timezone: Australia/Sydney
+owner: ops@example.com         # who answers for every agent and flow here that names no owner of its own
+budget: 60                     # a cap in USD for this workspace — per month; or 60/day, 60/week; unset is no limit
+notify:
+  email: ops@example.com
+  events: [failed, awaiting-approval, completed]
+provider:                      # see Providers
+  base_url: https://openrouter.ai/api/v1
+  token: ${OPENROUTER_API_KEY}
+---
+```
+
+`owner:` names the person accountable for the workspace's agents and flows.
+Each agent and flow may name its own; one that does not takes the
+workspace's, and a workspace that does not takes the account's.
+
+`telemetry:` sends each finished run to an OpenTelemetry collector as one
+trace; a workspace's block replaces the account's whole. See
+[Runs](runs#sending-the-trace-to-your-own-tracing).
+
+The frontmatter may also group these defaults by the job they do —
+`governance:`, `guardrail:`, `observability:` and `evaluation:` (where
+`judge:` sets the model every grader here uses). A block reads exactly as the
+same keys at the top. See [The four jobs](four-jobs) for which key goes where.
+
+`network_enforce: true` refuses a site off a step's [`network:`](network)
+list instead of only naming it in the trace. The account's `true` holds for
+every workspace; a workspace can add it for itself but not drop the
+account's. See [Network](network#report-only-then-refuse).
+
+`capture:` says what runs record of each tool call: `full` (the default —
+its input and output, secrets masked) or `metadata` (its name, size and time
+only). See [Runs](runs#what-a-run-records).
+
+There is an `AGENTS.md` one level up too — the account's — and the two
+compose in a way worth learning once:
+
+- **Prose accumulates.** The account's body is added to every workspace's,
+  so a rule written at the account cannot be dropped below it.
+- **A frontmatter key replaces whole.** A workspace that sets `notify:`
+  replaces the account's `notify:` entirely — it does not merge into it. To
+  inherit a key, say nothing about it.
+
+The second rule is the one that surprises people: a workspace that declares
+its own `notify:` block silently stops receiving the account's default.
+
+### The clock, all the way down
+
+`timezone:` is the one default with levels below the workspace as well as
+above it, because a flow's schedule and an agent's own calendar are both real
+things to set. Nearest wins, and every level inherits the one above it unless
+it says otherwise:
+
+```
+agent frontmatter → flow frontmatter → workspace AGENTS.md →
+account AGENTS.md → FOLDRUN_TIMEZONE → UTC
+```
+
+Whichever level wins sets `TZ`, the date in the agent's prompt, and
+`$FOLDRUN_DATE` in its scripts and its `verify:` shell — so "today" means the
+same thing to every part of a step. Each step's trace names the zone and the
+level it came from.
+
+The value is an IANA name (`Australia/Sydney`) or a plain fixed offset —
+`UTC+10`, `GMT-5`, `+10:00`, `-05:30`, or a bare `UTC`. `foldrun check` and a
+deploy both refuse anything else; a bad value that reaches a run falls through
+to the next level with one line in the trace rather than failing the step.
+
+## Pausing runs — the kill switch
+
+When something is going wrong — an agent posting what it should not, a
+loop spending money — pause the workspace, or the whole account, from its
+Settings → Governance → Pause, `foldrun workspace pause` / `foldrun account pause`, or
+the API (`POST /api/workspaces/<ws>/pause`, `POST /api/account/pause`).
+
+While paused, nothing new starts: a schedule's fire, a webhook delivery, a
+chained flow, a person's Run and a rerun are all refused, and the
+workspace's Triggers page logs each refused fire as *paused by a
+person*. A refused fire is not run later. A run that was queued before
+the pause and has not begun waits until the resume. Add `--stop` (or tick
+*Also stop the runs going now*) to stop the runs already going — and the
+queued and parked ones — as well; without it, a run already under way
+finishes.
+
+The account's pause holds every workspace, and only the account's resume
+lifts it; a workspace paused on its own stays paused when the account
+resumes. Who paused and why is on the page, on every dashboard page while
+the account is paused, and in the audit log (`workspace.paused`,
+`account.resumed`, …). A scheduled fire inside a pause is not reported as a
+missed schedule. The pause is the platform's record, not a file, so a
+deploy never lifts it.
+
+## The account library
+
+`<account>/library/` holds tools, skills, knowledge and memory shared by every
+workspace. Resolution is nearest-wins: an agent's own file beats the
+workspace's, which beats the library's. So a shared integration — the tool
+that clones your website, the skill that explains how — is defined once, and
+a workspace that needs a different version shadows it by defining the same
+name locally.
+
+From inside a run the library is read-only, reached as `account/…`
+(`account/knowledge/prices.md`). The Library page in the dashboard lists,
+for every shared file, which agents use it and where a nearer copy overrides
+it — that list is the blast radius of changing it.
+
+## Where a run's files go
+
+Three directories look alike and are not:
+
+| directory | who reads it next | survives a deploy | example |
+|---|---|---|---|
+| `outputs/` | this step, and the archive | no — it is the run's | a draft, a fetched page |
+| `storage/` | a person | yes | the weekly report, a CSV, an image |
+| `state/` | the next run | yes, and a deploy never overwrites it | a cursor, an append-only history |
+
+The test is not "is it important", it is **who reads it next**. A value
+regenerated every run is `storage/`; a value accumulated across runs is
+`state/`. From an agent, write `workspace/storage/x.md` and
+`workspace/state/x.md` — the older `../../storage/x.md` is the same place. See [Storage and sharing](storage-and-sharing).
+
+## What a deploy touches
+
+A deploy — `foldrun deploy` — replaces the source tree: agents, flows, tools, skills, evals, knowledge,
+`AGENTS.md`. It **never** touches `runs/`, `state/`, `secrets.json`, or any
+memory an agent wrote that your deploy does not mention. Those belong to the
+platform, not to your source, and a deploy that reverted what an agent learned would
+make every run a little dumber.
+
+The agent engine's own files are not workspace content either. Each step
+runs in a sandbox on the Claude Agent SDK — the engine, whichever model
+answers — and the engine writes its settings and session transcripts in the
+agent's folder there (`agents/<name>/.claude.json`, `agents/<name>/.claude/`).
+They stay in the sandbox: never copied back, never copied in. (Your own
+`.claude/agents/*.md` at the workspace root is different — a Claude Code
+subagent you wrote, deployed as an agent.)
+
+A deploy while a run is in flight is refused, saying which runs hold it; a
+run parked at an approval gate counts as in flight. See [Deploying](deploying).
+
+Trying a change to a live desk without touching it is a second workspace —
+`foldrun deploy --to <workspace>-try`. Branch previews come back with the
+GitHub and GitLab app.
