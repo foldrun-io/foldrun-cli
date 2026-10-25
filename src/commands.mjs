@@ -1,0 +1,11931 @@
+// CLI commands. Kept separate from bin/ so the environment is set before the
+// core is imported — single-workspace mode is read at module load.
+
+import { writeExact } from "./terminal.mjs";
+import dns from "node:dns";
+import fs from "node:fs";
+import crypto from "node:crypto";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage } from "./guide.mjs";
+import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
+import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
+
+// NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
+// job, or a test that wants to match what a person reads. The tests had
+// been setting it all along, to no effect. Output that is not a terminal
+// (a pipe, a file, a coding agent reading it) gets no escapes either, unless
+// FORCE_COLOR asks for them.
+const colour = !process.env.NO_COLOR && (Boolean(process.env.FORCE_COLOR) || Boolean(process.stdout.isTTY));
+const paint = (code) => (s) => (colour ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+const c = {
+  dim: paint(2),
+  bold: paint(1),
+  green: paint(32),
+  red: paint(31),
+  yellow: paint(33),
+  amber: paint(33),
+};
+
+// The published runtime, not a relative reach into a sibling directory. It was
+// `../../core/index.ts` — which works only inside this repo, so `npx foldrun`
+// installed a CLI that could not find its own runtime. Imported lazily so
+// `--help` and argument errors never pay for loading it.
+const core = async () => import("@foldrun/core");
+
+// ---------------------------------------------------------------- init
+
+/**
+ * Read a template directory as the same {path, content} list starterFiles
+ * returns, so both sources of a new workspace go through one writer.
+ *
+ * Run artifacts are skipped: a template is what someone authored, and copying
+ * a previous run's outputs or journal into a fresh workspace hands it a
+ * history it never had.
+ */
+function templateFilesFrom(dir) {
+  const skip = new Set(["runs", "outputs", ".foldrun", "node_modules", ".git"]);
+  const out = [];
+  const walk = (abs, rel) => {
+    for (const entry of fs.readdirSync(abs).sort()) {
+      if (skip.has(entry)) continue;
+      const full = path.join(abs, entry);
+      const next = rel ? `${rel}/${entry}` : entry;
+      if (fs.statSync(full).isDirectory()) walk(full, next);
+      else out.push({ path: next, content: fs.readFileSync(full, "utf8") });
+    }
+  };
+  walk(path.resolve(dir), "");
+  return out;
+}
+
+/** The root of the installed @foldrun/core package — dist/index.js is two levels down. */
+function coreRoot() {
+  const entry = fileURLToPath(import.meta.resolve("@foldrun/core"));
+  return path.resolve(path.dirname(entry), "..");
+}
+function shippedTemplate(rel) {
+  if (path.isAbsolute(rel)) return null;
+  const abs = path.join(coreRoot(), rel);
+  return fs.existsSync(abs) && fs.statSync(abs).isDirectory() ? abs : null;
+}
+function shippedTemplates() {
+  const dir = path.join(coreRoot(), "templates");
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((n) => fs.statSync(path.join(dir, n)).isDirectory()).map((n) => `templates/${n}`);
+}
+
+/** The files of one workspace: a template if asked for, else the starter. */
+async function workspaceFiles(name, from, starter = true) {
+  const { starterFiles } = await core();
+  // A template is a source, a workspace is a destination. Keeping the two
+  // words apart is the whole reason `templates/` is not called `examples/`:
+  // there is one place a workspace lives, and it is wherever you make one.
+  // A relative --from is first a directory here, then the same path inside
+  // the installed @foldrun/core package, which is where the shipped
+  // templates/ live — `--from templates/hello` must work from any directory
+  // after `npm i foldrun`, not only from a checkout of the repo.
+  const source = from && !fs.existsSync(from) ? shippedTemplate(from) : from;
+  if (from && !source) {
+    throw new Error(`no template at ${from} — pass a directory, or one that ships with foldrun: ${shippedTemplates().join(", ") || "none found"}`);
+  }
+  // Blank unless asked: the example researcher and writer met people as
+  // clutter in a workspace made for real work (owner, 2026-10-05). --starter
+  // brings them back; --from copies a template.
+  const { blankWorkspaceFiles } = /** @type {any} */ (await core());
+  const files = source
+    ? templateFilesFrom(source)
+    : starter || !blankWorkspaceFiles
+      ? starterFiles(name)
+      : blankWorkspaceFiles(name);
+
+  // Whatever the source, the new workspace must ignore the key that decrypts
+  // its secrets. A template does not carry one — it is a source, not a
+  // repository — so copying a template verbatim would hand back the very hole
+  // the starter's .gitignore exists to close.
+  if (!files.some((f) => f.path === ".gitignore")) {
+    const guard = starterFiles("x").find((f) => f.path === ".gitignore");
+    if (guard) files.unshift(guard);
+  }
+  return files;
+}
+
+/** Write a {path, content} list into `dir`, refusing to overwrite anything. */
+function writeFiles(dir, files, what) {
+  if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
+    const clash = files.find((f) => fs.existsSync(path.join(dir, f.path)));
+    if (clash) throw new Error(`${what ?? dir} already has ${clash.path} — refusing to overwrite`);
+  }
+  for (const { path: rel, content } of files) {
+    const file = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  }
+}
+
+/** kebab-case, the same rule the platform applies to a workspace name. */
+function assertName(name) {
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`"${name}" is not a workspace name — kebab-case only, e.g. blog-desk`);
+  }
+  return name;
+}
+
+/**
+ * `foldrun init [dir]` — an account folder, the same shape the platform keeps.
+ *
+ *   my-account/
+ *   ├── AGENTS.md          config and context every workspace here inherits
+ *   ├── library/           skills, tools, scripts, knowledge shared by all of them
+ *   └── workspaces/<name>/ the first one, ready to run
+ *
+ * It used to make the workspace alone, flat, with the account AGENTS.md
+ * dropped in the parent directory as a surprise. That was a different shape
+ * from the platform's, so a folder that worked on a laptop had to be
+ * rearranged in your head to reason about what a deploy would do. `--flat`
+ * still makes the old one, and every command still reads it.
+ */
+async function init(root, from, flags = {}) {
+  const { syncWorkspaceBundles, ensureAccountFiles, accountGitignore, LIBRARY_KINDS } = await core();
+
+  if (flags.flat === true) {
+    const files = await workspaceFiles(path.basename(path.resolve(root)), from);
+    writeFiles(root, files);
+    syncWorkspaceBundles(root);
+    // The account scope, one directory up — the same place libraryDir points
+    // for a flat workspace, so `my-desk/` ends up beside the `AGENTS.md` that
+    // covers it. accountDir cannot answer here: nothing has pinned this
+    // process to the new workspace yet, so it is passed explicitly.
+    const written = ensureAccountFiles("default", path.resolve(root, "..")).map((rel) => `../${rel}`);
+    const rules = writeAgentFiles(path.resolve(root, ".."));
+    if (rules.claudeMd === "created") written.push("../CLAUDE.md");
+    report(root, files.map((f) => f.path), written, root, files);
+    return 0;
+  }
+
+  const name = assertName(typeof flags.workspace === "string" ? flags.workspace : "main");
+  const account = path.resolve(root);
+  const wsDir = path.join(account, "workspaces", name);
+  const files = await workspaceFiles(name, from);
+
+  // Everything is checked before anything is written: a half-made account is
+  // worse than none, because the refusal to overwrite then blocks the retry.
+  const accountLevel = [accountGitignore(), ...(await core()).accountFiles(path.basename(account))];
+  // A library that exists as empty directories is a library someone can put a
+  // file in. `.gitkeep` is what makes git carry them.
+  for (const kind of LIBRARY_KINDS) {
+    accountLevel.push({ path: `library/${kind}/.gitkeep`, content: "" });
+  }
+  const existing = [...accountLevel.map((f) => f.path), ...files.map((f) => `workspaces/${name}/${f.path}`)]
+    .filter((rel) => fs.existsSync(path.join(account, rel)));
+  if (existing.length) throw new Error(`${account} already has ${existing[0]} — refusing to overwrite`);
+
+  writeFiles(account, accountLevel);
+  writeFiles(wsDir, files);
+  syncWorkspaceBundles(wsDir);
+  // What a coding agent reads first (guide.mjs): the managed block in
+  // AGENTS.md pointing at the docs that ship with this CLI, and CLAUDE.md
+  // importing it — the arrangement create-next-app makes.
+  writeAgentFiles(account);
+  report(
+    account,
+    [...accountLevel.map((f) => f.path), "CLAUDE.md", ...files.map((f) => `workspaces/${name}/${f.path}`)],
+    [],
+    wsDir,
+    files,
+  );
+  return 0;
+}
+
+/** What init and new both print: the tree they wrote, then the two next moves. */
+function report(where, written, outside, wsDir, files) {
+  console.log(`\n  ${c.green("created")} ${where}\n`);
+  for (const rel of written) console.log(`    ${c.dim(rel)}`);
+  // Not part of what was asked for: say so on the line, not in a comment
+  // nobody reads. A developer who ran `foldrun init ~/projects/desk --flat`
+  // finds an AGENTS.md in ~/projects and should know it was this, and why.
+  for (const rel of outside) {
+    console.log(`    ${c.dim(rel)}  ${c.dim("← account scope, shared by every workspace beside this one")}`);
+  }
+  const flow = files.map((f) => f.path.match(/^flows\/(.+)\.md$/)?.[1]).find(Boolean);
+  const rel = path.relative(process.cwd(), where) || ".";
+  console.log(`
+  ${c.bold("Next")}
+    foldrun check ${rel}${" ".repeat(Math.max(1, 16 - rel.length))}${c.dim("validate it — costs nothing")}
+    ${
+      flow
+        ? `foldrun run ${flow} --workspace ${path.relative(process.cwd(), wsDir) || "."}   ${c.dim("run the flow")}`
+        : `foldrun agent import <workspace>/<agent>   ${c.dim("bring in an agent you already have — or `foldrun agent new <name>`")}`
+    }
+`);
+}
+
+/**
+ * `foldrun new <name>` — another workspace in this account.
+ *
+ * Refuses outside an account folder rather than quietly making one: a flat
+ * workspace has nowhere to put a second one, and inventing a `workspaces/`
+ * directory beside somebody's agents/ would change the shape of a folder they
+ * did not ask to change.
+ */
+async function newWorkspace(name, flags, layout) {
+  const { syncWorkspaceBundles } = await core();
+  if (!name) throw new Error("which workspace? `foldrun new <name>`");
+  assertName(name);
+  if (!layout.workspacesDir) {
+    throw new Error(
+      layout.kind === "flat"
+        ? `${layout.workspaceDir} is a single workspace, not an account — \`foldrun init <dir>\` makes an account folder that can hold several`
+        : "not in an account folder — `foldrun init <dir>` makes one",
+    );
+  }
+  const dir = path.join(layout.workspacesDir, name);
+  if (fs.existsSync(dir)) throw new Error(`${dir} already exists`);
+  const files = await workspaceFiles(name, flags.from, flags.starter === true);
+  writeFiles(dir, files);
+  // A workspace is a folder holding agents/ or flows/; a blank one has
+  // neither file yet, so the folders are made for it to be found as one.
+  for (const sub of ["agents", "flows"]) fs.mkdirSync(path.join(dir, sub), { recursive: true });
+  syncWorkspaceBundles(dir);
+  report(dir, files.map((f) => f.path), [], dir, files);
+  return 0;
+}
+
+// ------------------------------------------------- agent, flow, tool: new
+
+/**
+ * Which workspace folder a scaffolding command writes into.
+ *
+ * `init` makes an account, `new` makes a workspace; these make one document
+ * INSIDE a workspace, so the question is the same one every workspace-scoped
+ * command asks and the answer is the same: the folder you are standing in,
+ * the only one in this account, or the one `--to` names.
+ */
+function workspaceDirFor(flags, layout) {
+  if (typeof flags.to === "string") {
+    if (!layout.workspacesDir || !layout.workspaces.includes(flags.to)) {
+      throw new Error(
+        `no workspace called "${flags.to}" here — this ${layout.kind === "flat" ? "is a single workspace" : `account has ${layout.workspaces.join(", ") || "none"}`} (--platform makes it in the deployed one)`,
+      );
+    }
+    return path.join(layout.workspacesDir, flags.to);
+  }
+  if (layout.workspaceDir && layout.kind !== "empty") return layout.workspaceDir;
+  if (layout.workspacesDir && layout.workspaces.length === 1) return path.join(layout.workspacesDir, layout.workspaces[0]);
+  if (layout.kind === "account") {
+    throw new Error(`which workspace? --to <name> — this account has ${layout.workspaces.join(", ") || "none"}`);
+  }
+  throw new Error("this is not a workspace — `foldrun init <dir>` makes one, or cd into an existing one");
+}
+
+/**
+ * What each key in a scaffolded file is for, said once where it is useful.
+ *
+ * Not written INTO the template: the templates are core's, shared with the
+ * dashboard's New button and checked by the same validator, and a commented
+ * copy here would be a second list to keep in step. Printed instead, beside
+ * the file it describes.
+ */
+const KEY_NOTES = {
+  agents: [
+    ["name", "how flows address it — [[name]]; matches the folder"],
+    ["description", "one line; what this role is for"],
+    ["model", "fast | default | max — tier the work, not the desk"],
+    ["effort", "low | high — how hard to think about it"],
+    ["tools", "the one grant list: built-ins and your own tools/"],
+  ],
+  flows: [
+    ["name", "how it is run: foldrun run <name>"],
+    ["description", "one line; what it accomplishes end to end"],
+    ["trigger", "manual | schedule | webhook — schedule: needs schedule: and timezone:"],
+    ["1. [[agent]]", "the NUMBER is the group: same number runs in parallel, and the flow waits"],
+  ],
+  tools: [
+    ["transport", "script | http | mcp — script is a program in this folder"],
+    ["name", "what an agent puts in its tools: list"],
+    ["description", "the model reads this to decide when to call it"],
+    ["run", "the program, relative to this folder"],
+  ],
+};
+
+/** An agent already in this workspace, so a new flow names a real one. */
+function anyAgentIn(dir) {
+  try {
+    return fs.readdirSync(path.join(dir, "agents"), { withFileTypes: true }).find((e) => e.isDirectory())?.name;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `foldrun agent new <name>`, `flow new`, `tool new` — one document inside a
+ * workspace, with the frontmatter its format requires.
+ *
+ * The dashboard's New button has written these templates since kinds.ts
+ * existed; the terminal's only scaffolding was `init` and `new`, which make a
+ * whole workspace. So the author who wanted a fourth agent wrote the
+ * frontmatter from memory, which is how `use:` survived a year after it was
+ * replaced by `tools:`.
+ *
+ * The templates are core's, not a second copy: a list of required keys in two
+ * places is the bug this codebase keeps producing, and a scaffold that drifts
+ * from the validator writes files `foldrun check` then rejects.
+ *
+ * A new tool is a `transport: script` folder by default — its program in a
+ * file beside it, because a tool whose code is a fenced block gets no linter,
+ * no formatter and no way to run it except through a run.
+ */
+async function scaffoldCmd(kind, positional, flags, layout) {
+  const { KINDS, toolStarter, SCRIPT_LANGUAGES } = await import("@foldrun/core/kinds");
+  const one = KINDS[kind].one;
+
+  // The other verbs are dispatched before this — `agent run` and `tool test`
+  // go to the platform — so anything left here should have been `new`.
+  const alsoVerbs = { agents: ["run", "link", "unlink", "import", "ls"], tools: ["test"], flows: ["ls", "add", "rm-step", "dup-step", "show", "run", "hook", "rotate-hook", "set", "trigger", "move-step", "copy-step", "paste", "draft"] }[kind] ?? [];
+  const verb = positional[0];
+  if (verb !== "new") {
+    const verbs = ["new", ...alsoVerbs].join(", ");
+    throw new Error(
+      `\`foldrun ${one} new <name>\` — ${alsoVerbs.length ? `${verbs} are the verbs` : `"new" is the only verb`}${verb ? `, not "${verb}"` : ""}`,
+    );
+  }
+  const name = positional[1];
+  if (!name) throw new Error(`which ${one}? \`foldrun ${one} new <name>\` — e.g. ${KINDS[kind].placeholder}`);
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`"${name}" is not a ${one} name — kebab-case only, e.g. ${KINDS[kind].placeholder}`);
+  }
+  // --platform: the dashboard's New button, on the deployed workspace —
+  // nothing is written here. `--to` alone still names a workspace of this
+  // folder, as it always has.
+  if (flags.platform === true) return platformScaffold(kind, name, flags, layout);
+
+  const dir = workspaceDirFor(flags, layout);
+  let files;
+  if (kind === "tools") {
+    const transport = typeof flags.transport === "string" ? flags.transport : "script";
+    if (!["script", "http", "mcp"].includes(transport)) {
+      throw new Error(`--transport takes script, http or mcp — not "${transport}"`);
+    }
+    const language = typeof flags.language === "string" ? flags.language : "javascript";
+    if (!SCRIPT_LANGUAGES.some((l) => l.value === language)) {
+      throw new Error(`--language takes ${SCRIPT_LANGUAGES.map((l) => l.value).join(", ")} — not "${language}"`);
+    }
+    files = toolStarter(name, transport, language).map((f) => ({ path: f.file, content: f.content }));
+  } else {
+    files = [{ path: KINDS[kind].file(name), content: KINDS[kind].template(name, { firstAgent: anyAgentIn(dir) }) }];
+  }
+
+  writeFiles(dir, files, path.basename(dir));
+
+  const where = path.relative(process.cwd(), dir) || ".";
+  console.log(`\n  ${c.green("created")} ${one} ${c.bold(name)} in ${where}\n`);
+  for (const f of files) console.log(`    ${c.dim(f.path)}`);
+  console.log(`\n  ${c.dim(KINDS[kind].hint)}\n`);
+  // What each key in the file it just wrote is FOR. The templates come from
+  // core so they cannot drift from the validator, and they carry no comments
+  // — a second, commented copy here would be exactly the two-lists bug. So
+  // the explanation is printed once, next to the file it explains.
+  for (const [key, what] of KEY_NOTES[kind]) console.log(`    ${c.bold(pad(key, 12))} ${c.dim(what)}`);
+  console.log(`\n  ${c.bold("Next")}
+    edit ${path.join(where, files[0].path)}
+    foldrun check${where === "." ? "" : ` ${where}`}${" ".repeat(4)}${c.dim("validate it — offline, costs nothing")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun agent new <name> --platform`, `flow new … --platform`, `tool new
+ * … --platform` — the dashboard's New button on a deployed workspace: the
+ * platform writes its own template (POST …/agents, …/flows, …/assets), so
+ * what lands is what the canvas would have made, as a revision.
+ */
+async function platformScaffold(kind, name, flags, layout) {
+  const one = { agents: "agent", flows: "flow", tools: "tool" }[kind];
+  const url = platformFor(flags, `${one} new --platform`);
+  const ws = platformWorkspace(flags, layout, `${one} new ${name} --platform`);
+  let route = `/api/workspaces/${enc(ws)}/${kind}`;
+  let body;
+  if (kind === "agents") {
+    body = { name, ...(typeof flags.description === "string" ? { description: flags.description } : {}), ...(typeof flags.model === "string" ? { model: flags.model } : {}) };
+  } else if (kind === "flows") {
+    if (flags.pattern !== undefined && !NEW_FLOW_SHAPES.includes(flags.pattern)) {
+      throw new Error(`--pattern takes ${NEW_FLOW_SHAPES.join(", ")} — not "${flags.pattern}"`);
+    }
+    body = { name, ...(typeof flags.pattern === "string" ? { pattern: flags.pattern } : {}) };
+  } else {
+    // A script tool, as `tool new` makes here — the platform's own default
+    // with no template is an http one.
+    route = `/api/workspaces/${enc(ws)}/assets`;
+    const template = typeof flags.template === "string" ? flags.template : typeof flags.transport === "string" ? flags.transport : "script";
+    body = { kind: "tools", name, template, ...(typeof flags.language === "string" ? { language: flags.language } : {}) };
+  }
+  const r = await remoteCall(url, flags, route, { method: "POST", body: JSON.stringify(body) });
+  console.log(`\n  ${c.green("created")} ${one} ${c.bold(name)} in ${ws} ${c.dim(`on ${url}`)}`);
+  console.log(`    ${c.dim(r.path ?? "")}${r.pattern ? c.dim(` · ${r.pattern}`) : ""}`);
+  console.log(`\n  ${c.dim(`foldrun source cat ${r.path ?? "<path>"} --to ${ws} · foldrun check --to ${ws} · foldrun pull ${ws} brings it here`)}\n`);
+  return 0;
+}
+
+/** The shapes the platform's New flow offers (core's store FLOW_PATTERNS). */
+const NEW_FLOW_SHAPES = ["pipeline", "review-loop", "fan-out", "debate", "router"];
+
+/**
+ * `foldrun agent ls` / `flow ls` — what is deployed in a workspace (GET
+ * …/agents, …/flows): the list the dashboard draws, from a terminal.
+ */
+async function remoteListCmd(kind, flags, layout) {
+  const one = kind === "agents" ? "agent" : "flow";
+  const url = platformFor(flags, `${one} ls`);
+  const ws = platformWorkspace(flags, layout, `${one} ls`);
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/${kind}`);
+  let list = r[kind] ?? [];
+  // --stale [days]: the agents nobody has run lately — with a number, not
+  // run in that many days (never run included); bare, the ones past the
+  // workspace's alerts: stale_days, as the platform counts them.
+  if (kind === "agents" && flags.stale !== undefined) {
+    const days = flags.stale === true ? null : Number(flags.stale);
+    if (days !== null && !(Number.isInteger(days) && days > 0)) throw new Error(`--stale takes a whole number of days, e.g. --stale 30 — not "${flags.stale}"`);
+    list = list.filter((x) => (days === null ? x.stale === true : !x.lastRunAt || Date.now() - Date.parse(x.lastRunAt) >= days * 86_400_000));
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify(list, null, 2));
+    return 0;
+  }
+  if (!list.length) {
+    console.log(`\n  ${c.dim(flags.stale !== undefined ? `no stale agents in ${ws}` : `no ${kind} in ${ws} on ${url} — \`foldrun ${one} new <name> --platform --to ${ws}\` makes one`)}\n`);
+    return 0;
+  }
+  const w = Math.max(...list.map((x) => x.name.length));
+  // Who answers for each one (owner:, or the workspace's, or the account's);
+  // the column only when someone is named, so a list with none is unchanged.
+  const ow = kind === "agents" ? Math.max(0, ...list.map((x) => (x.owner ?? "").length)) : 0;
+  console.log();
+  for (const x of list) {
+    if (kind === "agents") {
+      const owner = ow ? `${pad(x.owner ?? "—", Math.max(ow, 1))}  ` : "";
+      // When it last ran, from a platform that says (lastRunAt is absent before it did).
+      const ran = "lastRunAt" in x ? `${pad(x.lastRunAt ? `${Math.floor((Date.now() - Date.parse(x.lastRunAt)) / 86_400_000)}d ago` : "never", 7)} ` : "";
+      console.log(`  ${c.bold(pad(x.name, w))}  ${pad(x.model ?? "", 8)} ${ran}${owner}${x.stale ? c.amber("stale ") : ""}${c.dim(firstLine(x.description ?? "", 80))}`);
+    } else {
+      const when = x.trigger === "schedule" && x.schedule ? `schedule ${x.schedule}${x.timezone ? ` ${x.timezone}` : ""}` : (x.trigger ?? "manual");
+      console.log(`  ${c.bold(pad(x.name, w))}  ${c.dim(when)}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`${list.length} ${list.length === 1 ? one : kind} · ${ws} · ${url}`)}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------- check
+
+// The Agent Skills spec constrains the `name` field and requires a non-empty
+// `description`. Validation is deliberately lenient — the client guide says to
+// warn and load rather than reject, so cross-client skills still run — so these
+// are warnings and one error (an empty description cannot be disclosed, so the
+// runtime skips that skill; the error says why it vanished).
+const SKILL_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+function readFm(file) {
+  const block = readFrontmatter(file);
+  if (block === null) return null;
+  const field = (k) => {
+    const m = new RegExp(`^${k}:\\s*(.+)$`, "m").exec(block);
+    return m ? m[1].trim().replace(/^["']|["']$/g, "") : null;
+  };
+  return { name: field("name"), description: field("description") };
+}
+
+// Every skill root the runtime scans: each agent's own skills/, the workspace
+// skills/, and the cross-client .agents/skills/ convention.
+function skillRoots(workspace) {
+  const roots = [];
+  for (const agent of ls(path.join(workspace, "agents"))) {
+    roots.push(`agents/${agent}/skills`);
+  }
+  roots.push("skills", ".agents/skills");
+  return roots;
+}
+
+function validateSkills(workspace, note) {
+  for (const root of skillRoots(workspace)) {
+    for (const folder of ls(path.join(workspace, root))) {
+      const dir = path.join(workspace, root, folder);
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+      const skillMd = path.join(dir, "SKILL.md");
+      if (!fs.existsSync(skillMd)) continue;
+      const where = `${root}/${folder}/SKILL.md`;
+      const fm = readFm(skillMd);
+      if (!fm) { note("warn", where, "no frontmatter — needs name and description"); continue; }
+
+      if (!fm.description) {
+        note("error", where, "no description — the runtime skips a skill it cannot disclose");
+      } else if (fm.description.length > 1024) {
+        note("warn", where, `description is ${fm.description.length} chars — the spec limit is 1024`);
+      }
+
+      const name = fm.name;
+      if (!name) {
+        note("warn", where, "no name — the folder name is used, but declare it");
+      } else {
+        if (name !== folder) {
+          note("warn", where, `name "${name}" does not match its folder "${folder}" — the spec requires they match`);
+        }
+        if (name.length > 64) note("warn", where, `name is ${name.length} chars — the spec limit is 64`);
+        if (!SKILL_NAME_RE.test(name)) {
+          note("warn", where, `name "${name}" is not lowercase-alphanumeric-with-single-hyphens`);
+        }
+      }
+    }
+  }
+}
+
+// Single-file subagents authored by ANY coding tool. The vendor-neutral
+// cross-client location is .agents/agents/<name>.md (scanned first); a tool's
+// own dir (.claude/agents/ so far) follows for pragmatic compatibility.
+// readTree maps these into agents/<name>/agent.md at deploy; check mirrors it
+// so the local, pre-deploy experience matches — otherwise a workspace whose
+// only agents were authored elsewhere reports "no agents" until it deploys.
+function importedAgentNames(workspace, nativeNames) {
+  const names = new Set();
+  for (const dir of [".agents/agents", ".claude/agents"]) {
+    for (const entry of ls(path.join(workspace, dir))) {
+      if (!entry.endsWith(".md")) continue;
+      // A real file, not a directory named x.md — deploy's readTree reads the
+      // file and would skip a directory, so check must agree or it counts an
+      // agent that never ships.
+      try {
+        if (!fs.statSync(path.join(workspace, dir, entry)).isFile()) continue;
+      } catch {
+        continue;
+      }
+      const name = entry.replace(/\.md$/, "");
+      if (nativeNames.has(name)) continue; // native wins
+      names.add(name);
+    }
+  }
+  return names;
+}
+
+// ---------------------------------------------------------------- extract
+
+/**
+ * Lift a single-file script tool's program out of its markdown and into a
+ * file beside it: `tools/x.md` becomes `tools/x/tool.md` + `tools/x/run.py`.
+ *
+ * The tool's NAME does not change, which is the property that makes this
+ * safe to run against a live workspace: `tools: [x]` in an agent still names
+ * the same tool, so no agent, flow or schedule has to be edited alongside.
+ * Only where the bytes live changes.
+ *
+ * Written to be re-runnable. A tool already in folder form, or one with a
+ * `run:`, is skipped rather than touched, so a half-finished migration is
+ * finished by running it again rather than by unpicking it.
+ *
+ * Order matters on a live box: the folder is written and re-parsed FIRST,
+ * and the flat file is removed only once the result loads as a script tool
+ * whose program is on disk. A crash between the two leaves the old file
+ * intact and a folder beside it — visible, and fixed by re-running.
+ */
+async function extract(workspace, flags) {
+  const { fencedCodeBlock, parseToolDef } = await core();
+  const dry = Boolean(flags["dry-run"]);
+  const dir = path.join(workspace, "tools");
+
+  if (!fs.existsSync(dir)) {
+    console.log(`\n  no tools/ in ${workspace} — nothing to extract\n`);
+    return 0;
+  }
+
+  const done = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const entry of fs.readdirSync(dir).sort()) {
+    if (!entry.endsWith(".md")) continue;
+    const name = entry.replace(/\.md$/, "");
+    const flat = path.join(dir, entry);
+    const raw = fs.readFileSync(flat, "utf8");
+
+    // Frontmatter is edited as text, never re-serialised. A YAML round-trip
+    // reorders keys, drops comments and rewrites quoting — a diff nobody
+    // asked for across every tool on the box, hiding the one line that
+    // actually changed.
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
+    if (!fm) {
+      skipped.push([name, "no frontmatter"]);
+      continue;
+    }
+    const front = fm[1];
+    const body = raw.slice(fm[0].length);
+
+    if (/^transport:\s*script\s*$/m.test(front) === false && /^run:/m.test(front) === false) {
+      skipped.push([name, "not a script tool"]);
+      continue;
+    }
+    if (/^run:/m.test(front)) {
+      skipped.push([name, "already points at a file"]);
+      continue;
+    }
+
+    const block = fencedCodeBlock(body);
+    if (!block) {
+      failed.push([name, "transport: script with no run: and no fenced program — nothing to extract"]);
+      continue;
+    }
+
+    const program = `run${block.ext}`;
+    const folder = path.join(dir, name);
+    if (fs.existsSync(folder)) {
+      failed.push([name, `tools/${name}/ already exists — resolve by hand`]);
+      continue;
+    }
+
+    // The body keeps its prose and loses the block that is now a file. The
+    // pointer replaces it so the document still says where the program is.
+    const trimmed =
+      body.slice(0, block.start).replace(/\n{3,}$/, "\n\n") +
+      `\`${program}\` beside this file is the program.\n` +
+      body.slice(block.end).replace(/^\n+/, "\n");
+
+    const manifest =
+      `---\n${front.replace(/(^name:.*$)/m, `$1\nrun: ${program}`)}\n---\n\n` + trimmed.replace(/^\n+/, "");
+
+    if (dry) {
+      done.push([name, `${program} (${block.code.split("\n").length} lines)`]);
+      continue;
+    }
+
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, program), block.code);
+    fs.writeFileSync(path.join(folder, "tool.md"), manifest);
+
+    // Prove it before deleting anything. parseToolDef is what the runtime
+    // uses, so "it loads" here means it loads there.
+    const check = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(manifest);
+    if (!check) throw new Error(`${name}: the manifest has no frontmatter — nothing to extract from`);
+    const data = Object.fromEntries(
+      check[1]
+        .split("\n")
+        .flatMap((l) => {
+          const m = /^([a-z_-]+):\s*(.*)$/.exec(l);
+          return m ? [[m[1], m[2]]] : [];
+        }),
+    );
+    const def = parseToolDef(data, name, manifest.slice(check[0].length));
+    const ok =
+      def?.kind === "script" &&
+      def.spec.run === program &&
+      fs.existsSync(path.join(folder, program));
+    if (!ok) {
+      failed.push([name, "the extracted folder did not parse back as a script tool — flat file left in place"]);
+      continue;
+    }
+
+    fs.rmSync(flat);
+    done.push([name, `${program} (${block.code.split("\n").length} lines)`]);
+  }
+
+  const label = dry ? "would extract" : "extracted";
+  console.log("");
+  for (const [name, what] of done) console.log(`  ${c.green("✓")} ${label} ${c.bold(name)} → tools/${name}/${what}`);
+  for (const [name, why] of skipped) console.log(`  ${c.dim("·")} ${c.dim(`${name} — ${why}`)}`);
+  for (const [name, why] of failed) console.log(`  ${c.red("!")} ${c.bold(name)} — ${why}`);
+  console.log(
+    `\n  ${done.length} ${label}, ${skipped.length} skipped, ${failed.length} failed` +
+      (dry ? `  ${c.dim("(--dry-run: nothing written)")}` : "") +
+      `\n\n  ${c.dim("next: foldrun check " + workspace)}\n`,
+  );
+  return failed.length ? 1 : 0;
+}
+
+/**
+ * The library a signed-in developer's workspace will actually resolve
+ * against lives on the platform, not on this laptop. Without this, check
+ * reported `tools: [site_repo]` missing for a tool that runs fine on every
+ * deploy — the first red result a developer saw on a working desk. Read only
+ * the names; an unreachable platform is a warning, not a failed check.
+ */
+async function platformLibrary(flags) {
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  if (!url) return { url: undefined, tools: new Set(), skills: new Set(), warning: null };
+  let token;
+  try {
+    token = tokenFor(url, { ...flags, quiet: true });
+  } catch {
+    return { url, tools: new Set(), skills: new Set(), warning: `${url} is the platform but this machine is not signed in — library tools there cannot be seen` };
+  }
+  const names = async (kind) => {
+    const res = await fetch(new URL(`/api/library/${kind}`, url), {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`/api/library/${kind} → HTTP ${res.status}`);
+    const body = /** @type {any} */ (await res.json());
+    return new Set((body.entries ?? []).map((e) => e.name).filter(Boolean));
+  };
+  try {
+    // Hooks are newer than the library route on some platforms: a platform
+    // that does not list them leaves the set empty rather than failing check.
+    const [tools, skills, hooks] = await Promise.all([names("tools"), names("skills"), names("hooks").catch(() => new Set())]);
+    return { url, tools, skills, hooks, warning: null };
+  } catch (err) {
+    return { url, tools: new Set(), skills: new Set(), warning: `could not read the library on ${url} (${err instanceof Error ? err.message : err}) — tools defined there will be reported missing` };
+  }
+}
+
+/**
+ * The Google Chrome and Playwright Chromium versions in the platform's runner
+ * image, from its open /api/version (`browser_versions.chrome` and
+ * `.chromium`, which the deploy read out of the image's engines manifest).
+ * Each null when there is no platform, it cannot be reached, or it did not
+ * say — check then compares nothing for that engine. Asked once per platform
+ * per process: an account check walks many workspaces.
+ */
+const platformBrowsersCache = new Map();
+async function platformBrowsers(url) {
+  const none = { chrome: null, chromium: null };
+  if (!url) return none;
+  if (!platformBrowsersCache.has(url)) {
+    platformBrowsersCache.set(url, (async () => {
+      try {
+        const res = await fetch(new URL("/api/version", url), { signal: AbortSignal.timeout(8_000) });
+        if (!res.ok) return none;
+        const bv = /** @type {any} */ (await res.json())?.browser_versions;
+        const pick = (v) => (typeof v === "string" && /^\d+(\.\d+)+$/.test(v) ? v : null);
+        return { chrome: pick(bv?.chrome), chromium: pick(bv?.chromium) };
+      } catch {
+        return none;
+      }
+    })());
+  }
+  return platformBrowsersCache.get(url);
+}
+
+/**
+ * `foldrun check` at an account root: every workspace under it, then the
+ * library they all share.
+ *
+ * One workspace at a time, with FOLDRUN_WORKSPACE repointed between them —
+ * the core resolves every path late, on purpose, so this works and a cached
+ * module cannot make the second workspace read the first one's files.
+ */
+async function checkAccount(layout, flags) {
+  const { readLibraryTree, LIBRARY_KINDS } = await core();
+  const opts = checkOptions(flags);
+  const text = opts.format === "text";
+  if (!layout.workspaces.length) {
+    console.log(`\n  ${c.amber("!")} no workspaces in ${layout.accountRoot} — \`foldrun new <name>\` makes one\n`);
+    return 1;
+  }
+  const all = [];
+  let baselined = 0;
+  for (const name of layout.workspaces) {
+    const dir = path.join(layout.workspacesDir, name);
+    process.env.FOLDRUN_WORKSPACE = dir;
+    const r = await checkWorkspace(dir, flags, opts);
+    baselined += r.baselined;
+    if (text) {
+      console.log(`\n  ${c.bold(name)}  ${c.dim(path.relative(layout.accountRoot, dir))}`);
+      printCheck(r, opts);
+    }
+    const prefix = path.relative(layout.accountRoot, dir).split(path.sep).join("/");
+    // A library finding is the account's, reported once however many
+    // workspaces resolve that tool.
+    for (const f of r.findings) {
+      if (!f.account) all.push({ ...f, file: `${prefix}/${f.file}`, where: `${prefix}/${f.where}` });
+      else if (!all.some((x) => x.account && x.rule === f.rule && x.file === f.file && x.line === f.line && x.fingerprint === f.fingerprint)) all.push(f);
+    }
+  }
+
+  // The library, once — it is one thing however many workspaces read it.
+  const files = readLibraryTree(layout.accountRoot);
+  const problems = [];
+  const note = (level, where, message) => problems.push({ level, where, message, rule: checkRuleFor(`library/${where}`) });
+  validateSkills(path.join(layout.accountRoot, "library"), note);
+  const hc = await hooksCore();
+  for (const p of hc ? hc.checkHooksDir(path.join(layout.accountRoot, "library", "hooks"), "account") : []) {
+    const m = /^(hooks\/[^/:]+(?:\/hook\.md)?): (.*)$/s.exec(p);
+    note("error", m ? m[1] : "hooks/", m ? m[2] : p);
+  }
+  const scan = await scanCore();
+  const fp = scan?.findingFingerprint ?? localFingerprint;
+  let lib = problems.map((p) => toFinding({ ...p, where: `library/${p.where}` }, layout.accountRoot, fp));
+  if (scan?.filterIgnored) lib = scan.filterIgnored(lib, files.map((f) => ({ path: `library/${f.kind}/${f.path}`, content: f.content })));
+  if (scan) {
+    const outward = files.filter((f) => f.kind === "tools" && /^[^/]+(?:\/tool)?\.md$/.test(f.path) && /^outward:\s*true\s*$/m.test(f.content)).map((f) => f.path.replace(/(?:\/tool)?\.md$/, ""));
+    lib.push(...scan.scanFiles(files.map((f) => ({ path: `library/${f.kind}/${f.path}`, content: f.content })), { outwardTools: outward }).map((f) => ({ ...f, where: `${f.file}${f.line ? `:${f.line}` : ""}` })));
+  }
+  const libResult = narrowCheck(lib, layout.accountRoot, opts, "library");
+  baselined += libResult.baselined;
+  if (text) {
+    const counts = LIBRARY_KINDS.map((k) => ({ kind: k, n: files.filter((f) => f.kind === k).length })).filter((x) => x.n > 0);
+    console.log(`\n  ${c.bold("library")}  ${c.dim(counts.length ? counts.map((x) => `${x.n} ${x.kind}`).join(" · ") : "empty")}`);
+    for (const f of libResult.findings) {
+      console.log(`    ${f.level === "error" ? c.red("✗") : f.level === "warn" ? c.amber("!") : c.dim("·")} ${c.bold(f.where)}  ${f.message}  ${c.dim(f.rule)}`);
+    }
+    if (libResult.wrote) console.log(`    ${c.dim(`baseline: ${libResult.wrote}`)}`);
+    console.log();
+  }
+  all.push(...libResult.findings);
+  if (!text) emitCheck(all, opts, { root: layout.accountRoot, summary: `${layout.workspaces.length} workspaces and the library`, baselined });
+  return checkExit(all, opts);
+}
+
+async function check(workspace, flags = {}) {
+  const opts = checkOptions(flags);
+  const r = await checkWorkspace(workspace, flags, opts);
+  if (opts.format === "text") printCheck(r, opts);
+  else emitCheck(r.findings, opts, { root: workspace, summary: r.summary, baselined: r.baselined });
+  return checkExit(r.findings, opts);
+}
+
+function printCheck(r, opts) {
+  const errors = r.findings.filter((p) => p.level === "error");
+  const warnings = r.findings.filter((p) => p.level === "warn");
+  console.log("");
+  for (const p of r.findings) {
+    const tag = p.level === "error" ? c.red("error") : p.level === "warn" ? c.amber(" warn") : c.dim(" info");
+    console.log(`  ${tag}  ${c.bold(p.where)}  ${p.message}  ${c.dim(p.rule)}`);
+  }
+  const notes = [
+    ...(r.baselined ? [`${r.baselined} known in the baseline`] : []),
+    ...(opts.changed ? [`changed files only (vs ${opts.base})`] : []),
+    ...(opts.security ? ["security rules only"] : []),
+    ...(r.wrote ? [`baseline written: ${r.wrote}`] : []),
+    ...(r.noScanner ? ["this @foldrun/core has no scanner — `npm i -g foldrun@latest` for the security rules"] : []),
+  ];
+  const tail = notes.length ? `  ${c.dim(`(${notes.join("; ")})`)}` : "";
+  console.log(
+    errors.length === 0 && warnings.length === 0
+      ? `  ${c.green("✓")} ${r.summary} — no problems${tail}\n`
+      : `\n  ${r.summary} · ${errors.length} error${errors.length === 1 ? "" : "s"}, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}${tail}\n`,
+  );
+}
+
+// ---------------------------------------------------------------- check: rules, formats, baseline
+//
+// `check` is the linter and the scanner in one: its own rules (will this
+// run?) and core's scanner (is it safe to run? — secrets, hidden text, an
+// agent that can be talked into leaking, unpinned code). Every finding has a
+// rule id, a level, a file and a fingerprint, so the same result prints for
+// a person, as JSON for a script, or as SARIF for GitHub code scanning.
+
+/** Core's scanner, or null on a core from before it — check then runs its
+ *  own rules alone and says the security rules need a newer install. */
+async function scanCore() {
+  try {
+    scanRules = /** @type {any} */ (await import("@foldrun/core/scan"));
+    return scanRules;
+  } catch {
+    return null;
+  }
+}
+
+// The scanner module, once scanCore has loaded it — categoryOf and SARIF read it.
+let scanRules = null;
+
+const SECURITY_CATEGORIES = new Set(["secret", "security", "content", "supply-chain"]);
+const RANK = { error: 3, warn: 2, info: 1 };
+const FAIL_ON = { error: 3, warn: 2, info: 1, never: Infinity };
+
+/** The rule id of one of check's own problems, from where it was found —
+ *  core's ruleForWhere, so the deploy and the Checks page name the same
+ *  problem the same way. A core from before the scanner has no table, and
+ *  then this fallback reads the path the same way. */
+function checkRuleFor(where, kind) {
+  if (scanRules?.ruleForWhere) return scanRules.ruleForWhere(where, kind);
+  if (kind === "outward") return "flow/outward-ungated";
+  if (kind === "spelling") return "paths/workspace-spelling";
+  if (/(?:^|\/)(?:knowledge|memory)\//.test(where)) return "knowledge/okf";
+  const lib = where.startsWith("library/");
+  const top = where.replace(/^library\//, "").split(/[/:]/)[0];
+  const byTop = { agents: "agent/config", flows: "flow/config", tools: "tool/config", skills: "skill/config", ".agents": "skill/config", evals: "eval/config", hooks: "hook/config" };
+  if (byTop[top]) return byTop[top];
+  return lib || top === "library" ? "library/config" : "workspace/config";
+}
+
+function categoryOf(rule) {
+  return scanRules?.scanRule?.(rule)?.category ?? (rule === "flow/outward-ungated" ? "security" : "config");
+}
+
+function checkOptions(flags) {
+  const format = flags.json === true ? "json" : typeof flags.format === "string" ? flags.format : "text";
+  if (!["text", "json", "sarif"].includes(format)) throw new Error(`--format ${format} — use text, json or sarif`);
+  const security = flags.security === true;
+  const failOn = typeof flags["fail-on"] === "string" ? flags["fail-on"] : security ? "warn" : "error";
+  if (!(failOn in FAIL_ON)) throw new Error(`--fail-on ${failOn} — use error, warn, info or never`);
+  const rules = [].concat(flags.rule ?? []).flatMap((r) => String(r).split(",")).map((r) => r.trim()).filter(Boolean);
+  return {
+    format,
+    security,
+    failOn,
+    rules,
+    changed: flags.changed === true || typeof flags.base === "string",
+    base: typeof flags.base === "string" ? flags.base : "HEAD",
+    baseline: flags["no-baseline"] !== true,
+    writeBaseline: flags["write-baseline"] === true,
+    out: typeof flags.out === "string" ? flags.out : null,
+  };
+}
+
+/** sha256 over rule, file and text — core's findingFingerprint, for a core
+ *  without the scanner, so a baseline written by either matches. */
+function localFingerprint(rule, file, text) {
+  return crypto.createHash("sha256").update(`${rule}\0${file}\0${String(text).trim().replace(/\s+/g, " ")}`).digest("hex").slice(0, 16);
+}
+
+/** One of check's problems as a finding: a file (not a folder) and a line. */
+function toFinding(p, root, fp) {
+  const m = /^(.*?):(\d+)$/.exec(p.where);
+  let file = m ? m[1] : p.where;
+  const line = m ? Number(m[2]) : undefined;
+  if (/^agents\/[^/]+$/.test(file)) file += "/agent.md";
+  else if (/^(?:library\/)?tools\/[^/]+$/.test(file)) file = fs.existsSync(path.join(root, file, "tool.md")) ? `${file}/tool.md` : `${file}.md`;
+  const rule = p.rule ?? checkRuleFor(p.where);
+  return { rule, level: p.level, file, ...(line ? { line } : {}), message: p.message, fingerprint: fp(rule, file, p.message), where: p.where };
+}
+
+/**
+ * The file a finding is really in. readTree carries a single-file subagent
+ * (`.agents/agents/<name>.md`, `.claude/agents/<name>.md`) as
+ * `agents/<name>/agent.md`, so a finding on it names a file that is not
+ * there — and --changed, which asks git, would drop it. The content is the
+ * same, so the line still holds.
+ */
+function sourcePathOf(workspace, file) {
+  const m = /^agents\/([^/]+)\/agent\.md$/.exec(file);
+  if (!m || fs.existsSync(path.join(workspace, file))) return file;
+  // The same eligibility readTree uses: a regular file, never a link.
+  for (const alt of [`.agents/agents/${m[1]}.md`, `.claude/agents/${m[1]}.md`]) {
+    try {
+      if (fs.lstatSync(path.join(workspace, alt)).isFile()) return alt;
+    } catch {
+      // not there
+    }
+  }
+  return file;
+}
+
+/** Everything check finds in one workspace, narrowed by the flags. Findings
+ *  about the account library carry `account: true` and paths from the
+ *  account root, where they live — not from this workspace. */
+async function checkWorkspace(workspace, flags, opts) {
+  const { problems, summary, outwardTools } = await checkProblems(workspace, flags);
+  const scan = await scanCore();
+  const { libraryDir } = await core();
+  const accountRoot = path.dirname(libraryDir("default"));
+  const fp = scan?.findingFingerprint ?? localFingerprint;
+  /** @type {any[]} */
+  let findings = problems.map((p) => ({ ...toFinding(p, p.where.startsWith("library/") ? accountRoot : workspace, fp), account: p.where.startsWith("library/") }));
+  if (scan) {
+    const { readTree } = await core();
+    const files = readTree(workspace);
+    // One ignore syntax for every rule: check's own findings honour the
+    // same `foldrun-ignore <rule>: <reason>` comments the scanner does.
+    if (scan.filterIgnored) findings = [...scan.filterIgnored(findings.filter((f) => !f.account), files), ...findings.filter((f) => f.account)];
+    let accountNetwork;
+    try {
+      const md = path.join(accountRoot, "AGENTS.md");
+      if (md !== path.join(workspace, "AGENTS.md") && fs.existsSync(md)) accountNetwork = (await import("gray-matter")).default(fs.readFileSync(md, "utf8"), {}).data?.network;
+    } catch {
+      // an unreadable account AGENTS.md is reported by its own check
+    }
+    for (const f of scan.scanFiles(files, { outwardTools, accountNetwork })) {
+      findings.push({ ...f, where: `${f.file}${f.line ? `:${f.line}` : ""}` });
+    }
+  }
+  findings = findings.map((f) => {
+    if (f.account) return f;
+    const file = sourcePathOf(workspace, f.file);
+    return file === f.file ? f : { ...f, file, where: `${file}${f.line ? `:${f.line}` : ""}` };
+  });
+  const r = narrowCheck(findings, workspace, opts, workspace, accountRoot);
+  return { ...r, summary, noScanner: !scan };
+}
+
+/** --rule / --security, then --changed, then the baseline (or writing one).
+ *  `accountRoot` is where findings marked `account: true` live. */
+function narrowCheck(findings, root, opts, label, accountRoot = root) {
+  let out = findings;
+  if (opts.rules.length) {
+    const want = new Set(opts.rules);
+    out = out.filter((f) => want.has(f.rule) || want.has(f.rule.split("/")[0]) || want.has(categoryOf(f.rule)));
+  }
+  if (opts.security) out = out.filter((f) => SECURITY_CATEGORIES.has(categoryOf(f.rule)));
+  // check's own skill rule already says a skill has no description, as an
+  // error; the schema's note would say it twice. Only when that error is
+  // still in the report — `--rule config/missing-field` keeps the note.
+  out = out.filter((f) => !(f.rule === "config/missing-field" && out.some((g) => g.file === f.file && g.rule === "skill/config" && /no description|needs name and description/.test(g.message))));
+  const file = path.join(root, ".foldrun", "check-baseline.json");
+  if (opts.writeBaseline) {
+    const created = new Date().toISOString();
+    const seen = new Map(out.map((f) => [`${f.rule}\0${f.file}\0${f.fingerprint}`, { rule: f.rule, file: f.file, fingerprint: f.fingerprint }]));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ version: 1, created, findings: [...seen.values()].sort((a, b) => a.file.localeCompare(b.file) || a.rule.localeCompare(b.rule)) }, null, 2) + "\n");
+    return { findings: [], baselined: out.length, wrote: path.relative(process.cwd(), file) || file };
+  }
+  let baselined = 0;
+  if (opts.baseline && fs.existsSync(file)) {
+    let b = null;
+    try {
+      b = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      // Unreadable hides nothing: failing open would hide every new finding.
+      out = [...out, { rule: "workspace/config", level: "warn", file: ".foldrun/check-baseline.json", message: "the baseline is not JSON — it hides nothing until it is rewritten (`foldrun check --write-baseline`)", fingerprint: "baseline", where: ".foldrun/check-baseline.json" }];
+    }
+    if (b?.version === 1 && Array.isArray(b.findings)) {
+      // An entry that is not {rule, file, fingerprint} hides nothing.
+      const entries = b.findings.filter((f) => f && typeof f === "object" && typeof f.rule === "string" && typeof f.file === "string" && typeof f.fingerprint === "string");
+      const known = new Set(entries.map((f) => `${f.rule}\0${f.file}\0${f.fingerprint}`));
+      const kept = out.filter((f) => !known.has(`${f.rule}\0${f.file}\0${f.fingerprint}`));
+      baselined = out.length - kept.length;
+      out = kept;
+    }
+  }
+  if (opts.changed) {
+    const here = changedFiles(root, opts.base, label);
+    // The account may not be the same repository, or have that ref: then
+    // nothing in the library counts as changed, and the workspace's own
+    // comparison still stands.
+    let there = here;
+    if (out.some((f) => f.account) && accountRoot !== root) {
+      try {
+        there = changedFiles(accountRoot, opts.base, "library");
+      } catch {
+        there = new Set();
+      }
+    }
+    out = out.filter((f) => {
+      const changed = f.account ? there : here;
+      return changed.has(f.file) || [...changed].some((c) => c.startsWith(`${f.file}/`));
+    });
+  }
+  return { findings: out, baselined };
+}
+
+/** Files changed against a ref, tracked or not, relative to `root`. */
+function changedFiles(root, base, label) {
+  const git = (args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    // -z: literal paths. Without it git quotes and escapes a name outside
+    // ASCII ("knowledge/\346\227\245.md"), which matches no finding.
+    const diff = git(["diff", "-z", "--name-only", "--relative", base]);
+    const untracked = git(["ls-files", "-z", "--others", "--exclude-standard"]);
+    return new Set([...diff.split("\0"), ...untracked.split("\0")].filter(Boolean));
+  } catch (err) {
+    const why = String(/** @type {any} */ (err).stderr ?? err).trim().split("\n")[0];
+    throw new Error(`--changed needs ${label === "library" ? "the account" : "this workspace"} in a git repository and a ref git knows (${base}) — ${why}`);
+  }
+}
+
+function checkExit(findings, opts) {
+  const bar = FAIL_ON[opts.failOn];
+  return findings.some((f) => RANK[f.level] >= bar) ? 1 : 0;
+}
+
+/** JSON or SARIF, to stdout or --out. */
+function emitCheck(findings, opts, { root, summary, baselined }) {
+  const clean = findings.map(({ where, account, ...f }) => f);
+  let body;
+  if (opts.format === "sarif") {
+    body = scanRules?.toSarif
+      ? scanRules.toSarif(clean, { version: CLI_VERSION })
+      : { version: "2.1.0", runs: [{ tool: { driver: { name: "foldrun check", version: CLI_VERSION, rules: [] } }, results: [] }], error: "this @foldrun/core has no scanner — update foldrun for SARIF" };
+  } else {
+    const counts = { error: 0, warn: 0, info: 0 };
+    for (const f of clean) counts[f.level]++;
+    body = { version: 1, tool: `foldrun ${CLI_VERSION}`, root, summary, counts, baselined, findings: clean };
+  }
+  const text = JSON.stringify(body, null, 2) + "\n";
+  if (opts.out) fs.writeFileSync(opts.out, text);
+  else process.stdout.write(text);
+}
+
+/** `foldrun check --rules`: every rule check knows, with its level and why. */
+async function checkRulesCmd(flags) {
+  const scan = await scanCore();
+  const rules = [
+    ...(scan?.SCAN_RULES ?? []).map((r) => ({ ...r, source: "scanner" })),
+    ...(scan?.CHECK_RULES ?? []).map((r) => ({ ...r, source: "check" })),
+  ];
+  if (flags.json === true || flags.format === "json") {
+    process.stdout.write(JSON.stringify({ rules }, null, 2) + "\n");
+    return 0;
+  }
+  console.log("");
+  for (const r of rules) {
+    const lvl = r.source === "check" ? c.dim("  var") : r.level === "warn" ? c.amber(" warn") : r.level === "error" ? c.red("error") : c.dim(" info");
+    console.log(`  ${lvl}  ${c.bold(r.id.padEnd(28))} ${r.title}${r.owasp?.length ? c.dim(`  ${r.owasp.join(" ")}`) : ""}`);
+  }
+  if (!scan) console.log(`\n  ${c.amber("!")} this @foldrun/core has no scanner — \`npm i -g foldrun@latest\` adds the secret, security, content and supply-chain rules`);
+  console.log(`\n  ${c.dim("var: check's own rules carry the level of each problem. Ignore one with a comment on the line before: foldrun-ignore <rule>: <reason>")}\n`);
+  return 0;
+}
+
+/**
+ * Everything `check` finds in one workspace, as data: { problems, summary }.
+ * `check` prints it; `flow add` and `agent link` run it before and after an
+ * edit and refuse one that adds an error — one set of rules, whichever door
+ * the change came through.
+ */
+async function checkProblems(workspace, flags = {}) {
+  const {
+    listAgents, listFlows, readBundle, conformanceIssues, dateIssues, listEvals, lintFlow,
+    workspaceTools, libraryTools, checkFormatVersion, missingToolPrograms, discoverSkills,
+    libraryDir, undeclaredImports,
+  } = await core();
+  const T = "default";
+  const P = "workspace";
+  const problems = [];
+  await scanCore(); // the rule table checkRuleFor reads
+  // file:line, like every other linter — so an editor can jump to it and CI
+  // can annotate the right row. Every problem carries a rule id, so --rule,
+  // a foldrun-ignore, a baseline and SARIF can all name it.
+  const note = (level, where, message, line, kind) =>
+    problems.push({ level, where: line ? `${where}:${line}` : where, message, rule: checkRuleFor(where, kind) });
+
+  const agents = listAgents(T, P);
+  const flows = listFlows(T, P);
+  const evals = listEvals(T, P);
+  const tools = workspaceTools(T, P);
+  // What `tools:` can actually name of your own. The runtime resolves nearest-wins across
+  // both scopes, so a checker that only looked at the workspace called a
+  // working agent broken — an error, in CI, for an account library tool that
+  // runs fine. Mirror the runtime exactly; the summary still counts what this
+  // workspace itself defines.
+  const usable = { ...libraryTools(T), ...tools };
+  const platform = await platformLibrary(flags);
+  if (platform.warning) note("warn", "library", platform.warning);
+  // The runner image's Chrome and Chromium, for comparing a pinned user_agent
+  // with the engine that sends it. A core from before webWarnings has
+  // neither, and the comparison is skipped.
+  const { webWarnings, runnerEngines } = /** @type {any} */ (await core());
+  const localEngines = webWarnings ? runnerEngines?.() : null;
+  const remote = webWarnings && !(localEngines?.chrome && localEngines?.chromium) ? await platformBrowsers(platform.url) : { chrome: null, chromium: null };
+  const runnerBrowsers = { chrome: localEngines?.chrome ?? remote.chrome, chromium: localEngines?.chromium ?? remote.chromium };
+  const agentNames = new Set(agents.map((a) => a.name));
+  const imported = importedAgentNames(workspace, agentNames);
+  for (const n of imported) agentNames.add(n);
+  const flowNames = new Set(flows.map((f) => f.name));
+  // Which agents can act outside this workspace: any that grants a tool whose
+  // definition says `outward: true`. Worked out here, where the grants and the
+  // tool files are already resolved, so the flow lint only needs the answer.
+  const outwardAgents = agents
+    .filter((a) => (a.ownTools ?? []).some((t) => usable[t]?.outward === true))
+    .map((a) => a.name);
+  // Every skill name in scope, found the way the runtime finds them — the
+  // agent's own, the workspace's, the cross-client .agents/skills/, and the
+  // account library. Discovery comes from core so this cannot drift from
+  // what a run actually loads.
+  const skillNames = new Set();
+  for (const base of [workspace, libraryDir(T)]) {
+    for (const sub of ["skills", ".agents/skills"]) {
+      for (const s of discoverSkills(base, sub)) skillNames.add(s.name);
+    }
+  }
+  for (const a of agents) {
+    for (const s of discoverSkills(path.join(workspace, "agents", a.name))) skillNames.add(s.name);
+  }
+  for (const s of platform.skills) skillNames.add(s);
+
+  // A blank workspace is legal — `foldrun new` and the dashboard make one —
+  // so this is a nudge, as the deploy's warning is; a flow naming a missing
+  // agent is still an error below.
+  if (agentNames.size === 0) note("warn", "agents/", "no agents yet — `foldrun agent new <name>`, or `foldrun agent import <workspace>/<agent>`");
+
+  // What format does this workspace target?
+  const agentsMd = path.join(workspace, "AGENTS.md");
+  if (fs.existsSync(agentsMd)) {
+    const m = fs.readFileSync(agentsMd, "utf8").match(/^foldrun_version:\s*["']?([\d.]+)/m);
+    const { warning } = checkFormatVersion(m?.[1]);
+    if (warning) note("warn", "AGENTS.md", warning);
+    // `limits:` here are defaults for every agent below; the keys are not
+    // checked against grants (a default applies only where it can), the
+    // values are.
+    const { readAgentsMd } = await core();
+    const { readLimits } = await import("@foldrun/core/limits");
+    for (const w of readLimits(readAgentsMd(workspace)?.data?.limits).problems) note("error", "AGENTS.md", w);
+    // `network:` here is every agent's default: a value nobody can read
+    // leaves them on the account's, or the platform's.
+    const net = await import("@foldrun/core/network").catch(() => null);
+    for (const w of net ? net.networkProblems(readAgentsMd(workspace)?.data?.network) : []) note("error", "AGENTS.md", w);
+  }
+
+  const { unopenedFrontmatter } = /** @type {any} */ (await core());
+  for (const a of agents) {
+    // A frontmatter block with no opening `---` is read as prose: no tools,
+    // the default model (seo-digest's editor, 20 Sep to 5 Oct 2026).
+    const agentFile = path.join(workspace, "agents", a.name, "agent.md");
+    const unopened = unopenedFrontmatter && fs.existsSync(agentFile) ? unopenedFrontmatter(fs.readFileSync(agentFile, "utf8")) : null;
+    if (unopened) note("error", `agents/${a.name}/agent.md`, unopened, 1);
+    if (!a.description) note("warn", `agents/${a.name}`, "no description — other agents and people read it");
+
+    // A timezone nobody can read. The deploy already refuses it; check has to
+    // refuse it here, or the first anyone hears of it is a push that bounces.
+    if (a.timezoneProblem) {
+      // The sentence already names the value it could not read.
+      note("error", `agents/${a.name}`, a.timezoneProblem);
+    }
+
+    // A web: value that cannot work, or a per-action key outside web: —
+    // DeepSeek named for search, a search API named for fetch, a key
+    // written into the file. The run would say so in its trail and carry
+    // on; the deploy refuses it; this is where a person hears it first.
+    for (const w of a.webProblems ?? []) note("error", `agents/${a.name}`, w);
+    // A network: value that cannot be read leaves the agent on the level
+    // above it — the deploy refuses it, so check says so first.
+    for (const w of a.networkProblems ?? []) note("error", `agents/${a.name}`, w);
+    // What works but should change: the old `session:` key, and a pinned
+    // user_agent whose Chrome is not the runner image's (the platform's
+    // /api/version says which Chrome; FOLDRUN_RUNNER_ENGINES on a server).
+    if (webWarnings) {
+      try {
+        const matter = (await import("gray-matter")).default;
+        // `{}`: gray-matter caches a failed parse as an empty success without it.
+        const front = matter(fs.readFileSync(path.join(workspace, "agents", a.name, "agent.md"), "utf8"), {}).data ?? {};
+        for (const w of webWarnings(front, runnerBrowsers)) note("warn", `agents/${a.name}`, w);
+      } catch {
+        // an unreadable agent.md is already reported by the loader
+      }
+    }
+    // agent.md whose YAML does not parse: core lists it with defaults and the
+    // reason (core 2.5) rather than throwing; the file is unreadable to a run.
+    const frontmatterError = /** @type {{ frontmatterError?: string }} */ (a).frontmatterError;
+    if (frontmatterError) note("error", `agents/${a.name}`, frontmatterError);
+    // `schedule:` on an agent fires nothing — only a flow has a clock.
+    if (a.scheduleProblem) note("error", `agents/${a.name}`, a.scheduleProblem);
+    // `language:` that is not a tag — "Persian" where `fa` was meant.
+    if (a.languageProblem) note("error", `agents/${a.name}`, a.languageProblem);
+    // `region: Australia` where `au` was meant, `currency: dollars`, `units: both`.
+    for (const w of a.localeProblems ?? []) note("error", `agents/${a.name}`, w);
+
+    // What the author wrote that the runtime already writes, or writes better.
+    // Every trap here was one somebody hit while the answer sat in the source:
+    // check reads the whole folder anyway, so it may as well teach.
+    try {
+      const body = fs.readFileSync(path.join(workspace, "agents", a.name, "agent.md"), "utf8");
+
+      // The runtime appends a "# Where you are" section to every prompt saying
+      // the working directory is agents/<name>/ and ../../ is the workspace
+      // root. An agent that says it again spends its opening paragraph on
+      // something the platform guarantees.
+      if (/your working directory is|two levels up|\.\.\/\.\.\/` is the workspace/i.test(body)) {
+        note(
+          "warn",
+          `agents/${a.name}`,
+          'explains where it is — the runtime already appends a "Where you are" section saying this; the paragraph is safe to delete',
+        );
+      }
+
+      // `[[link]]` what you READ, spell out what you WRITE. A path that exists
+      // is something to read, and a link to it cannot rot when the file is
+      // renamed; a path that does not exist yet is an output destination and
+      // is correctly literal. So the test is simply whether the file is there.
+      const said = new Set(); // one path, one lesson, however often it appears
+      for (const m of body.matchAll(/\.\.\/\.\.\/(state|knowledge|memory|storage)\/([^\s`'")]+)/g)) {
+        const rel = `${m[1]}/${m[2]}`;
+        if (said.has(rel)) continue;
+        said.add(rel);
+        if (!fs.existsSync(path.join(workspace, rel))) continue; // a destination, not a reference
+        const bare = path.basename(m[2]).replace(/\.md$/, "");
+        note("warn", `agents/${a.name}`, `reads \`../../${rel}\` — \`[[${bare}]]\` resolves to it and survives a rename`);
+      }
+    } catch {
+      // an unreadable agent.md is already reported by the loader
+    }
+
+    for (const t of a.ownTools) {
+      if (usable[t]) continue;
+      if (platform.tools.has(t)) {
+        // Resolves on the platform's library and nowhere on this machine:
+        // fine at run time, worth one line so nobody looks for the file.
+        note("info", `agents/${a.name}`, `tools: [${t}] — from the library on ${platform.url}`);
+        continue;
+      }
+      if (t === WEB_TOOL) {
+        // Built in: the platform's gallery grants it in every account
+        // without an install, and a local run fetches the gallery when
+        // signed in. Signed out there is nothing on disk to run.
+        if (!platform.url) note("warn", `agents/${a.name}`, `tools: [${t}] — the platform's web tool; sign in (\`foldrun login\`) to run it locally`);
+        continue;
+      }
+      const hint = platform.url
+        ? `in this workspace, the local account library, or the library on ${platform.url}`
+        : "in this workspace or the account library (a library on a platform is seen when signed in: `foldrun login`, or --url)";
+      note("error", `agents/${a.name}`, `tools: [${t}] — no tools/${t}/tool.md or tools/${t}.md ${hint}`);
+    }
+    // A colleague that does not exist is not a consult tool the agent is
+    // missing — it is one it will never be told about, on a run that looks
+    // fine. Same shape as a tool that names nothing.
+    for (const c of a.consults) {
+      if (!agentNames.has(c)) {
+        note("error", `agents/${a.name}`, `agents: [${c}] — no such agent in this workspace`);
+      } else if (c === a.name) {
+        note("warn", `agents/${a.name}`, `agents: [${c}] — an agent consulting itself; the call is refused at run time`);
+      }
+    }
+
+    // Sub-agents: a name that is nothing, a delegate the model cannot pick
+    // (no description), or one left holding none of its tools inside this
+    // agent's step — each would be a delegation that silently does less.
+    if (a.subagents?.length) {
+      const { checkOverlap } = await import("@foldrun/core/subagents");
+      const byName = new Map(agents.map((x) => [x.name, x]));
+      for (const s of a.subagents) {
+        const sub = byName.get(s);
+        if (!sub) {
+          note("error", `agents/${a.name}`, `subagents: [${s}] — no such agent in this workspace`);
+        } else if (s === a.name) {
+          note("warn", `agents/${a.name}`, `subagents: [${s}] — an agent delegating to itself; it is skipped at run time`);
+        } else if (!sub.description?.trim()) {
+          note("error", `agents/${s}`, `no description — ${a.name} delegates to it (subagents:), and the model picks a sub-agent by its description`);
+        } else if (!ownSandboxOf(sub) && sub.tools.length && !checkOverlap(a.tools, sub.tools).length) {
+          // sandbox: own — its tools are its own, not cut to the parent's.
+          note("warn", `agents/${a.name}`, `subagents: [${s}] — none of ${s}'s tools are in ${a.name}'s, and a sub-agent never gets more than its parent: it would have no tools`);
+        }
+      }
+    }
+
+    // `limits:` — a count nobody can read runs uncapped, and a key that
+    // names no tool caps nothing. Shape from core's reader; the keys against
+    // what this agent can reach and what it holds.
+    for (const w of a.limitProblems ?? []) note("error", `agents/${a.name}`, w);
+    if (a.limits && Object.keys(a.limits).length) {
+      const { limitKeyProblems } = await import("@foldrun/core/limits");
+      const known = [...Object.keys(usable), ...platform.tools, ...a.inlineTools, ...a.consults, ...a.tools, ...a.apis.map((x) => x.name)];
+      const granted = [...a.tools, ...a.inlineTools, ...a.consults, ...a.apis.map((x) => x.name)];
+      for (const p of limitKeyProblems(a.limits, { known, granted })) note(p.level, `agents/${a.name}`, p.message);
+    }
+
+    // `skills:` present is an allowlist. A name that matches nothing silently
+    // withholds a skill the author believed was loaded — and an empty list
+    // withholds every one of them, which is legal but worth saying out loud.
+    if (a.skills !== null) {
+      if (a.skills.length === 0) {
+        note("warn", `agents/${a.name}`, "skills: [] withholds every skill — omit the field to inherit them");
+      }
+      for (const s of a.skills) {
+        if (!skillNames.has(s)) {
+          note("error", `agents/${a.name}`, `skills: [${s}] — no skill of that name in this agent, the workspace or the library`);
+        }
+      }
+    }
+
+    // Retired built-ins: still granted, so a deployed desk keeps running,
+    // but the author is told the name to write — core's sentence, so the
+    // run log and check say the same thing.
+    if (a.retiredTools?.length) {
+      const { retiredToolError } = await import("@foldrun/core/tool-names");
+      for (const t of a.retiredTools) note("error", `agents/${a.name}`, retiredToolError(t));
+    }
+
+    // `use:` is gone. Nothing under it is granted, so say the exact line to
+    // write rather than letting the run discover the missing tool.
+    if (a.legacyUse.length) {
+      note(
+        "error",
+        `agents/${a.name}`,
+        `\`use: [${a.legacyUse.join(", ")}]\` is no longer read — move these into \`tools:\` (node scripts/migrate-use-to-tools.mjs . rewrites every agent)`,
+      );
+    }
+  }
+
+  await checkHooks(workspace, agents, libraryDir(T), platform, note);
+
+  // A script tool whose `run:` resolves to nothing parses, counts, and is
+  // offered to the agent — then fails inside a turn. Checking it here is the
+  // difference between a typo found in CI and a flow that quietly stops
+  // using one of its tools. Resolution comes from core, so this agrees with
+  // the runner by construction rather than by maintenance.
+  for (const m of missingToolPrograms(T, P)) {
+    note(
+      "error",
+      m.scope === "account" ? `library/tools/${m.name}` : `tools/${m.name}`,
+      `run: ${m.run} — no such file (looked for ${m.looked})`,
+    );
+  }
+
+  // A program that imports a package nothing declares runs on the machine
+  // that happens to have it and fails on the platform's first call. Advisory:
+  // the import may be satisfied some way this cannot see. Older cores have no
+  // scanner, and then there is simply nothing to say.
+  for (const u of undeclaredImports ? undeclaredImports(T, P) : []) {
+    const how = u.language === "python"
+      ? `add \`runtime: packages: [${u.modules.join(", ")}]\` to the tool (or a requirements.txt beside it)`
+      : `add \`runtime: npm: [${u.modules.join(", ")}]\` to the tool (or a package.json beside it)`;
+    note(
+      "warn",
+      u.scope === "account" ? `library/tools/${u.name}` : `tools/${u.name}`,
+      `${u.file} imports ${u.modules.join(", ")}, which nothing declares — ${how}`,
+    );
+  }
+
+  validateSkills(workspace, note);
+
+  for (const f of flows) {
+    if (f.steps.length === 0) note("error", `flows/${f.file}`, "no steps");
+    // A step's own agent is core's check (lintFlow, below), so the CLI, the
+    // platform and a run all say the same thing about it; checking it here as
+    // well reported every unknown agent twice. Only a [[flow:x]] step, which
+    // lintFlow cannot see without the other flows, is checked here.
+    for (const s of f.steps) {
+      if (s.subflow && !flowNames.has(s.subflow)) {
+        note("error", `flows/${f.file}`, `[[flow:${s.subflow}]] does not exist`, s.line);
+      }
+    }
+    // A spelling hint (../../storage → workspace/storage) is info, not a warning:
+    // the old path works, and a check that cries wolf gets ignored.
+    for (const w of lintFlow(f, { agents: [...agentNames], outwardAgents })) note(w.level ?? (w.kind === "spelling" ? "info" : "warn"), `flows/${f.file}`, w.message, w.line, w.kind);
+  }
+
+  for (const e of evals) {
+    const target = e.flow ?? e.agent;
+    if (!target) note("error", `evals/${e.file}`, "names neither an agent nor a flow");
+    else if (!(e.flow ? flowNames.has(target) : agentNames.has(target))) {
+      note("error", `evals/${e.file}`, `${e.flow ? "flow" : "agent"} "${target}" does not exist`);
+    }
+    if (e.cases.length === 0) note("warn", `evals/${e.file}`, "no cases");
+  }
+
+  // A document's kind is its path, so nothing here declares one. Two older
+  // spellings may still be sitting in files and both are dead weight rather
+  // than errors: `kind: Agent` (ours, now redundant) and `type: Agent` (ours,
+  // back when it lived in OKF's field). The second is worth naming — an OKF
+  // consumer reading this repo would file that agent as a knowledge concept.
+  for (const [rel, noun] of documentTypes(workspace)) {
+    const front = readFrontmatter(path.join(workspace, rel));
+    if (front === null) continue;
+    const asType = /^type:\s*(.+)$/m.exec(front)?.[1].trim();
+    const asKind = /^kind:\s*(.+)$/m.exec(front)?.[1].trim();
+
+    if (asKind === noun) {
+      note("warn", rel, `\`kind: ${noun}\` is no longer read — the path says it; safe to delete`);
+    }
+    if (asType === noun) {
+      note("warn", rel, `\`type: ${noun}\` is OKF's field — delete it, the path says what this is`);
+    } else if (asType && rel.startsWith("tools/") && TRANSPORTS.has(asType.toLowerCase())) {
+      note("warn", rel, `\`type: ${asType}\` is the old spelling — use \`transport: ${asType}\``);
+    }
+  }
+
+  // Knowledge and memory are OKF bundles. The conformance rule lives in
+  // conformanceIssues() rather than here: this was a second copy of it, and it
+  // asked readBundle — which hides the files we present as indexes — so it
+  // agreed the bundle was fine while an outside validator would not.
+  for (const kind of ["knowledge", "memory"]) {
+    for (const dir of bundleDirs(workspace, kind)) {
+      const where = path.relative(workspace, dir);
+      for (const { file, issue } of conformanceIssues(dir)) {
+        note("error", `${where}/${file}`, issue);
+      }
+      // A warning, not an error: the bundle is still conformant — the spec says
+      // nothing about a date's shape — but the value cannot be compared, so
+      // staleness and "most recently verified" would quietly use it wrong.
+      for (const { file, field, value } of dateIssues(dir)) {
+        note(
+          "warn",
+          `${where}/${file}`,
+          `${field}: "${value}" is not a date — use YYYY-MM-DD or an ISO 8601 datetime. ` +
+            `It has been ignored rather than compared.`,
+        );
+      }
+      for (const doc of readBundle(dir)) {
+        if (doc.stale) {
+          note("warn", `${where}/${doc.file}`, `stale since ${doc.staleAfter}`);
+        }
+      }
+    }
+  }
+
+  const summary = `${agentNames.size} agents · ${flows.length} flows · ${evals.length} evals · ${Object.keys(tools).length} tools`;
+  // The scanner needs to know which tools act outside the workspace, across
+  // the library too — resolved here already, so it is handed over.
+  const outwardTools = Object.entries(usable).filter(([, d]) => /** @type {any} */ (d)?.outward === true).map(([n]) => n);
+  return { problems, summary, outwardTools };
+}
+
+/**
+ * Hooks, checked with core's own reader so check and a run agree: a hook
+ * folder that is not a hook, a `hooks:` name that resolves to nothing (a run
+ * refuses that step rather than run it unguarded), and a tool.call hook on an
+ * agent whose web search or fetch the model provider runs on its own servers
+ * — those calls never pass foldrun's dispatch, so the hook never sees them.
+ * A core from before hooks has no reader, and then there is nothing to say.
+ */
+async function checkHooks(workspace, agents, libraryRoot, platform, note) {
+  const h = await hooksCore();
+  if (!h) return;
+  for (const p of h.checkHooksDir(path.join(workspace, "hooks"), "workspace")) {
+    const m = /^(hooks\/[^/:]+(?:\/hook\.md)?): (.*)$/s.exec(p);
+    note("error", m ? m[1] : "hooks/", m ? m[2] : p);
+  }
+  const matter = (await import("gray-matter")).default;
+  const front = (file) => {
+    try {
+      return fs.existsSync(file) ? matter(fs.readFileSync(file, "utf8")).data ?? {} : {};
+    } catch {
+      return {}; // an unreadable file is reported by its own check
+    }
+  };
+  const exists = (n) =>
+    fs.existsSync(path.join(workspace, "hooks", n)) || fs.existsSync(path.join(libraryRoot, "hooks", n)) || platform.hooks?.has(n);
+  const missing = (where, names) => {
+    for (const n of names) {
+      if (!exists(n)) note("error", where, `hooks: [${n}] — no hooks/${n}/hook.md in this workspace or the account library`);
+    }
+  };
+  const accountNames = h.hookNames(front(path.join(path.dirname(libraryRoot), "AGENTS.md")).hooks);
+  const workspaceNames = h.hookNames(front(path.join(workspace, "AGENTS.md")).hooks);
+  missing("account AGENTS.md", accountNames);
+  missing("AGENTS.md", workspaceNames);
+
+  let resolveSearch = null;
+  try {
+    ({ resolveSearch } = /** @type {any} */ (await import("@foldrun/core/providers")));
+  } catch {
+    // no provider table: the provider-side search warning is skipped
+  }
+  for (const a of agents) {
+    const f = front(path.join(workspace, "agents", a.name, "agent.md"));
+    const own = h.hookNames(f.hooks);
+    missing(`agents/${a.name}`, own);
+    if (!resolveSearch || !f.web || typeof f.web !== "object" || Array.isArray(f.web)) continue;
+    const { hooks } = h.resolveHooks({ workspaceRoot: workspace, libraryRoot, names: [...accountNames, ...workspaceNames, ...own] });
+    const gates = hooks.filter((x) => x.on === "tool.call").map((x) => x.name);
+    if (!gates.length) continue;
+    for (const action of ["search", "fetch"]) {
+      if (f.web[action] === undefined) continue;
+      const r = resolveSearch(f.web[action], action);
+      if (!r?.provider || r.error || r.shape === "direct") continue;
+      note(
+        "warn",
+        `agents/${a.name}`,
+        `web.${action}: ${r.provider} runs on the model provider's servers, so tool.call hook${gates.length === 1 ? "" : "s"} ${gates.join(", ")} never see${gates.length === 1 ? "s" : ""} those calls — leave web.${action}: unset (or name a ${action} API) for foldrun's own dispatch, which hooks guard`,
+      );
+    }
+  }
+}
+
+/** The web tool the platform's gallery serves: built in, and the only
+ *  built-in that takes a provider. */
+const WEB_TOOL = "web";
+
+/** Transports a pre-v0.1 tool could put in `type:`. */
+const TRANSPORTS = new Set(["http", "script", "mcp"]);
+
+/** Frontmatter block of a file, or null if it has none. */
+function readFrontmatter(file) {
+  if (!fs.existsSync(file)) return null;
+  return /^---\r?\n([\s\S]*?)\r?\n---/.exec(fs.readFileSync(file, "utf8"))?.[1] ?? null;
+}
+
+/**
+ * Every document in the workspace paired with the `type:` it should declare.
+ * Mirrors KINDS — the CLI can't import the TypeScript core, so this is the one
+ * place the table is restated, and SPEC.md is the contract between them.
+ */
+/** Every structural document, paired with the noun it *is* — used only to
+ *  recognise a leftover declaration of it, never to require one. */
+function documentTypes(workspace) {
+  const out = [];
+  const add = (rel, type) => fs.existsSync(path.join(workspace, rel)) && out.push([rel, type]);
+
+  for (const agent of ls(path.join(workspace, "agents"))) {
+    add(`agents/${agent}/agent.md`, "Agent");
+    for (const skill of ls(path.join(workspace, `agents/${agent}/skills`))) {
+      add(`agents/${agent}/skills/${skill}/SKILL.md`, "Skill");
+    }
+  }
+  for (const [dir, type] of [["flows", "Flow"], ["evals", "Eval"], ["tools", "Tool"]]) {
+    for (const f of ls(path.join(workspace, dir))) if (f.endsWith(".md")) add(`${dir}/${f}`, type);
+  }
+  for (const skill of ls(path.join(workspace, "skills"))) add(`skills/${skill}/SKILL.md`, "Skill");
+  return out;
+}
+
+/** Directory entries, or nothing if the directory isn't there. */
+function ls(dir) {
+  return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+}
+
+function bundleDirs(workspace, kind) {
+  const out = [];
+  const top = path.join(workspace, kind);
+  if (fs.existsSync(top)) out.push(top);
+  const agentsDir = path.join(workspace, "agents");
+  if (fs.existsSync(agentsDir)) {
+    for (const a of fs.readdirSync(agentsDir)) {
+      const d = path.join(agentsDir, a, kind);
+      if (fs.existsSync(d)) out.push(d);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- run
+
+// A model credential, named, and never the machine's own login by default:
+// an API key (ANTHROPIC_API_KEY), a gateway bearer (ANTHROPIC_AUTH_TOKEN),
+// or a Claude login token (CLAUDE_CODE_OAUTH_TOKEN, from `claude
+// setup-token`) — in that order, and the run says which (core
+// model-credential.ts). Before, the key was checked here and then never
+// reached the step, which ran on whatever login the machine had. An agent
+// that names its own `provider:` needs none of these — that is checked where
+// the agent is read. Terms: Anthropic does not allow products built on its
+// Agent SDK to offer claude.ai login unless it has approved them.
+const MODEL_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"];
+function assertCredentials() {
+  if (MODEL_CREDENTIALS.some((v) => (process.env[v] ?? "").trim())) return;
+  throw new Error(
+    "no model credential — set ANTHROPIC_API_KEY (an API key from console.anthropic.com),\n" +
+      "  or CLAUDE_CODE_OAUTH_TOKEN (a Claude login token: `claude setup-token`),\n" +
+      "  or give the agent its own `provider:`. `foldrun check` works without any.",
+  );
+}
+
+async function runTarget(target, flags) {
+  if (!target) throw new Error("what should I run? try `foldrun run <agent>` or `foldrun run <flow>`");
+  assertCredentials();
+  await useGallery(flags);
+  const { startFlowRun, loadFlow, listAgents, readRun } = await core();
+  const T = "default";
+  const P = "workspace";
+  const name = target.replace(/^flow:/, "");
+  const asFlow = target.startsWith("flow:") || !listAgents(T, P).some((a) => a.name === name);
+
+  // --test: a test run. Locally there is no egress proxy, so what holds is
+  // the runner's own half of it — send-capable secrets are withheld from
+  // scripts, FOLDRUN_TEST_MODE=1 is set, and state/ and storage/ writes
+  // are moved under runs/<id>/test-writes/ after each step.
+  const opts = flags.test === true ? { test: true } : {};
+  let run;
+  if (asFlow) {
+    const flow = loadFlow(T, P, name);
+    if (!flow) throw new Error(`no agent or flow called "${name}"`);
+    const steps = flags.task
+      ? flow.steps.map((s, i) =>
+          i === 0 ? { ...s, instruction: `${s.instruction}\n\n<run_task>\n${flags.task}\n</run_task>` } : s,
+        )
+      : flow.steps;
+    run = startFlowRun(T, P, steps, flow.name, flow.model, [], null, null, opts);
+  } else {
+    run = startFlowRun(T, P, [{ agent: name, instruction: flags.task ?? "", group: 1, optional: false }], `cli:${name}`, null, [], null, null, opts);
+  }
+
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}${run.test ? `  ${c.amber("TEST")}` : ""}\n`);
+  const seen = new Map();
+  const open = new Map();
+  for (;;) {
+    const current = readRun(T, P, run.id);
+    if (!current) break;
+    printNew(current, seen, open);
+    if (current.finishedAt) {
+      flushCalls(open);
+      const cost = current.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+      const ok = current.status === "completed";
+      console.log(
+        `\n  ${ok ? c.green("✓") : c.red("✗")} ${current.status} · $${cost.toFixed(4)}\n`,
+      );
+      return ok ? 0 : 1;
+    }
+    if (current.status === "awaiting-approval") {
+      flushCalls(open);
+      console.log(`\n  ${c.amber("paused")} — this flow needs a human. Approve it in the dashboard.\n`);
+      return 2;
+    }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  return 1;
+}
+
+// ---------------------------------------------------------------- gallery
+
+/**
+ * The platform's gallery — `web`, the tool it ships to every account — is
+ * a shelf every run on the platform reads beneath the account's own
+ * library. A laptop had no shelf, so an agent granting a gallery tool ran
+ * fine on a deploy and had no program under `foldrun run`.
+ * The CLI keeps a copy per platform here and points the local runner at it:
+ * the same lookup order, the workspace first, then the account, then this.
+ */
+const galleryCacheDir = (url) => path.join(credentialsDir(), "gallery", new URL(url).host);
+
+/** Write the gallery as the platform lays its own shelf down: <kind>/<file>. */
+function writeGalleryCache(dir, tools) {
+  // A mirror, not an accumulation: a renamed entry must not leave its old
+  // file behind for the loader to find as a second tool of the same name.
+  fs.rmSync(dir, { recursive: true, force: true });
+  let files = 0;
+  for (const t of tools) {
+    for (const f of t.files ?? []) {
+      const full = path.join(dir, f.kind, f.file);
+      if (!full.startsWith(dir + path.sep)) throw new Error(`gallery file outside the shelf: ${f.kind}/${f.file}`);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, f.content, { mode: 0o644 });
+      files++;
+    }
+  }
+  fs.writeFileSync(path.join(dir, ".fetched"), new Date().toISOString());
+  return files;
+}
+
+/**
+ * Before a local run: refresh this platform's gallery if we can, keep the last
+ * copy if we cannot, and hand the runner the directory. Never fails the run —
+ * a laptop offline still runs whatever does not need the shelf.
+ */
+async function useGallery(flags) {
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  if (!url) return;
+  const dir = galleryCacheDir(url);
+  try {
+    const body = await remoteCall(url, { ...flags, quiet: true }, "/api/library/gallery", {}, { seconds: 15 });
+    if (Array.isArray(body.tools) && body.tools.length) writeGalleryCache(dir, body.tools);
+  } catch (err) {
+    if (fs.existsSync(dir)) console.error(c.dim(`  gallery: using the copy from ${fs.readFileSync(path.join(dir, ".fetched"), "utf8").trim()} (${err instanceof Error ? err.message.split("\n")[0] : err})`));
+  }
+  if (!fs.existsSync(dir)) return;
+  const { registerPlatform } = await core();
+  registerPlatform({ galleryDir: () => dir });
+}
+
+async function galleryCmd(positional, flags) {
+  const url = platformFor(flags, "gallery");
+  const [verb, name] = positional;
+  if (verb === "upgrade") {
+    if (!name) throw new Error("which tool? `foldrun gallery upgrade <tool>` — `foldrun gallery` lists them");
+    const body = await remoteCall(url, flags, "/api/library/gallery", { method: "POST", body: JSON.stringify({ tool: name }) });
+    console.log(`\n  ${c.green("upgraded")} ${c.bold(name)} ${c.dim(`in the account library to the gallery's current version (${body.path}) — the previous copy is one revision back`)}\n`);
+    return 0;
+  }
+  const body = await remoteCall(url, flags, "/api/library/gallery");
+  const tools = body.tools ?? [];
+  if (verb === "pull") {
+    const dir = galleryCacheDir(url);
+    const files = writeGalleryCache(dir, tools);
+    console.log(`\n  ${c.green("✓")} ${tools.length} gallery tools, ${files} files ${c.dim(`→ ${dir}`)}`);
+    console.log(`  ${c.dim("`foldrun run` refreshes this itself before each run; this is for offline work")}\n`);
+    return 0;
+  }
+  if (verb) throw new Error(`\`foldrun gallery ${verb}\` — the verbs are \`pull\` and \`upgrade <tool>\`, or none to list`);
+  console.log("");
+  for (const t of tools) {
+    const own = t.installed === "current" ? c.dim("your copy, current")
+      : t.installed === "differs" ? c.amber("your copy differs — `foldrun gallery upgrade " + t.name + "`")
+      : c.dim("from the platform");
+    console.log(`  ${c.bold(t.name.padEnd(18))} ${t.title}  ${own}`);
+  }
+  console.log(`\n  ${c.dim(`${tools.length} tools on ${url} — grant one with \`tools: [name]\`; nothing to install`)}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------- probe
+
+/** Every stop reason a model's turn can end on, in a line a person reads.
+ *  The translator maps other providers' finish reasons onto these. */
+const STOP_REASONS = {
+  end_turn: "finished its answer",
+  max_tokens: "cut off at the output limit",
+  stop_sequence: "hit a stop sequence",
+  tool_use: "wanted a tool and did not get the result back",
+  pause_turn: "paused a long server-side tool turn",
+  refusal: "declined (a safety or content filter)",
+  model_context_window_exceeded: "the context window filled up",
+};
+
+/**
+ * `foldrun probe <model>` — can this model hold a tool loop, answered by
+ * running one. The workspace's provider block is honoured, so the probe
+ * exercises the exact path a run takes: same endpoint, same token, same
+ * tier remap. The check the run-start gate makes from a catalogue, made
+ * from the ground truth instead.
+ */
+async function probeCmd(modelArg) {
+  if (!modelArg) throw new Error("which model? try `foldrun probe openai/gpt-oss-120b` (or a tier: fast, default, max)");
+  assertCredentials();
+  const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort, translatorSpecFor, startTranslator, providerPreset, readFrontmatter } = await core();
+
+  // The workspace's provider block, resolved the way a run resolves it —
+  // ${SECRET} values come from the process env here: the CLI's vault is the
+  // shell, which is where a laptop keeps its keys anyway. A Chat-Completions
+  // provider gets the same translator a run would, on loopback, for the
+  // length of the probe — so what passes here passes there.
+  let env = { ...process.env };
+  let translator = null;
+  // No AGENTS.md, or no provider block, means Anthropic direct — like a run.
+  // Anything else that goes wrong here is said, not swallowed: a provider
+  // block that is silently ignored sends the probe to the wrong endpoint
+  // and reports a model that "may not exist".
+  const agentsFile = path.join(process.cwd(), "AGENTS.md");
+  try {
+    const fm = fs.existsSync(agentsFile) ? readFrontmatter(agentsFile) : {};
+    const spec = fm.provider ? parseProvider(fm.provider) : null;
+    for (const w of spec?.warnings ?? []) console.log(`  ${c.yellow("!")} ${w}`);
+    if (spec?.baseUrl) {
+      const substitute = (t) => t.replace(/\$\{([A-Z][A-Z0-9_]*)\}/g, (whole, name) => process.env[name] ?? whole);
+      const token = substitute(spec.token);
+      const headers = Object.fromEntries(Object.entries(spec.headers).map(([k, v]) => [k, substitute(v)]));
+      env = { ...env, ...providerEnvFor({ baseUrl: spec.baseUrl, token, auth: spec.auth, models: spec.models, headers }) };
+      const preset = providerPreset(spec.name);
+      const tSpec = translatorSpecFor({
+        format: spec.format,
+        baseUrl: spec.baseUrl,
+        token,
+        headers,
+        params: spec.params,
+        name: spec.name,
+        maxTokensParam: preset?.maxTokensParam,
+        reasoningEffort: preset?.reasoningEffort,
+      });
+      if (tSpec) {
+        translator = await startTranslator(tSpec);
+        env = { ...env, ...translator.env };
+      }
+      console.log(`
+  ${c.dim(`via ${spec.name ? `${spec.name} ` : ""}${spec.baseUrl}${tSpec ? " (through the translator)" : ""}`)}`);
+    }
+  } catch (err) {
+    console.log(`  ${c.yellow("!")} provider block not applied: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const model = resolveModel(modelArg);
+  process.stdout.write(`  probing ${c.bold(model)} ${c.dim("(one tool call, one echo)")} … `);
+  let report;
+  try {
+    report = await probeModel(model, env, resolveEffort(null));
+  } finally {
+    if (translator) {
+      for (const line of translator.drainLog()) console.log(`    ${c.dim(line)}`);
+      await translator.close();
+    }
+  }
+  console.log(report.ok ? c.green("✓") : c.red("✗"));
+  console.log(`    tool call made      ${report.calledTool ? c.green("yes") : c.red("no")}`);
+  console.log(`    result read back    ${report.echoedNonce ? c.green("yes") : c.red("no")}`);
+  // Why the model's last turn ended. end_turn is a healthy probe; the rest
+  // name the failure a run would hit the same way.
+  if (report.stopReason) {
+    const why = STOP_REASONS[report.stopReason];
+    const word = report.stopReason === "end_turn" ? c.green(report.stopReason) : c.yellow(report.stopReason);
+    console.log(`    stopped because     ${word}${why ? c.dim(` — ${why}`) : ""}`);
+  }
+  console.log(`    ${c.dim(`${report.durationMs}ms${report.costUsd != null ? ` · $${report.costUsd.toFixed(4)}` : ""}`)}`);
+  if (!report.ok && report.reply) {
+    console.log(`    ${c.dim("reply:")} ${report.reply.slice(0, 200)}`);
+  }
+  if (!report.ok) {
+    console.log(`
+  ${c.amber("this model cannot drive an agent here — pick one that passes, or check the gateway route")}\n`);
+  } else {
+    console.log(`
+  ${c.green("fit to drive an agent")}\n`);
+  }
+  return report.ok ? 0 : 1;
+}
+
+// ---------------------------------------------------------------- eval
+
+async function runEvals(name, flags = {}) {
+  assertCredentials();
+  await useGallery(flags);
+  const { listEvals, runEval, workspaceDir } = await core();
+  const T = "default";
+  const P = "workspace";
+  // Where this workspace's evals are, for telling a grader by its file when
+  // the installed core predates graders — the workspace chosen, not the cwd.
+  const evalsDir = path.join(workspaceDir(T, P), "evals");
+  // An `inputs: true` file is a flow's saved inputs, not a test: it has
+  // nothing to assert, so it is never run as one (see evals.md).
+  const named = listEvals(T, P).filter((e) => (!name || e.name === name) && !e.inputs);
+  // A grader (`trigger: runs`) grades real runs; it has no cases to run here.
+  const all = named.filter((e) => !isGrader(e, evalsDir));
+  for (const g of named.filter((e) => isGrader(e, evalsDir))) {
+    console.log(`\n  ${c.bold(g.name)} ${c.dim(`grades live runs — \`foldrun eval grades ${g.name} --to <workspace>\` shows what it found`)}`);
+  }
+  if (all.length === 0) {
+    // Only graders here (or the one named is a grader): listed above, nothing to run — not an error.
+    if (named.length) return 0;
+    if (name && listEvals(T, P).some((e) => e.name === name)) {
+      throw new Error(`"${name}" is a file of saved inputs, not an eval — \`foldrun invoke <flow> --inputs <set>\` runs one`);
+    }
+    throw new Error(name ? `no eval called "${name}"` : "no evals in evals/");
+  }
+
+  let failed = 0;
+  for (const info of all) {
+    console.log(`\n  ${c.bold(info.name)} ${c.dim(`${info.cases.length} cases`)}`);
+    const result = await runEval(T, P, info);
+    printEvalResult(result);
+    failed += result.failed;
+  }
+  console.log("");
+  return failed ? 1 : 0;
+}
+
+// ----------------------------------------------------------------
+
+
+// ---------------------------------------------------------------- deploy
+
+/**
+ * Push a directory of markdown into an installation's workspace.
+ *
+ * The whole point of a markdown platform: there is no build, so deploying is
+ * making the files match the source. What earns a command rather than a `cp`
+ * is what surrounds the copy — the workspace is checked before any of it is
+ * live, and the swap is refused while a run is reading the files.
+ */
+/**
+ * The same deploy, against a running platform.
+ *
+ * Returns the same shape the local path does, so the reporting below does not
+ * have to know which one it was — a deploy that is refused over HTTP should
+ * read exactly like one refused on disk.
+ */
+async function deployOverHttp(url, workspace, files, flags, expectRemoved) {
+  const token = tokenFor(url, flags);
+  const endpoint = `${url.replace(/\/+$/, "")}/api/workspaces/${encodeURIComponent(workspace)}/deploy`;
+
+  let res;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "user-agent": USER_AGENT, "foldrun-version": API_VERSION, "idempotency-key": crypto.randomUUID() },
+      body: JSON.stringify({
+        files,
+        commit: flags.commit ?? null,
+        force: flags.force === true,
+        dryRun: flags["dry-run"] === true,
+        // The removals a person confirmed; the platform refuses (409) a
+        // deploy that would now remove anything else.
+        ...(expectRemoved ? { expectRemoved } : {}),
+      }),
+    });
+  } catch (err) {
+    throw new Error(`could not reach ${url} — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const body = /** @type {any} */ (await res.json().catch(() => ({})));
+  if (res.status === 401) throw new Error(`${body.error ?? "unauthorized"} — run \`foldrun login\` again, or check FOLDRUN_TOKEN`);
+  // 422 is a refusal the caller has to read, not a transport failure: the
+  // issues are in the body and reported like any other refused deploy.
+  if (res.status === 409 && Array.isArray(body.unexpectedRemovals)) {
+    return {
+      added: [], updated: [], issues: [], warnings: [], blockedBy: [], preserved: 0, commit: null,
+      removed: body.removed ?? [],
+      unexpectedRemovals: body.unexpectedRemovals,
+    };
+  }
+  if (!res.ok && res.status !== 422) {
+    throw new Error(body.error ?? `${url} returned ${res.status}`);
+  }
+
+  return {
+    added: body.added ?? [],
+    updated: body.updated ?? [],
+    removed: body.removed ?? [],
+    issues: body.issues ?? [],
+    warnings: body.warnings ?? [],
+    blockedBy: body.blockedBy ?? [],
+    preserved: body.preserved ?? 0,
+    commit: body.commit ?? null,
+  };
+}
+
+/**
+ * `foldrun deploy [dir|workspace]`.
+ *
+ * At an account root that is the whole account: every workspace under it and
+ * the shared library. Named a workspace, it is that one. Given a directory, it
+ * is whatever that directory turns out to be — which is how a flat workspace,
+ * the only shape that existed until today, still deploys exactly as it did.
+ */
+async function deploy(source, flags, layout) {
+  const { detectLayout } = await core();
+  let only;
+  if (source && source !== "." && !fs.existsSync(source)) {
+    if (layout.workspaces.includes(source)) only = source;
+    else throw new Error(`no such directory: ${source}`);
+  } else if (source && source !== "." && fs.existsSync(source)) {
+    layout = detectLayout(path.resolve(source));
+  }
+  return deployAccount(layout, flags, only);
+}
+
+// ---------------------------------------------------------------- secrets
+
+/** Read a value without echoing it. A secret typed into a terminal should
+ *  not sit in the scrollback afterwards. */
+function promptHidden(question) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(question);
+    const { stdin } = process;
+    if (!stdin.isTTY) {
+      // Piped input (echo "$VALUE" | foldrun secrets set NAME) — read a line.
+      let buf = "";
+      stdin.setEncoding("utf8");
+      stdin.on("data", (d) => (buf += d));
+      stdin.on("end", () => resolve(buf.replace(/\n$/, "")));
+      return;
+    }
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    let value = "";
+    const onData = (ch) => {
+      if (ch === "\u0003") {
+        cleanup();
+        reject(new Error("cancelled"));
+      } else if (ch === "\r" || ch === "\n") {
+        cleanup();
+        process.stdout.write("\n");
+        resolve(value);
+      } else if (ch === "\u007f" || ch === "\b") {
+        value = value.slice(0, -1);
+      } else {
+        value += ch;
+      }
+    };
+    const cleanup = () => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.off("data", onData);
+    };
+    stdin.on("data", onData);
+  });
+}
+
+/** Read a line with normal echo — for the non-secret halves of a config. */
+function promptVisible(question) {
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    const { stdin } = process;
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    stdin.once("data", (line) => {
+      stdin.pause();
+      resolve(String(line).replace(/\r?\n$/, ""));
+    });
+  });
+}
+
+/**
+ * Which platform, and with what.
+ *
+ * URL: --url, then FOLDRUN_URL, then whatever `foldrun login` last signed in
+ * to. Token: --token, then FOLDRUN_TOKEN, then the key stored for that URL.
+ * The environment beats the file on purpose — a CI job with FOLDRUN_TOKEN
+ * set never reads a laptop's credentials, and a person who exports a token
+ * to test as someone else gets exactly that.
+ */
+// An empty variable is an unset one: `export FOLDRUN_TOKEN=` in a profile
+// should not shadow the credentials file with nothing.
+const env = (name) => process.env[name] || undefined;
+
+/**
+ * The profile a command acts as. In order: --profile by name; else, when a
+ * URL is named (--url, FOLDRUN_URL), the current profile if it is on that
+ * URL, else the one profile there, else a refusal that lists them; else the
+ * current profile.
+ *
+ * It was "the newest login on that URL", which meant `foldrun whoami --url
+ * https://dev.foldrun.io` acted as a different account from the bare
+ * `foldrun whoami` on a machine with two customers on one platform — the
+ * same command, two accounts, and nothing on screen to say so.
+ */
+function chosenProfile(flags) {
+  if (typeof flags.profile === "string") {
+    const p = profileByName(flags.profile);
+    if (!p) {
+      const names = listProfiles().map((x) => x.name);
+      throw new Error(`no profile called "${flags.profile}"${names.length ? ` — try ${names.join(", ")}` : " — sign in with `foldrun login`"}`);
+    }
+    return p;
+  }
+  const current = currentProfile();
+  const url = typeof flags.url === "string" ? flags.url : env("FOLDRUN_URL");
+  if (!url) return current;
+  let key;
+  try {
+    key = normaliseUrl(url);
+  } catch {
+    return null;
+  }
+  if (current && normaliseUrl(current.url) === key) return current;
+  const here = listProfiles().filter((p) => normaliseUrl(p.url) === key);
+  if (here.length <= 1) return here[0] ?? null;
+  throw new Error(
+    `${here.length} accounts are signed in to ${key} (${here.map((p) => p.name).join(", ")}) and none of them is the current one — say which: --profile <name> for this command, or \`foldrun use <name>\``,
+  );
+}
+
+/**
+ * Which account this command is acting as, said once, dim, on stderr —
+ * stderr so `foldrun source cat … > file` stays a file. The same shape as
+ * a row of `foldrun accounts`, so the two read as one thing.
+ */
+let announced = false;
+function announce(url, flags) {
+  if (announced || flags.quiet === true) return;
+  announced = true;
+  const line = actingAs(url, flags);
+  if (line) console.error(`  ${c.dim(line)}`);
+}
+
+/** "acting as <name>  <account> · <role> · <email> · <url>", or the --token / FOLDRUN_TOKEN form. */
+function actingAs(url, flags) {
+  if (typeof flags.token === "string") return `acting with --token · ${url}`;
+  if (env("FOLDRUN_TOKEN")) return `acting with FOLDRUN_TOKEN · ${url}`;
+  const p = chosenProfile(flags);
+  return p ? `acting as ${p.name}  ${p.account} · ${p.role ?? "?"} · ${p.email ?? "api key"} · ${p.url}` : null;
+}
+
+/**
+ * What to add to a 401/403: which credential was refused. Without it a
+ * `logs --url` that fails on a machine with three accounts says
+ * "forbidden" and leaves the reader to guess which key was sent.
+ */
+function refusedHint(url, flags) {
+  const who = actingAs(url, flags);
+  return who ? ` — ${who}; \`foldrun accounts\` lists the others, --profile <name> picks one` : " — `foldrun login` signs this machine in";
+}
+
+const remoteUrl = (flags) =>
+  (typeof flags.profile === "string" ? chosenProfile(flags)?.url : undefined) ??
+  flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? undefined;
+
+const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOKEN / pass --token";
+
+function tokenFor(url, flags) {
+  // --token and the environment win, always: a CI job with a key in the
+  // environment must never read a file, whatever is stored in it.
+  const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token;
+  if (!token) throw new Error(NOT_SIGNED_IN);
+  announce(url, flags);
+  return token;
+}
+
+// ---------------------------------------------------------------- the HTTP client
+
+/** This CLI's version, so a platform's logs can tell which CLI called. */
+const CLI_VERSION = (() => {
+  try {
+    return String(JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "0");
+  } catch {
+    return "0";
+  }
+})();
+const USER_AGENT = `foldrun-cli/${CLI_VERSION}`;
+
+/**
+ * The HTTP API version this CLI was written against, sent as
+ * `Foldrun-Version` on every call. A platform that moves its API on keeps
+ * answering this CLI in the shape it reads (foldrun-docs/api-usage.md).
+ * Bump it — and fix what changed — when the CLI is updated to a newer one.
+ */
+export const API_VERSION = "2026-10-01";
+
+/** Methods that change something: each invocation sends one Idempotency-Key,
+ *  and its own retry sends the same one, so a retry never acts twice. */
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * A clock the caller asked for, in seconds, or undefined.
+ *
+ * `--timeout` first, then FOLDRUN_TIMEOUT. Separated from the default so a
+ * command that needs a longer one by nature — `tool test`, where the tool
+ * itself may take minutes — can raise its own floor without overriding
+ * somebody who said what they wanted.
+ */
+function explicitTimeout(flags = {}) {
+  for (const raw of [flags.timeout, env("FOLDRUN_TIMEOUT")]) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
+/** How long one request may take, in seconds: --timeout, FOLDRUN_TIMEOUT, else 30. */
+function timeoutSeconds(flags = {}) {
+  return explicitTimeout(flags) ?? 30;
+}
+
+/**
+ * Every message on the way down, joined. "fetch failed" on its own says
+ * nothing; the ECONNREFUSED / ENOTFOUND / connect timeout that explains it
+ * sits in err.cause, where undici puts it and where nothing printed from —
+ * so `foldrun whoami` against a stopped box said "fetch failed" and no more.
+ * @param {unknown} err
+ */
+export function explain(err) {
+  const parts = [];
+  const seen = new Set();
+  for (let e = /** @type {any} */ (err); e != null && !seen.has(e); e = e.cause) {
+    seen.add(e);
+    // undici tries every address and hands back an AggregateError with an
+    // empty message; the first member is the one worth reading.
+    if (e instanceof AggregateError && !e.message && e.errors?.length) {
+      parts.push(explain(e.errors[0]));
+      continue;
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    const code = typeof e.code === "string" && !msg.includes(e.code) ? ` (${e.code})` : "";
+    parts.push(`${msg}${code}`);
+  }
+  return parts.join(": ");
+}
+
+/** A failed call: the status and whatever the platform said, kept on the error. */
+export class HttpError extends Error {
+  /** @param {string} message @param {number} status @param {any} body */
+  constructor(message, status, body) {
+    super(message);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+const RETRY_STATUS = new Set([429, 502, 503, 504]);
+
+/** Retry-After as milliseconds — seconds or an HTTP date — else one second, never past the timeout. */
+function retryAfterMs(res, seconds) {
+  const h = res.headers.get("retry-after");
+  let ms = 1000;
+  if (h && /^\d+$/.test(h.trim())) ms = Number(h) * 1000;
+  else if (h && !Number.isNaN(Date.parse(h))) ms = Date.parse(h) - Date.now();
+  return Math.min(Math.max(ms, 0), seconds * 1000);
+}
+
+/**
+ * One request to a platform: the auth header, a User-Agent, and a clock.
+ *
+ * Without the clock a box that accepts the TCP connection and never answers
+ * held the terminal for as long as the kernel allowed. A GET that meets a
+ * 429/502/503/504 is asked once more, after Retry-After when the server
+ * names one — a rolling deploy or a rate limit deserves the nudge. Nothing
+ * else is retried: a second POST could be a second run.
+ * @param {string} url @param {string} apiPath @param {RequestInit} [init]
+ * @param {{ token?: string, seconds?: number }} [opts]
+ */
+async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = {}) {
+  const target = new URL(apiPath, url);
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = {
+    "user-agent": USER_AGENT,
+    "foldrun-version": API_VERSION,
+    ...(WRITE_METHODS.has(method) ? { "idempotency-key": crypto.randomUUID() } : {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(init.headers ?? {}),
+  };
+  const seconds = given ?? timeoutSeconds();
+  const attempt = async () => {
+    try {
+      return await fetch(target, { ...init, headers, signal: AbortSignal.timeout(seconds * 1000) });
+    } catch (err) {
+      const name = /** @type {any} */ (err)?.name;
+      if (name === "TimeoutError" || name === "AbortError") {
+        throw new Error(`${target.host} did not answer ${method} ${target.pathname} within ${seconds}s — FOLDRUN_TIMEOUT=<seconds> allows longer`);
+      }
+      throw new Error(`could not reach ${target.origin}`, { cause: err });
+    }
+  };
+  let res = await attempt();
+  // A 429 is retried once for any method that is safe to send twice: every
+  // read, and a write that carries its Idempotency-Key (all of ours do — the
+  // platform answers the second with the first's result, never a second run).
+  const repeatable = !WRITE_METHODS.has(method) || method === "PUT" || method === "DELETE" || Boolean(/** @type {any} */ (headers)["idempotency-key"]);
+  if ((method === "GET" && RETRY_STATUS.has(res.status)) || (res.status === 429 && repeatable)) {
+    await sleep(retryAfterMs(res, seconds));
+    res = await attempt();
+  }
+  updateNotice(res);
+  const refused = await versionRefusal(res, target);
+  if (refused) throw new Error(refused);
+  return res;
+}
+
+/**
+ * A 400 that refuses this CLI's Foldrun-Version, as what to do about it —
+ * null for any other answer. Left to each command, the refusal read as an
+ * answer: `foldrun workspaces` printed "no workspaces" against a platform
+ * older than the CLI (FOL-41, 18 Oct 2026). Platforms from before then send
+ * no `code`, so their sentence is read instead.
+ * @param {Response} res @param {URL} target
+ */
+export async function versionRefusal(res, target) {
+  if (res.status !== 400) return null;
+  /** @type {any} */
+  let body;
+  try {
+    body = await res.clone().json();
+  } catch {
+    return null;
+  }
+  const text = typeof body?.error === "string" ? body.error : "";
+  const code =
+    body?.code ?? (/^unknown API version /.test(text) ? "unknown_api_version" : /^Foldrun-Version must be a date/.test(text) ? "bad_api_version" : null);
+  if (code !== "unknown_api_version" && code !== "bad_api_version") return null;
+  const known = (Array.isArray(body.known) ? body.known.map(String) : (/this server knows (.+)$/.exec(text)?.[1] ?? "").split(/,\s*/))
+    .filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v))
+    .sort();
+  const newest = known.at(-1);
+  const theirs = String(res.headers.get("x-foldrun-cli") ?? "").trim();
+  const cli = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(theirs) ? theirs : null;
+  if (newest && API_VERSION > newest) {
+    return `${target.host} answers API versions up to ${newest}, and this CLI (foldrun ${CLI_VERSION}) speaks ${API_VERSION} — the platform is older than the CLI. Use the CLI released with it: npm i -g foldrun@${cli ?? "<the platform's version>"}`;
+  }
+  return `${target.host} no longer answers API ${API_VERSION}, which this CLI (foldrun ${CLI_VERSION}) speaks${newest ? ` (it answers ${known.join(", ")})` : ""} — update it: npm i -g foldrun@latest`;
+}
+
+// ---------------------------------------------------------------- versions
+
+/**
+ * a > b as semver (major.minor.patch; a pre-release sorts before its
+ * release). Anything unparseable is never "newer" — a notice that fires on
+ * garbage is worse than no notice.
+ * @param {string} a @param {string} b
+ */
+export function semverNewer(a, b) {
+  const parse = (v) => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?/.exec(String(v ?? "").trim());
+    return m ? { n: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ?? null } : null;
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x.n[i] !== y.n[i]) return x.n[i] > y.n[i];
+  if (x.pre && !y.pre) return false;
+  if (!x.pre && y.pre) return true;
+  if (!x.pre) return false;
+  // SemVer 2.0.0 §11: dot-separated identifiers compared one by one — numbers
+  // as numbers (rc.10 > rc.9), a number before a word, and a shorter list
+  // before a longer one it begins.
+  const xs = x.pre.slice(1).split(".");
+  const ys = y.pre.slice(1).split(".");
+  for (let i = 0; i < Math.max(xs.length, ys.length); i++) {
+    if (xs[i] == null || ys[i] == null) return ys[i] == null;
+    const xn = /^\d+$/.test(xs[i]);
+    const yn = /^\d+$/.test(ys[i]);
+    if (xn && yn) {
+      if (Number(xs[i]) !== Number(ys[i])) return Number(xs[i]) > Number(ys[i]);
+    } else if (xn !== yn) return yn;
+    else if (xs[i] !== ys[i]) return xs[i] > ys[i];
+  }
+  return false;
+}
+
+/**
+ * Is `latest` an update worth telling someone running `current` about? Newer,
+ * and not a pre-release offered to someone on a stable release: npm keeps
+ * pre-releases off `latest`, so `npm i -g foldrun@latest` would not even
+ * install it.
+ * @param {string} latest @param {string} current
+ */
+export function updateTo(latest, current) {
+  // The whole header must be a version: it is printed, and a platform that
+  // could append to it could write to the terminal.
+  if (!/^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(String(latest ?? "").trim())) return false;
+  const pre = (v) => /^v?\d+\.\d+\.\d+-/.test(String(v ?? "").trim());
+  return semverNewer(latest, current) && !(pre(latest) && !pre(current));
+}
+
+/**
+ * Text from a platform, made safe to print: no escape sequences or other
+ * control characters, so a hostile or broken server cannot move the cursor,
+ * retitle the terminal, write the clipboard (OSC 52) or disguise a link.
+ * @param {unknown} s
+ */
+export function printable(s) {
+  return String(s ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+}
+
+const UPDATE_EVERY_MS = 24 * 60 * 60 * 1000;
+let noticeDone = false;
+
+/**
+ * One dim line on stderr when the platform says a newer CLI was released
+ * with it (X-Foldrun-Cli). Read off a response the command made anyway — no
+ * extra request — at most once a day (~/.foldrun/version-check.json), only
+ * to a terminal, and never fatal: a notice that broke a command would be
+ * the worst kind of help.
+ * @param {Response} res
+ */
+function updateNotice(res) {
+  try {
+    if (noticeDone) return;
+    if (env("FOLDRUN_NO_UPDATE_NOTICE")) return;
+    if (!(process.stderr.isTTY || env("FOLDRUN_FORCE_TTY") === "1")) return;
+    const latest = res.headers.get("x-foldrun-cli");
+    if (!latest || !updateTo(latest, CLI_VERSION)) return;
+    noticeDone = true;
+    const file = path.join(credentialsDir(), "version-check.json");
+    try {
+      const last = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (Date.now() - Date.parse(last.notifiedAt) < UPDATE_EVERY_MS) return;
+    } catch {}
+    const platform = printable(res.headers.get("x-foldrun-version") ?? "") || null;
+    console.error(`  ${c.dim(`foldrun ${latest} is out (this is ${CLI_VERSION})${platform ? `, released with platform ${platform}` : ""} — npm i -g foldrun@latest`)}`);
+    fs.mkdirSync(credentialsDir(), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ notifiedAt: new Date().toISOString(), cli: latest, platform }) + "\n");
+  } catch {}
+}
+
+/**
+ * `foldrun version` — this CLI, the core it runs, and (when a platform is
+ * known) what that platform is running: its release, API version and the
+ * component shas behind it. Asks /api/version, which is open, so a machine
+ * that is not signed in can still see what it would be talking to.
+ */
+async function versionCmd(flags) {
+  noticeDone = true; // this command says it itself, louder
+  let core = null;
+  try {
+    core = JSON.parse(fs.readFileSync(path.join(coreRoot(), "package.json"), "utf8")).version ?? null;
+  } catch {}
+  const url = remoteUrl(flags);
+  /** @type {Record<string, any> | null} */
+  let platform = null;
+  let unreachable = null;
+  if (url) {
+    try {
+      const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token ?? undefined;
+      // No Foldrun-Version: /api/version describes the platform, and a CLI the
+      // platform would refuse still needs to see it — the mismatch is said below.
+      const res = await remoteFetch(url, "/api/version", { headers: { "foldrun-version": "" } }, { token, seconds: timeoutSeconds(flags) });
+      if (!res.ok) throw new Error(`/api/version → HTTP ${res.status}`);
+      platform = { url, .../** @type {Record<string, any>} */ (await res.json()) };
+    } catch (err) {
+      unreachable = explain(err);
+    }
+  }
+  const latestCli = platform?.packages?.cli ?? null;
+  const behind = latestCli ? updateTo(latestCli, CLI_VERSION) : false;
+  if (flags.json === true) {
+    console.log(JSON.stringify({ cli: CLI_VERSION, core, platform: platform ?? (url ? { url, error: unreachable } : null) }, null, 2));
+    if (behind) console.error(`foldrun ${latestCli} is out (this is ${CLI_VERSION}) — npm i -g foldrun@latest`);
+    return 0;
+  }
+  console.log();
+  console.log(`  cli       foldrun ${CLI_VERSION}`);
+  console.log(`  core      @foldrun/core ${core ?? c.dim("cannot be resolved")}`);
+  if (!url) {
+    console.log(`  ${c.dim("platform: none — sign in (`foldrun login`), or pass --url / set FOLDRUN_URL")}\n`);
+    return 0;
+  }
+  if (!platform) {
+    console.log(`  ${c.dim(`platform: unreachable (${unreachable}) — ${url}`)}\n`);
+    return 0;
+  }
+  console.log(`  platform  ${c.bold(String(platform.version ?? "?"))}  ${c.dim(url)}`);
+  if (platform.released_at) console.log(`  released  ${platform.released_at}`);
+  if (platform.api) console.log(`  api       ${platform.api}`);
+  // A platform whose newest API is older than the one this CLI speaks refuses
+  // every other command; say so here, where someone looks first.
+  if (typeof platform.api === "string" && /^\d{4}-\d{2}-\d{2}$/.test(platform.api) && platform.api < API_VERSION) {
+    console.log(`  ${c.amber(`this CLI speaks API ${API_VERSION}, newer than the platform's — its commands will be refused. npm i -g foldrun@${latestCli ?? "<the platform's version>"}`)}`);
+  }
+  if (platform.build) console.log(`  build     ${platform.build}`);
+  // The engines its runner image was built with (Chrome and Lightpanda are
+  // best-effort on some arches), so `engine: chrome` is not a guess.
+  // Versions beside the names where the image's manifest had them (Chrome's
+  // is what a pinned user_agent is checked against).
+  if (Array.isArray(platform.browsers) && platform.browsers.length) {
+    const v = platform.browser_versions && typeof platform.browser_versions === "object" ? platform.browser_versions : {};
+    console.log(`  browsers  ${platform.browsers.map((b) => (typeof v[b] === "string" ? `${b} ${v[b]}` : b)).join(", ")}`);
+  }
+  const comps = Object.entries(platform.components ?? {}).filter(([, v]) => v);
+  if (comps.length) {
+    console.log(`\n  ${c.dim("component  sha")}`);
+    for (const [k, v] of comps) console.log(`  ${k.padEnd(10)} ${v}`);
+  }
+  const pkgs = Object.entries(platform.packages ?? {}).filter(([, v]) => v);
+  if (pkgs.length) console.log(`\n  ${c.dim(`released with ${pkgs.map(([k, v]) => `${k === "cli" ? "foldrun" : `@foldrun/${k}`} ${v}`).join(" · ")}`)}`);
+  if (behind) console.error(`\n  ${c.yellow("!")} this CLI is ${CLI_VERSION} and the platform was released with ${latestCli} — npm i -g foldrun@latest`);
+  console.log();
+  return 0;
+}
+
+/**
+ * A call to the platform's API, as JSON. A body that is not JSON is not the
+ * platform talking — a Cloudflare challenge, a proxy's error page, a tunnel
+ * that is down — and used to be read as {} and reported as a bare "HTTP
+ * 403". Now the status, the content-type and the first line say so.
+ * @param {string} url @param {Record<string, any>} flags @param {string} apiPath @param {RequestInit} [init]
+ * @param {{ seconds?: number }} [opts]
+ * @returns {Promise<any>}
+ */
+async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
+  const token = tokenFor(url, flags);
+  const res = await remoteFetch(
+    url,
+    apiPath,
+    { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) } },
+    { token, seconds: seconds ?? timeoutSeconds(flags) },
+  );
+  const text = await res.text();
+  let body;
+  try {
+    body = text.trim() ? JSON.parse(text) : {};
+  } catch {
+    if (res.ok) return {};
+    const type = (res.headers.get("content-type") ?? "unknown type").split(";")[0].trim();
+    const title = text.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim();
+    const line = title || text.split("\n").map((l) => l.trim()).find(Boolean) || "";
+    throw new HttpError(`${apiPath} → HTTP ${res.status} (${type})${line ? `: ${line.slice(0, 160)}` : ""} — not the platform's answer; is ${new URL(url).host} the right address, and is it up?`, res.status, {});
+  }
+  if (!res.ok) {
+    // The body is the useful half of a failure and throwing it away is how a
+    // failed RUN comes to look like a broken PLATFORM. `?wait=true` answers a
+    // run that failed with 500 and a full record of why — status, steps, the
+    // agent's last words — and a caller that prints only "HTTP 500" sends the
+    // reader hunting for an outage that never happened.
+    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : res.status === 429 ? rateLimitHint(res, body) : "";
+    throw new HttpError(`${body.error ?? `${apiPath} → HTTP ${res.status}`}${hint}`, res.status, body);
+  }
+  return body;
+}
+
+/**
+ * What to say when the platform still refuses after the one wait: how long,
+ * and that the CLI already waited once, so nobody wraps it in a tight loop.
+ * @param {Response} res @param {any} body
+ */
+function rateLimitHint(res, body) {
+  const after = body?.retry_after ?? res.headers.get("retry-after");
+  const limit = res.headers.get("x-ratelimit-limit");
+  return ` — rate limited${limit ? ` (${limit} a minute)` : ""}; already waited once${after ? `, try again in ${after}s` : ""}. Settings → API shows this account's limits`;
+}
+
+/** The glyph an event leads with: a fault, a tool, or a plain line. */
+const EVENT_MARK = (e) =>
+  e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
+
+/** An event's first physical line, clipped to fit a terminal row. */
+const clipLine = (text) => text.split("\n")[0].slice(0, 140);
+
+/**
+ * One console line for one event — or null when the event is held back.
+ *
+ * A tool call reaches us as two events sharing a `call` id: a start, then a
+ * completion carrying `ms`. Printing both is why every call showed up twice.
+ * So the start is recorded in `open` and prints nothing; the completion
+ * prints the single line, with the duration the start could not yet know.
+ * A start whose completion never lands — the stream ended mid-call — is
+ * printed later by flushCalls. Every other event prints as it arrives.
+ */
+function eventLine(e, agent, open) {
+  if (e.type === "tool" && e.call != null) {
+    if (e.ms == null) {
+      open.set(e.call, { agent, e });
+      return null;
+    }
+    open.delete(e.call);
+    return `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}  ${c.dim(`${e.ms}ms`)}`;
+  }
+  return `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`;
+}
+
+/**
+ * Print a run's new events: one line per event, once each, and — since a
+ * tool call is two events — one line per call, printed when it completes.
+ * `open` carries the calls still in flight across polls and reconnects.
+ */
+function printNew(run, seen, open = new Map()) {
+  run.steps.forEach((step, i) => {
+    const from = seen.get(i) ?? 0;
+    for (const e of step.events.slice(from)) {
+      const line = eventLine(e, step.agent, open);
+      if (line !== null) console.log(line);
+    }
+    seen.set(i, step.events.length);
+  });
+}
+
+/** The stream is over: print a start line for each call that never completed. */
+function flushCalls(open) {
+  for (const { agent, e } of open.values()) {
+    console.log(`  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`);
+  }
+  open.clear();
+}
+
+function finishLine(run) {
+  const cost = run.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+  const ok = run.status === "completed";
+  console.log(`\n  ${ok ? c.green("✓") : run.status === "awaiting-approval" ? c.amber("⏸") : c.red("✗")} ${run.status} · $${cost.toFixed(4)}\n`);
+  return ok ? 0 : run.status === "awaiting-approval" ? 2 : 1;
+}
+
+/** A run that has not finished: the stream is worth following. */
+const isLive = (run) => run.status === "queued" || run.status === "running" || run.status === "awaiting-approval";
+
+/** How long a run stream may stay silent before it is reconnected: four request timeouts, 120 s by default. */
+const streamIdleSeconds = () => timeoutSeconds() * 4;
+
+/** The stream said nothing for this long. Not a failure yet; a reason to reconnect. */
+class StreamIdle extends Error {
+  /** @param {number} seconds */
+  constructor(seconds) {
+    super(`the run stream went quiet for ${seconds}s`);
+    this.seconds = seconds;
+  }
+}
+
+/**
+ * One connection to a run's stream, printed as frames land. Resolves with
+ * the finished run on `done`, with the last run seen if the server ends it
+ * first, and throws StreamIdle when nothing arrives for streamIdleSeconds.
+ */
+async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
+  const token = tokenFor(url, flags);
+  const idle = streamIdleSeconds();
+  const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
+  const ctrl = new AbortController();
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(new StreamIdle(idle)), idle * 1000);
+  };
+  arm();
+  try {
+    let res;
+    try {
+      res = await fetch(target, {
+        headers: { authorization: `Bearer ${token}`, accept: "text/event-stream", "user-agent": USER_AGENT, "foldrun-version": API_VERSION },
+        signal: ctrl.signal,
+      });
+    } catch (err) {
+      if (ctrl.signal.aborted) throw ctrl.signal.reason;
+      throw new Error(`could not reach ${target.origin}`, { cause: err });
+    }
+    if (!res.ok || !res.body) {
+      const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : "";
+      throw new HttpError(`stream → HTTP ${res.status}${hint}`, res.status, {});
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let last = null;
+    for (;;) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        if (ctrl.signal.aborted) throw ctrl.signal.reason;
+        throw err;
+      }
+      if (chunk.done) break;
+      arm();
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        const event = frame.match(/^event: (.*)$/m)?.[1];
+        const data = frame.match(/^data: (.*)$/m)?.[1];
+        if (!event || !data) continue;
+        if (event === "run") {
+          try {
+            last = JSON.parse(data);
+            printNew(last, seen, open);
+          } catch {
+            // a partial frame; the next one supersedes it
+          }
+        } else if (event === "done") {
+          try {
+            await reader.cancel();
+          } catch {
+            // the server ended it first
+          }
+          return last;
+        }
+      }
+    }
+    return last;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Follow a run on a platform: the same server-sent events the dashboard's
+ * run page reads, printed as they land. Resolves with the finished run.
+ *
+ * A stream that goes quiet is reconnected, up to three times, as long as
+ * the run is still live — every `run` frame carries the whole run, so a
+ * fresh connection IS the resume; `seen` keeps the lines already printed
+ * from printing twice. It used to block `invoke --watch` and `logs
+ * --follow` for as long as a stalled tunnel cared to keep the socket.
+ */
+async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map()) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const run = await streamOnce(url, flags, ws, runId, seen, open);
+      flushCalls(open);
+      return run;
+    } catch (err) {
+      if (!(err instanceof StreamIdle)) throw err;
+      const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+      printNew(run, seen, open);
+      if (!isLive(run)) {
+        flushCalls(open);
+        return run;
+      }
+      if (attempt >= 3) {
+        throw new Error(
+          `${err.message} three times while ${runId} is still ${run.status} — \`foldrun logs ${runId} --to ${ws} --follow\` picks it up again, or ${url}/dashboard/${ws}/runs/${runId}`,
+        );
+      }
+      console.error(`  ${c.dim(`… ${err.message}; reconnecting (${attempt}/3)`)}`);
+    }
+  }
+}
+
+/**
+ * `foldrun open [page]` — the dashboard, from the terminal: this
+ * workspace's overview, or one of its pages (runs, agents, flows, graph,
+ * repo…). Prints the URL and opens it, or only prints with --print.
+ */
+async function openCmd(positional, flags) {
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("open needs a platform — pass --url or set FOLDRUN_URL");
+  const ws = flags.to ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+  const page = positional[0] ? `/${positional[0].replace(/^\/+/, "")}` : "";
+  const target = new URL(`/dashboard/${ws}${page}`, url).toString();
+  console.log(target);
+  if (flags.print === true) return 0;
+  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    const { spawn } = await import("node:child_process");
+    spawn(opener, [target], { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    // printed above; that is enough
+  }
+  return 0;
+}
+
+/**
+ * `foldrun secrets set|ls|rm` — the vault, from the terminal.
+ *
+ * Local by default (the workspace's own secrets.json, encrypted under the
+ * install key); with --url/FOLDRUN_URL the same three verbs go to a running
+ * platform. Values are prompted without echo unless piped or passed with
+ * --value, and are never printed back by any verb.
+ */
+/**
+ * A leading positional that names a workspace in this account, pulled off the
+ * front of the arguments.
+ *
+ * `foldrun secrets blog ls` and `foldrun logs blog r-2026-09-16-1` read the
+ * way they should inside an account folder, and mean nothing ambiguous: the
+ * word is only taken as a workspace when it IS one of this account's
+ * workspaces, so a run id or a verb can never be mistaken for one. With
+ * exactly one workspace there is nothing to say, and nothing has to be.
+ */
+function takeWorkspace(positional, layout) {
+  if (layout && layout.workspaces.includes(positional[0])) return positional.shift();
+  if (layout && layout.workspaceDir) return path.basename(layout.workspaceDir);
+  // `--workspace <name>` already pinned one of this account's workspaces.
+  const pinned = process.env.FOLDRUN_WORKSPACE ? path.basename(process.env.FOLDRUN_WORKSPACE) : null;
+  if (layout && pinned && layout.workspaces.includes(pinned)) return pinned;
+  if (layout && layout.workspaces.length === 1) return layout.workspaces[0];
+  return null;
+}
+
+/**
+ * Stop a workspace-scoped command that is standing at an account root with
+ * several workspaces under it.
+ *
+ * Without this the runtime was pinned to the account directory, found no
+ * `agents/` in it, and said the workspace had no agents — true of the
+ * directory it was looking at and useless as an answer.
+ */
+function needsOne(layout, what) {
+  if (layout.kind === "account" && !layout.workspaceDir && layout.workspaces.length !== 1) {
+    throw new Error(
+      `which workspace? \`foldrun ${what} <target> --workspace <name>\` — this account has ${layout.workspaces.join(", ") || "none"}`,
+    );
+  }
+}
+
+/** …and the error when there are several and none was named. */
+function whichWorkspace(layout, what) {
+  return new Error(
+    `which workspace? ${layout.workspaces.length ? `\`foldrun ${what} <workspace> …\` — this account has ${layout.workspaces.join(", ")}` : "there are none here"}`,
+  );
+}
+
+/* ─────────────────────────────── site login ───────────────────────────────
+ * `foldrun login medium --url https://medium.com` opens a real browser on this
+ * machine, waits while a person signs in by hand, and stores what the session
+ * is made of. It replaces the five-step chore — DevTools, Application,
+ * Cookies, copy the line, `secrets set` — and it stores the parts that chore
+ * always forgot: the storage a cookie jar cannot hold, and the browser
+ * identity the site will check the session against.
+ *
+ * **No password ever reaches foldrun.** The person types it into the site's
+ * own page, does the MFA, closes the window. This command only reads what the
+ * browser was given afterwards, which is the same thing they would have copied
+ * out of DevTools by hand.
+ *
+ * What it captures, and why each part:
+ *   cookies    the session itself (HttpOnly ones included — a console cannot
+ *              read those, which is exactly why the manual route needed the
+ *              Network tab)
+ *   storage    localStorage, sessionStorage and IndexedDB, for the logins that
+ *              are not cookies at all (Firebase writes IndexedDB; MSAL can use
+ *              sessionStorage)
+ *   identity   user agent, locale, timezone — a Cloudflare clearance cookie is
+ *              bound to the user agent that earned it, so a session copied
+ *              without its identity is a challenge waiting to happen
+ *   expiry     when the longest-lived login cookie dies, so "why did it stop
+ *              working" has an answer before it stops working
+ */
+
+/** MEDIUM. The secret's name is the site's name, shouted. */
+export function siteSecretName(name) {
+  const clean = String(name).trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!clean || /^[0-9]/.test(clean)) {
+    throw new Error(`"${name}" does not make a secret name — use letters, like \`foldrun login medium\``);
+  }
+  return clean;
+}
+
+/** `.medium.com` from `https://medium.com/new-story`: the domain the cookies
+ *  belong to, with the leading dot so subdomains are included, and without a
+ *  `www.` that would exclude the apex. */
+export function cookieDomainFor(url) {
+  const host = new URL(url).hostname.replace(/^www\./, "");
+  return "." + host;
+}
+
+/** The block to paste into the agent, printed rather than written: which agent
+ *  wants this session is the person's decision, and a command that edits files
+ *  it was not pointed at is a command nobody trusts twice. */
+/** @param {{ secret: string, url: string, identity: any, hasStorage: boolean, engine: string, browser?: { name: string, channel?: string | null, version?: string | null } | null }} o */
+export function renderBrowseBlock({ secret, url, identity, hasStorage, engine, browser = null }) {
+  const lines = [
+    // Which browser minted the session, beside the cookies it minted. The
+    // cookies secret is a JSON array the web tool reads as-is, so there is
+    // no room in it for a note; a YAML comment in the block costs nothing.
+    ...(browser ? [`# signed in with ${browser.name} ${browser.version ?? ""}`.trimEnd()] : []),
+    "web:",
+    "  browse:",
+    `    engine: ${engine}`,
+    `    user_agent: "${identity.user_agent}"`,
+    `    cookies: ${secret}_COOKIES`,
+    `    cookie_domain: ${cookieDomainFor(url)}`,
+  ];
+  if (hasStorage) {
+    lines.push(`    storage: ${secret}_STORAGE`, `    storage_origin: ${new URL(url).origin}`);
+  }
+  lines.push(`    locale: ${identity.locale}`, `    timezone: ${identity.timezone}`);
+  return lines.join("\n");
+}
+
+/** The cookie a person would call "the login": the longest-lived one the page
+ *  cannot read. Not a guess we act on — it is printed so they can disagree. */
+export function loginCookieOf(cookies) {
+  const candidates = cookies.filter((c) => c.httpOnly && !/^(__cf_bm|cf_clearance|__cflb|_cfuvid)$/.test(c.name));
+  const pick = (list) => list.slice().sort((a, b) => (b.expires ?? 0) - (a.expires ?? 0))[0];
+  return pick(candidates.length ? candidates : cookies) ?? null;
+}
+
+export function whenItDies(cookie) {
+  if (!cookie || !cookie.expires || cookie.expires < 0) return "when the browser session ends";
+  const ms = cookie.expires * 1000 - Date.now();
+  const days = Math.round(ms / 86_400_000);
+  const when = new Date(cookie.expires * 1000).toISOString().slice(0, 16).replace("T", " ");
+  return days >= 1 ? `${when} (${days} day${days === 1 ? "" : "s"})` : `${when} (under a day)`;
+}
+
+
+/** Playwright, wherever this machine keeps it. Beside the CLI if someone
+ *  installed it there, and otherwise in the global modules directory — which
+ *  is where `npm i -g playwright` puts it and where a bare `import()` will
+ *  never look, because ESM does not consult global paths (NODE_PATH is
+ *  CJS-only). The tool in the runner image resolves it the same way. */
+async function loadPlaywright() {
+  const tried = [];
+  for (const name of ["playwright", "playwright-core"]) {
+    try {
+      // @ts-ignore - an optional peer, absent until someone installs it
+      return await import(name);
+    } catch (err) {
+      tried.push(`${name}: ${err.code ?? "failed"}`);
+    }
+  }
+  // `npm root -g` is the honest answer on any platform (homebrew, nvm, a
+  // Windows prefix), and it is asked once, only when the plain import failed.
+  let globalRoot;
+  try {
+    globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+  } catch {
+    globalRoot = null;
+  }
+  // Also this folder: a laptop often has Playwright inside a project rather
+  // than globally, and someone standing in that project means it. An explicit
+  // path wins over all of it, for the machine that keeps it somewhere only
+  // its owner knows.
+  const roots = [
+    typeof process.env.FOLDRUN_PLAYWRIGHT === "string" ? process.env.FOLDRUN_PLAYWRIGHT : "",
+    path.join(process.cwd(), "node_modules"),
+    globalRoot ?? "",
+    "/usr/local/lib/node_modules",
+    "/opt/homebrew/lib/node_modules",
+  ].filter((r) => r.length > 0);
+  for (const root of roots) {
+    for (const name of ["playwright", "playwright-core"]) {
+      try {
+        const require = createRequire(path.join(root, "/"));
+        return require(name);
+      } catch (err) {
+        tried.push(`${root}/${name}: ${err.code ?? "failed"}`);
+      }
+    }
+  }
+  throw new Error(
+    "this needs Playwright on your machine: `npm i -g playwright` (the browsers are cached separately, so " +
+      "`npx playwright install chromium` only downloads them once) — or run this from a folder that has " +
+      "playwright in node_modules, or point FOLDRUN_PLAYWRIGHT at one" +
+      (process.env.FOLDRUN_DEBUG ? `\n  looked in — ${tried.join("; ")}` : ""),
+  );
+}
+
+/** The browser a sign-in runs in. `--engine chrome` means what an agent's
+ *  `engine: chrome` means: real Google Chrome (Playwright's "chrome" channel),
+ *  because a site ties a session to the browser that earned it — a
+ *  Cloudflare clearance to its user agent, a fingerprint check to the
+ *  build — and a cookie minted in Chromium can be challenged when Chrome
+ *  replays it. Without Chrome installed it falls back to Playwright's
+ *  Chromium and says so. Every other engine is unchanged. `pw` is the
+ *  Playwright module, injected so the choice is testable without a window. */
+export async function launchForLogin(pw, asked, { headless = false, log = (/** @type {string} */ m) => console.log(m) } = {}) {
+  const engines = { chrome: "chromium", chromium: "chromium", firefox: "firefox", safari: "webkit", webkit: "webkit" };
+  const engine = engines[asked];
+  if (!engine) throw new Error(`--engine is chrome, firefox or safari`);
+  const names = { chromium: "Chromium", firefox: "Firefox", webkit: "WebKit" };
+  const args = engine === "chromium" ? ["--no-first-run"] : [];
+  if (asked === "chrome") {
+    try {
+      const browser = await pw.chromium.launch({ headless, channel: "chrome", args });
+      return { browser, used: { name: "Google Chrome", channel: "chrome", version: browser.version() }, fallback: false };
+    } catch (err) {
+      const why = String(/** @type {any} */ (err)?.message ?? err).split("\n")[0];
+      log(
+        `  ${c.yellow("!")} Google Chrome is not installed here (or would not start: ${why}) — signing in with Chromium instead.\n` +
+          `    ${c.dim("agents with engine: chrome run real Google Chrome, so a site that ties its session to the browser may challenge this cookie;")}\n` +
+          `    ${c.dim("install Chrome (https://www.google.com/chrome/) and sign in again to match.")}`,
+      );
+      const browser = await pw.chromium.launch({ headless, args });
+      return { browser, used: { name: "Chromium", channel: null, version: browser.version() }, fallback: true };
+    }
+  }
+  const browser = await pw[engine].launch({ headless, args });
+  return { browser, used: { name: names[engine], channel: null, version: browser.version() }, fallback: false };
+}
+
+/** The command itself. Playwright drives the window; it is not a dependency of
+ *  this CLI because 99% of what the CLI does needs no browser, so it is
+ *  imported when asked for and its absence is a sentence, not a stack trace. */
+async function siteLogin(positional, flags, layout) {
+  const secret = siteSecretName(positional[0]);
+  const url = typeof flags.url === "string" ? flags.url : undefined;
+  if (!url) throw new Error(`which site? \`foldrun login ${positional[0]} --url https://example.com\``);
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    throw new Error(`--url must be a full address, like https://medium.com`);
+  }
+  // The names people use, mapped to the ones Playwright answers to. Old
+  // spellings keep working, so a script written before this still runs.
+  const asked = typeof flags.engine === "string" ? flags.engine.toLowerCase() : "chrome";
+  if (!["chrome", "chromium", "firefox", "safari", "webkit"].includes(asked)) throw new Error(`--engine is chrome, firefox or safari`);
+
+  const pw = await loadPlaywright();
+  const { browser, used } = await launchForLogin(pw, asked);
+
+  console.log(`\n  opening ${c.bold(url)} in ${used.name} ${used.version}`);
+  console.log(`  ${c.dim("sign in by hand — password, MFA, whatever the site asks. foldrun never sees it.")}`);
+  console.log(`  ${c.dim("then close the window (or press Enter here) and the session is stored.")}\n`);
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(url, { waitUntil: "domcontentloaded" }).catch(() => {});
+
+  // Whichever comes first: the window closed, or Enter in this terminal. A
+  // person who signed in and left the window open should not have to guess
+  // which one this command wanted.
+  const closed = new Promise((resolve) => browser.on("disconnected", () => resolve("window")));
+  const entered = new Promise((resolve) => {
+    if (!process.stdin.isTTY) return; // a script has no Enter to press
+    process.stdin.resume();
+    process.stdin.once("data", () => resolve("enter"));
+  });
+  const how = await Promise.race([closed, entered]);
+  if (process.stdin.isTTY) process.stdin.pause();
+
+  // Read it back before the browser goes, and from the page itself so the
+  // identity is what the site actually saw, not what this machine assumed.
+  let cookies = [];
+  let storage = {};
+  let identity = { user_agent: "", locale: "en-US", timezone: "UTC" };
+  if (how === "enter") {
+    cookies = await context.cookies();
+    const live = context.pages().find((p) => !p.isClosed()) ?? page;
+    identity = await live
+      .evaluate(() => ({
+        user_agent: navigator.userAgent,
+        locale: navigator.language,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }))
+      .catch(() => identity);
+    storage = await readStorage(live, origin);
+    await browser.close().catch(() => {});
+  } else {
+    throw new Error(
+      "the window closed before the session could be read — run it again and press Enter in this terminal instead, " +
+        "with the window still open",
+    );
+  }
+
+  cookies = cookies.filter((ck) => {
+    const host = ck.domain.replace(/^\./, "");
+    const site = new URL(url).hostname.replace(/^www\./, "");
+    return host === site || host.endsWith(`.${site}`) || site.endsWith(`.${host}`);
+  });
+  if (!cookies.length && !hasAnyStorage(storage)) {
+    throw new Error(`nothing to store: no cookies or storage for ${origin} — was the sign-in finished?`);
+  }
+
+  const login = loginCookieOf(cookies);
+  // Here --url is the SITE. The platform must come from everything else
+  // (--profile, FOLDRUN_URL, where you last signed in): read with --url in
+  // it, the secret was PUT to https://medium.com/api/secrets, with the
+  // platform key as its Bearer token.
+  const platformFlags = { ...flags, url: undefined };
+  const store = async (name, value) => {
+    const remote = flags.local === true ? undefined : remoteUrl(platformFlags);
+    const named = takeWorkspace([], layout);
+    const scope = flags.account === true ? undefined : flags.to ?? named ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+    if (remote) {
+      await remoteCall(remote, platformFlags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, value, workspace: scope }) });
+    } else {
+      (await core()).setSecret("default", name, value, scope);
+    }
+  };
+
+  const storageJson = hasAnyStorage(storage) ? JSON.stringify(storage) : null;
+  if (flags.print === true) {
+    console.log(`  ${c.dim("--print: nothing stored")}`);
+  } else {
+    await store(`${secret}_COOKIES`, JSON.stringify(cookies));
+    if (storageJson) await store(`${secret}_STORAGE`, storageJson);
+  }
+
+  const httpOnly = cookies.filter((ck) => ck.httpOnly).map((ck) => ck.name);
+  console.log(`  ${c.green("✓")} ${c.bold(`${secret}_COOKIES`)} — ${cookies.length} cookies for ${cookieDomainFor(url)}`);
+  console.log(`    ${c.dim(`signed in with ${used.name} ${used.version}, as ${identity.user_agent || "an unread user agent"}`)}`);
+  if (httpOnly.length) console.log(`    ${c.dim(`HttpOnly (a console cannot read these): ${httpOnly.join(", ")}`)}`);
+  if (login) console.log(`    ${c.dim(`the login looks like ${login.name}, good until ${whenItDies(login)}`)}`);
+  if (storageJson) {
+    const parts = [];
+    if (Object.keys(storage.localStorage ?? {}).length) parts.push(`localStorage(${Object.keys(storage.localStorage).length})`);
+    if (Object.keys(storage.sessionStorage ?? {}).length) parts.push(`sessionStorage(${Object.keys(storage.sessionStorage).length})`);
+    if (Object.keys(storage.indexedDB ?? {}).length) parts.push(`indexedDB(${Object.keys(storage.indexedDB).join(", ")})`);
+    console.log(`  ${c.green("✓")} ${c.bold(`${secret}_STORAGE`)} — ${parts.join(", ")}`);
+  }
+  console.log(`\n  ${c.dim("paste this into the agent that uses it:")}\n`);
+  console.log(
+    renderBrowseBlock({ secret, url, identity, hasStorage: Boolean(storageJson), engine: asked, browser: used })
+      .split("\n")
+      .map((l) => "    " + l)
+      .join("\n"),
+  );
+  console.log(`\n  ${c.dim(`and declare the names under secrets: [${secret}_COOKIES${storageJson ? `, ${secret}_STORAGE` : ""}]`)}\n`);
+  return 0;
+}
+
+function hasAnyStorage(s) {
+  return Boolean(
+    Object.keys(s?.localStorage ?? {}).length ||
+      Object.keys(s?.sessionStorage ?? {}).length ||
+      Object.keys(s?.indexedDB ?? {}).length,
+  );
+}
+
+/** Web Storage and IndexedDB for this origin, in the shape web browse's
+ *  `storage:` seeds back. Read in the page, because that is the only place
+ *  these exist. */
+async function readStorage(page, origin) {
+  const empty = { localStorage: {}, sessionStorage: {}, indexedDB: {} };
+  if (new URL(page.url()).origin !== origin) return empty;
+  return await page
+    // @ts-ignore - this function is serialised and runs in the page, where
+    // indexedDB, localStorage and sessionStorage are the browser's own
+    .evaluate(async () => {
+      const dump = (store) => {
+        const out = {};
+        try {
+          for (let i = 0; i < store.length; i++) {
+            const k = store.key(i);
+            out[k] = store.getItem(k);
+          }
+        } catch {}
+        return out;
+      };
+      const idb = {};
+      try {
+        // The page's own globals; typed as any because this body is
+        // serialised and never runs in Node.
+        const g = /** @type {any} */ (globalThis);
+        const dbs = (await g.indexedDB.databases?.()) ?? [];
+        for (const { name } of dbs) {
+          if (!name) continue;
+          idb[name] = await new Promise((resolve) => {
+            const open = g.indexedDB.open(name);
+            open.onerror = () => resolve({});
+            open.onsuccess = (e) => {
+              const db = e.target.result;
+              const stores = [...db.objectStoreNames];
+              if (!stores.length) {
+                db.close();
+                return resolve({});
+              }
+              const tx = db.transaction(stores, "readonly");
+              const out = {};
+              let left = stores.length;
+              for (const s of stores) {
+                const req = tx.objectStore(s).getAll();
+                req.onsuccess = () => {
+                  out[s] = req.result;
+                  if (--left === 0) {
+                    db.close();
+                    resolve(out);
+                  }
+                };
+                req.onerror = () => {
+                  if (--left === 0) {
+                    db.close();
+                    resolve(out);
+                  }
+                };
+              }
+            };
+          });
+        }
+      } catch {}
+      return { localStorage: dump(localStorage), sessionStorage: dump(sessionStorage), indexedDB: idb };
+    })
+    .catch(() => empty);
+}
+
+/** Bind on this machine's vault — a core from before site binding says so. */
+async function localSetSites(name, sites, scope) {
+  const k = await core();
+  if (typeof k.setSecretSites !== "function") throw new Error("binding a secret to sites needs @foldrun/core 1.1 or later — update foldrun");
+  return k.setSecretSites("default", name, sites, scope);
+}
+
+/** `--site a.com --site "*.b.org"` or `--site a.com,b.org`, as one list. */
+function siteFlags(flags) {
+  const raw = flags.site === undefined ? [] : Array.isArray(flags.site) ? flags.site : [flags.site];
+  return raw.filter((v) => typeof v === "string").flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
+}
+
+async function secretsCmd(positional, flags, layout) {
+  // --local: this machine's store even when signed in, the same escape
+  // hatch deploy and keys have. Without it, a signed-in laptop sent every
+  // secret to the platform and the local store could not be reached at all.
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  // The scope is the workspace's own store, named the way the runner names
+  // it — the folder's basename. It was the literal string "workspace", so a
+  // secret set from the terminal landed under workspaces/workspace/ and every
+  // run, reading under workspaces/<name>/, reported it missing. The same
+  // scope goes to the platform: it used to take only --to there, so
+  // `--workspace .` was silently an account-wide secret.
+  // Inside an account folder the workspace is a positional — or the only one
+  // there is. Outside, it is the folder's own basename, as it always was.
+  const named = takeWorkspace(positional, layout);
+  if (flags.account !== true && !named && !flags.to && layout?.kind === "account") throw whichWorkspace(layout, "secrets");
+  const localWorkspace = named ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+  const scope = flags.account === true ? undefined : flags.to ?? localWorkspace;
+  const [verb, name] = positional;
+
+  if (verb === "ls" || verb === undefined) {
+    const entries = url
+      ? (await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
+      : (await core()).listSecrets("default", scope);
+    if (!entries.length) {
+      console.log(`\n  ${c.dim("no secrets yet — foldrun secrets set NAME")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const s of entries) {
+      console.log(
+        `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}${s.sites?.length ? ` · sent only to ${s.sites.join(", ")}` : ""}`)}`,
+      );
+    }
+    console.log();
+    return 0;
+  }
+
+  if (verb === "status") {
+    // OAuth grants only: which still refresh, which are failing or about to
+    // expire, and whether a no-prompt reconnect exists for each.
+    if (!url) throw new Error("secrets status reads the platform's connection health — sign in first (foldrun login)");
+    const { connections } = await remoteCall(url, flags, "/api/oauth/connections");
+    if (!connections.length) {
+      console.log(`\n  ${c.dim("no OAuth connections")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const s of connections) {
+      const where = s.workspace ? `workspace ${s.workspace}` : "account";
+      const state =
+        s.status === "ok" ? c.green(`ok${s.daysLeft !== null ? ` · ${s.daysLeft} days left` : ""}`)
+        : s.status === "expiring" ? c.amber(`expires in ${s.daysLeft} days`)
+        : s.status === "no-client" ? c.dim("ok · no saved client (reconnect will ask for it once)")
+        : c.red(`${s.status}${s.lastError ? ` — ${s.lastError}` : ""}`);
+      console.log(`  ${c.bold(s.name)}  ${c.dim(where)}  ${state}`);
+      if (s.status !== "ok" && s.status !== "no-client") {
+        console.log(`    ${c.dim(`reconnect: foldrun connect ${s.name}${s.workspace ? ` --to ${s.workspace}` : ""}   or ${s.reconnectUrl}`)}`);
+      }
+    }
+    console.log();
+    return 0;
+  }
+
+  if (!name) throw new Error(`which secret? try \`foldrun secrets ${verb} NAME\``);
+
+  // A secret bound to sites never enters a sandbox: steps hold `${NAME}` and
+  // the egress proxy fills it in requests to those sites alone.
+  if (verb === "sites") {
+    const given = [...positional.slice(2), ...siteFlags(flags)];
+    if (!given.length && flags.clear !== true) {
+      const entries = url
+        ? (await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
+        : (await core()).listSecrets("default", scope);
+      const hit = entries.find((s) => s.name === name);
+      if (!hit) throw new Error(`no secret ${name}${scope ? ` in workspace ${scope}` : " in the account"}`);
+      console.log(hit.sites?.length
+        ? `\n  ${c.bold(name)} is sent only to ${hit.sites.join(", ")} — on the platform it never enters a sandbox\n`
+        : `\n  ${c.bold(name)} is not bound to sites — a step with a script or Bash gets its real value. Bind it: foldrun secrets sites ${name} api.example.com\n`);
+      return 0;
+    }
+    const sites = flags.clear === true ? [] : given;
+    const stored = url
+      ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, sites, workspace: scope }) })).sites
+      : await localSetSites(name, sites, scope);
+    console.log(stored.length
+      ? `\n  ${c.green("✓")} ${name} is sent only to ${stored.join(", ")} — on the platform the egress proxy fills it, and it never enters a sandbox\n`
+      : `\n  ${c.green("✓")} ${name} unbound — a step with a script or Bash gets its real value again\n`);
+    return 0;
+  }
+
+  if (verb === "set") {
+    // --kind: the other shapes the Connections form stores — a file, an SSH
+    // login, API headers, a service account's key, a client-credentials app.
+    if (typeof flags.kind === "string") {
+      const { body, local } = await secretOfKind(flags.kind, flags);
+      if (url) await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope }) });
+      else local(await core(), name, body, scope);
+      console.log(`\n  ${c.green("✓")} ${name} stored as ${flags.kind}${url ? "" : " on this machine"} — declare it in agent.md under \`secrets:\` to use it\n`);
+      return 0;
+    }
+    // --oauth2: store a refresh recipe instead of a static value. The
+    // platform exchanges it for a live access token before every use.
+    if (flags.oauth2 === true) {
+      const token_url =
+        (await promptVisible("  token URL [https://oauth2.googleapis.com/token]: ")) ||
+        "https://oauth2.googleapis.com/token";
+      const client_id = await promptVisible("  client_id: ");
+      const client_secret = await promptHidden("  client_secret: ");
+      const refresh_token = await promptHidden("  refresh_token: ");
+      const config = { token_url, client_id, client_secret, refresh_token };
+      if (url) {
+        await remoteCall(url, flags, "/api/secrets", {
+          method: "PUT",
+          body: JSON.stringify({ name, oauth2: config, workspace: scope }),
+        });
+      } else {
+        (await core()).setOAuth2Secret("default", name, config, scope);
+      }
+      console.log(`\n  ${c.green("✓")} ${name} stored as an auto-refreshing oauth2 credential\n`);
+      return 0;
+    }
+
+    const value =
+      typeof flags.value === "string" ? flags.value : await promptHidden(`  value for ${name}: `);
+    if (!value) throw new Error("empty value — nothing stored");
+    const sites = siteFlags(flags);
+    if (url) {
+      await remoteCall(url, flags, "/api/secrets", {
+        method: "PUT",
+        body: JSON.stringify({ name, value, workspace: scope, ...(sites.length ? { sites } : {}) }),
+      });
+    } else {
+      const k = await core();
+      k.setSecret("default", name, value, scope);
+      if (sites.length) await localSetSites(name, sites, scope);
+    }
+    console.log(`\n  ${c.green("✓")} ${name} stored${sites.length ? ` and sent only to ${sites.join(", ")}` : ""} — declare it in agent.md under \`secrets:\` to use it\n`);
+    return 0;
+  }
+
+  if (verb === "rm") {
+    if (!(await sureToDelete(flags, "secrets rm", `secret ${name}${scope ? ` (workspace ${scope})` : " (account)"}${url ? ` on ${url}` : ""}`))) return 1;
+    if (url) {
+      await remoteCall(url, flags, "/api/secrets", {
+        method: "DELETE",
+        body: JSON.stringify({ name, workspace: scope }),
+      });
+    } else {
+      (await core()).deleteSecret("default", name, scope);
+    }
+    console.log(`\n  ${c.green("✓")} ${name} removed\n`);
+    return 0;
+  }
+
+  throw new Error(`unknown secrets verb "${verb}" — set, ls or rm`);
+}
+
+// ---------------------------------------------------------------- logs
+
+/**
+ * `foldrun logs [run-id]` — without an id, the recent runs; with one, that
+ * run's whole event log. `--follow` keeps tailing a live run.
+ */
+async function logsCmd(positional, flags, layout) {
+  // Inside an account folder the workspace comes first, the way it does on
+  // every other workspace-scoped command — or is the only one there is.
+  const named = takeWorkspace(positional, layout);
+  if (!named && !flags.to && layout?.kind === "account") throw whichWorkspace(layout, "logs");
+  if (named && layout?.workspacesDir && layout.workspaces.includes(named)) {
+    process.env.FOLDRUN_WORKSPACE = path.join(layout.workspacesDir, named);
+  }
+  // With a platform named, the same verbs read the server's runs: the list,
+  // one run's trail, or a live one followed to the end. --local reads this
+  // machine's store even when signed in — the same escape hatch deploy,
+  // secrets and keys have, and the one thing `logs` was missing.
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  if (url) return remoteLogs(url, positional, { ...flags, to: flags.to ?? named ?? undefined });
+
+  const { listRuns, readRun } = await core();
+  const T = "default";
+  const P = "workspace";
+  const runId = positional[0];
+
+  if (!runId) {
+    const runs = listRuns(T, P).slice(0, 20);
+    if (!runs.length) {
+      console.log(`\n  ${c.dim("no runs yet — foldrun run <agent or flow>")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const r of runs) {
+      const cost = r.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+      const mark =
+        r.status === "completed" ? c.green("✓") : r.status === "failed" ? c.red("✗") : c.amber("…");
+      console.log(
+        `  ${mark} ${c.bold(r.id)}  ${r.flow}  ${c.dim(`${r.status} · $${cost.toFixed(4)} · ${r.startedAt}`)}`,
+      );
+    }
+    console.log(`\n  ${c.dim("foldrun logs <run-id> for the full trail")}\n`);
+    return 0;
+  }
+
+  const print = (run, seen) => {
+    run.steps.forEach((step, i) => {
+      const from = seen.get(i) ?? 0;
+      for (const e of step.events.slice(from)) {
+        console.log(`  ${EVENT_MARK(e)} ${c.dim(e.t)} ${c.bold(step.agent)}  ${e.text}`);
+      }
+      seen.set(i, step.events.length);
+    });
+  };
+
+  const seen = new Map();
+  let run = readRun(T, P, runId);
+  if (!run) throw new Error(`no run called "${runId}" here — \`foldrun logs\` lists them`);
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
+  print(run, seen);
+
+  while (flags.follow === true && !run.finishedAt) {
+    await new Promise((r) => setTimeout(r, 700));
+    run = readRun(T, P, runId);
+    if (!run) break;
+    print(run, seen);
+  }
+  if (run?.finishedAt) {
+    const cost = run.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+    console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${run.status} · $${cost.toFixed(4)}\n`);
+  } else {
+    console.log();
+  }
+  return run?.status === "failed" ? 1 : 0;
+}
+
+// ---------------------------------------------------------------- invoke
+
+async function remoteLogs(url, positional, flags) {
+  const ws = flags.to ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
+  const runId = positional[0];
+  if (!runId) {
+    const { runs } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=20`);
+    if (!runs?.length) {
+      console.log(`\n  ${c.dim(`no runs in ${ws} on ${url}`)}\n`);
+      return 0;
+    }
+    console.log();
+    for (const r of runs) {
+      const cost = r.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
+      const mark = r.status === "completed" ? c.green("✓") : r.status === "failed" ? c.red("✗") : c.amber("…");
+      console.log(`  ${mark} ${c.bold(r.id)}  ${r.flow}  ${c.dim(`${r.status} · $${cost.toFixed(4)} · ${r.startedAt}`)}${r.summary ? `\n      ${c.dim(r.summary)}` : ""}`);
+    }
+    console.log(`\n  ${c.dim("foldrun logs <run-id> --to " + ws + " for the full trail; --follow tails a live one")}\n`);
+    return 0;
+  }
+  let run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
+  const seen = new Map();
+  const open = new Map();
+  printNew(run, seen, open);
+  if (flags.follow === true && isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open)) ?? run;
+  flushCalls(open);
+  return finishLine(run);
+}
+
+/**
+ * A flow's saved input set, by name, as the platform has it: a case of an
+ * `inputs: true` file under evals/ (what "Save current as input set" on the
+ * dashboard writes), or of any eval that runs this flow — an eval case's
+ * `task:` is an input too. The inputs file wins a name both have.
+ */
+async function savedInputs(url, flags, ws, flow, name) {
+  if (typeof flags.task === "string") throw new Error("--inputs and --task both name the task — pick one");
+  const { evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`);
+  const mine = evals
+    .filter((e) => e.flow === flow)
+    .sort((a, b) => Number(b.inputs === true) - Number(a.inputs === true));
+  const sets = mine.flatMap((e) => (e.cases ?? []).filter((k) => k.task).map((k) => ({ ...k, file: e.file })));
+  const want = name.trim().toLowerCase();
+  const hit = sets.find((k) => k.name === name) ?? sets.find((k) => k.name.toLowerCase() === want);
+  if (!hit) {
+    const names = [...new Set(sets.map((k) => k.name))];
+    throw new Error(
+      names.length
+        ? `no input set "${name}" for ${flow} in ${ws} — it has ${names.map((n) => `"${n}"`).join(", ")}`
+        : `${flow} in ${ws} has no saved inputs — save one from "Run with…" on its card, or add evals/${flow}-inputs.md (see flows.md)`,
+    );
+  }
+  console.log(`\n  ${c.dim(`inputs: ${hit.name} (evals/${hit.file})`)}`);
+  return hit.task;
+}
+
+/**
+ * `foldrun invoke <flow>` — start a flow on a running platform. The remote
+ * sibling of `foldrun run`: same task flag, but the run continues on the
+ * server whether or not this terminal sticks around. `--wait` holds on for
+ * the result like an RPC.
+ */
+async function invoke(target, flags) {
+  const url = remoteUrl(flags);
+  if (!url) {
+    throw new Error(
+      "invoke starts a flow on a platform — pass --url or set FOLDRUN_URL. (Running locally? That's `foldrun run`.)",
+    );
+  }
+  if (!target) throw new Error("which flow? try `foldrun invoke <flow> --to <workspace>`");
+  const ws = flags.to;
+  if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
+
+  // --wait asks in short pieces, not one long request: whatever sits in
+  // front of the platform cuts a request that stays silent too long
+  // (Cloudflare at 100 s, an ALB at 60 s), and a flow can run for many
+  // minutes. The server answers 202 { timedOut: true } when a piece runs out
+  // and the same question is asked again of the run itself. The 524 that
+  // used to land here after 100 s while the run carried on was the trigger.
+  const WAIT_PIECE_S = 25;
+  const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
+  // A waited run that FAILS is answered with 500 and a full record (see
+  // server/wait.ts). That is not an error in the call, it is the answer to
+  // it, so it is reported as a failed run rather than thrown as a transport
+  // fault — the difference between "your flow failed" and "the platform is
+  // down", which is the first thing anyone reading this needs to know.
+  const reportFailedRun = (body, ws) => {
+    if (body?.result) console.log(`\n${body.result}\n`);
+    for (const st of body?.steps ?? []) {
+      const mark = st.status === "completed" ? c.green("✓") : st.status === "skipped" ? c.dim("–") : c.red("✗");
+      console.log(`  ${mark} ${c.dim(st.agent ?? "?")}  ${st.status}${st.skipReason ? c.dim(` (${st.skipReason})`) : ""}`);
+    }
+    console.log(
+      `\n  ${c.red("✗")} ${body?.status ?? "failed"}${body?.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}` +
+        `${body?.runId ? c.dim(` — foldrun logs ${body.runId} --to ${ws}`) : ""}\n`,
+    );
+    return 1;
+  };
+  // --from N starts at step N of the flow as its file numbers them; the
+  // earlier steps are recorded as skipped. Mutually exclusive with --task
+  // server-side (the task goes to step 1, which --from skips).
+  const from = flags.from !== undefined ? Number(flags.from) : undefined;
+  // --inputs <set>: the task is a saved input set — the file the dashboard's
+  // "Run with…" reads and writes, as the platform has it.
+  const task = typeof flags.inputs === "string" ? await savedInputs(url, flags, ws, target, flags.inputs) : typeof flags.task === "string" ? flags.task : "";
+  if (flags.inputs !== undefined && typeof flags.inputs !== "string") throw new Error("which input set? `--inputs <name>`");
+  let body;
+  try {
+    body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
+      method: "POST",
+      body: JSON.stringify({
+        task,
+        ...(from !== undefined ? { from } : {}),
+        // --test: the platform marks the run a test run — sends refused or
+        // sunk at the proxy, send-capable secrets withheld, state/ kept.
+        ...(flags.test === true ? { test: true } : {}),
+        // --once <key>: the same key twice is one run — a CI step that
+        // retries after a dropped response used to start and pay for two.
+        ...(typeof flags.once === "string" && flags.once ? { idempotencyKey: flags.once } : {}),
+        // --tag a --tag b: labels on the run, as the API's `tags`.
+        ...(many(flags.tag).length ? { tags: many(flags.tag) } : {}),
+      }),
+    });
+  } catch (err) {
+    if (flags.wait === true && err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
+    // overlap: skip — a run of this flow is live and the platform refused a
+    // second. Not a fault; the live run's id is the useful half of the answer.
+    if (err?.status === 409 && err?.body?.runId) {
+      console.log(`\n  ${c.amber("·")} ${target} in ${ws} is already running — ${c.dim(`foldrun logs ${err.body.runId} --to ${ws}`)}\n`);
+      return 1;
+    }
+    throw err;
+  }
+  while (flags.wait === true && body?.timedOut === true && body.runId) {
+    try {
+      body = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${body.runId}${wait}`);
+    } catch (err) {
+      if (err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
+      throw err;
+    }
+  }
+
+  if (flags.watch === true && body.runId) {
+    // Queued, then followed: the trace lands here line by line, the way the
+    // run page draws it, and the exit code is the run's.
+    console.log(`\n  ${c.bold(target)}  ${c.dim(body.runId)}\n`);
+    const run = await followRemote(url, flags, ws, body.runId);
+    if (!run) {
+      console.log(`  ${c.dim("the stream ended before the run did — foldrun logs " + body.runId + " --to " + ws)}\n`);
+      return 0;
+    }
+    return finishLine(run);
+  }
+  if (!flags.wait) {
+    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)}${body.test ? ` ${c.amber("TEST")}` : ""} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${url}/dashboard/${ws}/runs/${body.runId}`)}\n`);
+    return 0;
+  }
+  const run = body.run ?? body;
+  const status = run.status ?? body.status ?? "finished";
+  const ok = status === "completed";
+  if (body.result) console.log(`\n${body.result}\n`);
+  const mark = ok ? c.green("✓") : status === "awaiting-approval" ? c.amber("⏸") : c.red("✗");
+  console.log(`  ${mark} ${status}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}${status === "awaiting-approval" ? c.dim(` — ${url}/dashboard/${ws}/runs/${body.runId}`) : ""}\n`);
+  return ok ? 0 : status === "awaiting-approval" ? 2 : 1;
+}
+
+// ---------------------------------------------------------------- connect
+
+/** The loopback port `foldrun connect` listens on. Documented; do not change casually. */
+const CONNECT_PORT = 8642;
+
+/**
+ * `foldrun connect NAME --provider linkedin` — the OAuth consent from the
+ * terminal, the way `gh auth login` and `gcloud auth login` do it: open the
+ * provider's screen, catch the redirect on a loopback port on this machine,
+ * trade the code for tokens, and store the result on the platform (or in the
+ * local vault) as the auto-refreshing secret an agent's `secrets:` names.
+ *
+ * Why loopback and not the dashboard's callback: every provider requires the
+ * redirect to be registered in advance and most refuse plain http anywhere
+ * but localhost. A developer's laptop always has localhost; a box behind a
+ * tunnel or a LAN address does not have a name a provider will accept. So the
+ * callback is `http://localhost:<port>/callback`, printed before the browser
+ * opens so it can be registered first, and the port is fixed (--port) because
+ * providers match it exactly.
+ *
+ * Nothing secret is printed. The refresh token goes straight into the vault;
+ * a provider that issues none (GitHub, most LinkedIn apps) gets its access
+ * token stored as a static value and the expiry is said out loud.
+ */
+/**
+ * `--authorize-param name=value`, repeatable: extra query parameters on the
+ * provider's authorize URL — what a provider wants beyond OAuth's own
+ * (Google's access_type=offline and prompt=consent, for a refresh token).
+ * foldrun knows no provider; the person types what theirs documents.
+ */
+function authorizeParams(flags) {
+  const out = {};
+  for (const p of [flags["authorize-param"]].flat().filter((x) => x !== undefined)) {
+    const i = typeof p === "string" ? p.indexOf("=") : -1;
+    if (i < 1) throw new Error(`--authorize-param takes name=value, got "${p}"`);
+    out[p.slice(0, i).trim()] = p.slice(i + 1).trim();
+  }
+  return out;
+}
+
+/** --provider is deprecated: a runner keeps no provider list. Said once,
+ *  on stderr, so a script reading stdout is not disturbed. */
+function warnProviderDeprecated(flags) {
+  if (flags.provider !== undefined) {
+    console.error(c.dim("  --provider is deprecated — pass the provider's own --authorize-url and --token-url, and any --authorize-param it documents"));
+  }
+}
+
+async function connect(positional, flags) {
+  const name = positional[0];
+  if (!name) throw new Error("usage: foldrun connect NAME --authorize-url <url> --token-url <url> [--authorize-param name=value …] [--scopes …] [--workspace <name>] [--new-client]");
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error(`secret name "${name}" must be UPPER_SNAKE_CASE`);
+  const { OAUTH_PRESETS } = await core();
+
+  const providerName = flags.provider;
+  warnProviderDeprecated(flags);
+  const preset = providerName ? OAUTH_PRESETS[providerName] : undefined;
+  if (providerName && !preset) {
+    throw new Error(`unknown provider "${providerName}" — one of ${Object.keys(OAUTH_PRESETS).join(", ")}, or pass --authorize-url and --token-url`);
+  }
+  const authorizeUrl = flags["authorize-url"] ?? preset?.authorize_url;
+  const tokenUrl = flags["token-url"] ?? preset?.token_url;
+
+  // Where the result goes: the platform when one is named or signed in,
+  // this machine's vault otherwise. Decided before the browser opens, so a
+  // consent is never spent on a store that then refuses it.
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  const token = url ? tokenFor(url, flags) : null;
+  const workspaceName = flags.to ?? (flags.workspace ? path.basename(path.resolve(flags.workspace)) : undefined);
+
+  // Reconnecting: the platform already holds the client this secret (or this
+  // provider) was connected with, so run its consent flow — no client id, no
+  // secret, nothing typed. The redirect is the platform's own callback, which
+  // rewrites the same secret at the same scope; we wait for it to land.
+  if (url && !flags["client-id"] && !env("OAUTH_CLIENT_ID") && flags["new-client"] !== true) {
+    let started = null;
+    try {
+      started = await remoteCall(url, flags, "/api/oauth/reconnect", {
+        method: "POST",
+        body: JSON.stringify({ secret: name, workspace: workspaceName, provider: providerName }),
+      });
+    } catch (err) {
+      if (err.status !== 404) throw err;
+    }
+    if (started?.url) {
+      const before = (await remoteCall(url, flags, "/api/oauth/connections")).connections
+        .find((s) => s.name === name && (s.workspace ?? undefined) === workspaceName)?.connectedAt ?? null;
+      console.log(`\n  Reusing the saved ${c.bold(started.client)} client — nothing to type.`);
+      console.log(`  ${c.dim(`consent returns to ${started.redirectUri} (it must be registered on the app)`)}`);
+      const opened = flags["no-browser"] === true ? false : await openInBrowser(started.url);
+      console.log(opened
+        ? `  Opened your browser. Approve as the account that owns the ${providerName ?? started.client} resource.\n`
+        : `  Open this address in your browser:\n\n    ${started.url}\n`);
+      console.log(`  ${c.dim("Waiting for the platform to store it…")}`);
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const row = (await remoteCall(url, flags, "/api/oauth/connections")).connections
+          .find((s) => s.name === name && (s.workspace ?? undefined) === workspaceName);
+        if (row?.connectedAt && row.connectedAt !== before) {
+          console.log(`\n  ${c.green("✓")} ${name} reconnected on ${url}${workspaceName ? ` · ${workspaceName}` : " · account"}\n`);
+          return 0;
+        }
+      }
+      throw new Error("no consent arrived within 10 minutes — run it again, or pass --new-client to enter a client id and secret");
+    }
+  }
+
+  if (!authorizeUrl || !tokenUrl) throw new Error("--authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
+  const extra = { ...(preset?.authorize_extra ?? {}), ...authorizeParams(flags) };
+  if (!/^https:\/\//.test(tokenUrl) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tokenUrl)) {
+    throw new Error("token URL must be https — a refresh token over http is a leaked one");
+  }
+
+  const clientId = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
+  const pkce = flags["no-pkce"] !== true;
+  const clientSecret = flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
+  if (!clientId) throw new Error("client_id is required");
+  // No secret is a public app, which PKCE alone protects (RFC 9700 §2.1.1).
+  if (!clientSecret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
+  const scopes = flags.scopes ?? preset?.scopes_example ?? "";
+
+  // One fixed loopback address, the same on every developer's machine, so an
+  // OAuth app is set up once — `http://localhost:8642/callback` — and never
+  // per person. Fixed because most providers match the port exactly; 8642
+  // because 3000 is every dev server. --port / FOLDRUN_CONNECT_PORT override
+  // it, and then the app needs that value registered too.
+  const port = Number(flags.port ?? env("FOLDRUN_CONNECT_PORT") ?? CONNECT_PORT);
+  const redirectUri = `http://localhost:${port}/callback`;
+  if (preset?.hint) console.log(`\n  ${c.dim(preset.hint)}`);
+  console.log(`\n  Register this redirect URL on the ${providerName ?? "provider"} app once — it is the same for every developer:\n    ${c.bold(redirectUri)}\n`);
+
+  const crypto = await import("node:crypto");
+  const http = await import("node:http");
+  const state = crypto.randomBytes(24).toString("hex");
+  // PKCE (RFC 7636, S256): 32 random bytes as the verifier, its hash as the challenge.
+  const verifier = pkce ? crypto.randomBytes(32).toString("base64url") : null;
+  const authorize = new URL(authorizeUrl);
+  // Extras first: the flow's own parameters are set after, and win.
+  for (const [k, v] of Object.entries(extra)) authorize.searchParams.set(k, v);
+  for (const k of ["client_id", "redirect_uri", "response_type", "scope", "state", "code_challenge", "code_challenge_method"]) authorize.searchParams.delete(k);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("client_id", clientId);
+  authorize.searchParams.set("redirect_uri", redirectUri);
+  authorize.searchParams.set("state", state);
+  if (scopes) authorize.searchParams.set("scope", scopes);
+  if (verifier) {
+    authorize.searchParams.set("code_challenge", crypto.createHash("sha256").update(verifier).digest("base64url"));
+    authorize.searchParams.set("code_challenge_method", "S256");
+  }
+
+  // One request, then the listener closes. The state is the whole authority:
+  // a callback with any other value is answered and ignored.
+  const code = await new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      const u = new URL(req.url ?? "/", redirectUri);
+      if (u.pathname !== "/callback") { res.statusCode = 404; res.end(); return; }
+      if (u.searchParams.get("state") !== state) { res.statusCode = 400; res.end("state mismatch — start again"); return; }
+      const err = u.searchParams.get("error");
+      if (err) {
+        res.end(`${err}: ${u.searchParams.get("error_description") ?? ""}. You can close this tab.`);
+        server.close();
+        reject(new Error(`${providerName ?? "provider"} refused: ${err} ${u.searchParams.get("error_description") ?? ""}`.trim()));
+        return;
+      }
+      res.end("Connected. You can close this tab and return to the terminal.");
+      server.close();
+      resolve(u.searchParams.get("code"));
+    });
+    server.on("error", (/** @type {any} */ e) => reject(e.code === "EADDRINUSE"
+      ? new Error(`port ${port} is in use — pass --port <n> and register http://localhost:<n>/callback on the app`)
+      : e));
+    server.listen(port, "127.0.0.1", async () => {
+      const opened = flags["no-browser"] === true ? false : await openInBrowser(authorize.toString());
+      console.log(opened
+        ? `  Opened your browser. Approve as the account that owns the ${providerName ?? "provider"} resource.\n`
+        : `  Open this address in your browser:\n\n    ${authorize.toString()}\n`);
+      console.log(`  ${c.dim("Waiting for the redirect…")}`);
+    });
+  });
+  if (!code) throw new Error("the redirect carried no code");
+
+  const exchange = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code", code, redirect_uri: redirectUri, client_id: clientId,
+      ...(clientSecret ? { client_secret: clientSecret } : {}),
+      ...(verifier ? { code_verifier: verifier } : {}),
+    }).toString(),
+  });
+  const payload = /** @type {any} */ (await exchange.json().catch(() => ({})));
+  if (!exchange.ok || (!payload.refresh_token && !payload.access_token)) {
+    throw new Error(`token exchange failed (${exchange.status}): ${payload.error_description ?? payload.error ?? "no token in the reply"}`);
+  }
+
+  // Store: the refresh recipe when there is one, the bare token otherwise.
+  /** @type {any} */
+  const body = payload.refresh_token
+    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), refresh_token: payload.refresh_token }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
+    : { name, value: payload.access_token, workspace: workspaceName };
+  if (url) {
+    // The same PUT `secrets set` makes. A store that fails here has spent the
+    // consent — the code is single-use and nothing secret is kept locally —
+    // so say that rather than leave "HTTP 405" to explain itself.
+    try {
+      await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify(body) });
+    } catch (err) {
+      throw new Error(`${providerName ?? "the provider"} approved, but storing ${name} on ${url} failed: ${err instanceof Error ? err.message : err}. The consent is spent; fix the platform side and run this again.`);
+    }
+  } else {
+    const { setSecret, setOAuth2Secret } = await core();
+    if (body.oauth2) setOAuth2Secret("default", name, body.oauth2, workspaceName);
+    else setSecret("default", name, body.value, workspaceName);
+  }
+
+  const where = `${url ?? "this machine"}${workspaceName ? ` · ${workspaceName}` : " · account"}`;
+  if (payload.refresh_token) {
+    console.log(`\n  ${c.green("✓")} ${name} stored as an auto-refreshing oauth2 credential on ${where}\n`);
+  } else {
+    const days = payload.expires_in ? Math.round(payload.expires_in / 86400) : null;
+    console.log(`\n  ${c.green("✓")} ${name} stored on ${where}`);
+    console.log(`  ${c.amber("!")} ${providerName ?? "the provider"} issued no refresh token — this access token expires${days ? ` in about ${days} days` : ""}; run this command again then.\n`);
+  }
+  if (payload.scope) console.log(`  ${c.dim(`granted scopes: ${payload.scope}`)}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------- login
+
+const DEFAULT_PLATFORM = "https://app.foldrun.io";
+
+function openInBrowser(target) {
+  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  return import("node:child_process")
+    .then(({ spawn }) => {
+      const child = spawn(opener, [target], { detached: true, stdio: "ignore" });
+      child.on("error", () => {});
+      child.unref();
+      return true;
+    })
+    .catch(() => false);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * `foldrun login [--url]` — sign this machine in from the browser.
+ *
+ * The platform hands back a short code; the browser opens on the page that
+ * asks "is this your terminal?"; the person says yes; the key that makes
+ * lands here and is kept in ~/.foldrun/credentials.json. No key to copy,
+ * nothing pasted into a shell history. `--token` skips the browser and
+ * stores a key made in the dashboard — for a machine with no browser.
+ */
+async function login(flags) {
+  const url = normaliseUrl(flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? DEFAULT_PLATFORM);
+
+  if (typeof flags.token === "string") {
+    // Verify before storing: a wrong key stored is a wrong key on every
+    // later command, each failing one step further from the cause.
+    const me = await remoteCall(url, { token: flags.token, quiet: true }, "/api/me");
+    const name = saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
+    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
+    console.log(`  ${c.dim(`stored as the account "${name}" — \`foldrun accounts\` lists them, \`foldrun use ${name}\` switches`)}\n`);
+    return 0;
+  }
+
+  /** @type {any} */
+  let start;
+  try {
+    const res = await remoteFetch(url, "/api/cli/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostname: os.hostname() }),
+    });
+    start = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(start.error ?? `HTTP ${res.status}`);
+  } catch (err) {
+    throw new Error(`could not start a sign-in with ${url} — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  console.log(`\n  Confirm this code in your browser:  ${c.bold(start.code)}\n`);
+  console.log(`  ${c.dim(start.verifyUrl)}\n`);
+  const opened = flags["no-browser"] === true ? false : await openInBrowser(start.verifyUrl);
+  console.log(`  ${c.dim(opened ? "Opening the browser… waiting for you to approve." : "Open that address on any device and enter the code. Waiting…")}`);
+
+  const interval = Math.max(1, Number(start.interval) || 3) * 1000;
+  const deadline = Date.parse(start.expiresAt) || Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await sleep(interval);
+    /** @type {any} */
+    let poll;
+    try {
+      // Through the shared client: a poll that hangs used to hang the
+      // sign-in; now it is cut at FOLDRUN_TIMEOUT and asked again.
+      const res = await remoteFetch(url, `/api/cli/login/${start.id}`);
+      poll = await res.json().catch(() => ({}));
+    } catch {
+      continue; // a blip; the next poll asks again
+    }
+    if (poll.status === "pending") continue;
+    if (poll.status === "denied") throw new Error("the sign-in was denied in the browser");
+    if (poll.status === "expired") break;
+    if (poll.status === "approved" && poll.token) {
+      // `minted`: this key exists because of this login, so logout may end
+      // it. A key stored with --token was made elsewhere and may be in use
+      // elsewhere; logout only forgets it.
+      const name = saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
+      console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}\n`);
+      console.log(`  ${c.dim(`Stored as the account "${name}" in ~/.foldrun/credentials.json. \`foldrun accounts\` lists every account signed in here; \`foldrun use ${name}\` switches.`)}\n`);
+      return 0;
+    }
+  }
+  throw new Error("the code expired before it was approved — run `foldrun login` again");
+}
+
+/**
+ * `foldrun logout [--url]` — forget this machine's key, and, when `login`
+ * minted it, revoke it on the platform too (an editor's key cannot revoke
+ * keys; it is still forgotten here, and the Settings page can revoke it). A
+ * key given with --token is only forgotten: it was made elsewhere and may
+ * be in use elsewhere.
+ */
+async function logout(flags) {
+  // One account, not one machine: --profile names which, else the one this
+  // shell is acting as. Signing out of a customer must not sign you out of
+  // the other three.
+  const entry = chosenProfile(flags);
+  if (!entry) {
+    console.log(`\n  ${c.dim("not signed in anywhere")}\n`);
+    return 0;
+  }
+  const url = entry.url;
+  let revoked = false;
+  if (entry.minted) {
+    try {
+      const me = await remoteCall(url, { token: entry.token, quiet: true }, "/api/me");
+      if (me.actor?.kind === "key" && me.actor.id) {
+        await remoteCall(url, { token: entry.token, quiet: true }, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: me.actor.id }) });
+        revoked = true;
+      }
+    } catch {
+      // Not allowed, or unreachable. The local copy still goes.
+    }
+  }
+  removeCredential(entry.name ?? url);
+  const note = revoked ? "" : entry.minted ? "  (the key is forgotten here; revoke it on Settings → API keys to be sure)" : "  (the key is forgotten here, not revoked — it was not made by `foldrun login`)";
+  console.log(`\n  ${c.green("✓")} signed out of ${c.bold(entry.name ?? url)} ${c.dim(`(${entry.account} · ${url})`)}${c.dim(note)}`);
+  const left = listProfiles();
+  console.log(left.length ? `  ${c.dim(`still signed in as: ${left.map((p) => p.name).join(", ")}`)}\n` : "");
+  return 0;
+}
+
+/** `foldrun whoami` — who the platform thinks this terminal is. */
+async function whoami(flags) {
+  const url = remoteUrl(flags);
+  if (!url) throw new Error(NOT_SIGNED_IN);
+  const me = await remoteCall(url, flags, "/api/me");
+  const who = me.actor.kind === "user" ? me.actor.email : `API key ${me.actor.prefix ?? ""}… ${c.dim(`"${me.actor.label ?? ""}"${me.actor.createdBy ? ` by ${me.actor.createdBy}` : ""}`)}`;
+  console.log(`\n  ${c.bold(who)}`);
+  console.log(`  platform    ${url}`);
+  console.log(`  account     ${me.account}${me.owner ? c.dim(`  (owner ${me.owner})`) : ""}`);
+  console.log(`  role        ${me.role}`);
+  console.log(`  workspaces  ${me.workspaces === null ? "all" : me.workspaces.join(", ") || "none"}`);
+  const profile = flags.token || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
+  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : `~/.foldrun/credentials.json as "${profile?.name ?? "?"}"`;
+  console.log(`  ${c.dim(`credential from ${source}`)}`);
+  const others = listProfiles().filter((p) => p.name !== profile?.name);
+  console.log(others.length ? `  ${c.dim(`also signed in as: ${others.map((p) => p.name).join(", ")} — \`foldrun accounts\``)}\n` : "\n");
+  return 0;
+}
+
+/**
+ * `foldrun doctor [--url]` — one line per thing that can be wrong between
+ * this terminal and a platform, ✓ or ✗, in the order a person would check
+ * them by hand: node, this CLI, its runtime, the environment, the account
+ * a command would act as, the name, and a timed request through the same
+ * client every other command uses. Exit 1 if any line is ✗.
+ *
+ * It exists because "fetch failed" was the whole diagnosis, and the fix
+ * was in a different place each time: a tunnel, a stale profile, a proxy
+ * variable, a box that was down.
+ */
+async function doctor(flags) {
+  const results = [];
+  const line = (ok, label, detail) => {
+    results.push(ok);
+    console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${label.padEnd(9)} ${detail}`);
+  };
+  console.log();
+
+  const major = Number(process.versions.node.split(".")[0]);
+  line(major >= 22, "node", `${process.version}${major >= 22 ? "" : " — foldrun needs 22 or newer"}  ${c.dim(process.execPath)}`);
+  line(true, "cli", `foldrun ${CLI_VERSION}  ${c.dim(fileURLToPath(new URL("..", import.meta.url)))}`);
+  try {
+    const root = coreRoot();
+    const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+    line(true, "core", `@foldrun/core ${version}  ${c.dim(root)}`);
+  } catch (err) {
+    line(false, "core", `@foldrun/core cannot be resolved — ${explain(err)}`);
+  }
+  // Set or unset, never the value: two of these are a key and a proxy URL
+  // that may carry one.
+  line(true, "env", ["FOLDRUN_URL", "FOLDRUN_TOKEN", "FOLDRUN_TIMEOUT", "HTTPS_PROXY"].map((v) => (env(v) ? `${v} set` : c.dim(`${v} unset`))).join(" · "));
+  // Which model credential a local run would use — said, not judged: a
+  // machine that only drives the platform needs none.
+  try {
+    const { resolveModelCredential } = await core();
+    const m = resolveModelCredential(process.env);
+    console.log(
+      `  ${m.kind === "none" ? c.dim("·") : c.green("✓")} ${"model".padEnd(9)} ` +
+        (m.kind === "none"
+          ? c.dim("no credential for local runs — ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`")
+          : `${m.label} — what \`foldrun run\` uses here`),
+    );
+  } catch {
+    // core unresolvable is already its own line above
+  }
+
+  let url;
+  let token;
+  try {
+    url = remoteUrl(flags);
+    if (typeof flags.token === "string" || env("FOLDRUN_TOKEN")) {
+      token = flags.token ?? env("FOLDRUN_TOKEN");
+      line(true, "account", `${typeof flags.token === "string" ? "--token" : "FOLDRUN_TOKEN"} ${token.slice(0, 8)}…  ${c.dim(url ?? "no platform")}`);
+    } else {
+      const p = chosenProfile(flags);
+      if (p) {
+        token = p.token;
+        line(true, "account", `${p.name}  ${p.account} · ${p.role ?? "?"} · ${p.email ?? "api key"} · key ${String(p.token).slice(0, 8)}…  ${c.dim(p.url)}`);
+      } else {
+        line(false, "account", url ? `no account stored for ${url} — \`foldrun login --url ${url}\`, or --token` : "not signed in — `foldrun login`, or --url with --token");
+      }
+    }
+  } catch (err) {
+    line(false, "account", explain(err));
+  }
+
+  if (!url) {
+    line(false, "dns", "no platform — pass --url, or sign in");
+    line(false, "healthz", "no platform — pass --url, or sign in");
+  } else {
+    const host = new URL(url).hostname;
+    if (net.isIP(host)) line(true, "dns", `${host} is an address, nothing to resolve`);
+    else {
+      const [a, aaaa] = await Promise.allSettled([dns.promises.resolve4(host), dns.promises.resolve6(host)]);
+      const list = (r) => (r.status === "fulfilled" ? r.value.join(", ") : "none");
+      if (a.status === "fulfilled" || aaaa.status === "fulfilled") line(true, "dns", `${host} → A ${list(a)} · AAAA ${list(aaaa)}`);
+      else {
+        // Not in DNS; /etc/hosts still counts, and is where a dev box lives.
+        try {
+          const found = await dns.promises.lookup(host, { all: true });
+          line(true, "dns", `${host} → ${found.map((f) => f.address).join(", ")} ${c.dim("(hosts file, not DNS)")}`);
+        } catch (err) {
+          line(false, "dns", `${host} — ${explain(a.status === "rejected" ? a.reason : err)}`);
+        }
+      }
+    }
+    const t0 = performance.now();
+    const took = () => `${Math.round(performance.now() - t0)} ms`;
+    try {
+      const res = await remoteFetch(url, "/api/healthz", {}, { token });
+      const text = await res.text();
+      let body = {};
+      try {
+        body = JSON.parse(text);
+      } catch {
+        // not JSON; the first line is shown below
+      }
+      const fields = ["version", "role"].filter((k) => body[k] != null).map((k) => `${k} ${body[k]}`).join(" · ");
+      const firstLine = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+      line(res.ok, "healthz", `GET /api/healthz ${res.status} in ${took()}${fields ? ` · ${fields}` : ""}${res.ok ? "" : ` — ${(res.headers.get("content-type") ?? "?").split(";")[0]}: ${firstLine.slice(0, 120)}`}`);
+    } catch (err) {
+      line(false, "healthz", `${explain(err)} ${c.dim(`(${took()})`)}`);
+    }
+  }
+
+  console.log();
+  return results.every(Boolean) ? 0 : 1;
+}
+
+/**
+ * `foldrun keys ls|create|revoke` — the account's API keys, from the terminal.
+ *
+ *   keys ls                          every key, live and revoked
+ *   keys create <label> [--role r]   an account key (editor unless said)
+ *   keys create <label> --workspaces <ws>  one that opens that workspace alone
+ *   keys revoke <id>
+ *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
+ *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
+ *                                      one ends now, or when the grace runs out.
+ *                                      A key already rotated is refused (409):
+ *                                      rotate the key that replaced it instead
+ *
+ * Minting, rotating and revoking need admin, the same as the Settings page.
+ */
+async function keysCmd(positional, flags) {
+  const [verb, arg] = positional;
+  const url = remoteUrl(flags);
+  if (!url) throw new Error(NOT_SIGNED_IN);
+
+  if (verb === "ls" || verb === "list" || verb === undefined) {
+    const { keys } = await remoteCall(url, flags, "/api/keys");
+    if (!keys.length) {
+      console.log(`\n  ${c.dim("no API keys — foldrun keys create <label>")}\n`);
+      return 0;
+    }
+    console.log("");
+    const day = (iso) => (iso ? iso.slice(0, 10) : "");
+    for (const k of keys) {
+      // A deploy key opened the platform's own git, gone since 17 Oct 2026.
+      const what = k.scope ? "deploy key · opens nothing since the platform's git went — revoke it" : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
+      const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
+      const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
+      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}`);
+      // A rotated key in its grace: still live, but not to be rotated again.
+      const next = k.replacedBy ? keys.find((n) => n.id === k.replacedBy) : null;
+      if (k.replacedBy) console.log(`  ${" ".repeat(9)}${c.yellow(`rotated → ${k.replacedBy}${next ? ` (${next.prefix}…)` : ""}`)}${c.dim(" — rotate that one, not this")}`);
+      console.log(`  ${" ".repeat(9)}${c.dim(`created ${day(k.createdAt)} · last used ${k.lastUsedAt ? `${day(k.lastUsedAt)}${k.lastIp ? ` from ${k.lastIp}` : ""}` : "never"} · expires ${k.expiresAt ? day(k.expiresAt) : "never"}`)}`);
+    }
+    console.log("");
+    return 0;
+  }
+  if (verb === "create" || verb === "new") {
+    if (!arg) throw new Error("what is the key for? foldrun keys create <label>");
+    const body = { label: arg };
+    if (typeof flags.role === "string") body.role = flags.role;
+    // --expires 30d|90d|365d|never; unsaid, the key never expires.
+    if (typeof flags.expires === "string") body.expires = flags.expires;
+    // --workspaces a,b narrows the key to those; --workspaces all opens
+    // every one you can. Unsaid, the key inherits your own scope.
+    if (typeof flags.workspaces === "string") body.workspaces = flags.workspaces === "all" ? null : flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
+    const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+    if (made.key == null) return lostSecret(made.id);
+    console.log(`  ${made.key}\n`);
+    console.log(`  ${c.dim("Shown once. FOLDRUN_TOKEN=<key> uses it; `foldrun keys revoke " + made.id + "` ends it.")}\n`);
+    return 0;
+  }
+  if (verb === "revoke" || verb === "rm") {
+    if (!arg) throw new Error("which key? foldrun keys revoke <id> — ids are in `foldrun keys ls`");
+    if (!(await sureToDelete(flags, "keys revoke", `API key ${arg} on ${url} (anything using it stops working)`))) return 1;
+    await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: arg }) });
+    console.log(`\n  ${c.green("✓")} revoked ${arg}\n`);
+    return 0;
+  }
+  if (verb === "rotate") {
+    if (!arg) throw new Error("which key? foldrun keys rotate <id> [--grace 1h] — ids are in `foldrun keys ls`");
+    const grace = typeof flags.grace === "string" ? flags.grace : "0";
+    // No grace: whatever uses the old key stops at once — the same question
+    // a revoke asks. With a grace, nothing breaks before it runs out.
+    if (grace === "0" && !(await sureToDelete(flags, "keys rotate", `API key ${arg} on ${url}, now (anything using it stops working — --grace 1h keeps it for an hour)`))) return 1;
+    let made;
+    try {
+      made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}/rotate`, { method: "POST", body: JSON.stringify({ grace }) });
+    } catch (err) {
+      // Already rotated: the platform names the new key by prefix; the
+      // command takes an id, so say the command — the new key is the one to
+      // rotate, also when its secret was lost.
+      if (!(err instanceof HttpError && err.status === 409 && /already rotated/.test(err.message))) throw err;
+      const { keys = [] } = await remoteCall(url, flags, "/api/keys").catch(() => ({}));
+      const next = keys.find((k) => k.id === arg)?.replacedBy;
+      throw new Error(`${err.message}${next ? `\n  → foldrun keys rotate ${next}${grace === "0" ? "" : ` --grace ${grace}`}` : ""}`);
+    }
+    console.log(`\n  ${c.green("✓")} rotated ${arg} → ${c.bold(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+    if (made.key == null) return lostSecret(made.id);
+    console.log(`  ${made.key}\n`);
+    const ends = made.replaced?.endsAt;
+    console.log(`  ${c.dim(`Shown once. The old key ${grace === "0" ? "is revoked" : `keeps working until ${String(ends).slice(0, 16).replace("T", " ")} UTC`}.`)}\n`);
+    return 0;
+  }
+  throw new Error(`keys: unknown verb "${verb}" — ls, create, rotate, revoke`);
+}
+
+/** A retried mint or rotate is answered from the first call, and the server
+ *  never stores a key's secret — so a retry after a lost answer has none. */
+function lostSecret(id) {
+  console.log(`  ${c.yellow("The key was made, but its secret was in the answer that was lost; it is never stored, so it cannot be shown again.")}`);
+  console.log(`  ${c.dim(`Revoke it (\`foldrun keys revoke ${id}\`) and make another.`)}\n`);
+  return 1;
+}
+
+/**
+ * `foldrun audit` — the account's audit log: who signed in, minted a key,
+ * invited someone, set a secret (by name), deployed, and when support
+ * viewed the account. Newest first. The owner's and unscoped admins'.
+ *
+ *   audit [--since 7d] [--until <date>] [--action apikey] [--actor <who>] [--to <workspace>] [--limit n] [--all]
+ *   audit --csv [--file audit.csv]
+ */
+async function auditCmd(positional, flags) {
+  const url = remoteUrl(flags);
+  if (!url) throw new Error(NOT_SIGNED_IN);
+  const q = new URLSearchParams();
+  q.set("since", typeof flags.since === "string" ? flags.since : "7d");
+  for (const [flag, param] of [["until", "until"], ["action", "action"], ["actor", "actor"], ["to", "workspace"], ["limit", "limit"]]) {
+    if (typeof flags[flag] === "string") q.set(param, flags[flag]);
+  }
+  if (positional[0]) q.set("action", positional[0]);
+  if (flags.csv === true) {
+    q.set("format", "csv");
+    const { bytes, name } = await remoteBytes(url, flags, `/api/audit?${q}`, "the audit log");
+    if (typeof flags.file !== "string") {
+      writeExact(bytes);
+      return 0;
+    }
+    return writeDownload(bytes, name ?? "audit.csv", flags, "the audit log");
+  }
+  // --all follows the cursor to the start of the window; otherwise one page.
+  const entries = [];
+  let next = null;
+  for (let page = 0; page < 100; page++) {
+    if (next) q.set("cursor", next);
+    const got = await remoteCall(url, flags, `/api/audit?${q}`);
+    entries.push(...(got.entries ?? []));
+    next = got.next ?? null;
+    if (!next || flags.all !== true) break;
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify({ entries, next }, null, 2));
+    return 0;
+  }
+  if (!entries.length) {
+    console.log(`\n  ${c.dim(`nothing in the audit log since ${q.get("since")}${q.get("action") ? ` for ${q.get("action")}` : ""}`)}\n`);
+    return 0;
+  }
+  console.log("");
+  for (const e of entries) {
+    const d = e.detail ?? {};
+    const about = e.action.startsWith("support.")
+      ? `support viewed your account: ${d.reason ?? ""}`
+      : [d.label, d.name, d.workspace, d.prefix ? `${d.prefix}…` : null, d.role, d.reason].filter((x) => typeof x === "string" && x).join(" · ") || e.subject || "";
+    const mark = e.action.startsWith("support.") ? c.amber("!") : /refused|revoked|deleted|removed|disabled/.test(e.action) ? c.red("·") : c.dim("·");
+    console.log(`  ${mark} ${c.dim(when(e.at))}  ${pad(e.action, 22)}  ${pad(firstLine(e.actor, 28), 28)}  ${firstLine(about, 70)}`);
+  }
+  console.log(`\n  ${c.dim(`${entries.length} entr${entries.length === 1 ? "y" : "ies"}${next ? " — more: --all, or --since further back" : ""} · --csv for the file an auditor wants`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun source` — the files themselves, on the platform, one at a time.
+ *
+ *   source ls [dir]                 the workspace's tree (or one folder of it)
+ *   source cat <path>               one file, to stdout
+ *   source put <path> [--file f]    write a file: from --file, else from stdin
+ *                                   (--message "why" goes on the revision)
+ *   source mv <from> <to>
+ *   source rm <path>
+ *
+ * The same door the dashboard's editor uses, so every write is a revision
+ * with who and why, and the workspace's history shows it. For a whole
+ * tree, `foldrun deploy`; for what agents PRODUCE (storage/), the
+ * dashboard's Storage page — source is what you wrote, storage is what
+ * they wrote.
+ */
+async function sourceCmd(positional, flags) {
+  const [verb, a, b] = positional;
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("source reads a workspace on a platform — pass --url, or `foldrun login` first");
+  const ws = flags.to;
+  if (!ws) throw new Error("which workspace? pass --to <workspace>");
+  const base = `/api/workspaces/${encodeURIComponent(ws)}/source`;
+
+  if (verb === "ls" || verb === "list" || verb === undefined) {
+    const { files } = await remoteCall(url, flags, base);
+    const prefix = a ? a.replace(/\/+$/, "") + "/" : "";
+    const shown = files.filter((f) => !prefix || f.startsWith(prefix));
+    if (!shown.length) {
+      console.log(`\n  ${c.dim(prefix ? `nothing under ${prefix}` : "an empty workspace")}\n`);
+      return 0;
+    }
+    console.log("");
+    for (const f of shown) console.log(`  ${f}`);
+    console.log(`\n  ${c.dim(`${shown.length} file${shown.length === 1 ? "" : "s"} · ${ws} · ${url}`)}\n`);
+    return 0;
+  }
+  if (verb === "cat" || verb === "read" || verb === "get") {
+    if (!a) throw new Error("which file? foldrun source cat flows/daily.md --to <workspace>");
+    const { content } = await remoteCall(url, flags, `${base}?path=${encodeURIComponent(a)}`);
+    writeExact(content.endsWith("\n") ? content : `${content}\n`);
+    return 0;
+  }
+  if (verb === "put" || verb === "write") {
+    if (!a) throw new Error("which file? foldrun source put flows/daily.md --file ./daily.md --to <workspace>");
+    const content = typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : fs.readFileSync(0, "utf8");
+    if (!content.trim()) throw new Error("refusing to write an empty file — `foldrun source rm` is the deliberate way to remove one");
+    const body = { path: a, content, ...(typeof flags.message === "string" ? { message: flags.message } : {}) };
+    await remoteCall(url, flags, base, { method: "PUT", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} ${ws}/${a}  ${c.dim(`${content.length} chars · revision recorded${flags.message ? ` · "${flags.message}"` : ""}`)}\n`);
+    return 0;
+  }
+  if (verb === "mv" || verb === "move") {
+    if (!a || !b) throw new Error("foldrun source mv <from> <to> --to <workspace>");
+    await remoteCall(url, flags, base, { method: "PATCH", body: JSON.stringify({ from: a, to: b }) });
+    console.log(`\n  ${c.green("✓")} ${a} → ${b}\n`);
+    return 0;
+  }
+  if (verb === "rm" || verb === "delete") {
+    if (!a) throw new Error("foldrun source rm <path> --to <workspace>");
+    if (!(await sureToDelete(flags, "source rm", `${a} from the deployed ${ws}`))) return 1;
+    await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: a }) });
+    console.log(`\n  ${c.green("✓")} removed ${a}\n`);
+    return 0;
+  }
+  if (verb === "new") {
+    // The dashboard's New button for any document (POST …/assets): the
+    // platform writes the template — a tool folder, a skill, knowledge,
+    // memory, a script — at workspace scope, or inside one agent (--agent).
+    const kinds = ["tools", "knowledge", "memory", "skills", "scripts", "agents", "flows", "evals"];
+    if (!kinds.includes(a) || !b) throw new Error(`\`foldrun source new <kind> <name> --to <workspace>\` — kind is ${kinds.join(", ")} (--agent <name>, --template, --language)`);
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(b)) throw new Error(`"${b}" is not a name — kebab-case only`);
+    const body = {
+      kind: a,
+      name: b,
+      ...(typeof flags.agent === "string" ? { agent: flags.agent } : {}),
+      ...(typeof flags.template === "string" ? { template: flags.template } : {}),
+      ...(typeof flags.language === "string" ? { language: flags.language } : {}),
+    };
+    const r = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/assets`, { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} ${ws}/${r.path ?? b}  ${c.dim(`a new ${a.replace(/s$/, "")}${flags.agent ? ` for ${flags.agent}` : ""} · revision recorded`)}\n`);
+    return 0;
+  }
+  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, new, mv, rm`);
+}
+
+// ------------------------------------------------- the account, as a whole
+
+/**
+ * Where this folder records what it last pushed, and to which platform.
+ *
+ * `status` needs a third fact beyond "local" and "live": whether the live copy
+ * moved since you last deployed. Nothing on the wire carries that — a file's
+ * revision on the platform is the platform's own history, not this laptop's —
+ * so the laptop keeps a stamp of the bytes it sent. Under `.foldrun/`, which
+ * every scaffold already ignores.
+ */
+function stampFile(layout) {
+  return path.join(layout.accountRoot, ".foldrun", "deployed.json");
+}
+function readStamps(layout) {
+  try {
+    return JSON.parse(fs.readFileSync(stampFile(layout), "utf8"));
+  } catch {
+    return {};
+  }
+}
+function writeStamp(layout, url, workspace, files) {
+  const all = readStamps(layout);
+  const key = url ?? "local";
+  all[key] ??= {};
+  all[key][workspace] = {
+    at: new Date().toISOString(),
+    files: Object.fromEntries(files.map((f) => [f.path, digest(f.content)])),
+  };
+  try {
+    fs.mkdirSync(path.dirname(stampFile(layout)), { recursive: true });
+    fs.writeFileSync(stampFile(layout), JSON.stringify(all, null, 2));
+  } catch {
+    /* an unwritable folder costs a "changed since" column, not the deploy */
+  }
+}
+const digest = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(0, 16);
+
+/** Every source file of one workspace on the platform, by path. */
+async function remoteWorkspaceFiles(url, flags, ws, isSourcePath) {
+  const { files } = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/source`);
+  const wanted = (files ?? []).filter(isSourcePath);
+  const out = new Map();
+  for (const rel of wanted) {
+    const { content } = await remoteCall(
+      url,
+      flags,
+      `/api/workspaces/${encodeURIComponent(ws)}/source?path=${encodeURIComponent(rel)}`,
+    );
+    out.set(rel, content);
+  }
+  return out;
+}
+
+/** Every library file on the platform, as {kind, path, content}. */
+async function remoteLibrary(url, flags, kinds) {
+  const out = [];
+  for (const kind of kinds) {
+    let entries;
+    try {
+      ({ entries } = await remoteCall(url, flags, `/api/library/${kind}`));
+    } catch {
+      continue; // an older platform without this kind
+    }
+    for (const e of entries ?? []) {
+      const rel = e.path ?? (e.name ? `${e.name}.md` : null);
+      if (!rel) continue;
+      // The listing is a catalogue of tools and skills, not of files: a
+      // folder tool is deliberately one row, so its code is not a row of its
+      // own. `files` is what that row is actually made of. Without it a pull
+      // brought down tool.md and left run.mjs behind, and the next deploy
+      // would have shipped a library whose every script tool had lost its
+      // program. Older platforms do not send it — then the entry is its own
+      // whole, which is true for every single-file entry anyway.
+      const wanted = Array.isArray(e.files) && e.files.length ? e.files : [rel];
+      for (const one of wanted) {
+        const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${encodeURIComponent(one)}`);
+        out.push({ kind, path: one, content });
+      }
+    }
+  }
+  return out;
+}
+
+/** The workspaces the platform holds, by name. */
+async function remoteWorkspaceNames(url, flags) {
+  const { workspaces } = await remoteCall(url, flags, "/api/workspaces");
+  return (workspaces ?? []).map((w) => w.name).filter(Boolean).sort();
+}
+
+/**
+ * The account AGENTS.md has no write endpoint.
+ *
+ * `/api/account` reads and PATCHes a handful of known frontmatter keys — a
+ * timezone, a notify target, a cap — and nothing reads or writes the file
+ * itself. So a deploy cannot ship the account's prose, and a pull cannot
+ * fetch it. Said out loud, once, rather than silently dropped: a scope that
+ * vanishes without a word is the failure this codebase keeps producing.
+ */
+const NO_ACCOUNT_FILE_API =
+  "the platform has no account-file endpoint — /api/account only PATCHes known frontmatter keys, so AGENTS.md at account scope is not synced. Edit it in Settings, or on the box.";
+
+/**
+ * `foldrun deploy` — the whole account, or one workspace of it.
+ *
+ * Nothing is ever deleted on the platform: a workspace that exists there and
+ * not here is left exactly as it is. A deploy is a push, and a push that
+ * quietly removed a colleague's desk because it was not on your laptop would
+ * be the worst bug this tool could have. `foldrun workspaces rm <name>
+ * --platform --yes` is the deliberate way.
+ */
+async function deployAccount(layout, flags, only) {
+  const { accountTreeFrom, LIBRARY_KINDS } = await core();
+  // Ask from the workspace, not the account root, unless this IS an account
+  // root: for a flat folder the account root is its parent, and reading the
+  // tree from there would find a directory that is not a workspace at all.
+  const { tree } = accountTreeFrom(layout.kind === "account" ? layout.accountRoot : layout.workspaceDir, only);
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+  const tenant = flags.tenant ?? "default";
+  const dry = flags["dry-run"] === true;
+
+  console.log(`\n  ${c.bold(url ? url : tenant)} ${c.dim(`← ${tree.root}`)}`);
+
+  let worst = 0;
+  for (const ws of tree.workspaces) {
+    // --to renames the destination. Only when there is one thing to name: a
+    // whole account cannot be squeezed into one workspace on the other side.
+    const dest = tree.workspaces.length === 1 && typeof flags.to === "string" ? flags.to : ws.name;
+    const code = await deployOne(url, tenant, dest, ws.files, flags, layout, ws.dir);
+    worst = Math.max(worst, code);
+  }
+
+  // The library, file by file: /api/library/<kind> writes one path at a time,
+  // which is the only endpoint there is. Locally it goes straight through the
+  // same writer the dashboard uses, so a revision is recorded either way.
+  if (tree.library.length) {
+    if (dry) {
+      console.log(`  ${c.dim(`library · ${tree.library.length} files (not sent — dry run)`)}`);
+    } else if (url) {
+      for (const f of tree.library) {
+        await remoteCall(url, flags, `/api/library/${f.kind}`, {
+          method: "PUT",
+          body: JSON.stringify({ path: f.path, content: f.content }),
+        });
+      }
+      console.log(`  ${c.green("✓")} library ${c.dim(`${tree.library.length} files`)}`);
+    } else {
+      const { writeLibraryFile } = await core();
+      for (const f of tree.library) writeLibraryFile(tenant, f.kind, f.path, f.content);
+      console.log(`  ${c.green("✓")} library ${c.dim(`${tree.library.length} files`)}`);
+    }
+  }
+
+  if (tree.agentsMd !== null) {
+    if (url) {
+      console.log(`  ${c.amber("·")} AGENTS.md ${c.dim(`not sent — ${NO_ACCOUNT_FILE_API}`)}`);
+    } else if (!dry) {
+      const { accountDir } = await core();
+      fs.mkdirSync(accountDir(tenant), { recursive: true });
+      fs.writeFileSync(path.join(accountDir(tenant), "AGENTS.md"), tree.agentsMd);
+      console.log(`  ${c.green("✓")} AGENTS.md ${c.dim("account scope")}`);
+    }
+  }
+  console.log();
+  return worst;
+}
+
+/** "<profile> (<email or key label>)" — who a deploy is about to act as,
+ *  asked of the platform once per command. */
+let identityCache = null;
+async function deployIdentity(url, flags) {
+  if (identityCache) return identityCache;
+  const profile = flags.token || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
+  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : (profile?.name ?? "?");
+  let who = "";
+  try {
+    const me = await remoteCall(url, { ...flags, quiet: true }, "/api/me");
+    who = me.actor?.kind === "user" ? me.actor.email : `key "${me.actor?.label ?? me.actor?.prefix ?? ""}"`;
+    if (me.account) who += `, account ${me.account}`;
+  } catch {
+    who = "identity unknown";
+  }
+  identityCache = `${c.bold(source)} ${c.dim(`(${who})`)}`;
+  return identityCache;
+}
+
+/** List what a deploy would delete — platform-written files first, apart,
+ *  because those are the ones a local folder rarely has and a person rarely
+ *  means to lose — and ask. Throws without a terminal and without --yes. */
+async function confirmRemovals(workspace, removed, flags) {
+  const produced = removed.filter((f) => /^storage\/|trigger-log\.jsonl$/.test(f));
+  const other = removed.filter((f) => !produced.includes(f));
+  console.log(`\n  ${c.red(`${removed.length} file${removed.length === 1 ? "" : "s"} would be DELETED`)} from ${c.bold(workspace)} on the platform:`);
+  const show = (list) => {
+    for (const f of list.slice(0, 20)) console.log(`    ${c.red("-")} ${f}`);
+    if (list.length > 20) console.log(`    ${c.dim(`… and ${list.length - 20} more`)}`);
+  };
+  if (produced.length) {
+    console.log(`  ${c.amber("written by runs, not by you")} ${c.dim("(storage/ outputs, the trigger log)")}`);
+    show(produced);
+  }
+  if (other.length) {
+    if (produced.length) console.log(`  ${c.dim("source files missing from this folder")}`);
+    show(other);
+  }
+  return confirmed(flags, "a deploy that deletes files", `delete ${removed.length} file${removed.length === 1 ? "" : "s"} from ${workspace}? [y/N] `);
+}
+
+/** One workspace, pushed and reported. Extracted so the account loop and the
+ *  single-workspace path print the same four lines. */
+async function deployOne(url, tenant, workspace, files, flags, layout, from) {
+  const { planDeploy, deployWorkspace, deployedCommit } = await core();
+  // Say where this is going and ask before anything is deleted. On
+  // 2026-09-30 a deploy went to the machine's default profile (not the
+  // account meant) and deleted the platform's storage/ outputs and trigger
+  // log with no question asked. So: plan first, name the destination, and a
+  // deploy that REMOVES anything needs a yes — or --yes, which is the only
+  // way through without a terminal (an AI session or a script is not one).
+  // A deploy that only adds or changes files goes straight on, as before.
+  //
+  // The yes is to THAT list. A run can write new storage/ outputs between
+  // the question and the deploy, and the deploy used to remove whatever was
+  // missing at that moment. So the confirmed list goes with the deploy as
+  // expectRemoved, and a platform whose plan now removes more refuses (409)
+  // with the new list — which a person confirms again, or, with no
+  // terminal, is refused even under --yes: that yes was to a shorter list.
+  /** @type {string[] | undefined} */
+  let expectRemoved;
+  if (!flags["dry-run"]) {
+    const preview = url ? await deployOverHttp(url, workspace, files, { ...flags, "dry-run": true }) : planDeploy(tenant, workspace, files);
+    if (url) console.log(`\n  ${c.dim("deploying to")} ${c.bold(url)} ${c.dim("as")} ${await deployIdentity(url, flags)}`);
+    if (preview.removed.length && !(await confirmRemovals(workspace, preview.removed, flags))) {
+      console.log(`  ${c.amber("·")} ${workspace} not deployed — nothing was changed\n`);
+      return 1;
+    }
+    expectRemoved = preview.removed;
+  }
+  const attempt = () =>
+    url
+      ? deployOverHttp(url, workspace, files, flags, expectRemoved)
+      : flags["dry-run"]
+        ? planDeploy(tenant, workspace, files)
+        : deployWorkspace(tenant, workspace, files, {
+            commit: flags.commit ?? null,
+            force: flags.force === true,
+            expectRemoved,
+          });
+  /** @type {any} */
+  let plan = await attempt();
+  for (let tries = 0; plan.unexpectedRemovals?.length; tries++) {
+    console.log(`\n  ${c.amber("!")} since you confirmed, this deploy would also remove: ${plan.unexpectedRemovals.join(", ")}`);
+    if (!process.stdin.isTTY || tries >= 3) {
+      console.log(`  ${c.amber("·")} ${workspace} not deployed — nothing was changed. Run the deploy again to confirm the new list.\n`);
+      return 1;
+    }
+    if (!(await confirmRemovals(workspace, plan.removed, { ...flags, yes: false }))) {
+      console.log(`  ${c.amber("·")} ${workspace} not deployed — nothing was changed\n`);
+      return 1;
+    }
+    expectRemoved = plan.removed;
+    plan = await attempt();
+  }
+
+  console.log(
+    `\n  ${c.bold(workspace)} ${c.dim(`${files.length} files · +${plan.added.length} ~${plan.updated.length} -${plan.removed.length}`)}${from ? ` ${c.dim(`← ${from}`)}` : ""}`,
+  );
+  const show = (label, list, colour) => {
+    for (const f of list.slice(0, 20)) console.log(`    ${colour(label)} ${f}`);
+    if (list.length > 20) console.log(`    ${c.dim(`… and ${list.length - 20} more`)}`);
+  };
+  show("+", plan.added, c.green);
+  show("~", plan.updated, c.dim);
+  show("-", plan.removed, c.red);
+
+  if (plan.issues.length) {
+    console.log(`\n  ${c.red(`${plan.issues.length} problem${plan.issues.length === 1 ? "" : "s"}`)} — ${workspace} was not deployed\n`);
+    for (const i of plan.issues) console.log(`    ${c.red("✗")} ${c.bold(i.where)}  ${i.message}`);
+    return 1;
+  }
+  // Advisory: the deploy still proceeds. The outward-without-a-gate lint the
+  // same as `foldrun check`, surfaced so an API push is not the last to hear.
+  for (const w of plan.warnings ?? []) console.log(`    ${c.amber("!")} ${c.bold(w.where)}  ${w.message}`);
+  if (plan.blockedBy.length && !flags.force) {
+    console.log(
+      `\n  ${c.amber("⏸")} ${plan.blockedBy.length} run${plan.blockedBy.length === 1 ? " is" : "s are"} still using these files: ` +
+        `${plan.blockedBy.join(", ")}\n    ${c.dim("wait for them to finish, or --force to deploy anyway")}`,
+    );
+    return 1;
+  }
+  if (flags["dry-run"]) {
+    console.log(`    ${c.dim("checks out — run without --dry-run to deploy")}`);
+    return 0;
+  }
+  const at = url ? { commit: plan.commit } : deployedCommit(tenant, workspace);
+  console.log(
+    `    ${c.green("✓")} deployed${at?.commit ? ` ${c.dim(at.commit.slice(0, 8))}` : ""}` +
+      `${plan.preserved ? c.dim(` · kept ${plan.preserved} file${plan.preserved === 1 ? "" : "s"} the agents own`) : ""}`,
+  );
+  if (layout) writeStamp(layout, url, workspace, files);
+  // The environments the agents need are built on the platform as the deploy
+  // lands; wait for them here so a package that will not install is heard
+  // now, not from the first scheduled run. --no-runtimes skips the wait.
+  if (url && flags["no-runtimes"] !== true) await reportRuntimes(url, workspace, flags, { waitSeconds: 120 });
+  return 0;
+}
+
+/**
+ * The runtimes a deployed workspace's agents need, and whether each is built
+ * (GET /api/workspaces/<ws>/runtimes). With waitSeconds, polls while any is
+ * still pending or building. A platform without the endpoint says nothing:
+ * older installs simply build on first run, as they always did.
+ */
+async function reportRuntimes(url, workspace, flags, { waitSeconds = 0 } = {}) {
+  const until = Date.now() + waitSeconds * 1000;
+  let runtimes = [];
+  for (;;) {
+    try {
+      runtimes = (await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(workspace)}/runtimes`)).runtimes ?? [];
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return [];
+      throw err;
+    }
+    const busy = runtimes.some((r) => r.state === "pending" || r.state === "building");
+    if (!busy || Date.now() >= until) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  for (const r of runtimes) {
+    const what = [
+      r.python && r.python !== true ? `python ${r.python}` : null,
+      ...(r.packages ?? []),
+      ...(r.npm ?? []).map((n) => `npm:${n}`),
+      ...(r.system ?? []).map((n) => `apt:${n}`),
+    ].filter(Boolean).join(", ") || "python";
+    const who = c.dim(`(${(r.agents ?? []).join(", ")})`);
+    const mark =
+      r.state === "ready" ? c.green("✓") : r.state === "failed" ? c.red("✗") : c.amber("…");
+    const tail =
+      r.state === "failed"
+        ? `\n        ${c.red(String(r.error ?? "failed").split("\n").slice(-3).join("\n        "))}`
+        : r.state === "ready"
+          ? ""
+          : c.dim(` ${r.state}${waitSeconds ? ` after ${waitSeconds}s — \`foldrun runtimes --to ${workspace}\` checks again` : ""}`);
+    console.log(`    ${mark} runtime ${c.dim(r.fingerprint.slice(0, 8))} ${what} ${who}${tail}`);
+    for (const bad of r.rejected ?? []) console.log(`      ${c.amber("!")} not a requirement, ignored: ${bad}`);
+  }
+  return runtimes;
+}
+
+/** `foldrun runtimes` — the deployed workspace's environments and their state. */
+async function runtimesCmd(flags, layout) {
+  const url = platformFor(flags, "runtimes");
+  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  if (!ws) throw new Error("which workspace? `foldrun runtimes --to <workspace>` — or run it inside one");
+  console.log(`\n  ${c.bold(ws)} ${c.dim("runtimes")}`);
+  const runtimes = await reportRuntimes(url, ws, flags, { waitSeconds: flags.wait === true ? 120 : 0 });
+  if (!runtimes.length) console.log(`    ${c.dim("no agent here declares a runtime")}`);
+  console.log();
+  return runtimes.some((r) => r.state === "failed") ? 1 : 0;
+}
+
+/**
+ * `foldrun status` — what differs here from what is deployed.
+ *
+ * Reads only. Three numbers per workspace, plus the one a plain diff cannot
+ * give you: whether the live copy moved since your last deploy, which is how
+ * you find out somebody edited a flow in the dashboard before you overwrite
+ * it.
+ */
+/** Levels as the status page colours them. */
+const LEVEL_PAINT = { operational: (t) => c.green(t), maintenance: (t) => c.amber(t), degraded: (t) => c.amber(t), outage: (t) => c.red(t), unknown: (t) => c.dim(t) };
+
+/** GET /api/status — open, so no key is sent or needed. Null when the
+ *  platform does not answer, which is itself the answer.
+ *  @returns {Promise<{ report?: any, error?: string }>} */
+async function fetchPlatformStatus(url, flags) {
+  try {
+    const res = await remoteFetch(url, "/api/status", {}, { seconds: timeoutSeconds(flags) });
+    if (!res.ok && res.status !== 503) return { error: `/api/status → HTTP ${res.status}` };
+    return { report: await res.json() };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The live incidents and windows, one line each with the latest update. */
+function printIncidents(report) {
+  for (const i of [...(report.incidents ?? []), ...(report.maintenance ?? [])]) {
+    const last = i.updates?.at(-1);
+    const upcoming = i.kind === "maintenance" && Date.parse(i.startsAt) > Date.now();
+    const label = i.kind === "maintenance" ? (upcoming ? `maintenance ${i.startsAt.slice(0, 16).replace("T", " ")}Z` : "maintenance") : `${i.impact} incident`;
+    const paint = i.kind === "incident" && i.impact === "major" ? c.red : c.amber;
+    console.log(`  ${paint("!")} ${c.bold(i.title)}  ${c.dim(`${label} · ${String(i.status).replace("_", " ")}`)}`);
+    if (last?.body) console.log(`      ${last.body.split("\n")[0].slice(0, 160)}`);
+  }
+}
+
+/**
+ * `foldrun status --platform` — is the platform up: overall, each
+ * component, and any incident or maintenance the operator posted. Reads the
+ * open GET /api/status; exits 1 when the platform does not answer.
+ */
+async function platformStatusCmd(flags) {
+  if (flags.history === true) return platformHistoryCmd(flags);
+  const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
+  const { report, error } = await fetchPlatformStatus(url, flags);
+  if (flags.json === true) {
+    console.log(JSON.stringify(report ?? { url, error }, null, 2));
+    return report ? 0 : 1;
+  }
+  if (!report) {
+    console.log(`\n  ${c.red("✗")} status unavailable — ${url} did not answer (${error}); the platform may be down\n`);
+    return 1;
+  }
+  const paint = LEVEL_PAINT[report.status] ?? LEVEL_PAINT.unknown;
+  console.log(`\n  ${paint("●")} ${c.bold(report.description ?? report.status)}  ${c.dim(url)}\n`);
+  const wide = Math.max(...(report.components ?? []).map((x) => x.name.length), 0);
+  for (const comp of report.components ?? []) {
+    const p = LEVEL_PAINT[comp.status] ?? LEVEL_PAINT.unknown;
+    console.log(`  ${comp.name.padEnd(wide)}  ${p(comp.status.padEnd(11))} ${c.dim(comp.detail ?? "")}`);
+  }
+  if ((report.incidents?.length ?? 0) + (report.maintenance?.length ?? 0)) {
+    console.log();
+    printIncidents(report);
+  }
+  console.log(`\n  ${c.dim("history and past incidents: https://foldrun.io/status/")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun status --platform --history [--days n]` — what the status page
+ * draws as bars: each component's uptime per day over the window (1–90,
+ * default 90), and the incidents in it. The open GET /api/status/history.
+ */
+async function platformHistoryCmd(flags) {
+  const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
+  const days = flags.days === undefined ? 90 : Number(flags.days);
+  if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error(`--days is a whole number from 1 to 90 — not "${flags.days}"`);
+  const res = await remoteFetch(url, `/api/status/history?days=${days}`, {}, { seconds: timeoutSeconds(flags) });
+  /** @type {any} */
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new HttpError(body.error ?? `/api/status/history → HTTP ${res.status}`, res.status, body);
+  if (flags.json === true) {
+    console.log(JSON.stringify(body, null, 2));
+    return 0;
+  }
+  const share = (u) => (u === null || u === undefined ? "  —   " : `${(u * 100).toFixed(u === 1 ? 0 : 2)}%`.padStart(6));
+  const mark = (d) => (d.uptime === null ? c.dim("·") : d.outage ? c.red("▮") : d.degraded || d.maintenance ? c.amber("▮") : c.green("▮"));
+  const comps = body.components ?? [];
+  const wide = Math.max(0, ...comps.map((x) => x.name.length));
+  console.log(`\n  ${c.bold(`last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}`)}  ${c.dim(`${url} · a sample every ${body.sampleMinutes ?? 5} minutes · uptime is the share not in outage`)}\n`);
+  for (const comp of comps) console.log(`  ${comp.name.padEnd(wide)}  ${share(comp.uptime)}  ${(comp.days ?? []).map(mark).join("")}`);
+  const incidents = body.incidents ?? [];
+  if (incidents.length) {
+    console.log(`\n  ${c.dim("incidents and maintenance")}`);
+    for (const i of incidents) {
+      const span = `${String(i.startsAt).slice(0, 16).replace("T", " ")}Z${i.resolvedAt ? ` → ${String(i.resolvedAt).slice(0, 16).replace("T", " ")}Z` : " · open"}`;
+      console.log(`  ${i.kind === "incident" ? (i.impact === "major" ? c.red("!") : c.amber("!")) : c.dim("~")} ${c.bold(i.title)}  ${c.dim(`${i.kind === "incident" ? `${i.impact} incident` : "maintenance"} · ${span}`)}`);
+    }
+  } else {
+    console.log(`\n  ${c.dim("no incidents in the window")}`);
+  }
+  console.log(`\n  ${c.dim("▮ a day: green up, amber degraded or maintenance, red an outage, · no samples · --days <n>, --json")}\n`);
+  return 0;
+}
+
+async function statusCmd(layout, flags, only) {
+  if (flags.platform === true) return platformStatusCmd(flags);
+  const { isSourcePath, accountTreeFrom } = await core();
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("status compares this folder with a platform — pass --url, or `foldrun login` first");
+  // The platform's own state first, one line: a diff read during an
+  // incident should say so before it says anything else.
+  {
+    const { report, error } = await fetchPlatformStatus(url, flags);
+    const paint = report ? (LEVEL_PAINT[report.status] ?? LEVEL_PAINT.unknown) : c.red;
+    console.log(`\n  ${paint("●")} ${report ? `platform: ${report.description}` : `platform status unavailable (${error})`}${report && report.status !== "operational" ? c.dim("  — foldrun status --platform") : ""}`);
+    if (report) printIncidents(report);
+  }
+  const { tree } = accountTreeFrom(layout.kind === "account" ? layout.accountRoot : layout.workspaceDir, only);
+  const live = new Set(await remoteWorkspaceNames(url, flags));
+  const stamps = readStamps(layout)[url] ?? {};
+
+  console.log(`\n  ${c.bold(url)} ${c.dim(`← ${tree.root}`)}\n`);
+  for (const ws of tree.workspaces) {
+    if (!live.has(ws.name)) {
+      console.log(`  ${c.green("+")} ${c.bold(ws.name)}  ${c.dim(`${ws.files.length} files · not on the platform yet`)}`);
+      continue;
+    }
+    const there = await remoteWorkspaceFiles(url, flags, ws.name, isSourcePath);
+    const here = new Map(ws.files.map((f) => [f.path, f.content]));
+    const added = [...here.keys()].filter((p) => !there.has(p));
+    const updated = [...here.keys()].filter((p) => there.has(p) && there.get(p) !== here.get(p));
+    const removed = [...there.keys()].filter((p) => !here.has(p));
+    // Changed on the platform since we last pushed: compare the live bytes
+    // with the stamp of what we sent, not with what is on disk now.
+    const stamp = stamps[ws.name];
+    const drifted = stamp
+      ? [...there.entries()].filter(([p, content]) => stamp.files[p] !== undefined && stamp.files[p] !== digest(content)).map(([p]) => p)
+      : [];
+    const clean = !added.length && !updated.length && !removed.length;
+    console.log(
+      `  ${clean ? c.green("✓") : c.amber("~")} ${c.bold(ws.name)}  ` +
+        c.dim(`+${added.length} ~${updated.length} -${removed.length}`) +
+        (stamp ? c.dim(` · deployed ${stamp.at.slice(0, 16).replace("T", " ")}`) : c.dim(" · never deployed from here")),
+    );
+    for (const p of added.slice(0, 10)) console.log(`      ${c.green("+")} ${p}`);
+    for (const p of updated.slice(0, 10)) console.log(`      ${c.dim("~")} ${p}`);
+    for (const p of removed.slice(0, 10)) console.log(`      ${c.red("-")} ${p}  ${c.dim("(on the platform, not here — a deploy never removes it)")}`);
+    if (drifted.length) {
+      console.log(`      ${c.amber("!")} ${drifted.length} file${drifted.length === 1 ? "" : "s"} changed on the platform since your last deploy: ${drifted.slice(0, 5).join(", ")}`);
+    }
+  }
+
+  const gone = [...live].filter((n) => !tree.workspaces.some((w) => w.name === n));
+  if (gone.length) {
+    console.log(`\n  ${c.dim(`on the platform but not here: ${gone.join(", ")} — \`foldrun pull\` brings them down`)}`);
+  }
+  console.log(`\n  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun pull` — the platform's account, into this folder.
+ *
+ * Safe by default: any local file whose bytes differ from the live ones is
+ * listed and NOTHING is written. `--force` writes them. The rule is blunt on
+ * purpose — a three-way merge needs a base this tool does not have, and a
+ * silent overwrite of an afternoon's work is not worth the convenience.
+ */
+async function pullCmd(layout, flags, only) {
+  const { isSourcePath, LIBRARY_KINDS } = await core();
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("pull brings a platform's account down — pass --url, or `foldrun login` first");
+  const root = layout.accountRoot;
+  const wsRoot = layout.workspacesDir ?? path.join(root, "workspaces");
+
+  const names = (await remoteWorkspaceNames(url, flags)).filter((n) => (only ? n === only : true));
+  if (only && !names.length) throw new Error(`no workspace "${only}" on ${url}`);
+
+  /** @type {{file: string, content: string}[]} */
+  const incoming = [];
+  for (const name of names) {
+    const there = await remoteWorkspaceFiles(url, flags, name, isSourcePath);
+    for (const [rel, content] of there) incoming.push({ file: path.join(wsRoot, name, rel), content });
+  }
+  for (const f of await remoteLibrary(url, flags, LIBRARY_KINDS)) {
+    incoming.push({ file: path.join(root, "library", f.kind, f.path), content: f.content });
+  }
+
+  const clashes = incoming.filter((f) => {
+    try {
+      return fs.readFileSync(f.file, "utf8") !== f.content;
+    } catch {
+      return false; // absent: nothing to clobber
+    }
+  });
+  if (clashes.length && flags.force !== true) {
+    console.log(`\n  ${c.red("✗")} ${clashes.length} local file${clashes.length === 1 ? "" : "s"} would be overwritten\n`);
+    for (const f of clashes.slice(0, 40)) console.log(`    ${c.red("~")} ${path.relative(root, f.file)}`);
+    if (clashes.length > 40) console.log(`    ${c.dim(`… and ${clashes.length - 40} more`)}`);
+    console.log(`\n  ${c.dim("commit them, or pull with --force to take the platform's copy")}\n`);
+    return 1;
+  }
+
+  let written = 0;
+  for (const f of incoming) {
+    let before = null;
+    try {
+      before = fs.readFileSync(f.file, "utf8");
+    } catch {
+      /* new */
+    }
+    if (before === f.content) continue;
+    fs.mkdirSync(path.dirname(f.file), { recursive: true });
+    fs.writeFileSync(f.file, f.content);
+    written++;
+  }
+  console.log(
+    `\n  ${c.green("✓")} pulled ${names.length} workspace${names.length === 1 ? "" : "s"} from ${url}  ` +
+      c.dim(`${written} file${written === 1 ? "" : "s"} written, ${incoming.length - written} already current`),
+  );
+  const rules = writeAgentFiles(root);
+  for (const [file, what] of [["AGENTS.md", rules.agentsMd], ["CLAUDE.md", rules.claudeMd]]) {
+    if (what === "created" || what === "updated") console.log(`  ${c.green("✓")} ${file} ${c.dim(`${what} — the coding-agent rules, pointing at \`foldrun docs\``)}`);
+  }
+  console.log(`  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun workspaces` — what exists here, what exists there, and which are
+ * both. `rm <name>` removes one; on the platform it needs saying twice.
+ */
+async function workspacesCmd(positional, flags, layout) {
+  const [verb, name] = positional;
+  const url = flags.local === true ? undefined : remoteUrl(flags);
+
+  if (verb === "new" || verb === "add") {
+    if (flags.platform !== true) return newWorkspace(name, flags, layout);
+    // The dashboard's Create workspace: blank (an AGENTS.md), or with
+    // --starter the example researcher, writer and publish flow.
+    if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
+    if (!name) throw new Error("which workspace? `foldrun workspaces new <name> --platform`");
+    assertName(name);
+    const r = await remoteCall(url, flags, "/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify(flags.starter === true ? { name, starter: true } : { name, template: true }),
+    });
+    console.log(`\n  ${c.green("✓")} ${c.bold(r.name ?? name)} ${c.dim(`on ${url} — ${r.agents ?? 0} agent${r.agents === 1 ? "" : "s"}, ${r.flows ?? 0} flow${r.flows === 1 ? "" : "s"}`)}`);
+    console.log(`  ${c.dim(`foldrun agent new <name> --platform --to ${r.name ?? name} · foldrun pull ${r.name ?? name}`)}\n`);
+    return 0;
+  }
+
+  if (verb === "rm" || verb === "remove" || verb === "delete") {
+    if (!name) throw new Error("which workspace? `foldrun workspaces rm <name>`");
+    // `rm ..` joined to workspaces/ is the account folder itself. A name is
+    // one path segment, never . or .., and locally one this account has.
+    if (name === "." || name === ".." || /[\\/]/.test(name)) {
+      throw new Error(`"${name}" is not a workspace name — have: ${(layout.workspaces ?? []).join(", ") || "none"}`);
+    }
+    if (flags.platform === true) {
+      if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
+      if (flags.yes !== true) {
+        throw new Error(`this deletes ${name} and every run in it on ${url}, for everyone — add --yes if that is what you mean`);
+      }
+      await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(name)}`, { method: "DELETE" });
+      console.log(`\n  ${c.green("✓")} deleted ${c.bold(name)} on ${url}\n`);
+      return 0;
+    }
+    if (!layout.workspacesDir) throw new Error("not in an account folder — there is nothing here to remove");
+    const dir = path.join(layout.workspacesDir, name);
+    if (!layout.workspaces.includes(name) || !fs.existsSync(dir)) {
+      throw new Error(`no workspace "${name}" here — have: ${layout.workspaces.join(", ") || "none"}`);
+    }
+    if (!(await sureToDelete(flags, "workspaces rm", `the folder ${dir} and everything in it`))) return 1;
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log(`\n  ${c.green("✓")} removed ${c.dim(dir)}  ${c.dim("(locally — the platform's copy is untouched)")}\n`);
+    return 0;
+  }
+  if (verb && verb !== "ls" && verb !== "list") {
+    throw new Error(`workspaces: unknown verb "${verb}" — ls, show <name>, new <name>, rm <name>, demo`);
+  }
+
+  const here = layout.workspaces;
+  let there = [];
+  let reach = null;
+  if (url) {
+    try {
+      there = await remoteWorkspaceNames(url, flags);
+    } catch (err) {
+      reach = explain(err);
+    }
+  }
+  const all = [...new Set([...here, ...there])].sort();
+  // --json: for a script — `foldrun workspaces --json | jq -r '.workspaces[].name'`.
+  // The table's footer once read as a workspace called "is" to a loop that
+  // parsed it. Unreachable platform: still the list, with `error`, exit 1.
+  if (flags.json === true) {
+    console.log(
+      JSON.stringify(
+        {
+          platform: url ?? null,
+          workspaces: all.map((n) => ({ name: n, here: here.includes(n), platform: there.includes(n) })),
+          ...(reach ? { error: reach } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+    return reach ? 1 : 0;
+  }
+  // Nothing here and the platform could not be read is not "no workspaces":
+  // that once answered a refused API version, a bad key and a down platform
+  // alike, with exit 0 (FOL-41).
+  if (!all.length && reach) throw new Error(`could not read the platform's workspaces: ${reach}`);
+  if (!all.length) {
+    console.log(`\n  ${c.dim("no workspaces — `foldrun new <name>` makes one")}\n`);
+    return 0;
+  }
+  const width = Math.max(...all.map((n) => n.length));
+  console.log("");
+  for (const n of all) {
+    const local = here.includes(n);
+    const live = there.includes(n);
+    const where = local && live ? "here · " + (url ?? "") : local ? "here only" : `${url} only`;
+    console.log(`  ${local && live ? c.green("●") : c.dim("○")} ${c.bold(n.padEnd(width))}  ${c.dim(where)}`);
+  }
+  if (reach) console.log(`\n  ${c.amber("!")} ${c.dim(`could not read the platform: ${reach}`)}`);
+  console.log(`\n  ${c.dim("● is in both. `foldrun pull` brings one down; `foldrun deploy <name>` pushes one up.")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun accounts` — every account this machine is signed in to, and
+ * which one a bare command talks as. `foldrun use <name>` switches.
+ *
+ * The list is the point: someone looking after four customers on one
+ * platform could see only the last one they signed in as, and had to paste
+ * --token to reach the others.
+ */
+function accountsCmd(positional) {
+  const profiles = listProfiles();
+  if (!profiles.length) {
+    console.log(`\n  ${c.dim("not signed in anywhere — `foldrun login`")}\n`);
+    return 0;
+  }
+  const verb = positional[0];
+  if (verb && verb !== "ls" && verb !== "list") throw new Error(`accounts: unknown verb "${verb}" — it takes none; \`foldrun use <name>\` switches`);
+  const width = Math.max(...profiles.map((p) => p.name.length));
+  console.log("");
+  for (const p of profiles) {
+    const mark = p.current ? c.green("●") : " ";
+    const who = p.email ?? c.dim("api key");
+    console.log(`  ${mark} ${c.bold(p.name.padEnd(width))}  ${p.account}  ${c.dim(`${p.role ?? "?"} · ${who} · ${p.url}`)}`);
+  }
+  console.log(`\n  ${c.dim("● is the one a bare command talks as. `foldrun use <name>` switches; --profile <name> is one command.")}\n`);
+  return 0;
+}
+
+function useCmd(positional) {
+  const name = positional[0];
+  if (!name) {
+    const names = listProfiles().map((p) => p.name);
+    throw new Error(`which account? ${names.length ? names.join(", ") : "none stored — `foldrun login` first"}`);
+  }
+  const p = useProfile(name);
+  if (!p) {
+    const names = listProfiles().map((x) => x.name);
+    throw new Error(`no account called "${name}"${names.length ? ` — try ${names.join(", ")}` : ""}`);
+  }
+  console.log(`\n  ${c.green("✓")} now acting as ${c.bold(p.name)} ${c.dim(`(${p.account}, ${p.role} · ${p.url})`)}\n`);
+  return 0;
+}
+
+// --------------------------------------------------------------- storage
+
+/** Bytes as a person reads them: 12.4KB, 3.1MB. */
+function humanBytes(n) {
+  const b = Number(n);
+  if (!Number.isFinite(b)) return "—";
+  if (b < 1024) return `${b}B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)}KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)}MB`;
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)}GB`;
+}
+
+/**
+ * `foldrun storage ls|cat|get|put|rm|share|shares|unshare` — what a workspace
+ * PRODUCED, what you put beside it, and the public links to it.
+ *
+ * `source` is the other half of this and the distinction is the whole
+ * point: source is what you wrote, storage is what the agents made. A
+ * deliverable nobody looks at is the one that goes stale, so `ls` prints
+ * when each file was written and which run wrote it. A directory whose
+ * newest file is three weeks old and whose run id nobody recognises is the
+ * shape staleness actually has.
+ */
+async function storageCmd(positional, flags, layout) {
+  const url = platformFor(flags, "storage");
+  // A folder that is not a workspace is not a workspace: `logs` and `source`
+  // fall back to the directory's NAME, which from ~/Downloads asks the
+  // platform for a workspace called "Downloads" and reports a 404 as though
+  // the file were missing. --to is the answer from anywhere else.
+  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  if (!ws) throw new Error("which workspace? `foldrun storage ls --to <workspace>` — or run it inside one");
+  const verb = positional[0] ?? "ls";
+
+  if (verb === "ls") {
+    const body = await remoteCall(url, flags, `/api/workspaces/${ws}/storage`);
+    const prefix = positional[1];
+    const files = (body.files ?? []).filter((f) => (prefix ? f.path === prefix || f.path.startsWith(prefix.replace(/\/*$/, "/")) : true));
+    if (!files.length) {
+      console.log(`\n  ${c.dim(`nothing in ${ws}'s storage${prefix ? ` under ${prefix}` : ""}`)}\n`);
+      return 0;
+    }
+    files.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    const w = {
+      size: Math.max(...files.map((f) => humanBytes(f.size).length)),
+      path: Math.max(...files.map((f) => f.path.length)),
+      when: Math.max(...files.map((f) => when(f.updatedAt).length)),
+    };
+    console.log();
+    for (const f of files) {
+      // `by` is "run:<id>" for anything an agent wrote, "user:<email>" for
+      // an upload, "api-key" for a key with no person behind it.
+      const by = String(f.by ?? "");
+      console.log(
+        `  ${c.bold(pad(f.path, w.path))}  ${c.dim(`${pad(humanBytes(f.size), w.size)}  ${pad(when(f.updatedAt), w.when)}  ${ago(f.updatedAt)} ago  ${by}`)}`,
+      );
+    }
+    const used = body.used ?? files.reduce((n, f) => n + (f.size ?? 0), 0);
+    console.log(
+      `\n  ${c.dim(`${files.length} file${files.length === 1 ? "" : "s"} · ${humanBytes(used)}${body.quotaMb ? ` of ${body.quotaMb}MB` : ""}${body.driver ? ` · ${body.driver}` : ""} — \`foldrun storage cat <path> --to ${ws}\``)}\n`,
+    );
+    return 0;
+  }
+
+  // ---- public links. A share is the one thing here reachable without a
+  // credential, so the terminal says exactly what it minted and until when.
+  if (verb === "share") {
+    const rel = positional[1];
+    if (!rel) throw new Error("`foldrun storage share <path>` — a path under storage/, as `foldrun storage ls` names it (--ttl <days>, --forever)");
+    if (flags.forever === true && flags.ttl !== undefined) throw new Error("--forever or --ttl <days>, not both");
+    const ttlDays = flags.forever === true ? null : flags.ttl !== undefined ? Number(flags.ttl) : undefined;
+    if (ttlDays !== undefined && ttlDays !== null && !(Number.isFinite(ttlDays) && ttlDays > 0)) throw new Error("--ttl is a number of days, more than zero");
+    const body = await remoteCall(url, flags, `/api/workspaces/${ws}/shares`, {
+      method: "POST",
+      body: JSON.stringify({ path: rel.startsWith("storage/") ? rel : `storage/${rel}`, ...(ttlDays !== undefined ? { ttlDays } : {}) }),
+    });
+    console.log(`\n  ${c.green("✓")} ${c.bold(body.url)}`);
+    console.log(`  ${c.dim(`${body.path} · ${body.contentType} · ${body.expiresAt ? `until ${when(body.expiresAt)}` : "never expires"} — anyone with the link can fetch it; \`foldrun storage unshare ${body.token} --to ${ws}\` takes it down`)}\n`);
+    return 0;
+  }
+  if (verb === "shares") {
+    const { shares = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares`);
+    const now = Date.now();
+    const live = (x) => !x.revokedAt && (!x.expiresAt || Date.parse(x.expiresAt) > now);
+    const rows = flags.all === true ? shares : shares.filter(live);
+    if (!rows.length) {
+      console.log(`\n  ${c.dim(`no ${flags.all === true ? "" : "live "}links in ${ws} — \`foldrun storage share <path>\` mints one${flags.all === true ? "" : ", --all shows expired and revoked ones too"}`)}\n`);
+      return 0;
+    }
+    const w = { path: Math.max(...rows.map((x) => x.path.length)), token: Math.max(...rows.map((x) => x.token.length)) };
+    console.log();
+    for (const x of rows) {
+      const state = x.revokedAt ? c.red(`revoked ${ago(x.revokedAt)} ago`) : !live(x) ? c.red(`expired ${ago(x.expiresAt)} ago`) : x.expiresAt ? `until ${when(x.expiresAt)}` : "never expires";
+      console.log(`  ${live(x) ? c.green("✓") : c.dim("·")} ${c.bold(pad(x.path, w.path))}  ${c.dim(pad(x.token, w.token))}  ${c.dim(`${state} · by ${x.createdBy ?? "api-key"} · ${ago(x.createdAt)} ago`)}`);
+    }
+    console.log(`\n  ${c.dim(`${rows.length} link${rows.length === 1 ? "" : "s"} · a link is <platform>/s/<token> · \`foldrun storage unshare <token> --to ${ws}\``)}\n`);
+    return 0;
+  }
+  if (verb === "unshare") {
+    const token = positional[1];
+    if (!token) throw new Error("`foldrun storage unshare <token>` — `foldrun storage shares` lists them");
+    if (!(await sureToDelete(flags, "storage unshare", `share link ${token} (anyone holding it gets 404)`))) return 1;
+    const { revoked } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares?token=${encodeURIComponent(token)}`, { method: "DELETE" });
+    if (!revoked) {
+      console.log(`\n  ${c.dim(`nothing revoked — ${token} is not a live link of this account's`)}\n`);
+      return 1;
+    }
+    console.log(`\n  ${c.green("✓")} ${c.dim(`${token} revoked — the link answers 404 from now on, and the token is never reused`)}\n`);
+    return 0;
+  }
+
+  if (verb === "put") {
+    // Files and whole folders, into any workspace (--to). Each file goes the
+    // way the dashboard sends it: hashed, a presigned PUT straight to the
+    // bucket, then recorded — so a 400 MB video never meets the platform's
+    // request-size limit. An install with no bucket answers url: null and
+    // takes the bytes itself.
+    const locals = positional.slice(1);
+    if (!locals.length) throw new Error("`foldrun storage put <file|folder>...` — --as <path> renames one file, --into <folder/> puts them under a folder in storage/");
+    const into = typeof flags.into === "string" && flags.into ? `${flags.into.replace(/^\/+|\/+$/g, "")}/` : "";
+    const jobs = [];
+    const walk = (abs, rel) => {
+      const st = fs.statSync(abs);
+      if (st.isDirectory()) {
+        for (const name of fs.readdirSync(abs).sort()) {
+          if (name === ".DS_Store" || name === ".git" || name === "node_modules") continue;
+          walk(path.join(abs, name), `${rel}/${name}`);
+        }
+      } else if (st.isFile()) jobs.push({ abs, rel });
+    };
+    for (const local of locals) {
+      if (!fs.existsSync(local)) throw new Error(`${local} is not here`);
+      walk(path.resolve(local), path.basename(path.resolve(local)));
+    }
+    if (typeof flags.as === "string" && flags.as) {
+      if (jobs.length !== 1) throw new Error("--as names one file; for several use --into <folder/>");
+      jobs[0].rel = flags.as;
+    }
+    const token = tokenFor(url, flags);
+    const base = `/api/workspaces/${encodeURIComponent(ws)}/storage`;
+    const said = async (res) => {
+      const text = await res.text();
+      try { return JSON.parse(text).error ?? text.slice(0, 200); } catch { return text.slice(0, 200); }
+    };
+    let ok = 0, skipped = 0, bytesSent = 0;
+    const failed = [];
+    console.log();
+    for (const job of jobs) {
+      const rel = `${into}${job.rel}`.replace(/\\/g, "/");
+      const bytes = fs.readFileSync(job.abs);
+      if (!bytes.length) {
+        skipped++;
+        console.log(`  ${c.dim(`– ${ws}/storage/${rel}  skipped, empty`)}`);
+        continue;
+      }
+      try {
+        const sha = crypto.createHash("sha256").update(bytes).digest("hex");
+        const ask = await remoteFetch(url, `${base}/upload-url`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha }) }, { token });
+        // A platform older than presigned uploads answers 404 here: it
+        // takes the bytes itself, the way one with no bucket does.
+        if (!ask.ok && ask.status !== 404) throw new HttpError(await said(ask), ask.status, {});
+        const { url: direct } = /** @type {{ url?: string | null }} */ (ask.ok ? await ask.json() : { url: null });
+        if (direct) {
+          const put = await fetch(direct, { method: "PUT", body: bytes, signal: AbortSignal.timeout(Math.max(120, bytes.length / 200_000) * 1000) });
+          if (!put.ok) throw new Error(`the storage service refused it (${put.status})`);
+          const done = await remoteFetch(url, base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha, size: bytes.length }) }, { token });
+          if (!done.ok) throw new HttpError(await said(done), done.status, {});
+        } else {
+          const put = await remoteFetch(url, `${base}?path=${encodeURIComponent(rel)}`, { method: "PUT", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token });
+          if (!put.ok) throw new HttpError(await said(put), put.status, {});
+        }
+        ok++;
+        bytesSent += bytes.length;
+        console.log(`  ${c.green("✓")} ${ws}/storage/${rel}  ${c.dim(humanBytes(bytes.length))}`);
+      } catch (err) {
+        const status = err instanceof HttpError ? err.status : 0;
+        failed.push(rel);
+        console.log(`  ${c.red("✗")} ${ws}/storage/${rel}  ${c.dim(`${err.message}${status === 401 || status === 403 ? refusedHint(url, flags) : ""}`)}`);
+      }
+    }
+    console.log(`\n  ${c.dim(`${ok} of ${jobs.length} uploaded to ${ws} · ${humanBytes(bytesSent)}${skipped ? ` · ${skipped} empty skipped` : ""}${failed.length ? ` · ${failed.length} refused` : ""} — \`foldrun storage ls --to ${ws}\``)}\n`);
+    return failed.length ? 1 : 0;
+  }
+  if (verb === "rm") {
+    const rel = positional[1];
+    if (!rel) throw new Error("`foldrun storage rm <path>` — `foldrun storage ls` names them");
+    if (!(await sureToDelete(flags, "storage rm", `${ws}/storage/${rel}`))) return 1;
+    await remoteCall(url, flags, `/api/workspaces/${ws}/storage?path=${encodeURIComponent(rel)}`, { method: "DELETE" });
+    console.log(`\n  ${c.green("✓")} ${ws}/storage/${rel} removed\n`);
+    return 0;
+  }
+
+  if (verb !== "cat" && verb !== "get") {
+    throw new Error(`unknown storage verb "${verb}" — ls, cat, get, put, rm, share, shares or unshare`);
+  }
+
+  const rel = positional[1];
+  if (!rel) throw new Error(`\`foldrun storage ${verb} <path>\` — \`foldrun storage ls\` names them`);
+
+  // --preview: the platform reads the file (a PDF, a sheet, a deck, a zip)
+  // and answers what is in it as data — the storage browser's preview.
+  if (verb === "cat" && flags.preview === true) {
+    printPreview(await remoteCall(url, flags, `/api/workspaces/${ws}/storage/preview?path=${encodeURIComponent(rel)}`), rel);
+    return 0;
+  }
+
+  // The download route redirects to a signed URL on an object store and
+  // streams the bytes on the fs driver, so this is a plain fetch that
+  // follows redirects — not remoteCall, which parses JSON and would make a
+  // markdown file look like a broken platform.
+  const token = tokenFor(url, flags);
+  const res = await remoteFetch(url, `/api/workspaces/${ws}/storage/download?path=${encodeURIComponent(rel)}`, {}, { token });
+  if (!res.ok) {
+    const said = await res.text();
+    let why = said.slice(0, 200);
+    try {
+      why = JSON.parse(said).error ?? why;
+    } catch {
+      /* not JSON — whatever it said is the message */
+    }
+    throw new HttpError(`${rel} in ${ws}: ${why}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, {});
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+
+  if (verb === "cat") {
+    // A file store holds PDFs and images too, and spraying them at a
+    // terminal is how a shell ends up rendering escape codes it was handed.
+    if (bytes.includes(0)) {
+      throw new Error(`${rel} is not text (${humanBytes(bytes.length)}) — \`foldrun storage cat ${rel} --preview\` reads what is in it, \`foldrun storage get ${rel}\` writes it to a file`);
+    }
+    writeExact(bytes);
+    return 0;
+  }
+
+  const to = typeof flags.file === "string" ? flags.file : path.basename(rel);
+  if (fs.existsSync(to) && flags.force !== true) {
+    throw new Error(`${to} already exists — --file <path> puts it somewhere else, --force overwrites`);
+  }
+  fs.mkdirSync(path.dirname(path.resolve(to)), { recursive: true });
+  fs.writeFileSync(to, bytes);
+  console.log(`\n  ${c.green("✓")} ${to}  ${c.dim(`${humanBytes(bytes.length)} from ${ws}/storage/${rel}`)}\n`);
+  return 0;
+}
+
+// ----------------------------------------------------------------- rerun
+
+/**
+ * `foldrun rerun <run-id>` — the same flow again, from a step.
+ *
+ * The debug loop is fix the file, deploy, rerun from the step that failed:
+ * `--from <n>` names the step as the flow numbers them, `--agent <name>` the
+ * first step that agent runs. Earlier steps are recorded as skipped, not
+ * invented. `--wait` follows it the way `invoke --wait` does.
+ */
+async function rerunCmd(runId, flags, layout) {
+  const url = platformFor(flags, "rerun");
+  if (!runId) throw new Error("which run? `foldrun rerun <run-id> --from <step>` — `foldrun runs --status failed` lists them");
+  const from = flags.from !== undefined ? Number(flags.from) : undefined;
+  const agent = typeof flags.agent === "string" ? flags.agent : undefined;
+  if ((from === undefined || !Number.isInteger(from) || from < 1) && !agent) {
+    throw new Error("where from? --from <step> (as the flow numbers them) or --agent <name> (the first step that agent runs)");
+  }
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/rerun`, {
+    method: "POST",
+    // --instruction: what that step is told this once (FOL-72 step 6).
+    body: JSON.stringify({ ...(agent ? { agent } : { step: from }), ...(typeof flags.instruction === "string" ? { instruction: flags.instruction } : {}) }),
+  });
+  const id = body.runId ?? body.id;
+  console.log(`\n  ${c.green("✓")} ${c.bold(id)}  ${c.dim(`${ws} · again from ${agent ? `agent ${agent}` : `step ${from}`} of ${runId} · ${body.steps ?? "?"} steps${typeof flags.instruction === "string" ? " · with your instruction for that step" : ""}`)}`);
+  console.log(`  ${c.dim(`foldrun logs ${id} --to ${ws}${flags.wait === true ? "" : " · --wait follows it"}`)}\n`);
+  if (flags.wait !== true) return 0;
+  return logsCmd([id], { ...flags, follow: true, to: ws }, layout);
+}
+
+// ----------------------------------------------------------------- guide
+
+/**
+ * `foldrun guide` — the coding-agent rules, as Next.js writes them: a short
+ * managed block in AGENTS.md telling a coding agent to read the docs that
+ * ship with this CLI, and CLAUDE.md importing it. Rewrites the block in
+ * place, keeps everything around it. `--check` exits 1 when the block is
+ * missing or old (for CI); `--print` writes the block to stdout.
+ */
+async function guideCmd(flags, layout) {
+  if (flags.print === true) {
+    process.stdout.write(`${agentRulesBlock()}\n`);
+    return 0;
+  }
+  // An account folder or a flat workspace has an account root; a bare
+  // directory (nothing of foldrun's here yet) is its own root.
+  const root = layout && layout.kind !== "empty" ? layout.accountRoot : process.cwd();
+  if (flags.check === true) {
+    const ok = hasCurrentAgentRules(root);
+    console.log(`\n  ${ok ? c.green("✓") : c.amber("·")} ${c.dim(ok ? "AGENTS.md carries the current coding-agent rules" : "the coding-agent rules are missing or old here — `foldrun guide` writes them")}\n`);
+    return ok ? 0 : 1;
+  }
+  const r = writeAgentFiles(root);
+  console.log(`\n  ${c.green("✓")} ${root}`);
+  console.log(`    AGENTS.md  ${c.dim(r.agentsMd)}\n    CLAUDE.md  ${c.dim(r.claudeMd)}`);
+  console.log(`  ${c.dim("a coding agent here now reads `foldrun docs` before it edits; your own text around the block is kept")}\n`);
+  return 0;
+}
+
+// ------------------------------------------------------------------ docs
+
+/**
+ * `foldrun docs [page]` — foldrun's documentation, from the copy that ships
+ * with this CLI (the way node_modules/next/dist/docs does for Next.js), so a
+ * coding agent reads the version it is driving, offline. No page lists
+ * them; `--path` prints where they are on disk.
+ */
+async function docsCmd(positional, flags) {
+  if (flags.path === true) {
+    console.log(docsDir());
+    return 0;
+  }
+  const slug = positional[0];
+  if (!slug) {
+    const pages = docPages();
+    if (!pages.length) throw new Error("this install of the CLI has no bundled docs — reinstall it, or read them at foldrun.io/docs");
+    const w = Math.max(...pages.map((p) => p.slug.length));
+    console.log();
+    for (const p of pages) console.log(`  ${c.bold(p.slug.padEnd(w))}  ${c.dim(p.title)}`);
+    console.log(`\n  ${c.dim(`foldrun docs <page> prints one · on disk at ${docsDir()}`)}\n`);
+    return 0;
+  }
+  const text = docPage(slug);
+  if (text === null) {
+    const near = docPages().filter((p) => p.slug.includes(slug) || p.title.toLowerCase().includes(slug.toLowerCase())).map((p) => p.slug);
+    throw new Error(`no page "${slug}"${near.length ? ` — did you mean ${near.join(", ")}?` : ""} — \`foldrun docs\` lists them`);
+  }
+  process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+  return 0;
+}
+
+// -------------------------------------------------------------- triggers
+
+/**
+ * `foldrun triggers` — why nothing happened.
+ *
+ * One row per flow: how often its trigger fired, how often that became a
+ * run, and what the difference was — a duplicate delivery, a throttled or
+ * debounced burst, a quarantined flow, an overlap skipped, a fire missed
+ * while the platform was down. The gap between fired and started is the
+ * number someone opened a terminal to find.
+ */
+async function triggersCmd(flags, layout) {
+  const url = platformFor(flags, "triggers");
+  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  if (!ws) throw new Error("which workspace? `foldrun triggers --to <workspace>` — or run it inside one");
+  const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
+  const body = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/triggers?days=${days}`);
+  const rows = body.flows ?? [];
+  if (!rows.length) {
+    console.log(`\n  ${c.dim(`no trigger fired in ${ws} in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"} — a flow fires when its frontmatter says trigger: schedule, webhook, watch, storage or email`)}\n`);
+    return 0;
+  }
+  const w = { flow: Math.max(...rows.map((r) => r.flow.length)), trigger: Math.max(...rows.map((r) => r.trigger.length)) };
+  console.log();
+  let held = 0;
+  for (const r of rows) {
+    const quarantined = (r.dropped ?? []).some((d) => d.outcome === "quarantined");
+    if (quarantined) held++;
+    const ratio = `${r.started}/${r.fired} started`;
+    console.log(`  ${quarantined ? c.red("⏹") : r.started === r.fired ? c.green("✓") : c.amber("·")} ${c.bold(pad(r.flow, w.flow))}  ${c.dim(pad(r.trigger, w.trigger))}  ${ratio}  ${c.dim(r.lastStartedAt ? `last run ${ago(r.lastStartedAt)} ago` : "never became a run")}`);
+    for (const d of r.dropped ?? []) {
+      console.log(`      ${quarantined && d.outcome === "quarantined" ? c.red(`${d.count}× ${d.outcome}`) : c.dim(`${d.count}× ${d.outcome}`)}  ${c.dim(firstLine(d.detail ?? "", 90))}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`${rows.length} flow${rows.length === 1 ? "" : "s"} fired in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}${held ? ` · ${held} switched off by disable_after — one successful run clears it` : ""} · --since <days>`)}\n`);
+  return held ? 1 : 0;
+}
+
+// -------------------------------------------------------------- schedule
+
+/**
+ * `foldrun schedule` — every flow in the account that fires on a clock.
+ *
+ * Worth one command of its own because a cron line is the thing nobody
+ * reads twice: `0 5 1-7 * 5` looks monthly and fires eight times in
+ * twenty-eight days, since day-of-month and day-of-week are OR'd. So the
+ * next firing times are printed beside the expression rather than left to
+ * be reasoned about, and an expression the scheduler cannot parse is
+ * marked — an invalid schedule does not error anywhere, it simply never
+ * runs.
+ */
+async function scheduleCmd(flags) {
+  const url = platformFor(flags, "schedule");
+  const { scheduled = [] } = await remoteCall(url, flags, "/api/schedule");
+  const rows = typeof flags.to === "string" ? scheduled.filter((r) => r.workspace === flags.to) : scheduled;
+
+  if (!rows.length) {
+    console.log(`\n  ${c.dim(`nothing is scheduled${flags.to ? ` in ${flags.to}` : ""} — a flow fires on a clock when its frontmatter says trigger: schedule`)}\n`);
+    return 0;
+  }
+
+  // Soonest first: the question is almost always "what happens next".
+  rows.sort((a, b) => ((a.upcoming?.[0] ?? "9") < (b.upcoming?.[0] ?? "9") ? -1 : 1));
+  const w = {
+    workspace: Math.max(...rows.map((r) => r.workspace.length)),
+    flow: Math.max(...rows.map((r) => r.flow.length)),
+    schedule: Math.max(...rows.map((r) => r.schedule.length)),
+  };
+
+  console.log();
+  for (const r of rows) {
+    const next = (r.upcoming ?? [])[0];
+    console.log(
+      `  ${r.valid ? c.green("✓") : c.red("✗")} ${pad(r.workspace, w.workspace)}  ${c.bold(pad(r.flow, w.flow))}  ${pad(r.schedule, w.schedule)}  ` +
+        `${c.dim(`${r.timezone} · ${r.steps} step${r.steps === 1 ? "" : "s"}`)}`,
+    );
+    if (!r.valid) {
+      console.log(`      ${c.red("the scheduler cannot parse this — it will never fire")}`);
+      continue;
+    }
+    console.log(`      ${c.dim(`next ${next ? `${when(next)} (in ${ago(next).replace("—", "")})` : "not in the next 40 days"}`)}`);
+    for (const t of (r.upcoming ?? []).slice(1)) console.log(`      ${c.dim(`then ${when(t)}`)}`);
+  }
+  console.log(
+    `\n  ${c.dim(`${rows.length} scheduled flow${rows.length === 1 ? "" : "s"} — times are this terminal's clock; the cron line is read in the timezone beside it`)}\n`,
+  );
+  return rows.some((r) => !r.valid) ? 1 : 0;
+}
+
+/**
+ * `foldrun account providers` — which model providers this account's files
+ * use, and whether each key still works.
+ *
+ * A dead key is found by a desk failing at 3am, unless someone asks. The
+ * platform asks once a day; --check asks now, which spends one minimal
+ * request at each distinct endpoint.
+ */
+async function providersCmd(url, flags) {
+  const body = flags.check === true
+    ? { ...(await remoteCall(url, flags, "/api/account/providers")), lastCheck: (await remoteCall(url, flags, "/api/account/providers", { method: "POST", body: "{}" })).lastCheck }
+    : await remoteCall(url, flags, "/api/account/providers");
+  const configured = body.configured ?? [];
+  const last = body.lastCheck ?? null;
+  if (!configured.length) {
+    console.log(`\n  ${c.dim("no provider of the account's own — every agent here runs on the platform's credential")}\n`);
+    return 0;
+  }
+  const verdict = new Map((last?.results ?? []).map((r) => [`${r.declaredIn}|${r.provider}`, r]));
+  const w = { provider: Math.max(...configured.map((p) => p.provider.length)), where: Math.max(...configured.map((p) => p.declaredIn.length)) };
+  console.log();
+  let broken = 0;
+  for (const p of configured) {
+    const r = verdict.get(`${p.declaredIn}|${p.provider}`);
+    const mark = !r ? c.dim("·") : r.ok ? c.green("✓") : c.red("✗");
+    if (r && !r.ok) broken++;
+    console.log(`  ${mark} ${c.bold(pad(p.provider, w.provider))}  ${c.dim(pad(p.declaredIn, w.where))}  ${c.dim(`${p.model} · ${p.format}`)}${r && !r.ok ? `  ${c.red(r.verdict)} ${c.dim(firstLine(r.detail ?? "", 60))}` : ""}`);
+  }
+  console.log(
+    `\n  ${c.dim(last ? `checked ${ago(last.checkedAt)} ago${broken ? ` — ${broken} not answering` : " — all answering"}` : "never checked yet — the platform checks daily; --check asks now")}\n`,
+  );
+  return broken ? 1 : 0;
+}
+
+/**
+ * `foldrun account model` — the account's own model key: what every step
+ * runs on unless a provider: block names another (/api/account/model).
+ *
+ *   foldrun account model                                   what is set, what runs
+ *   foldrun account model set <provider> --key <api key>    a preset (anthropic,
+ *       openrouter, openai, groq, …) or `custom --base-url https://… --format openai`
+ *   foldrun account model remove
+ *
+ * `--key -` reads the key from stdin, so it stays out of the shell's history.
+ * The platform refuses a Claude login token for any account not allowed its
+ * own credential: bring an API key.
+ */
+async function accountModelCmd(url, positional, flags) {
+  const verb = positional[0];
+  const show = (r) => {
+    const runs =
+      r.runsOn === "account"
+        ? `${c.green("✓")} your own key — ${c.bold(r.provider ?? "custom")} ${c.dim(`${r.keyHint ?? ""} · ${r.baseUrl ?? ""} · ${r.format ?? ""}`)}`
+        : r.runsOn === "platform"
+          ? `${c.yellow("·")} the platform's credential ${c.dim("(this account is allowed it)")}`
+          : `${c.red("✗")} no key — runs on this account are refused until one is set`;
+    console.log(`\n  ${runs}`);
+    console.log(`\n  ${c.dim("foldrun account model set <provider> --key <api key> · remove · a provider: block in AGENTS.md wins over it")}\n`);
+  };
+  if (!verb) {
+    const r = await remoteCall(url, flags, "/api/account/model");
+    if (flags.json === true) console.log(JSON.stringify(r, null, 2));
+    else show(r);
+    return r.runsOn === "none" ? 1 : 0;
+  }
+  if (verb === "remove") {
+    const r = await remoteCall(url, flags, "/api/account/model", { method: "DELETE" });
+    if (flags.json === true) console.log(JSON.stringify(r, null, 2));
+    else show(r);
+    return 0;
+  }
+  if (verb !== "set") throw new Error("`foldrun account model`, `foldrun account model set <provider> --key <api key>`, or `foldrun account model remove`");
+  const provider = positional[1];
+  if (!provider) throw new Error("which provider? `foldrun account model set anthropic --key …` (a preset name, or `custom --base-url https://… --format openai`)");
+  let apiKey = typeof flags.key === "string" ? flags.key : "";
+  if (apiKey === "-") apiKey = fs.readFileSync(0, "utf8").trim();
+  if (!apiKey) throw new Error("--key <api key> (or --key - to read it from stdin)");
+  const body = {
+    provider,
+    apiKey,
+    ...(typeof flags["base-url"] === "string" ? { baseUrl: flags["base-url"] } : {}),
+    ...(typeof flags.format === "string" ? { format: flags.format } : {}),
+  };
+  const r = await remoteCall(url, flags, "/api/account/model", {
+    method: "PUT",
+    body: JSON.stringify(body),
+    headers: { "idempotency-key": crypto.randomUUID() },
+  });
+  if (flags.json === true) console.log(JSON.stringify(r, null, 2));
+  else show(r);
+  return 0;
+}
+
+// --------------------------------------------------------------- billing
+
+/**
+ * `foldrun billing` — what the account has, and what it has been spending on.
+ *
+ * "The wallet is empty" was a thing you could only learn by opening the
+ * dashboard, which means a run that stops paying for models looks like a
+ * broken platform from the terminal. The balance goes first, and a negative
+ * one is said in words.
+ */
+async function billingCmd(flags) {
+  const url = platformFor(flags, "billing");
+  const body = await remoteCall(url, flags, "/api/billing");
+  const balance = Number(body.balanceUsd ?? 0);
+  const entries = body.entries ?? [];
+
+  console.log(`\n  ${balance > 0 ? c.green("✓") : c.red("✗")} balance ${c.bold(`$${balance.toFixed(2)}`)}  ${c.dim(body.enabled ? "billing on" : "billing off — nothing is charged on this install")}`);
+  // What the account should be told — an empty wallet, an overdraft, a
+  // waiver — as the platform words it: it knows the gate, the overdraft and
+  // the waivers; the numbers here do not say enough to guess.
+  for (const notice of Array.isArray(body.notices) ? body.notices : []) {
+    const empty = /wallet is empty/.test(notice);
+    console.log(`  ${empty ? c.red("✗") : c.amber("⏸")} ${empty ? notice : c.dim(notice)}`);
+  }
+
+  const limit = Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 15;
+  const recent = entries.slice(0, limit);
+  if (!recent.length) {
+    console.log(`\n  ${c.dim("no ledger entries yet")}\n`);
+    return 0;
+  }
+
+  console.log();
+  const w = {
+    when: Math.max(...recent.map((e) => when(e.t).length)),
+    kind: Math.max(...recent.map((e) => String(e.kind).length)),
+    usd: Math.max(...recent.map((e) => `$${Number(e.usd ?? 0).toFixed(4)}`.length)),
+  };
+  for (const e of recent) {
+    const usd = Number(e.usd ?? 0);
+    // What it was FOR: a run says which flow in which workspace, an
+    // adjustment carries its own note, a top-up is itself.
+    const about = e.flow ? `${e.workspace}/${e.flow}${e.runId ? c.dim(` ${e.runId}`) : ""}` : (e.note ?? "");
+    console.log(
+      `  ${usd < 0 ? c.red("−") : usd > 0 ? c.green("+") : c.dim("·")} ${c.dim(pad(when(e.t), w.when))}  ${pad(e.kind ?? "", w.kind)}  ` +
+        `${pad(`$${Math.abs(usd).toFixed(4)}`, w.usd)}  ${firstLine(about, 70)}`,
+    );
+  }
+  console.log(`\n  ${c.dim(`${entries.length} entr${entries.length === 1 ? "y" : "ies"} on the ledger — --limit <n> shows more of them`)}\n`);
+  return 0;
+}
+
+// --------------------------------------------------------------- account
+
+/** The events a notify block may name, as the platform validates them. */
+const NOTIFY_EVENTS = ["failed", "awaiting-approval", "completed"];
+
+/** The account's defaults, as one readable block. */
+function printDefaults(d) {
+  const notify = d.notify
+    ? [d.notify.email, d.notify.url].filter(Boolean).join(", ") + c.dim(` on ${(d.notify.events ?? []).join(", ") || "nothing"}`)
+    : c.dim("nobody is told anything");
+  console.log(`\n  ${c.bold("account defaults")}  ${c.dim("every workspace here inherits these")}\n`);
+  console.log(`  timezone     ${d.timezone ?? c.dim("unset — schedules read UTC")}`);
+  console.log(`  notify       ${notify}`);
+  console.log(`  budget       ${d.budget ? `$${d.budget.usd} per ${d.budget.period}` : c.dim("no cap")}`);
+  console.log(`  concurrency  ${d.concurrency ?? c.dim("the plan's number")}`);
+  console.log(`  deploy_block ${d.deployBlock && d.deployBlock !== "none" ? `${d.deployBlock} ${c.dim(d.deployBlock === "secrets" ? "— a written-in key refuses a deploy" : "— any security finding refuses a deploy")}` : c.dim("none — security findings only warn")}`);
+  console.log(`  network      ${networkEnforceText(d.networkEnforce, "the install")}`);
+}
+
+/** network_enforce: as a person reads it. Off is never "allowed" outright:
+ *  the level above (the account, or the install's own switch) may refuse
+ *  anyway, and this file cannot see either, so off says what it leaves to. */
+function networkEnforceText(on, above) {
+  return on ? `refused ${c.dim("— a site off an agent's network: list gets a 403")}` : c.dim(`${above}'s — this file does not ask to refuse`);
+}
+
+/** `on`/`off` (or true/false, yes/no) for network_enforce, or an error. */
+function onOff(key, value, how) {
+  const v = String(value ?? "").toLowerCase();
+  if (["on", "true", "yes"].includes(v)) return true;
+  if (["off", "false", "no"].includes(v)) return false;
+  throw new Error(`${key} is on or off — e.g. \`${how}\` — not "${value ?? ""}"`);
+}
+
+/**
+ * `foldrun account telemetry` — where each finished run goes as an
+ * OpenTelemetry trace (the account's `telemetry:`). `set <url> --header
+ * authorization=\${OTEL_TOKEN}`, `clear`, `test` (POST …/telemetry/test:
+ * one made-up run, and what the collector answered).
+ */
+async function telemetryCmd(url, args, flags) {
+  const [sub, endpoint] = args;
+  if (!sub) {
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const t = defaults?.telemetry;
+    if (!t) {
+      console.log(`\n  ${c.dim("runs are not sent anywhere — foldrun account telemetry set https://<collector>/v1/traces --header authorization=\${OTEL_TOKEN}")}\n`);
+      return 0;
+    }
+    console.log(`\n  ${c.bold("telemetry")}  ${t.endpoint}`);
+    for (const [k, v] of Object.entries(t.headers ?? {})) console.log(`  ${c.dim(k)}  ${v}`);
+    console.log();
+    return 0;
+  }
+  if (sub === "test") {
+    const r = await remoteCall(url, flags, "/api/account/telemetry/test", { method: "POST", body: "{}" });
+    if (r.ok) console.log(`\n  ${c.green("✓")} ${r.endpoint} took it — ${r.spans} spans, HTTP ${r.status}. Look for the trace "run foldrun-telemetry-test".\n`);
+    else console.log(`\n  ${c.red("✗")} not delivered to ${r.endpoint} — ${r.error}\n`);
+    return r.ok ? 0 : 1;
+  }
+  if (sub === "clear") {
+    await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify({ telemetry: null }) });
+    console.log(`\n  ${c.green("✓")} runs are no longer sent\n`);
+    return 0;
+  }
+  if (sub !== "set") throw new Error(`unknown telemetry verb "${sub}" — set <url> [--header name=\${SECRET}], clear, test (bare: show it)`);
+  if (!endpoint) throw new Error("`foldrun account telemetry set https://<collector>/v1/traces --header authorization=${OTEL_TOKEN}`");
+  const headers = {};
+  for (const h of [flags.header].flat().filter((x) => typeof x === "string")) {
+    const i = h.indexOf("=");
+    if (i < 1) throw new Error(`--header is name=value, e.g. --header authorization='\${OTEL_TOKEN}' — not "${h}"`);
+    headers[h.slice(0, i).trim().toLowerCase()] = h.slice(i + 1).trim();
+  }
+  const r = await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify({ telemetry: { otlp: endpoint, ...(Object.keys(headers).length ? { headers } : {}) } }) });
+  console.log(`\n  ${c.green("✓")} every run that finishes is sent to ${r.defaults?.telemetry?.endpoint ?? endpoint} — \`foldrun account telemetry test\` proves it arrives\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------- the four jobs
+//
+// governance, guardrail, observability, evaluation — what each AGENTS.md
+// field does, as the platform maps it (GET /api/account/jobs). The CLI reads
+// the map from the platform rather than from @foldrun/core, so it always
+// matches the platform it is talking to.
+
+/** GET /api/account/jobs, for the account or one workspace. */
+function jobsOf(url, flags, workspace) {
+  return remoteCall(url, flags, `/api/account/jobs${workspace ? `?workspace=${enc(workspace)}` : ""}`);
+}
+
+/**
+ * `governance.deploy_block` → `deploy_block`, checked against the map: a
+ * field written under the wrong job is refused with the right one named.
+ * A bare key comes back as it was, with no request.
+ */
+async function jobKey(url, flags, key, workspace) {
+  if (typeof key !== "string" || !key.includes(".")) return { key, view: null };
+  const job = key.slice(0, key.indexOf("."));
+  const field = key.slice(key.indexOf(".") + 1);
+  const view = await jobsOf(url, flags, workspace);
+  const j = view.jobs.find((x) => x.name === job);
+  if (!j) throw new Error(`"${job}" is not one of the four jobs — governance, guardrail, observability, evaluation`);
+  const f = j.fields.find((x) => x.key === field);
+  if (!f) {
+    const right = view.jobs.find((x) => x.fields.some((y) => y.key === field));
+    throw new Error(right ? `${field} is a ${right.name} setting, not a ${job} one — \`${right.name}.${field}\`` : `${job} has no setting "${field}" — it holds ${j.fields.map((y) => y.key).join(", ")}`);
+  }
+  // `writable` says what this scope's settings can write; the rest live in
+  // AGENTS.md itself. A server too old to say leaves it to the PATCH.
+  if (f.writable === false) {
+    throw new Error(`${job}.${field} is not set from here — write \`${field}:\` in ${workspace ? `workspaces/${workspace}/AGENTS.md` : "the account's AGENTS.md"} (under \`${job}:\` or at the top) and deploy`);
+  }
+  return { key: field, view };
+}
+
+/** The value a field has at one level (the account's, or the workspace's). */
+async function jobValue(url, flags, key, workspace, view) {
+  const v = view ?? (await jobsOf(url, flags, workspace));
+  for (const j of v.jobs) {
+    const f = j.fields.find((x) => x.key === key);
+    if (f) return workspace ? f.workspace : f.account;
+  }
+  return null;
+}
+
+/**
+ * `set alerts <threshold> <value>` and `set judge model|effort <value>` —
+ * one entry merged into the block as it stands (the platform replaces a
+ * block whole). `off` removes the entry. A workspace's alerts, once its own,
+ * stay its own: the last threshold removed leaves `{}` ("none here"), and
+ * `new_host off` is written as false so the account's `on` does not apply;
+ * `clear alerts` goes back to the account's.
+ */
+async function mergedEntry(url, flags, key, args, workspace, view, how) {
+  const [entry, ...words] = args;
+  const raw = words.join(" ").trim();
+  const allowed = key === "alerts"
+    ? ["failure_rate", "min_runs", "credits_day", "run_minutes", "stale_days", "cost_spike", "runs_per_hour", "new_host"]
+    : ["model", "effort"];
+  if (!allowed.includes(entry)) throw new Error(`${how} <${allowed.join("|")}> <value> — not "${entry ?? ""}"`);
+  if (!raw) throw new Error(`${how} ${entry} <value> — or \`${entry} off\` to remove it`);
+  const current = { ...((await jobValue(url, flags, key, workspace, view)) ?? {}) };
+  if (raw === "off") delete current[entry];
+  else if (entry === "new_host") current.new_host = onOff("new_host", raw, `${how} new_host on`);
+  else current[entry] = key === "alerts" && entry !== "failure_rate" && /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
+  const own = key === "alerts" && workspace;
+  // A workspace's `new_host: false` is an opt-out from the account's on —
+  // kept whatever else is edited; at the account false is just unset.
+  if (own && entry === "new_host" && raw === "off") current.new_host = false;
+  else if (!own && current.new_host === false) delete current.new_host;
+  if (own) return current;
+  return Object.keys(current).length ? current : null;
+}
+
+/** A setting's value as one short line. */
+function shortValue(v) {
+  if (v === null || v === undefined) return null;
+  return typeof v === "object" ? JSON.stringify(v).replace(/"([a-z_]+)":/g, "$1: ").replace(/,/g, ", ") : String(v);
+}
+
+/**
+ * `foldrun identity [--to <workspace>]` — what a cloud must trust to accept
+ * this account's keyless identities: the issuer, and each agent's subject.
+ */
+async function identityCmd(flags) {
+  const url = platformFor(flags, "identity");
+  const ws = typeof flags.to === "string" ? flags.to : null;
+  const info = await remoteCall(url, flags, `/api/identity${ws ? `?workspace=${enc(ws)}` : ""}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(info, null, 2));
+    return 0;
+  }
+  if (!info.enabled) {
+    console.log(`\n  ${c.yellow("This install does not issue identity tokens")} ${c.dim("— its operator sets FOLDRUN_OIDC_ISSUER")}\n`);
+    return 1;
+  }
+  console.log(`\n  ${c.bold("Keyless cloud identity")}\n`);
+  console.log(`  issuer   ${info.issuer}`);
+  console.log(`  subject  ${info.subject}`);
+  console.log(`  tokens   ${Math.round(info.tokenSeconds / 60)} minutes, renewed while a step runs`);
+  console.log(`\n  ${c.dim("Trust the issuer in your cloud and pin at least the account in the subject; then `foldrun secrets set NAME --kind identity --audience <aud>` and name it in an agent's secrets:")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun jobs [--to <workspace>]` — the four jobs and every AGENTS.md
+ * field of each: the account's value, the workspace's, and how the two
+ * combine (they do not all simply override — network_enforce is on if
+ * either turns it on, both budgets apply).
+ */
+async function jobsCmd(flags, layout) {
+  const url = platformFor(flags, "jobs");
+  const ws = typeof flags.to === "string" ? flags.to : null;
+  const view = await jobsOf(url, flags, ws);
+  if (flags.json === true) {
+    console.log(JSON.stringify(view, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold("The four jobs")}  ${c.dim(ws ? `workspace ${ws}, over the account's` : "the account — every workspace inherits these")}`);
+  for (const j of view.jobs) {
+    console.log(`\n  ${c.bold(j.title)}  ${c.dim(j.what)}`);
+    const w = Math.max(...j.fields.map((f) => f.key.length));
+    for (const f of j.fields) {
+      const account = shortValue(f.account);
+      if (!ws) {
+        console.log(`    ${pad(f.key, w)}  ${account ?? c.dim("unset")}`);
+        continue;
+      }
+      const here = shortValue(f.workspace);
+      const how = f.combine ? c.dim(`  · ${f.combine}`) : "";
+      console.log(`    ${pad(f.key, w)}  ${here ?? c.dim("unset")}${c.dim(`  account: ${account ?? "unset"}`)}${how}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`set one: foldrun ${ws ? `workspace set <job>.<field> … --to ${ws}` : "account set <job>.<field> …"} — e.g. governance.deploy_block secrets`)}\n`);
+  return 0;
+}
+
+/** A GET …/pause, or null from a platform older than the kill switch —
+ *  the settings still print, without the line. */
+async function pauseState(request) {
+  try {
+    return await request;
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/** One pause mark as a line: since when, by whom, why. */
+function pauseLine(m) {
+  return `${m.at.slice(0, 16).replace("T", " ")} UTC by ${m.by}${m.reason ? ` — ${m.reason}` : ""}`;
+}
+
+/**
+ * `foldrun account pause|resume`, `foldrun workspace pause|resume` — the
+ * kill switch (POST / DELETE …/pause). Pausing is undone by a resume, so it
+ * asks nothing; --stop also stops the runs going now, which nothing undoes,
+ * so that asks.
+ */
+async function pauseCmd(flags, verb, what, { post, del }) {
+  if (verb === "resume") {
+    const r = await del();
+    const still = r.paused;
+    // An account resume leaves a workspace paused on its own paused.
+    const own = Object.keys(r.workspaces ?? {});
+    const held = still
+      ? c.amber(` — but still held: ${still.scope === "account" ? "the account" : "this workspace"} is paused (${pauseLine(still)})`)
+      : own.length
+        ? c.amber(` — but ${own.join(", ")} ${own.length === 1 ? "is" : "are"} paused on ${own.length === 1 ? "its" : "their"} own (\`foldrun workspace resume --to <name>\`)`)
+        : " — runs start again";
+    console.log(`\n  ${c.green("✓")} resumed ${what}${held}\n`);
+    return 0;
+  }
+  const stop = flags.stop === true;
+  if (stop && !(await confirmed(flags, "pause --stop", `Pause ${what} and stop every run going now? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing paused, nothing stopped")}\n`);
+    return 1;
+  }
+  const body = { ...(typeof flags.reason === "string" && flags.reason.trim() ? { reason: flags.reason.trim() } : {}), ...(stop ? { stop: true } : {}) };
+  const r = await post(JSON.stringify(body));
+  console.log(`\n  ${c.green("✓")} paused ${what} — no new run starts until \`resume\``);
+  if (stop) console.log(`  ${c.dim(`${r.stopped?.length ?? 0} run(s) stopped`)}`);
+  // A stop that failed is a run that may still be going: named, and the
+  // exit says so, rather than assumed to have finished on its own.
+  for (const f of r.failed ?? []) console.log(`  ${c.red("✗")} ${f.workspace}/${f.runId} not stopped — ${f.error}`);
+  console.log();
+  return r.failed?.length ? 1 : 0;
+}
+
+/**
+ * `foldrun account` — the account's own settings, read and set.
+ *
+ * These four keys live in the account AGENTS.md frontmatter and reach every
+ * workspace under it. The dashboard has had a form for them since they
+ * existed; the terminal had nothing, so setting a timezone meant a raw PATCH
+ * with a hand-built JSON body, which is exactly the door this CLI exists to
+ * replace.
+ *
+ * `set notify` MERGES against what is there. The platform replaces the whole
+ * notify block — that is how frontmatter scopes work — so setting an email
+ * without reading the current events first would silently drop them.
+ */
+async function accountCmd(positional, flags) {
+  const url = platformFor(flags, "account");
+  const verb = positional[0];
+
+  if (!verb) {
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    printDefaults(defaults ?? {});
+    const halt = await pauseState(remoteCall(url, flags, "/api/account/pause"));
+    const own = Object.keys(halt?.workspaces ?? {});
+    if (halt) console.log(`  paused       ${halt.account ? c.red(pauseLine(halt.account)) : c.dim("no")}${own.length ? c.dim(` · on their own: ${own.join(", ")}`) : ""}`);
+    console.log(`\n  ${c.dim("foldrun account set timezone Australia/Sydney · set notify email you@example.com · set budget 60/month · clear budget")}\n`);
+    return 0;
+  }
+  if (verb === "providers") return providersCmd(url, flags);
+  if (verb === "telemetry") return telemetryCmd(url, positional.slice(1), flags);
+  if (verb === "pause" || verb === "resume") {
+    return pauseCmd(flags, verb, "every workspace in the account", {
+      post: (body) => remoteCall(url, flags, "/api/account/pause", { method: "POST", body }),
+      del: () => remoteCall(url, flags, "/api/account/pause", { method: "DELETE" }),
+    });
+  }
+  if (verb === "model") return accountModelCmd(url, positional.slice(1), flags);
+  if (verb === "export") return accountExportCmd(url, flags);
+  if (verb !== "set" && verb !== "clear") {
+    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one, \`model\` is the account's own model key, \`providers\` checks the model keys, \`export\` downloads everything, \`pause\`/\`resume\` the kill switch`);
+  }
+
+  // `governance.deploy_block` names the job; checked, then sent as the field.
+  const { key, view } = await jobKey(url, flags, positional[1], null);
+  // telemetry: is set with its own verb (an endpoint and headers, not one
+  // value); `clear` works here as for any other key.
+  if (key === "telemetry" && verb === "set") {
+    throw new Error("telemetry has its own verb — `foldrun account telemetry set <otlp-url> [--header name=value]`; `foldrun account clear telemetry` turns it off");
+  }
+  const KEYS = ["timezone", "notify", "budget", "concurrency", "deploy_block", "network_enforce", "owner", "alerts", "judge", ...(verb === "clear" ? ["telemetry"] : [])];
+  if (!KEYS.includes(key)) {
+    throw new Error(`which setting? \`foldrun account ${verb} <${KEYS.join("|")}> …\` — or <job>.<field>, e.g. governance.owner (\`foldrun jobs\` lists them)`);
+  }
+
+  let patch;
+  if (verb === "clear") {
+    patch = { [key]: null };
+  } else if (key === "alerts" || key === "judge") {
+    patch = { [key]: await mergedEntry(url, flags, key, positional.slice(2), null, view, `foldrun account set ${key}`) };
+  } else if (key === "notify") {
+    // `set notify email you@example.com` / `set notify url https://…`, and
+    // --events to change what is notified on.
+    const channel = positional[2];
+    const value = positional[3];
+    if (channel !== "email" && channel !== "url") {
+      throw new Error("`foldrun account set notify email <address>` or `set notify url <https://…>` — and --events failed,awaiting-approval,completed");
+    }
+    if (!value && flags.events === undefined) throw new Error(`\`foldrun account set notify ${channel} <value>\` — or --events alone to change only what is notified on`);
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const current = defaults?.notify ?? {};
+    const events =
+      typeof flags.events === "string"
+        ? flags.events.split(",").map((e) => e.trim()).filter(Boolean)
+        : (current.events ?? ["failed", "awaiting-approval"]);
+    const unknown = events.filter((e) => !NOTIFY_EVENTS.includes(e));
+    if (unknown.length) throw new Error(`--events takes ${NOTIFY_EVENTS.join(", ")} — not ${unknown.join(", ")}`);
+    patch = {
+      notify: {
+        ...(current.url ? { url: current.url } : {}),
+        ...(current.email ? { email: current.email } : {}),
+        ...(value ? { [channel]: value } : {}),
+        events,
+      },
+    };
+  } else {
+    const value = positional[2];
+    if (value === undefined) throw new Error(`\`foldrun account set ${key} <value>\` — or \`clear ${key}\` to unset it`);
+    // Not a number is an error, not a clear: Number("abc") is NaN, JSON sends
+    // it as null, and null is how PATCH is told to clear the setting.
+    if (key === "concurrency" && !/^\d+$/.test(value)) {
+      throw new Error(`concurrency is a whole number of runs at once, e.g. \`foldrun account set concurrency 4\` — not "${value}"`);
+    }
+    // deploy_block (FOL-58): none | secrets | security.
+    if (key === "deploy_block" && !["none", "secrets", "security"].includes(value)) {
+      throw new Error(`deploy_block is none, secrets or security — e.g. \`foldrun account set deploy_block secrets\` — not "${value}"`);
+    }
+    patch = {
+      [key]: key === "concurrency" ? Number(value) : key === "network_enforce" ? onOff(key, value, "foldrun account set network_enforce on") : value,
+    };
+  }
+
+  const answer = await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify(patch) });
+  printDefaults(answer.defaults ?? {});
+  console.log(`\n  ${c.green("✓")} ${verb === "clear" ? `${key} cleared` : `${key} set`} — every workspace in this account reads it\n`);
+  return 0;
+}
+
+// ------------------------------------------- approvals, runs and reports
+//
+// What `logs` never answered. `logs` is a trail: it prints what happened,
+// event by event, for one run you already knew the id of. These four are
+// about the other three questions a person actually has — what is waiting
+// for me, let it through or refuse it, what has run lately, and what did
+// this one run actually do — and each of them reads the platform, because
+// that is where the runs are.
+
+/** A span in the shortest honest form: 850ms, 12s, 4m 20s, 2h 5m, 3d 4h. */
+function humanDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  if (h < 24) return rm ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh ? `${d}d ${rh}h` : `${d}d`;
+}
+
+/** How long ago an ISO timestamp was. */
+const ago = (iso) => (iso && !Number.isNaN(Date.parse(iso)) ? humanDuration(Date.now() - Date.parse(iso)) : "—");
+
+/** A local wall-clock stamp short enough for a column: "15 Sep 19:00". */
+function when(iso) {
+  const t = Date.parse(iso ?? "");
+  if (Number.isNaN(t)) return "—";
+  const d = new Date(t);
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())} ${month} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** `--since 24h`, `7d`, `90m`, `2w` — a window, in milliseconds. */
+function parseSince(spec) {
+  const m = /^(\d+(?:\.\d+)?)\s*([smhdw])$/i.exec(String(spec).trim());
+  if (!m) throw new Error(`--since wants a span like 24h, 7d or 90m — not "${spec}"`);
+  return Number(m[1]) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 }[m[2].toLowerCase()];
+}
+
+/** What a run's work concluded: the verdict word its summary leads with —
+ *  core's runVerdict, mirrored because the list is drawn without loading
+ *  core. Null for a run whose summary leads with none. */
+const verdictOf = (r) => {
+  if (r.verdict !== undefined) return r.verdict;
+  const m = /^(GOOD|BAD|QUIET|BLOCKED)(?![A-Za-z0-9_])/.exec(String(r.summary ?? "").replace(/^[\s#>*_`\-]+/, ""));
+  return m ? m[1] : null;
+};
+/** A completed run's verdict beside its status: BLOCKED red, BAD amber. */
+const verdictTag = (r) => {
+  const v = r.status === "completed" ? verdictOf(r) : null;
+  return v === "BLOCKED" ? c.red(v) : v === "BAD" ? c.amber(v) : v ? c.dim(v) : "";
+};
+
+/** The same mark everywhere a status is printed, so one glance reads alike. */
+const statusMark = (s) =>
+  s === "completed"
+    ? c.green("✓")
+    : s === "failed"
+      ? c.red("✗")
+      : s === "awaiting-approval"
+        ? c.amber("⏸")
+        : s === "skipped" || s === "expanded"
+          ? c.dim("–")
+          : c.amber("…");
+
+/** What a run cost, from its steps — the only place the number exists. */
+const runCost = (run) => (run.steps ?? []).reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
+
+/** How long a run took, or has been going. */
+const runDuration = (run) =>
+  run.startedAt ? humanDuration((run.finishedAt ? Date.parse(run.finishedAt) : Date.now()) - Date.parse(run.startedAt)) : "—";
+
+/** Pad to a column width, counting characters a person sees, not escapes. */
+const pad = (s, width) => String(s) + " ".repeat(Math.max(0, width - String(s).length));
+
+/** One line of a step's or a run's prose — the first line that says anything. */
+const firstLine = (text, width = 120) => {
+  const line = String(text ?? "")
+    .split("\n")
+    .map((l) => l.replace(/^[#>*_\s-]+/, "").trim())
+    .find(Boolean);
+  return line ? (line.length > width ? `${line.slice(0, width - 1)}…` : line) : "";
+};
+
+/** Wrap prose to a width, so a long `ask:` stays inside the terminal. */
+function wrap(text, width) {
+  const out = [];
+  for (const para of String(text ?? "").split("\n")) {
+    let line = "";
+    for (const word of para.trim().split(/\s+/).filter(Boolean)) {
+      if (line && line.length + 1 + word.length > width) {
+        out.push(line);
+        line = word;
+      } else line = line ? `${line} ${word}` : word;
+    }
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+/**
+ * These four commands read a platform and only a platform: a gate waiting
+ * on a person is a thing that exists on a server, and a local `foldrun run`
+ * asks the terminal it is running in. Said plainly rather than failing at
+ * the fetch, which is how `--url` typos used to read.
+ */
+function platformFor(flags, what) {
+  const url = remoteUrl(flags);
+  if (!url) {
+    throw new Error(
+      `\`foldrun ${what}\` reads a running platform — \`foldrun login\`, or pass --url <url> (or set FOLDRUN_URL)`,
+    );
+  }
+  return url;
+}
+
+/** Run at most `width` of these at once — fifteen desks, not fifteen bursts. */
+async function pool(items, width, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i], i);
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker));
+  return out;
+}
+
+/**
+ * Which workspace holds this run.
+ *
+ * `--to` settles it. Otherwise the folder this terminal is standing in is
+ * tried first — from a desk directory the run is almost always that desk's,
+ * and one request beats fifteen — and only then does it fan out.
+ */
+/**
+ * `foldrun answer <run-id> "…"` — answer the question an agent is asking
+ * mid-step (tools: [ask]). `--option <n>` picks one of its offered choices,
+ * `--question <id>` one of several. The agent is waiting in a live sandbox.
+ */
+async function answerCmd(positional, flags) {
+  const url = platformFor(flags, "answer");
+  const runId = positional[0];
+  if (!runId) throw new Error("which run? `foldrun answer <run-id> \"…\"` — `foldrun approvals` lists the questions");
+  const { questions = [] } = await remoteCall(url, flags, "/api/approvals");
+  const mine = questions.filter((q) => q.runId === runId && (typeof flags.question !== "string" || q.id === flags.question));
+  if (!mine.length) throw new Error(`${runId} is not asking anything right now — \`foldrun approvals\` lists what is`);
+  const q = mine[0];
+  let text = positional.slice(1).join(" ").trim();
+  if (flags.option !== undefined) {
+    // A bare `--option` parses as true, and Number(true) is 1.
+    if (typeof flags.option !== "string") throw new Error(`--option needs a number: \`foldrun answer ${runId} --option <n>\``);
+    const n = Number(flags.option);
+    if (!q.options?.length || !Number.isInteger(n) || n < 1 || n > q.options.length) {
+      throw new Error(q.options?.length ? `--option takes 1–${q.options.length}` : "this question offered no options — answer in words");
+    }
+    text = q.options[n - 1];
+  }
+  if (!text) throw new Error(`what is the answer? \`foldrun answer ${runId} "…"\`${q.options?.length ? " or --option <n>" : ""}`);
+  const res = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(q.workspace)}/runs/${encodeURIComponent(runId)}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ question: q.id, answer: text }),
+  });
+  console.log(`\n  ${c.green("✓")} answered ${c.bold(q.agent)} ${c.dim(`in ${q.workspace} · ${runId}`)}: ${res.answer ?? text}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun message <run-id> "…"` — say something to a running agent. It
+ * reaches the model after its next tool call, as context; it changes none
+ * of the step's tools. Platform only: a local \`foldrun run\` has no inbox.
+ */
+async function messageCmd(positional, flags, layout) {
+  const url = platformFor(flags, "message");
+  const runId = positional[0];
+  const text = positional.slice(1).join(" ").trim();
+  if (!runId || !text) throw new Error("`foldrun message <run-id> \"…\"` — the run must be running");
+  // `--step <n>`: which running step, by its index in the run — needed only
+  // when a parallel group has several running; the platform lists them.
+  let step;
+  if (flags.step !== undefined) {
+    if (typeof flags.step !== "string" || !/^\d+$/.test(flags.step)) throw new Error("`--step <n>` — the step's number in the run, from `foldrun runs <run-id>`");
+    step = Number(flags.step);
+  }
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const sent = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${encodeURIComponent(runId)}/message`, {
+    method: "POST",
+    body: JSON.stringify(step === undefined ? { text } : { text, step }),
+  });
+  const which = typeof sent?.step === "number" ? ` step ${sent.step}` : "";
+  console.log(`\n  ${c.green("✓")} sent to ${runId}${which} ${c.dim(`in ${ws} — it reaches the agent after its next tool call`)}\n`);
+  return 0;
+}
+
+async function workspaceOfRun(url, flags, layout, runId) {
+  if (typeof flags.to === "string") return flags.to;
+  const names = await remoteWorkspaceNames(url, flags);
+  const here = takeWorkspace([], layout);
+  const order = here && names.includes(here) ? [here, ...names.filter((n) => n !== here)] : names;
+  if (!order.length) throw new Error(`no workspaces on ${url} — \`foldrun workspaces\` lists them`);
+
+  const found = await pool(order, 8, async (ws) => {
+    try {
+      await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+      return ws;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
+  });
+  const hit = found.find(Boolean);
+  if (!hit) {
+    throw new Error(
+      `no run "${runId}" in any workspace on ${url} — \`foldrun runs\` lists them, and --to <workspace> looks in one`,
+    );
+  }
+  return hit;
+}
+
+/**
+ * A deliberate yes, or nothing happens.
+ *
+ * `expect` is what the person must type back — the run id, for the two
+ * decisions that cannot be taken back: approving something outward, and
+ * killing a run mid-step. --yes is the way to mean it without being asked,
+ * and it is REQUIRED where there is no terminal to ask: a script that pipes
+ * into this must say so, rather than being waved through by an empty read.
+ */
+/** Ask before a delete that cannot be undone. False means "keep it"; no
+ *  terminal and no --yes throws, the way approve, stop and deploy do. */
+async function sureToDelete(flags, verb, what) {
+  if (await confirmed(flags, verb, `${what} — this cannot be undone. Delete? [y/N] `)) return true;
+  console.log(`\n  ${c.dim("nothing deleted")}\n`);
+  return false;
+}
+
+async function confirmed(flags, verb, question, expect) {
+  if (flags.yes === true) return true;
+  if (!process.stdin.isTTY) {
+    throw new Error(`${verb} needs a person — this is not a terminal, so pass --yes to mean it`);
+  }
+  const answer = (await promptVisible(`  ${question}`)).trim();
+  return expect === undefined ? /^y(es)?$/i.test(answer) : answer === expect;
+}
+
+/** The steps of a run that are parked on a PERSON — not on a `wait: event`. */
+const waitingSteps = (run) =>
+  (run.steps ?? [])
+    .map((s, i) => ({ step: s, index: i }))
+    .filter(({ step }) => step.status === "awaiting-approval" && step.waitFor !== "event");
+
+/** The steps of a run parked on `wait: event` — what `approve --payload` releases. */
+const eventSteps = (run) =>
+  (run.steps ?? [])
+    .map((s, i) => ({ step: s, index: i }))
+    .filter(({ step }) => step.status === "awaiting-approval" && step.waitFor === "event");
+
+// ------------------------------------------------------------- approvals
+
+/**
+ * `foldrun approvals` — everything across the account that is waiting for a
+ * person to say yes.
+ *
+ * One entry per GATE, the way /api/approvals counts them: a run with two `!`
+ * steps in one group is two decisions, and a list that folded them into one
+ * line named one agent and asked neither question.
+ */
+/** `foldrun runs views` — your saved run searches (FOL-72 step 9). */
+async function runViewsCmd(flags) {
+  const url = platformFor(flags, "runs");
+  const { runViews = [] } = await remoteCall(url, flags, "/api/me/preferences");
+  if (flags.json === true) return console.log(JSON.stringify(runViews, null, 2)), 0;
+  if (!runViews.length) return console.log(`\n  ${c.dim("no saved views — save one from the runs page's search")}\n`), 0;
+  console.log();
+  for (const v of runViews) console.log(`  ${c.bold(v.name)}  ${c.dim(v.query)}`);
+  console.log(`\n  ${c.dim("foldrun runs --view <name> opens one")}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------- insights
+
+/** `foldrun insights` (FOL-72 step 8): recurring problems found in the runs,
+ *  with evidence, what they cost and what to do — GET /api/insights. */
+async function insightsCmd(flags) {
+  const url = platformFor(flags, "insights");
+  const qs = new URLSearchParams({ ...(flags.days !== undefined ? { days: String(flags.days) } : {}), ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) });
+  const { insights = [], days = 7 } = await remoteCall(url, flags, `/api/insights${qs.size ? `?${qs}` : ""}`);
+  if (flags.json === true) return console.log(JSON.stringify(insights, null, 2)), 0;
+  if (!insights.length) {
+    console.log(`\n  ${c.dim(`nothing recurring in the last ${days} days`)}\n`);
+    return 0;
+  }
+  console.log();
+  for (const i of insights) {
+    const cost = i.credits ? ` · about ${i.credits.toLocaleString()} credits` : "";
+    console.log(`  ${c.amber("◆")} ${c.bold(i.title)}  ${c.dim(`${i.workspace} · ${i.steps} step${i.steps === 1 ? "" : "s"}${cost}`)}`);
+    for (const line of wrap(i.why, 84)) console.log(`      ${c.dim(line)}`);
+    for (const [k, line] of wrap(i.fix, 80).entries()) console.log(`      ${k === 0 ? "→ " : "  "}${line}`);
+    console.log(`      ${c.dim(i.evidence.map((e) => `${e.runId}#${e.step}`).join("  "))}`);
+    console.log();
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------- issues
+
+const ISSUE_VERBS = { ack: "acknowledge", acknowledge: "acknowledge", snooze: "snooze", resolve: "resolve", reopen: "reopen" };
+
+/** What the run doctor reads for an issue: its newest run, that run's
+ *  workspace, and the question the run page's Doctor asks — core's
+ *  issueDoctor (issues.ts), repeated here as the cache note is until the
+ *  next core release. Null for a missed schedule, which has no run. */
+function issueDoctor(issue) {
+  const run = (issue.runs ?? []).find((r) => !r.missed);
+  if (!run || issue.kind === "missed") return null;
+  const ended = issue.kind === "blocked" ? "end BLOCKED" : issue.kind === "bad" ? "end BAD" : "fail";
+  return { workspace: run.workspace, runId: run.id, prompt: `Doctor: why did run ${run.id} ${ended}, and how do I fix it?` };
+}
+
+/** `foldrun issues` (FOL-54 step 3): what went wrong, grouped, open until a
+ *  person resolves it; `foldrun issues ack|snooze|resolve|reopen <id>` acts
+ *  on one — the dashboard's Issues page and its buttons, same route.
+ *  `foldrun issues doctor <id>` is the card's Doctor: the run doctor on the
+ *  issue's newest run, in that run's workspace. */
+/**
+ * `foldrun inbox` — what is waiting on you across your workspaces (GET
+ * /api/me/inbox): gates, questions agents ask, open issues, proposed fixes,
+ * your runs that went wrong this week. Assigned to you and started by you by
+ * default; `--team` for the rest of what waits in your workspaces, `--all`
+ * for every bucket, `--dismissed` for what you set aside, `--kind
+ * approval|question|issue|proposal|run`, `--unread`, `--json`. `read`,
+ * `unread`, `dismiss` (set aside — it still waits where it lives) and
+ * `restore` take item ids. A key reads the inbox of the person who minted it.
+ * The dashboard's Inbox. Exit 1 when anything assigned to you is unread.
+ */
+async function inboxCmd(positional, flags) {
+  const url = platformFor(flags, "inbox");
+  const [verb, ...ids] = positional;
+  const ACTIONS = { read: "read", unread: "unread", dismiss: "dismiss", restore: "restore" };
+  if (verb) {
+    const action = ACTIONS[verb];
+    if (!action) throw new Error(`\`foldrun inbox\` lists what waits on you; its verbs are read, unread, dismiss and restore — not ${verb}`);
+    if (!ids.length) throw new Error(`\`foldrun inbox ${verb} <id>…\` — the ids are the first column of \`foldrun inbox\``);
+    await remoteCall(url, flags, "/api/me/inbox", { method: "POST", body: JSON.stringify({ ids, action }) });
+    console.log(`\n  ${c.green(action === "dismiss" ? "set aside" : action === "restore" ? "put back" : `marked ${action}`)} ${ids.length} item${ids.length === 1 ? "" : "s"}\n`);
+    return 0;
+  }
+  const q = new URLSearchParams();
+  if (flags.all === true) q.set("bucket", "all");
+  else if (flags.team === true) q.set("bucket", "team");
+  else if (flags.started === true) q.set("bucket", "started");
+  else if (flags.mine === true) q.set("bucket", "mine");
+  if (flags.dismissed === true) q.set("dismissed", "1");
+  if (typeof flags.kind === "string") q.set("kind", flags.kind);
+  if (typeof flags.workspace === "string") q.set("workspace", flags.workspace);
+  const view = await remoteCall(url, flags, `/api/me/inbox${q.size ? `?${q}` : ""}`);
+  const items = (view.items ?? []).filter((i) => (flags.unread === true ? !i.read : true));
+  if (flags.json) {
+    console.log(JSON.stringify({ ...view, items }, null, 2));
+    return view.counts?.unread ? 1 : 0;
+  }
+  const k = view.counts ?? {};
+  console.log(`\n  ${c.bold(`inbox of ${view.person}`)} ${c.dim(`· for you ${k.mine ?? 0} · started by you ${k.started ?? 0} · team ${k.team ?? 0} · ${k.unread ?? 0} unread`)}`);
+  if (!items.length) console.log(`\n  ${c.dim(flags.dismissed ? "nothing set aside" : "nothing waiting")}`);
+  const BUCKET = { mine: "for you", started: "yours", team: "team" };
+  for (const i of items) {
+    const dot = i.read ? " " : c.amber("•");
+    console.log(`\n  ${dot} ${c.bold(i.title)} ${c.dim(`· ${i.kind} · ${BUCKET[i.bucket] ?? i.bucket} · ${i.workspace} · ${String(i.at).slice(0, 16).replace("T", " ")}`)}`);
+    if (i.detail) console.log(`    ${i.detail}`);
+    console.log(`    ${c.dim(`${i.id} — ${i.why}`)}`);
+  }
+  console.log("");
+  return k.unread ? 1 : 0;
+}
+
+async function issuesCmd(positional, flags, layout) {
+  const url = platformFor(flags, "issues");
+  const [verb, id] = positional;
+  if (verb === "doctor") {
+    if (!id || !/^iss_[a-z0-9]{2,32}$/.test(id)) throw new Error("`foldrun issues doctor <issue-id>` — the id is the iss_… on each line of `foldrun issues`");
+    const { issue } = await remoteCall(url, flags, `/api/issues/${id}`);
+    const doc = issueDoctor(issue);
+    if (!doc) throw new Error(`${id} is a missed schedule: no run started, so there is nothing for the doctor to read — open the flow's schedule instead`);
+    return assistantCmd([doc.prompt], { ...flags, to: doc.workspace }, layout);
+  }
+  if (verb && verb !== "show") {
+    const action = ISSUE_VERBS[verb];
+    if (!action) throw new Error(`\`foldrun issues\` lists them; its verbs are show, doctor, ack, snooze, resolve, reopen — not ${verb}`);
+    if (!id || !/^iss_[a-z0-9]{2,32}$/.test(id)) throw new Error(`\`foldrun issues ${verb} <issue-id>\` — the id is the iss_… on each line of \`foldrun issues\``);
+    if (action === "snooze" && typeof flags.for !== "string" && typeof flags.until !== "string" && flags.times === undefined) throw new Error("a snooze takes --for 30m|4h|1d|1w, --until <ISO time>, or --times <n> (until it happens n more times)");
+    const body = {
+      action,
+      ...(typeof flags.for === "string" ? { for: flags.for } : {}),
+      ...(typeof flags.until === "string" ? { until: flags.until } : {}),
+      ...(flags.times !== undefined ? { times: Number(flags.times) } : {}),
+      ...(typeof flags.note === "string" ? { note: flags.note } : {}),
+    };
+    const { issue } = await remoteCall(url, flags, `/api/issues/${id}`, { method: "POST", body: JSON.stringify(body) });
+    if (flags.json === true) return console.log(JSON.stringify(issue, null, 2)), 0;
+    console.log(`\n  ${c.green("✓")} ${issue.id} is ${issue.status}${issue.snoozedUntil ? ` until ${when(issue.snoozedUntil)}` : ""}${issue.snoozedFor ? ` for ${issue.snoozedFor} more` : ""} — ${issue.what}\n`);
+    return 0;
+  }
+  if (verb === "show") {
+    if (!id) throw new Error("`foldrun issues show <issue-id>`");
+    const { issue } = await remoteCall(url, flags, `/api/issues/${id}`);
+    if (flags.json === true) return console.log(JSON.stringify(issue, null, 2)), 0;
+    printIssue(issue, true);
+    return 0;
+  }
+  const status = typeof flags.status === "string" ? flags.status : flags.all === true ? "all" : "active";
+  const qs = new URLSearchParams({ status, ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) });
+  const { issues = [] } = await remoteCall(url, flags, `/api/issues?${qs}`);
+  if (flags.json === true) return console.log(JSON.stringify(issues, null, 2)), 0;
+  if (!issues.length) {
+    console.log(`\n  ${c.dim(status === "active" ? "no open issues" : `no ${status} issues`)}\n`);
+    return 0;
+  }
+  console.log();
+  for (const i of issues) printIssue(i, false);
+  console.log(`  ${c.dim("foldrun issues show <id> for its runs and history; doctor <id> asks the run doctor why; ack, snooze --for 1d, resolve or reopen <id> act on one; --all lists resolved too")}\n`);
+  return 0;
+}
+
+function printIssue(i, full) {
+  const mark = i.kind === "platform" ? c.bold("▲") : i.kind === "failed" ? c.red("✗") : i.kind === "blocked" ? c.red("⛔") : i.kind === "missed" ? c.amber("◷") : c.amber("!");
+  const where = i.kind === "platform" ? i.workspaces.join(", ") : `${i.workspace} · ${i.what}${i.agent ? ` at ${i.agent}` : ""}`;
+  const label = i.kind === "missed" ? "missed schedule" : i.kind;
+  const state = (i.status === "open" ? "" : c.dim(` [${i.status}${i.snoozedUntil ? ` until ${when(i.snoozedUntil)}` : ""}${i.snoozedFor ? ` for ${i.snoozedFor} more` : ""}${i.resolved?.by?.startsWith("auto:") ? ", auto" : ""}]`)) + (i.regressed ? ` ${c.red(`regressed${i.sinceRevision ? ` since ${String(i.sinceRevision).slice(0, 7)}` : ""}`)}` : "");
+  console.log(`  ${mark} ${c.bold(i.kind === "platform" ? i.what : label)}  ${where}${state}  ${c.dim(i.id)}`);
+  console.log(`      ${c.dim(`${i.count}× · first ${ago(i.firstSeen)} ago · latest ${ago(i.lastSeen)} ago${i.recoveredAt ? ` · fine for ${ago(i.recoveredAt)}` : ""}`)}`);
+  for (const line of wrap(i.reason, 84).slice(0, full ? 20 : 2)) console.log(`      ${line}`);
+  console.log(`      ${c.dim("→")} ${i.action}`);
+  if (full) {
+    console.log(`      ${c.dim(`runs: ${i.runs.map((r) => `${r.workspace}/${r.id}`).join(", ")}`)}`);
+    for (const e of i.history) console.log(`      ${c.dim(`${when(e.at)} ${e.action} by ${e.by}${e.until ? ` until ${when(e.until)}` : ""}${e.note ? ` — ${e.note}` : ""}`)}`);
+  }
+  console.log();
+}
+
+async function approvalsCmd(flags, layout) {
+  const url = platformFor(flags, "approvals");
+  const only = typeof flags.to === "string" ? flags.to : null;
+  const { approvals = [], questions = [] } = await remoteCall(url, flags, "/api/approvals");
+  const waiting = only ? approvals.filter((a) => a.workspace === only) : approvals;
+  const asking = only ? questions.filter((q) => q.workspace === only) : questions;
+
+  if (!waiting.length && !asking.length) {
+    console.log(`\n  ${c.dim(only ? `nothing is waiting on a person in ${only}` : "nothing is waiting on a person")}\n`);
+    return 0;
+  }
+  // Questions agents are asking mid-step (tools: [ask]) come first: their
+  // sandboxes are live and waiting, not parked.
+  if (asking.length) {
+    console.log();
+    for (const q of asking) {
+      console.log(`  ${c.bold("?")} ${c.bold(q.runId)}  ${q.workspace} · ${q.flow}  ${c.dim(`asking ${ago(q.askedAt)}`)}`);
+      console.log(`      ${c.dim(`${q.agent} asks`)}`);
+      for (const line of wrap(q.question, 84)) console.log(`      ${line}`);
+      (q.options ?? []).forEach((o, i) => console.log(`      ${c.dim(`${i + 1}.`)} ${o}`));
+      console.log();
+    }
+    console.log(`  ${c.dim(`\`foldrun answer <run-id> "…"\` (or --option <n>) answers — the agent is waiting in its sandbox`)}\n`);
+    if (!waiting.length) return 0;
+  }
+
+  // What each gate PREVIEWS lives on the run record, not on the index — a
+  // gate that says "approve this" without naming the draft it is about is
+  // a button, not a question. Best effort: a run that cannot be read still
+  // gets its line.
+  const runs = new Map();
+  for (const ws of new Set(waiting.map((a) => a.workspace))) {
+    const ids = [...new Set(waiting.filter((a) => a.workspace === ws).map((a) => a.runId))];
+    await pool(ids, 6, async (id) => {
+      try {
+        runs.set(`${ws}/${id}`, await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${id}`));
+      } catch {
+        /* the index already told us enough to name it */
+      }
+    });
+  }
+
+  console.log();
+  for (const a of waiting) {
+    const record = runs.get(`${a.workspace}/${a.runId}`);
+    const step = record?.steps?.[a.step];
+    console.log(
+      `  ${c.amber("⏸")} ${c.bold(a.runId)}  ${a.workspace} · ${a.flow}  ${c.dim(`waiting ${ago(a.waitingSince)}`)}`,
+    );
+    console.log(`      ${c.dim(`step ${a.step + 1} · ${a.agent}${a.asked ? "" : " · no ask:, so its instruction"}`)}`);
+    for (const line of wrap(a.question, 84)) console.log(`      ${line}`);
+    const preview = step?.previewFiles ?? step?.preview ?? [];
+    if (preview.length) console.log(`      ${c.dim(`previews storage/: ${preview.join(", ")}`)}`);
+    if (record?.approveBy) console.log(`      ${c.dim(`expires ${when(record.approveBy)}`)}`);
+    console.log();
+  }
+  console.log(
+    `  ${c.dim(`${waiting.length} waiting — \`foldrun approve <run-id> --note "…"\` releases one, \`foldrun reject <run-id>\` refuses it`)}\n`,
+  );
+  return 0;
+}
+
+// -------------------------------------------------------- approve, reject
+
+/**
+ * `foldrun approve <run-id>` and `foldrun reject <run-id>`.
+ *
+ * Approving is an OUTWARD action: the step behind the gate is the one that
+ * publishes, sends or posts, which is exactly why a person was asked. So it
+ * says what it is about to release and waits to be told again, unless --yes
+ * was passed deliberately. Nothing here approves implicitly.
+ *
+ * `--note` is not a comment. It rides the record into the step's prompt, so
+ * "approve, but skip the Sydney batch" is an instruction the agent reads.
+ */
+async function decideCmd(decision, runId, flags, layout) {
+  const url = platformFor(flags, decision);
+  if (!runId) {
+    throw new Error(`which run? \`foldrun ${decision} <run-id>\` — \`foldrun approvals\` lists what is waiting`);
+  }
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  // --payload releases a `wait: event` step as its event URL would, so those
+  // are the steps it chooses from; every other decision is a person's gate.
+  const payload = flags.payload === undefined ? undefined : eventPayload(flags.payload);
+  if (payload !== undefined && decision !== "approve") throw new Error("--payload releases a `wait: event` step — it cannot go with reject");
+  const waiting = payload === undefined ? waitingSteps(run) : eventSteps(run);
+  if (!waiting.length) {
+    throw new Error(
+      payload === undefined
+        ? `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person. \`foldrun approvals\` lists the ones that are`
+        : `${runId} in ${ws} is ${run.status} — no step of it is waiting on \`wait: event\`, which is what --payload releases`,
+    );
+  }
+
+  const only = flags.step === undefined ? null : Number(flags.step) - 1;
+  if (only !== null && !waiting.some(({ index }) => index === only)) {
+    throw new Error(
+      `step ${flags.step} of ${runId} is not waiting on ${payload === undefined ? "a person" : "`wait: event`"} — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
+    );
+  }
+  const chosen = only === null ? waiting : waiting.filter(({ index }) => index === only);
+  const note = typeof flags.note === "string" ? flags.note : undefined;
+
+  console.log(`\n  ${c.bold(run.flow)}  ${c.dim(`${ws} · ${runId}`)}`);
+  for (const { step, index } of chosen) {
+    console.log(`  ${c.amber("⏸")} step ${index + 1} · ${c.bold(step.agent)}  ${c.dim(firstLine(step.instruction))}`);
+    for (const line of wrap(step.ask ?? "", 84)) console.log(`      ${line}`);
+    const preview = step.previewFiles ?? step.preview ?? [];
+    if (preview.length) console.log(`      ${c.dim(`previews storage/: ${preview.join(", ")}`)}`);
+  }
+  if (note) console.log(`  ${c.dim(`note the agent will read: ${note}`)}`);
+  console.log(
+    decision === "approve"
+      ? `\n  ${c.yellow("!")} approving lets ${chosen.length === 1 ? "this step" : "these steps"} run — whatever it publishes, sends or posts, it does for real.`
+      : `\n  ${c.dim(`rejecting fails ${chosen.length === 1 ? "this step" : "these steps"}, and the run with ${chosen.length === 1 ? "it" : "them"}.`)}`,
+  );
+
+  if (decision === "approve" && !(await confirmed(flags, "approving", `type the run id to approve (${runId}): `, runId))) {
+    console.log(`\n  ${c.dim("nothing approved")}\n`);
+    return 1;
+  }
+
+  const body = {
+    decision,
+    ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}),
+    ...(only === null ? {} : { step: only }),
+    ...(payload === undefined ? {} : { payload }),
+  };
+  const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  const count = Array.isArray(answer.steps) ? answer.steps.length : chosen.length;
+  console.log(
+    `\n  ${decision === "approve" ? c.green("✓") : c.red("✗")} ${decision === "approve" ? "approved" : "rejected"} ${count} step${count === 1 ? "" : "s"} of ${runId}` +
+      `\n  ${c.dim(`foldrun report ${runId} --to ${ws} — or logs ${runId} --to ${ws} --follow`)}\n`,
+  );
+  return 0;
+}
+
+/** `--payload` for a `wait: event` step: text, or `@file`; JSON is sent as
+ *  JSON, anything else as the text it is — what the event URL would take. */
+function eventPayload(value) {
+  if (value === true) throw new Error("--payload needs a value — text, JSON, or @file");
+  let text = String(value);
+  if (text.startsWith("@")) {
+    const file = path.resolve(text.slice(1));
+    if (!fs.existsSync(file)) throw new Error(`--payload ${text}: no such file`);
+    text = fs.readFileSync(file, "utf8");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+// ------------------------------------------------------------------ stop
+
+/**
+ * `foldrun stop <run-id>` — kill a run in flight.
+ *
+ * The one thing you want at 3am when a flow is looping on a paid API, and
+ * the one thing that had no command: it was a raw POST with a hand-written
+ * bearer header, which means the workspace had to be remembered too. Here
+ * the run id is enough.
+ *
+ * It says what it is about to destroy first. The step that is running has a
+ * sandbox and has already spent something; stopping throws that work away
+ * and keeps the charge, because the work was really done.
+ */
+async function stopCmd(runId, flags, layout) {
+  const url = platformFor(flags, "stop");
+  if (!runId) throw new Error("which run? `foldrun stop <run-id>` — `foldrun runs --status running` lists them");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+
+  if (run.status === "completed" || run.status === "failed") {
+    // Not an error worth a stack: the thing you wanted — it is not running —
+    // is already true. Said plainly, and exit 0, so a script that stops a
+    // run it is not sure about does not fail on the good case.
+    console.log(`\n  ${statusMark(run.status)} ${runId} in ${ws} already finished ${ago(run.finishedAt)} ago — nothing to stop\n`);
+    return 0;
+  }
+
+  const live = (run.steps ?? []).map((s, i) => ({ step: s, index: i })).filter(({ step }) => step.status === "running");
+  console.log(`\n  ${statusMark(run.status)} ${c.bold(run.flow)}  ${c.dim(`${ws} · ${runId}`)}`);
+  console.log(`  ${c.dim(`${run.status} · started ${ago(run.startedAt)} ago · $${runCost(run).toFixed(4)} spent`)}`);
+  for (const { step, index } of live) {
+    console.log(`  ${c.amber("…")} step ${index + 1} of ${(run.steps ?? []).length} · ${c.bold(step.agent)}  ${c.dim(firstLine(step.instruction, 70))}`);
+  }
+  console.log(
+    `\n  ${c.yellow("!")} stopping destroys the sandbox the running step is spending in and throws its work away. Finished steps keep their results, and every cost already incurred stays on the bill.`,
+  );
+
+  if (!(await confirmed(flags, "stopping a run", `type the run id to stop (${runId}): `, runId))) {
+    console.log(`\n  ${c.dim("nothing stopped")}\n`);
+    return 1;
+  }
+
+  const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/stop`, { method: "POST" });
+  console.log(
+    `\n  ${c.green("✓")} stopped ${runId} in ${ws}${answer.status ? ` — now ${answer.status}` : ""}` +
+      `\n  ${c.dim(`foldrun report ${runId} --to ${ws} for what it got through first`)}\n`,
+  );
+  return 0;
+}
+
+// ------------------------------------------------------------------ runs
+
+/**
+ * `foldrun runs` — what has run lately, across the account.
+ *
+ * `logs` without an id lists ONE workspace's runs, which is the wrong unit
+ * for the question people actually ask in the morning: did anything fail
+ * overnight, anywhere. So this one fans out and merges, newest first, and
+ * carries each run's one-line summary — the sentence that says what it
+ * found, not merely that it finished.
+ */
+async function runsCmd(flags, layout) {
+  const url = platformFor(flags, "runs");
+  // --view <name>: a saved search (the dashboard's) read first, so every
+  // filter in it — status, since, workspace, flow, q and the search's own —
+  // applies as if typed; a flag typed too wins (Codex review).
+  if (typeof flags.view === "string") {
+    const { runViews = [] } = await remoteCall(url, flags, "/api/me/preferences");
+    const view = runViews.find((v) => v.name === flags.view);
+    if (!view) throw new Error(`no saved view called ${flags.view}${runViews.length ? ` — yours: ${runViews.map((v) => v.name).join(", ")}` : " — save one on the runs page"}`);
+    const as = { workspace: "to", min_tokens: "min-tokens", min_secs: "min-secs" };
+    const fromView = {};
+    for (const [k, v] of new URLSearchParams(view.query)) {
+      if (k === "tool_error") fromView["tool-error"] = v === "1" || v === "true";
+      // The dashboard's Today chip is its 24-hour window (Codex review).
+      else if (k === "since" && v === "today") fromView.since = "24h";
+      else fromView[as[k] ?? k] = v;
+    }
+    flags = { ...fromView, ...flags };
+  }
+  const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
+  if (!names.length) {
+    console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
+    return 0;
+  }
+  const limit = Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 20;
+  const cutoff = flags.since === undefined ? null : Date.now() - parseSince(flags.since);
+  const wanted =
+    typeof flags.status === "string" ? new Set(flags.status.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+  const verdicts =
+    typeof flags.verdict === "string" ? new Set(flags.verdict.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)) : null;
+  // --outcome (FOL-54): the one word every surface shows — needs-you is the
+  // dashboard's name for waiting. A platform from before it sends none.
+  const OUTCOME_WORDS = ["running", "queued", "waiting", "good", "done", "quiet", "blocked", "bad", "failed", "stopped"];
+  const outcomes =
+    typeof flags.outcome === "string"
+      ? new Set(flags.outcome.split(",").map((s) => s.trim().toLowerCase().replace(/^needs-?you$/, "waiting")).filter(Boolean))
+      : null;
+  if (outcomes) {
+    const unknown = [...outcomes].filter((o) => !OUTCOME_WORDS.includes(o));
+    if (unknown.length) throw new Error(`--outcome takes ${OUTCOME_WORDS.join(", ")} (or needs-you) — not ${unknown.join(", ")}`);
+  }
+
+  // Each desk is asked for its own newest rows before the merge, so one
+  // busy workspace cannot crowd every quiet one out of the answer. With a
+  // status or a window in play the ask is the API's ceiling, not `limit`:
+  // the filter runs here, after the fetch, and a desk with twenty recent
+  // successes was hiding its older failures from `--status failed` because
+  // only its newest twenty of any status ever arrived.
+  // Search (FOL-72 step 9): by what happened inside a run, filtered by the
+  // platform; --view <name> starts from a saved search (the dashboard's).
+  const search = new URLSearchParams();
+  for (const [flag, key] of [["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"]]) {
+    if (flags[flag] !== undefined && flags[flag] !== true) search.set(key, String(flags[flag]));
+  }
+  if (flags["tool-error"] === true) search.set("tool_error", "1");
+  const searching = [...search.keys()].some((k) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs"].includes(k));
+  // A view's flow or text filters here, after the fetch: ask for the ceiling
+  // as for a status, or matches past the newest few go missing (Codex review).
+  const localText = typeof flags.flow === "string" || typeof flags.q === "string";
+  const perWorkspace = wanted || verdicts || outcomes || cutoff !== null || searching || localText ? 500 : limit;
+  const unreachable = [];
+  const lists = await pool(names, 8, async (ws) => {
+    try {
+      const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs"].includes(k)));
+      const { runs = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=${perWorkspace}${forApi.size ? `&${forApi}` : ""}`);
+      return runs.map((r) => ({ ...r, workspace: ws }));
+    } catch (err) {
+      unreachable.push([ws, explain(err)]);
+      return [];
+    }
+  });
+
+  const rows = lists
+    .flat()
+    // The status the dashboard shows: a stopped run is "stopped", not the
+    // "failed" its record says (Codex review — a saved status=stopped view).
+    .filter((r) => (wanted ? wanted.has(r.outcome === "stopped" ? "stopped" : r.status) : true))
+    .filter((r) => (verdicts ? r.status === "completed" && verdicts.has(verdictOf(r)) : true))
+    .filter((r) => (outcomes ? typeof r.outcome === "string" && outcomes.has(r.outcome) : true))
+    // A view's flow and free text (the runs page's): "agent: x" is a direct run.
+    // The dashboard names a run by what ran (whatRan): a direct agent run's
+    // or an eval's own name, without adhoc:/eval: (Codex review).
+    .filter((r) => (typeof flags.flow === "string" ? r.flow === flags.flow || r.flow.replace(/^(adhoc|eval):/, "") === flags.flow : true))
+    // The runs page's text search, field for field (its runSearchText): every
+    // word, any order, across id, what ran, workspace, the status it shows,
+    // verdict, summary and the failure (Codex review).
+    .filter((r) => {
+      if (typeof flags.q !== "string") return true;
+      const words = flags.q.toLowerCase().replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+      const shown = r.outcome === "stopped" ? "stopped" : r.status;
+      const hay = [r.id, r.flow.replace(/^(adhoc|eval):/, ""), r.workspace, shown, verdictOf(r) ?? "", r.summary ?? "", r.failure ? `${r.failure.agent} ${r.failure.reason}` : ""]
+        .join(" ")
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+      return words.every((w) => hay.includes(w));
+    })
+    .filter((r) => (cutoff === null ? true : Date.parse(r.startedAt) >= cutoff))
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
+    .slice(0, limit);
+
+  if (!rows.length) {
+    const how = [wanted ? `status ${[...wanted].join(", ")}` : null, verdicts ? `verdict ${[...verdicts].join(", ")}` : null, outcomes ? `outcome ${[...outcomes].join(", ")}` : null, flags.since ? `the last ${flags.since}` : null]
+      .filter(Boolean)
+      .join(" in ");
+    console.log(`\n  ${c.dim(`no runs${how ? ` matching ${how}` : ""}${flags.to ? ` in ${flags.to}` : ""}`)}\n`);
+    for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
+    return 0;
+  }
+
+  const cells = rows.map((r) => {
+    const done = (r.steps ?? []).filter((s) => s.status === "completed" || s.status === "skipped").length;
+    return {
+      mark: r.status === "completed" && verdictOf(r) === "BLOCKED" ? c.red("⛔") : statusMark(r.status),
+      when: when(r.startedAt),
+      workspace: r.workspace,
+      flow: r.flow,
+      status: r.status,
+      verdict: verdictTag(r),
+      verdictWidth: (r.status === "completed" ? verdictOf(r) ?? "" : "").length,
+      steps: `${done}/${(r.steps ?? []).length}`,
+      took: runDuration(r),
+      // FOL-54: credits charged, as the dashboard shows; a run not settled
+      // yet (or a platform from before chargedUsd) shows its token cost, in dollars.
+      cost: typeof r.chargedUsd === "number" ? `${Math.round(r.chargedUsd * 100)} credits` : `$${runCost(r).toFixed(2)}`,
+      id: r.id,
+      summary: firstLine(r.summary, 110),
+    };
+  });
+  const widest = (key) => Math.max(...cells.map((x) => x[key].length));
+  const w = {
+    when: widest("when"),
+    workspace: widest("workspace"),
+    flow: widest("flow"),
+    status: widest("status"),
+    steps: widest("steps"),
+    took: widest("took"),
+    cost: widest("cost"),
+  };
+
+  console.log();
+  for (const x of cells) {
+    console.log(
+      `  ${x.mark} ${c.dim(pad(x.when, w.when))}  ${pad(x.workspace, w.workspace)}  ${c.bold(pad(x.flow, w.flow))}  ` +
+        `${pad(x.status, w.status)} ${x.verdict}${" ".repeat(Math.max(...cells.map((y) => y.verdictWidth)) - x.verdictWidth)}  ${c.dim(`${pad(x.steps, w.steps)}  ${pad(x.took, w.took)}  ${pad(x.cost, w.cost)}`)}  ${c.dim(x.id)}`,
+    );
+    if (x.summary) console.log(`      ${c.dim(x.summary)}`);
+  }
+  for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
+  console.log(`\n  ${c.dim("foldrun report <run-id> for the whole story; --status failed, --verdict blocked, --since 24h narrow this")}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------- report
+
+/** Files a run wrote, as its own steps recorded them. */
+function filesWritten(run) {
+  const out = new Set();
+  for (const step of run.steps ?? []) {
+    for (const e of step.events ?? []) {
+      const m = /^files: saved (.+)$/.exec(String(e.text ?? "").trim());
+      if (m) for (const f of m[1].split(",")) out.add(f.trim());
+    }
+  }
+  for (const f of run.memoryWrites ?? []) out.add(f);
+  return [...out].filter(Boolean);
+}
+
+/** Trim what prose puts around a URL: trailing markdown/punctuation and a
+ *  trailing `)` that nothing in the URL opened — so `(url)` comes back bare,
+ *  but a wikipedia `..._(bar)` keeps its balanced `)`. `[` and `]` are not
+ *  URL chars, so a markdown `](url)` never carries a bracket in. */
+function trimUrl(u) {
+  let prev;
+  do {
+    prev = u;
+    u = u.replace(/[.,;:!?*_~`]+$/, "");
+    if (u.at(-1) === ")" && u.split(")").length > u.split("(").length) u = u.slice(0, -1);
+  } while (u !== prev);
+  return u;
+}
+
+/** Every address a run said it published to, from its summary and conclusions. */
+export function published(run) {
+  const text = [run.summary ?? "", ...(run.steps ?? []).map((s) => s.conclusion ?? s.result ?? "")].join("\n");
+  return [...new Set((text.match(/https?:\/\/[^\s"'<>`\[\]]+/g) ?? []).map(trimUrl).filter(Boolean))];
+}
+
+/** How long the step took to reach the model's first word — the record's
+ *  `startup` phases (seconds since the step started); null before 17 Oct
+ *  2026 and for in-process steps. */
+export function startupLabel(step) {
+  const ph = step.startup;
+  if (!ph || typeof ph !== "object") return null;
+  const end = typeof ph.model === "number" ? ph.model : Math.max(...Object.values(ph).filter((v) => typeof v === "number"));
+  return Number.isFinite(end) ? `start-up ${end.toFixed(1)}s` : null;
+}
+
+/** Which runner image a step ran on, as the run page's chip says it:
+ *  "slim · browser pod" when it browsed through the account's pod. Null on
+ *  a record from before images were recorded. */
+export function imageLabel(step) {
+  const im = step.image;
+  if (!im?.variant) return null;
+  return im.variant === "slim" && im.pod ? "slim · browser pod" : im.variant;
+}
+
+/** The browser pod under a slim step, in one line — the run page's note,
+ *  worded as core's browserPodLine words it. Null when nothing happened. */
+export function podNote(step) {
+  const p = step.browserPod;
+  if (!p || (!p.reconnects && !p.lost && !p.fallback && !p.failure)) return null;
+  // A lost pod never let a reconnect "through"; one that reached the pod
+  // only for the call to drop again says so.
+  const count = `${p.reconnects} reconnect${p.reconnects === 1 ? "" : "s"}`;
+  const tries = !p.reconnects ? "no reconnects"
+    : !p.lost ? `${count} (${p.reconnected ?? 0} got through)`
+    : p.closedAgain ? `${count}, ${p.reconnects === 1 ? "which" : "the last"} reached the pod but it closed again`
+    : count;
+  const line = p.failure ? `${tries}; ${p.failure}`
+    : p.fallback ? `${tries}; ${p.fallback}${p.lost ? ` (${p.lost.detail})` : ""}`
+    : p.lost ? `${tries}; ${p.lost.cause === "needs-full" ? "needed a browser in the step" : "pod lost"}: ${p.lost.detail}`
+    : tries;
+  return { line, bad: Boolean(p.failure), warn: Boolean(p.fallback || p.lost) };
+}
+
+/** The step's tries when the browser pod was lost under one — "slim · lost ·
+ *  $0.0040 → full · completed · $0.0060" — worded as core's podTriesLine.
+ *  Null when no try was lost. */
+export function podTries(step) {
+  const tries = step.tries;
+  if (!tries?.some((t) => t.status === "lost")) return null;
+  const many = new Set(tries.map((t) => t.n)).size > 1;
+  return tries
+    .map((t) => [`${many ? `#${t.n} ` : ""}${t.image ?? "?"}`, t.status, typeof t.costUsd === "number" ? `$${t.costUsd.toFixed(4)}` : null].filter(Boolean).join(" · "))
+    .join(" → ");
+}
+
+/** Whichever error this step recorded — on the step, or on its last try. */
+const stepError = (step) => step.error ?? [...(step.tries ?? [])].reverse().find((t) => t.error)?.error ?? null;
+
+/**
+ * `foldrun report <run-id>` — one run, whole, readable without a browser.
+ *
+ * `logs <run-id>` prints every event of every step, which is the right tool
+ * when you know what you are hunting and the wrong one when you are asking
+ * "what did this do". This is the other half: the header, a line per step
+ * with what it cost and whether its verify held, the first line of each
+ * result, and — for the step that failed — the error and the last events
+ * before it. Then the three things a person goes looking for afterwards:
+ * what it wrote, what it published, and what is still waiting on them.
+ */
+/** The share of a step's input the prompt cache served. `input` is all of
+ *  it; records from before 18 Oct 2026 have no cache fields, so the share
+ *  is unknown (null), not zero. */
+const cachedShare = (t) => (t && t.cacheRead !== undefined && t.input > 0 ? t.cacheRead / t.input : null);
+/** Over the steps that report the split only, as the Usage page counts it. */
+function measuredShare(list) {
+  let read = 0;
+  let all = 0;
+  for (const t of list) {
+    if (!t || t.cacheRead === undefined) continue;
+    read += t.cacheRead;
+    all += t.input ?? 0;
+  }
+  return all > 0 ? read / all : null;
+}
+const cachedLabel = (rate) => (rate == null ? null : `${Math.round(rate * 100)}% cached`);
+/** Why a step's prompt cache missed — core's rule (tokens.ts promptCacheNote),
+ *  repeated here as `cachedShare` is: a step that wrote a fifth or more of its
+ *  input to the cache says which layer of its prompt changed since the same
+ *  agent's previous step in the run. Nothing for a step without layers on
+ *  record (before 20 Oct 2026) or one the cache served. */
+function promptCacheNote(steps, index) {
+  const step = steps[index];
+  const t = step?.tokens;
+  if (!step?.promptLayers || !t || t.cacheWrite === undefined || !(t.input > 0)) return null;
+  const share = t.cacheWrite / t.input;
+  if (share < 0.2) return null;
+  const head = `${Math.round(share * 100)}% of input written to the cache`;
+  let prev = -1;
+  for (let j = index - 1; j >= 0; j--) if (steps[j].agent === step.agent && steps[j].promptLayers) { prev = j; break; }
+  if (prev < 0) return `${head} — the agent's first step in this run`;
+  const before = new Map(steps[prev].promptLayers.map((l) => [l.name, l.hash]));
+  const after = new Map(step.promptLayers.map((l) => [l.name, l.hash]));
+  const changed = [...after].filter(([name, hash]) => before.get(name) !== hash).map(([name]) => name);
+  for (const name of before.keys()) if (!after.has(name)) changed.push(name);
+  if (!changed.length) return `${head} — the same prompt as step ${prev + 1}; the entry had expired or was still being written`;
+  return `${head} — ${changed.join(", ")} changed since step ${prev + 1}`;
+}
+function sumTokens(list) {
+  const out = { input: 0, output: 0 };
+  for (const t of list) {
+    if (!t) continue;
+    out.input += t.input ?? 0;
+    out.output += t.output ?? 0;
+    if (t.cacheRead !== undefined || t.cacheWrite !== undefined) {
+      out.cacheRead = (out.cacheRead ?? 0) + (t.cacheRead ?? 0);
+      out.cacheWrite = (out.cacheWrite ?? 0) + (t.cacheWrite ?? 0);
+    }
+  }
+  return out;
+}
+
+/** `foldrun report <run-id> call <call-id>` — one tool call's recorded input
+ *  and output, secrets masked (FOL-54 step 4). */
+async function reportCallCmd(runId, callId, flags, layout) {
+  const url = platformFor(flags, "report");
+  if (!runId || !callId) throw new Error("`foldrun report <run-id> call <call-id>` — `foldrun report <run-id> --calls` lists the recorded calls");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const { call } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/calls/${encodeURIComponent(callId)}`);
+  if (flags.json === true) return console.log(JSON.stringify(call, null, 2)), 0;
+  console.log(`\n  ${c.bold(call.tool)}  ${c.dim(call.id)}`);
+  for (const [label, text, whole, wasCut] of [["input", call.input, call.inputChars, call.inputCut], ["output", call.output, call.outputChars, call.outputCut]]) {
+    if (text === undefined) continue;
+    const cut = wasCut === true && typeof whole === "number" && whole > text.length ? c.dim(` (the first ${text.length.toLocaleString()} of ${whole.toLocaleString()} characters)`) : "";
+    console.log(`\n  ${c.dim(label)}${cut}`);
+    for (const line of String(text).split("\n")) console.log(`    ${line}`);
+  }
+  console.log();
+  return 0;
+}
+
+/** `foldrun report <run-id> --tree` — the run as one tree, run → step →
+ *  model call → tool call, from GET …/runs/<id>/trace (FOL-72 step 5). */
+async function reportTreeCmd(url, flags, ws, runId) {
+  const { tree, failure = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/trace`);
+  if (flags.json === true) return console.log(JSON.stringify({ tree, failure }, null, 2)), 0;
+  // The deepest span on the way to the failure is the one to point at.
+  const culprit = failure.length ? failure[failure.length - 1] : null;
+  const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : String(n));
+  const mark = { run: "▣", step: "◆", model: "✦", tool: "→", error: "✗" };
+  const lines = [];
+  const walk = (s, prefix, last, root) => {
+    const dur = s.start != null && s.end != null ? humanDuration(Math.max(0, s.end - s.start)) : "";
+    const facts = [
+      s.kind === "model" && s.tokens ? `${k(s.tokens.input)} in · ${k(s.tokens.output)} out` : null,
+      s.stop ?? null,
+      s.subagent ? `↳ ${s.subagent}` : null,
+      s.kind === "tool" && s.captured && s.call ? s.call : null,
+    ].filter(Boolean);
+    const text = s.kind === "error" ? firstLine(s.text ?? "", 90) : s.label;
+    const head = `${root ? "" : `${prefix}${last ? "└ " : "├ "}`}${mark[s.kind] ?? "·"} ${s.status === "error" ? c.red(text) : s.kind === "step" || s.kind === "run" ? c.bold(text) : text}`;
+    lines.push(`  ${head}${facts.length ? `  ${c.dim(facts.join(" · "))}` : ""}${dur && s.kind !== "error" ? `  ${c.dim(dur)}` : ""}${s.id === culprit ? `  ${c.red("← what went wrong")}` : ""}`);
+    const kids = s.children ?? [];
+    kids.forEach((ch, i) => walk(ch, root ? "" : `${prefix}${last ? "  " : "│ "}`, i === kids.length - 1, false));
+  };
+  walk(tree, "", true, true);
+  console.log(`\n${lines.join("\n")}\n`);
+  if ((tree.children ?? []).some((s) => (s.children ?? []).some((ch) => (ch.children ?? []).some((t) => t.captured)))) console.log(`  ${c.dim(`\`foldrun report ${runId} call <id>\` shows a call's input and output`)}\n`);
+  return 0;
+}
+
+/** `foldrun report <run-id> --compare [<other>]` — this run beside the flow's
+ *  last good run (or the one named), from GET …/compare (FOL-72 step 6). */
+async function reportCompareCmd(url, flags, ws, runId) {
+  const other = typeof flags.compare === "string" ? flags.compare : null;
+  const { comparison: cmp, chosen } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/compare${other ? `?with=${encodeURIComponent(other)}` : ""}`);
+  if (flags.json === true) return console.log(JSON.stringify({ comparison: cmp, chosen }, null, 2)), 0;
+  console.log(`\n  ${c.bold(runId)} ${c.dim(`(${cmp.run.status})`)} beside ${c.bold(cmp.base.id)} ${c.dim(`(${chosen}, ${cmp.base.status})`)}`);
+  const files = !cmp.revisionChanged
+    ? "both ran the same version of the files"
+    : cmp.changedFiles === null
+      ? "they ran different versions of the files"
+      : cmp.changedFiles.length
+        ? `files changed between them: ${cmp.changedFiles.slice(0, 8).join(", ")}${cmp.changedFiles.length > 8 ? ` and ${cmp.changedFiles.length - 8} more` : ""}`
+        : "different revisions, no file changes between them";
+  console.log(`  ${c.dim(files)}\n`);
+  const changed = cmp.steps.filter((s) => s.changes.length);
+  if (!changed.length) console.log(`  ${c.dim("no step differs in status, instruction, model, tools, errors, time or tokens")}`);
+  for (const s of changed) {
+    console.log(`  ${c.bold(`step ${s.step} · ${s.agent}`)}`);
+    for (const ch of s.changes) console.log(`    ${/^(status|new error|tool errors)/.test(ch) ? c.red("•") : c.dim("•")} ${ch}`);
+  }
+  console.log();
+  return 0;
+}
+
+async function reportCmd(runId, flags, layout) {
+  const url = platformFor(flags, "report");
+  if (!runId) throw new Error("which run? `foldrun report <run-id>` — `foldrun runs` lists them");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  if (flags.tree === true) return reportTreeCmd(url, flags, ws, runId);
+  if (flags.compare !== undefined) return reportCompareCmd(url, flags, ws, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+
+  if (flags.json === true) {
+    console.log(JSON.stringify(run, null, 2));
+    return run.status === "failed" ? 1 : 0;
+  }
+
+  const tokens = sumTokens((run.steps ?? []).map((s) => s.tokens));
+  const cost = runCost(run);
+
+  const blocked = run.status === "completed" && verdictOf(run) === "BLOCKED";
+  console.log(`\n  ${blocked ? c.red("⛔") : statusMark(run.status)} ${c.bold(run.flow)}  ${c.dim(run.id)}`);
+  console.log(`  ${c.dim(`${ws} · ${run.status}`)}${verdictTag(run) ? ` ${verdictTag(run)}` : ""}${c.dim(run.test ? " · test run" : "")}`);
+  console.log(`  ${c.dim(`started ${when(run.startedAt)} (${ago(run.startedAt)} ago) · ${runDuration(run)} · $${cost.toFixed(4)}`)}`);
+  if (tokens.input || tokens.output) {
+    const cached = cachedLabel(measuredShare((run.steps ?? []).map((s) => s.tokens)));
+    console.log(`  ${c.dim(`${tokens.input.toLocaleString()} in / ${tokens.output.toLocaleString()} out tokens${cached ? ` · ${cached}` : ""}`)}`);
+  }
+  if (run.budgetUsd) console.log(`  ${c.dim(`budget $${Number(run.budgetUsd).toFixed(2)}`)}`);
+  // Which files it ran and how long it waited for a worker (FOL-54 step 4).
+  const ranOn = [run.revision ? `ran on ${String(run.revision).slice(0, 7)}` : null, run.drivenAt ? `queued ${humanDuration(Math.max(0, Date.parse(run.drivenAt) - Date.parse(run.startedAt)))}` : null].filter(Boolean);
+  if (ranOn.length) console.log(`  ${c.dim(ranOn.join(" · "))}`);
+  if (run.summary) {
+    console.log();
+    for (const line of wrap(run.summary, 84)) console.log(`  ${line}`);
+  }
+
+  console.log();
+  (run.steps ?? []).forEach((step, i) => {
+    const bits = [
+      step.status,
+      step.attempts > 1 ? `${step.attempts} attempts` : null,
+      imageLabel(step),
+      startupLabel(step),
+      step.costUsd ? `$${step.costUsd.toFixed(4)}` : null,
+      cachedLabel(cachedShare(step.tokens)),
+      typeof step.turns === "number" ? `${step.turns} turn${step.turns === 1 ? "" : "s"}` : null,
+      step.startedAt && step.finishedAt
+        ? humanDuration(Date.parse(step.finishedAt) - Date.parse(step.startedAt))
+        : null,
+    ].filter(Boolean);
+    console.log(
+      `  ${statusMark(step.status)} ${pad(`${i + 1}.`, 4)}${c.dim(`g${step.group ?? 1}`)} ${c.bold(step.agent)}  ${c.dim(bits.join(" · "))}`,
+    );
+    // A step the prompt cache did not serve says why — which layer of its
+    // prompt changed since the agent's last step — the way the run page does.
+    const cacheNote = promptCacheNote(run.steps ?? [], i);
+    if (cacheNote) console.log(`      ${c.dim("·")} ${c.dim(`prompt cache: ${cacheNote}`)}`);
+    if (step.verify) {
+      // A step that completed with a verify held it — the runtime fails the
+      // step otherwise, so status IS the verdict, and saying it out loud is
+      // the difference between "completed" and "completed, and checked".
+      const held = step.status === "completed";
+      console.log(`      ${held ? c.green("✓") : c.red("✗")} ${c.dim(`verify: ${firstLine(step.verify, 80)}`)}`);
+    }
+    // The account's browser pod under a slim step: reconnects, the re-run
+    // on full after it was lost, or why the step was not re-run.
+    const pod = podNote(step);
+    if (pod) console.log(`      ${pod.bad ? c.red("✗") : pod.warn ? c.amber("↻") : c.dim("·")} ${pod.bad ? c.red(`browser pod: ${pod.line}`) : c.dim(`browser pod: ${pod.line}`)}`);
+    // The slim go the pod was lost under is a try of its own.
+    const tries = podTries(step);
+    if (tries) console.log(`      ${c.dim("·")} ${c.dim(`tries: ${tries}`)}`);
+    if (step.approvedAt) {
+      console.log(`      ${c.green("✓")} ${c.dim(`approved ${when(step.approvedAt)}${step.approvalNote ? ` — "${step.approvalNote}"` : ""}`)}`);
+    }
+    if (step.status === "awaiting-approval") {
+      console.log(`      ${c.amber("⏸")} ${c.dim(step.waitFor === "event" ? "waiting on an event" : `waiting on a person: ${firstLine(step.ask ?? step.instruction, 70)}`)}`);
+    }
+    // Each model call (FOL-54 step 4): one line, or every call with --calls,
+    // and the tool calls whose input and output were recorded.
+    const calls = Array.isArray(step.calls) ? step.calls : [];
+    if (calls.length) {
+      const slowest = Math.max(...calls.map((m) => m.ms ?? 0));
+      console.log(`      ${c.dim(`${calls.length} model call${calls.length === 1 ? "" : "s"} · slowest ${humanDuration(slowest)} · largest ${Math.max(...calls.map((m) => m.tokens?.input ?? 0)).toLocaleString()} in`)}`);
+      if (flags.calls === true) {
+        for (const m of calls) {
+          const t = m.tokens ?? {};
+          const cached = t.input > 0 && t.cacheRead > 0 ? ` (${Math.round((100 * t.cacheRead) / t.input)}% cached)` : "";
+          console.log(`        ${c.dim(`${m.n}. ${m.model ?? "model"}${m.subagent ? ` ↳ ${m.subagent}` : ""} · ${humanDuration(m.ms ?? 0)} · ${(t.input ?? 0).toLocaleString()} in${cached} · ${(t.output ?? 0).toLocaleString()} out${m.stop ? ` · ${m.stop}` : ""}${m.tools ? ` · ${m.tools} tool${m.tools === 1 ? "" : "s"}` : ""}`)}`);
+        }
+      }
+    }
+    if (flags.calls === true) {
+      // Either half recorded counts, once per call.
+      const recorded = [...new Map((step.events ?? []).filter((e) => e.type === "tool" && e.captured && e.call).map((e) => [e.call, e])).values()];
+      for (const e of recorded) console.log(`        ${c.dim(`→ ${e.text}  ${e.call}`)}`);
+      if (recorded.length) console.log(`        ${c.dim(`\`foldrun report ${run.id} call <id>\` shows one call's input and output`)}`);
+    }
+    const said = firstLine(step.conclusion ?? step.result, 96);
+    if (said) console.log(`      ${said}`);
+    const err = stepError(step);
+    if (err) {
+      console.log(`      ${c.red(firstLine(err, 96))}`);
+      for (const e of (step.events ?? []).slice(-4)) {
+        console.log(`      ${EVENT_MARK(e)} ${c.dim(firstLine(e.text, 92))}`);
+      }
+    }
+  });
+
+  const files = filesWritten(run);
+  const links = published(run);
+  const waiting = waitingSteps(run);
+  if (files.length || links.length || waiting.length) console.log();
+  if (files.length) console.log(`  ${c.dim(`wrote  ${files.join(", ")}`)}`);
+  for (const link of links) console.log(`  ${c.dim(`published  ${link}`)}`);
+  for (const { step, index } of waiting) {
+    console.log(`  ${c.amber("⏸")} step ${index + 1} · ${step.agent} is waiting on a person — \`foldrun approve ${run.id} --to ${ws}\``);
+  }
+  console.log();
+  return run.status === "failed" ? 1 : 0;
+}
+
+// ------------------------------------------------- one tool, one agent, alone
+
+/** Which workspace a platform command is about: --to, else the folder we stand in. */
+function platformWorkspace(flags, layout, what) {
+  // A folder with no agents in it is not a workspace, whatever it is called,
+  // and guessing from its name posts to a workspace that does not exist —
+  // which comes back as the platform's 404 about something else entirely.
+  const guess = layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  const ws = typeof flags.to === "string" ? flags.to : guess;
+  if (!ws) {
+    throw new Error(
+      `which workspace is it in? \`foldrun ${what} --to <workspace>\`${
+        layout?.workspaces?.length ? ` — this account has ${layout.workspaces.join(", ")}` : ""
+      }`,
+    );
+  }
+  return ws;
+}
+
+/**
+ * A tool test runs the tool for real — an HTTP request, a script, an MCP
+ * handshake — and a script that scrapes a site or waits on a slow API takes
+ * as long as it takes. Thirty seconds is right for asking the platform a
+ * question and wrong for asking it to DO something, so this one waits five
+ * minutes unless told otherwise.
+ */
+const TOOL_TEST_SECONDS = 300;
+
+/**
+ * `foldrun tool test <name> [key=value …]` — exercise one tool, alone.
+ *
+ * No model, no run, no flow: the point is to find out whether the tool works
+ * BEFORE a flow depends on it. Otherwise the first anyone hears of a wrong
+ * `base:` or an unset secret is an agent, mid-turn, quietly not using the
+ * tool and saying something plausible instead.
+ *
+ * Arguments are `key=value` pairs because that is what the tool declares in
+ * `args:` — the platform passes them as the same long flags a run would.
+ */
+async function toolTestCmd(positional, flags, layout) {
+  const url = platformFor(flags, "tool test");
+  const name = positional[1];
+  if (!name) {
+    throw new Error("which tool? `foldrun tool test <name> --to <workspace>` — `foldrun tool new <name>` makes one");
+  }
+  const ws = platformWorkspace(flags, layout, `tool test ${name}`);
+
+  const args = {};
+  for (const pair of positional.slice(2)) {
+    const eq = pair.indexOf("=");
+    if (eq < 1) {
+      throw new Error(
+        `"${pair}" is not an argument — \`foldrun tool test ${name} key=value\`, one pair per argument the tool declares`,
+      );
+    }
+    args[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+
+  const seconds = explicitTimeout(flags) ?? TOOL_TEST_SECONDS;
+  let r;
+  try {
+    r = await remoteCall(
+      url,
+      flags,
+      `/api/workspaces/${encodeURIComponent(ws)}/tools/${encodeURIComponent(name)}/test`,
+      {
+        method: "POST",
+        // `path:` is the http transport's probe path, appended to `base:`.
+        body: JSON.stringify({ args, ...(typeof flags.path === "string" ? { path: flags.path } : {}) }),
+      },
+      { seconds },
+    );
+  } catch (err) {
+    if (explain(err).includes("did not answer")) {
+      throw new Error(
+        `${name} was still running ${seconds}s in, so the test was given up on — the tool itself may still be going on the platform. \`--timeout <seconds>\` waits longer.`,
+      );
+    }
+    throw err;
+  }
+
+  const mark = r.ok ? c.green("✓") : c.red("✗");
+  console.log(`\n  ${mark} ${c.bold(name)}  ${c.dim(`${r.transport ?? "?"} · ${ws} · ${humanDuration(r.ms ?? 0)}`)}`);
+  if (r.summary) console.log(`  ${c.dim(r.summary)}`);
+
+  // Names only. The platform never sends a secret's value and neither does
+  // this — "which one did you not set" is the whole of the useful half.
+  if (r.missingSecrets?.length) {
+    console.log();
+    for (const s of r.missingSecrets) {
+      console.log(`  ${c.red("✗")} ${c.bold(s)} ${c.dim(`is not set — foldrun secrets set ${s}`)}`);
+    }
+  }
+
+  // Whatever the tool printed: a script's stdout and stderr together, an
+  // HTTP response body, an MCP server's tool list.
+  if (r.detail) {
+    console.log();
+    for (const line of String(r.detail).split("\n")) console.log(`    ${line}`);
+  }
+
+  console.log(
+    `\n  ${c.dim(
+      r.ok
+        ? "it works — a flow can depend on it"
+        : `not working yet — fix it, \`foldrun deploy\`, and test again${
+            Object.keys(args).length ? "" : "; a tool that takes arguments needs them: key=value"
+          }`,
+    )}\n`,
+  );
+  return r.ok ? 0 : 1;
+}
+
+/**
+ * `foldrun agent run <name> --task "…"` — one agent, once, on the platform.
+ *
+ * A flow of one step, without a flow file: the way to try a desk's agent on
+ * a real task before wiring it into anything, and the way to ask one a
+ * question that does not deserve a schedule.
+ */
+async function agentRunCmd(positional, flags, layout) {
+  const url = platformFor(flags, "agent run");
+  const name = positional[1];
+  if (!name) throw new Error('which agent? `foldrun agent run <name> --to <workspace> --task "…"`');
+  const ws = platformWorkspace(flags, layout, `agent run ${name}`);
+  const task = typeof flags.task === "string" ? flags.task.trim() : "";
+  if (!task) {
+    throw new Error(`what should ${name} do? pass --task "<text>" — an agent run is one instruction and nothing else`);
+  }
+
+  // --wait asks in short pieces, exactly as `invoke` does: whatever sits in
+  // front of the platform cuts a request that stays silent too long, and an
+  // agent can think for many minutes.
+  const WAIT_PIECE_S = 25;
+  const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
+  const base = `/api/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
+
+  // A waited run that FAILS is answered with 500 and a full record — the
+  // answer to the question, not a fault in the call. So the run id is taken
+  // off it and the report is printed like any other.
+  const waited = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (flags.wait === true && err?.body?.runId) return err.body;
+      throw err;
+    }
+  };
+
+  let body = await waited(() =>
+    remoteCall(url, flags, `${base}/run${wait}`, {
+      method: "POST",
+      // --test: the platform marks the run a test run — sends refused or sunk
+      // at the proxy, send-capable secrets withheld, state/ kept.
+      body: JSON.stringify({ task, ...(flags.test === true ? { test: true } : {}) }),
+    }),
+  );
+  const runId = body?.runId;
+  if (!runId) throw new Error(`${url} started no run for ${name} — ${JSON.stringify(body).slice(0, 200)}`);
+
+  if (flags.wait !== true) {
+    console.log(
+      `\n  ${c.green("✓")} queued ${c.bold(runId)}${body.test ? ` ${c.amber("TEST")}` : ""}  ${c.dim(`${name} · ${ws}`)}`,
+    );
+    console.log(`  ${c.dim(`foldrun report ${runId} --to ${ws}`)}`);
+    console.log(`  ${c.dim(`foldrun logs ${runId} --to ${ws} --follow`)}\n`);
+    return 0;
+  }
+
+  while (body?.timedOut === true) {
+    body = await waited(() => remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${runId}${wait}`));
+  }
+  // The same report `foldrun report` prints, from the same code — a summary
+  // written twice is a summary that disagrees with itself by Friday.
+  return reportCmd(runId, { ...flags, to: ws }, layout);
+}
+
+/**
+ * `foldrun check --to <ws> --online` (FOL-58): the network checks, from the
+ * platform — known vulnerabilities for exact runtime pins (OSV) and what
+ * remote MCP servers tell the model about their tools — and, as loudly,
+ * what could not be checked. Exit 1 on a finding at --fail-on or above
+ * (warn under --security), as the local check does.
+ */
+async function checkOnline(url, flags, ws) {
+  const answer = await remoteCall(
+    url,
+    flags,
+    `/api/workspaces/${enc(ws)}/check?online=1&rule=supply-chain/known-vulnerability,content/mcp-tool-text`,
+    {},
+    { seconds: Math.max(timeoutSeconds(flags), 120) },
+  );
+  // --rule narrows these as it narrows the offline ones (Codex review).
+  const { rules } = checkOptions(flags);
+  const want = new Set(rules);
+  const findings = (answer.findings ?? []).filter(
+    (f) => !rules.length || want.has(f.rule) || want.has(f.rule.split("/")[0]) || want.has(categoryOf(f.rule)),
+  );
+  const problems = answer.online?.problems ?? [];
+  console.log(`  ${c.bold("online checks")}  ${c.dim("OSV for exact runtime pins · remote MCP servers' tool text")}`);
+  for (const f of findings) console.log(`  ${c.amber(" warn")}  ${c.bold(`${f.file}${f.line ? `:${f.line}` : ""}`)}  ${f.message}  ${c.dim(`[${f.rule}]`)}`);
+  if (!findings.length) console.log(`  ${c.green("✓")} ${c.dim(problems.length ? "nothing found in what could be checked" : "nothing found")}`);
+  for (const p of problems) console.log(`  ${c.amber("!")} ${c.dim("not checked:")} ${p}`);
+  if (answer.rescan?.checkedAt) console.log(`  ${c.dim(`the daily rescan last ran ${answer.rescan.checkedAt}`)}`);
+  console.log();
+  const { failOn } = checkOptions(flags);
+  return findings.some((f) => (RANK[f.level] ?? 0) >= FAIL_ON[failOn]) ? 1 : 0;
+}
+
+/**
+ * `foldrun check --to <workspace>` — validate the copy that is DEPLOYED.
+ *
+ * Everything else `check` does is about the folder in front of you. But a
+ * workspace can be edited through the API, by an agent or by `foldrun source
+ * put`, and until now the only way to find out whether what landed there was
+ * valid was to spend a run and read the failure.
+ *
+ * The files come down into a temporary folder and the ordinary local check
+ * runs over them, so there is exactly one copy of the rules. The library is
+ * not fetched: `check` already asks the platform what its library holds, by
+ * name, which is the half that matters for `tools:` and `skills:`.
+ */
+async function checkRemote(flags, layout) {
+  const url = platformFor(flags, "check --to <workspace>");
+  const ws = platformWorkspace(flags, layout, "check");
+  const { isSourcePath } = await core();
+
+  const files = await remoteWorkspaceFiles(url, flags, ws, isSourcePath);
+  if (!files.size) {
+    throw new Error(`no source files in "${ws}" on ${url} — \`foldrun workspaces\` lists what is there`);
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-check-"));
+  // Under `workspaces/` so the account root above it is the shape the core
+  // expects — and empty, so nothing on this laptop can be mistaken for part
+  // of what is deployed.
+  const dir = path.join(root, "workspaces", ws);
+  const before = { workspace: process.env.FOLDRUN_WORKSPACE, account: process.env.FOLDRUN_ACCOUNT };
+  try {
+    for (const [rel, content] of files) {
+      const abs = path.join(dir, rel);
+      // A path from the platform is still a path from somewhere else.
+      if (!abs.startsWith(dir + path.sep)) continue;
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    }
+    // JSON and SARIF own stdout; the framing goes to stderr then.
+    const say = checkOptions(flags).format === "text" ? console.log : console.error;
+    say(`\n  ${c.bold(ws)}  ${c.dim(`the deployed copy on ${url} · ${files.size} file${files.size === 1 ? "" : "s"}`)}`);
+    process.env.FOLDRUN_WORKSPACE = dir;
+    process.env.FOLDRUN_ACCOUNT = root;
+    // The baseline belongs to the folder it was written in, not to a temp copy.
+    const code = await check(dir, { ...flags, "no-baseline": true });
+    say(`  ${c.dim(`checked what is deployed, not this folder — ${ws} · ${url}`)}\n`);
+    if (flags.online === true) return Math.max(code, await checkOnline(url, flags, ws));
+    return code;
+  } finally {
+    if (before.workspace === undefined) delete process.env.FOLDRUN_WORKSPACE;
+    else process.env.FOLDRUN_WORKSPACE = before.workspace;
+    if (before.account === undefined) delete process.env.FOLDRUN_ACCOUNT;
+    else process.env.FOLDRUN_ACCOUNT = before.account;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------- hooks
+
+/**
+ * Core's hooks module — readHookDef, runHook, the event list — or null on a
+ * core from before hooks, where `check` then says nothing about them and the
+ * `hook` verbs say which core they need.
+ */
+async function hooksCore() {
+  try {
+    return /** @type {any} */ (await import("@foldrun/core/hooks"));
+  } catch {
+    return null;
+  }
+}
+async function needHooksCore() {
+  const h = await hooksCore();
+  if (!h) throw new Error("this CLI's @foldrun/core has no hooks — update it (npm i -g foldrun@latest)");
+  return h;
+}
+
+/** The account library a hook verb works on: the folder beside workspaces/. */
+const libraryRootOf = (layout) => path.join(layout.accountRoot, "library");
+
+/** What a new run.mjs answers, per event: a gate allows, a watcher notes nothing. */
+const HOOK_ANSWER = {
+  "tool.call": `{ decision: "allow" }`,
+  "tool.result": `{}`,
+  "step.start": `{}`,
+  "step.end": `{}`,
+};
+
+/** A sample event per kind, for `hook test` with no --event. */
+const HOOK_SAMPLE = {
+  "tool.call": { tool: { name: "Bash", input: { command: "ls" } } },
+  "tool.result": { tool: { name: "Bash", input: { command: "ls" }, result: "agent.md\n" } },
+  "step.start": { prompt: "Find three sources." },
+  "step.end": { reply: "Done." },
+};
+
+function hookRunTemplate(name, on) {
+  return `// ${name} — a foldrun hook (on: ${on}). Self-contained: Node's built-ins only,
+// no relative imports — it runs from a copy taken when the step starts.
+//
+// In:  one JSON object on stdin — the event:
+//        { event, hook, run_id, step, agent, workspace,
+//          tool: { name, input }        (tool.call, tool.result; + result on tool.result)
+//          prompt                       (step.start)
+//          reply                        (step.end) }
+// Out: one JSON object on stdout, the last line printed:
+//        tool.call    { decision: "allow" | "deny", reason, input, note }
+//                     input replaces the tool's whole input; a deny needs a reason
+//        step.start   { context, note }   context is added to the step's prompt
+//        step.end     { reply, note }     reply replaces the step's reply
+//        tool.result  { note }            a line on the run's trail
+// Exit 0 with an answer. Exit 2 denies, with stderr as the reason.
+// Anything else is a failure: a gate (tool.call, step.start) that fails
+// refuses; a watcher (tool.result, step.end) that fails is recorded.
+// No secrets and no model key reach this process.
+
+let raw = "";
+for await (const chunk of process.stdin) raw += chunk;
+const event = JSON.parse(raw || "{}");
+
+// Decide here. This one allows everything.
+void event;
+console.log(JSON.stringify(${HOOK_ANSWER[on]}));
+`;
+}
+
+/** `foldrun hook <ls|add|test|rm>` — hooks in this workspace and the library. */
+async function hookCmd(positional, flags, layout) {
+  const [verb = "ls"] = positional;
+  if (verb === "ls" || verb === "list") return hookLsCmd(flags, layout);
+  if (verb === "add" || verb === "new") return hookAddCmd(positional, flags, layout);
+  if (verb === "test") return hookTestCmd(positional, flags, layout);
+  if (verb === "rm") return hookRmCmd(positional, flags, layout);
+  throw new Error(`unknown hook verb "${verb}" — ls, add <name> --on <event>, test <name>, rm <name>`);
+}
+
+/** Every hook folder here, the workspace's first, each read the way a run reads it. */
+async function hooksHere(flags, layout) {
+  const h = await needHooksCore();
+  const ws = workspaceDirFor(flags, layout);
+  const out = [];
+  const seen = new Set();
+  for (const [root, scope] of [[ws, "workspace"], [libraryRootOf(layout), "account"]]) {
+    for (const dir of h.listHookDirs(path.join(root, "hooks"))) {
+      const name = path.basename(dir);
+      const def = h.readHookDef(dir, scope);
+      const row = "error" in def
+        ? { name, scope, error: def.error }
+        : { name, scope, on: def.on, tool: def.tool ?? null, timeout: def.timeoutSec, description: def.description ?? null };
+      // A workspace hook of the same name is the one a run resolves.
+      out.push({ ...row, ...(seen.has(name) ? { shadowed: true } : {}) });
+      seen.add(name);
+    }
+  }
+  return { h, ws, hooks: out };
+}
+
+/** `hook ls --to <ws>`: the DEPLOYED workspace's hooks and what they did
+ *  lately — GET /api/workspaces/<ws>/hooks, the dashboard's Hooks panel. */
+async function hookLsRemote(flags) {
+  const url = platformFor(flags, "hook ls");
+  const ws = String(flags.to);
+  const q = new URLSearchParams();
+  if (flags.all === true) q.set("all", "1");
+  if (flags.runs !== undefined) q.set("runs", String(flags.runs));
+  const r = /** @type {{ hooks: any[], recent: any[] }} */ (await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/hooks${q.size ? `?${q}` : ""}`));
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const hooks = r.hooks ?? [];
+  if (!hooks.length) console.log(`\n  ${c.dim(`no hooks in ${ws} or the account library`)}`);
+  else {
+    console.log();
+    const w = Math.max(...hooks.map((x) => x.name.length));
+    for (const x of hooks) {
+      const where = x.scope === "account" ? "library" : "workspace";
+      if (x.error) {
+        console.log(`  ${c.red("✗")} ${c.bold(x.name.padEnd(w))}  ${c.dim(where.padEnd(9))}  ${x.error}`);
+        continue;
+      }
+      const on = (x.onFor ?? []).length ? `on for ${x.onFor.join(", ")}` : "turned on by nobody";
+      const note = x.shadowed ? "(the workspace's own of this name is the one that runs)" : `${on}${x.description ? ` — ${x.description}` : ""}`;
+      console.log(`  ${c.green("✓")} ${c.bold(x.name.padEnd(w))}  ${c.dim(where.padEnd(9))}  ${String(x.on).padEnd(11)}  ${String(x.tool ?? "*").padEnd(12)}  ${c.dim(note)}`);
+    }
+  }
+  const recent = r.recent ?? [];
+  console.log(`\n  ${c.bold("lately")}  ${c.dim(recent.length ? `${recent.length} ${flags.all === true ? "hook decision" : "deny, rewrite or failure"}${recent.length === 1 ? "" : "s"}, newest first` : flags.all === true ? "no hook ran" : "nothing denied, rewritten or failed (--all for every decision)")}`);
+  for (const e of recent.slice(0, 20)) {
+    const rec = e.record ?? {};
+    console.log(`  ${c.dim(String(e.t).slice(0, 16).replace("T", " "))}  ${rec.hook} ${rec.did} ${rec.event}${rec.tool ? ` ${rec.tool}` : ""}  ${c.dim(`${e.runId} step ${e.step} ${e.agent}`)}${rec.reason ? ` — ${firstLine(rec.reason, 80)}` : ""}`);
+  }
+  console.log(`\n  ${c.dim("--runs <n> reads further back (default 50) · --all for every decision · --json")}\n`);
+  return hooks.some((x) => x.error) ? 1 : 0;
+}
+
+async function hookLsCmd(flags, layout) {
+  if (typeof flags.to === "string") return hookLsRemote(flags);
+  const { hooks } = await hooksHere(flags, layout);
+  if (flags.json === true) {
+    console.log(JSON.stringify(hooks, null, 2));
+    return 0;
+  }
+  if (!hooks.length) {
+    console.log(`\n  ${c.dim("no hooks — `foldrun hook add <name> --on tool.call` makes one")}\n`);
+    return 0;
+  }
+  console.log();
+  const w = Math.max(...hooks.map((x) => x.name.length));
+  for (const x of hooks) {
+    const where = x.scope === "account" ? "library" : "workspace";
+    if (x.error) {
+      console.log(`  ${c.red("✗")} ${c.bold(x.name.padEnd(w))}  ${c.dim(where.padEnd(9))}  ${x.error}`);
+      continue;
+    }
+    const what = `${x.on.padEnd(11)}  ${(x.tool ?? "*").padEnd(12)}`;
+    const note = x.shadowed ? c.dim("(the workspace's own of this name is the one that runs)") : c.dim(x.description ?? "");
+    console.log(`  ${c.green("✓")} ${c.bold(x.name.padEnd(w))}  ${c.dim(where.padEnd(9))}  ${what}  ${note}`);
+  }
+  console.log(`\n  ${c.dim("an agent turns one on with hooks: [name]; AGENTS.md hooks: turns it on for every agent under it")}\n`);
+  return hooks.some((x) => x.error) ? 1 : 0;
+}
+
+async function hookAddCmd(positional, flags, layout) {
+  const h = await needHooksCore();
+  const name = positional[1];
+  if (!name) throw new Error("which hook? `foldrun hook add <name> --on tool.call|tool.result|step.start|step.end`");
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+    throw new Error(`"${name}" is not a hook name — lowercase letters, digits and dashes, e.g. no-rm-rf`);
+  }
+  const on = flags.on;
+  if (typeof on !== "string" || !h.HOOK_EVENTS.includes(on)) {
+    throw new Error(`--on takes ${h.HOOK_EVENTS.join(", ")}${typeof on === "string" ? ` — not "${on}"` : ""}`);
+  }
+  const tool = typeof flags.tool === "string" ? flags.tool.trim() : undefined;
+  if (flags.tool !== undefined && !tool) throw new Error("--tool takes a tool name or pattern, like Bash, Write|Edit or mcp__*");
+  if (tool && on !== "tool.call" && on !== "tool.result") {
+    throw new Error(`--tool only means something on tool.call and tool.result, not ${on}`);
+  }
+  const root = flags.library === true ? libraryRootOf(layout) : workspaceDirFor(flags, layout);
+  const rel = `hooks/${name}`;
+  const front = [
+    "---",
+    `on: ${on}`,
+    ...(tool ? [`tool: ${/[|*:]/.test(tool) ? JSON.stringify(tool) : tool}`] : []),
+    `description: What ${name} checks, in one line.`,
+    "---",
+    "",
+    `What ${name} is for, and what it refuses or rewrites. The code is run.mjs beside this file.`,
+    "",
+  ].join("\n");
+  writeFiles(root, [
+    { path: `${rel}/hook.md`, content: front },
+    { path: `${rel}/run.mjs`, content: hookRunTemplate(name, on) },
+  ], flags.library === true ? "the library" : path.basename(root));
+  const where = path.relative(process.cwd(), path.join(root, rel)) || rel;
+  console.log(`\n  ${c.green("created")} hook ${c.bold(name)} ${c.dim(`(${on}${tool ? ` · ${tool}` : ""})`)} in ${where}\n`);
+  console.log(`    ${c.dim(`${rel}/hook.md`)}\n    ${c.dim(`${rel}/run.mjs`)}`);
+  console.log(`\n  ${c.bold("Next")}
+    edit ${path.join(where, "run.mjs")}
+    hooks: [${name}]${" ".repeat(4)}${c.dim("in an agent's frontmatter — or in AGENTS.md for every agent")}
+    foldrun hook test ${name}${" ".repeat(4)}${c.dim("run it on a sample event, here")}\n`);
+  return 0;
+}
+
+/** --event: inline JSON, or @file. */
+function readHookEvent(raw, on) {
+  if (raw === undefined) return { event: HOOK_SAMPLE[on] ?? {}, sample: true };
+  if (typeof raw !== "string") throw new Error("--event takes a JSON object, or @file");
+  const text = raw.startsWith("@") ? fs.readFileSync(raw.slice(1), "utf8") : raw;
+  let event;
+  try { event = JSON.parse(text); } catch (err) {
+    throw new Error(`--event is not JSON (${err instanceof Error ? err.message : err})`);
+  }
+  if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("--event is one JSON object — the event the hook reads on stdin");
+  return { event, sample: false };
+}
+
+function printHookAnswer(name, on, a, where) {
+  const mark = !a.ok ? c.red("✗") : a.decision === "deny" ? c.amber("■") : c.green("✓");
+  console.log(`\n  ${mark} ${c.bold(name)}  ${c.dim(`${on ?? "?"} · ${where} · ${a.ms ?? 0}ms`)}`);
+  if (!a.ok) console.log(`  ${c.red("failed")}  ${a.failure ?? "no reason given"}${on === "tool.call" || on === "step.start" ? c.dim(" — a gate that fails refuses") : ""}`);
+  if (a.decision) console.log(`  ${pad("decision", 9)} ${a.decision === "deny" ? c.amber("deny") : "allow"}`);
+  if (a.reason) console.log(`  ${pad("reason", 9)} ${a.reason}`);
+  if (a.input) console.log(`  ${pad("input", 9)} ${JSON.stringify(a.input)}`);
+  if (a.context) console.log(`  ${pad("context", 9)} ${a.context}`);
+  if (a.reply !== undefined) console.log(`  ${pad("reply", 9)} ${a.reply}`);
+  if (a.note) console.log(`  ${pad("note", 9)} ${a.note}`);
+  console.log();
+  return a.ok ? 0 : 1;
+}
+
+/**
+ * `foldrun hook test <name> [--event '<json>']` — run one hook on one event,
+ * here, the way a step runs it (core's runHook: the event on stdin, a
+ * stripped environment, its timeout). `--to <workspace>` asks the platform
+ * to run the deployed one instead.
+ */
+async function hookTestCmd(positional, flags, layout) {
+  const name = positional[1];
+  if (!name) throw new Error("which hook? `foldrun hook test <name> --event '<json>'` — `foldrun hook ls` lists them");
+  if (typeof flags.to === "string") {
+    const url = platformFor(flags, "hook test");
+    const ws = flags.to;
+    let event = {};
+    if (flags.event !== undefined) event = readHookEvent(flags.event, "tool.call").event;
+    const r = /** @type {any} */ (await remoteCall(
+      url,
+      flags,
+      `/api/workspaces/${enc(ws)}/hooks/${enc(name)}/test`,
+      { method: "POST", body: JSON.stringify({ event }) },
+    ));
+    const a = r?.answer ?? r ?? {};
+    return printHookAnswer(name, r?.on ?? a.on, { ok: a.ok !== false, ...a }, ws);
+  }
+  const h = await needHooksCore();
+  const ws = workspaceDirFor({ ...flags, to: undefined }, layout);
+  const r = h.resolveHooks({ workspaceRoot: ws, libraryRoot: libraryRootOf(layout), names: [name] });
+  if (r.missing.length) throw new Error(`no hook named ${name} in hooks/ or the library — \`foldrun hook ls\` lists them`);
+  if (r.errors.length) throw new Error(r.errors[0]);
+  const def = r.hooks[0];
+  const { event, sample } = readHookEvent(flags.event, def.on);
+  if (sample) console.log(`\n  ${c.dim(`no --event, so a sample ${def.on} event: ${JSON.stringify(event)}`)}`);
+  const full = { event: def.on, hook: def.name, run_id: null, step: null, agent: null, workspace: path.basename(ws), ...event };
+  const a = await h.runHook(def, full, { cwd: ws, env: process.env });
+  return printHookAnswer(name, def.on, a, def.scope === "account" ? "library" : path.basename(ws));
+}
+
+async function hookRmCmd(positional, flags, layout) {
+  const h = await needHooksCore();
+  const name = positional[1];
+  if (!name) throw new Error("which hook? `foldrun hook rm <name>` (--library for the account's)");
+  const root = flags.library === true ? libraryRootOf(layout) : workspaceDirFor(flags, layout);
+  const dir = path.join(root, "hooks", name);
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name) || !fs.existsSync(dir)) {
+    throw new Error(`no hooks/${name} in ${flags.library === true ? "the library" : path.basename(root)} — \`foldrun hook ls\` lists them`);
+  }
+  // Who still turns it on: they fail check, and their steps are refused.
+  const users = [];
+  const wsRoots = flags.library === true
+    ? (layout.workspacesDir ? layout.workspaces.map((w) => path.join(layout.workspacesDir, w)) : [layout.workspaceDir].filter(Boolean))
+    : [root];
+  const matter = (await import("gray-matter")).default;
+  const names = (file) => {
+    try { return h.hookNames(matter(fs.readFileSync(file, "utf8")).data?.hooks); } catch { return []; }
+  };
+  for (const w of wsRoots) {
+    if (names(path.join(w, "AGENTS.md")).includes(name)) users.push(`${path.basename(w)}/AGENTS.md`);
+    for (const a of ls(path.join(w, "agents"))) {
+      if (names(path.join(w, "agents", a, "agent.md")).includes(name)) users.push(`${path.basename(w)}/agents/${a}`);
+    }
+  }
+  const still = users.length ? ` — still turned on by ${users.join(", ")}, whose steps will be refused until it goes from their hooks:` : "";
+  if (!(await sureToDelete(flags, "hook rm", `${flags.library === true ? "library/" : ""}hooks/${name}${still}`))) return 1;
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log(`\n  ${c.green("✓")} removed hooks/${name}${users.length ? c.dim(` — take it out of: ${users.join(", ")}`) : ""}\n`);
+  return 0;
+}
+
+// ------------------------------------------- flows and teams, as the canvas edits them
+//
+// The dashboard's flow canvas turns every palette block into a small, exact
+// edit of a markdown file — core's flow-patterns.ts. These verbs are the same
+// edits from a terminal: the same function writes the same bytes, so a flow
+// changed here and one changed on the canvas cannot disagree about what
+// "add a router" means.
+//
+// Every edit is shown as a diff first and run through the same rules `check`
+// applies. One that would ADD an error is refused and nothing is written —
+// a problem that was there before is not this edit's fault and does not
+// block it.
+
+const patterns = async () => import("@foldrun/core/flow-patterns");
+const enc = encodeURIComponent;
+
+/** A repeatable flag as a list: `--tag a --tag b`, or one `--tag a`. */
+const many = (v) => (Array.isArray(v) ? v : v === undefined || v === true ? [] : [v]).filter((x) => typeof x === "string" && x.trim());
+
+/** Did the person name a platform? Then a flow or agent edit goes there. */
+const namesPlatform = (flags) =>
+  typeof flags.to === "string" || typeof flags.url === "string" || typeof flags.profile === "string" || typeof flags.token === "string";
+
+/** The directories a workspace's source never lives in — skipped whole
+ *  rather than walked and filtered out file by file. */
+const NOT_WALKED = new Set(["node_modules", ".git", ".foldrun", "runs", "state", "storage", "outputs"]);
+
+/** Every source file of a local workspace, by path — what a deploy ships. */
+function localSourceFiles(dir, isSourcePath) {
+  const out = new Map();
+  const walk = (abs, rel) => {
+    for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+      if (e.isDirectory()) {
+        if (NOT_WALKED.has(e.name)) continue;
+        walk(path.join(abs, e.name), rel ? `${rel}/${e.name}` : e.name);
+      } else if (e.isFile()) {
+        const r = rel ? `${rel}/${e.name}` : e.name;
+        if (isSourcePath(r)) out.set(r, fs.readFileSync(path.join(abs, e.name), "utf8"));
+      }
+    }
+  };
+  walk(dir, "");
+  return out;
+}
+
+/** The local workspace a flow or agent edit is about: the one this terminal
+ *  stands in, the one --workspace names, the only one, or — in an account
+ *  with several — the one that has a flow of that name. */
+function localDeskDir(layout, flowName) {
+  if (layout.workspaceDir && layout.kind !== "empty") return layout.workspaceDir;
+  const named = takeWorkspace([], layout);
+  if (named && layout.workspacesDir) return path.join(layout.workspacesDir, named);
+  if (layout.kind === "account" && layout.workspacesDir) {
+    if (flowName) {
+      const hits = layout.workspaces.filter((ws) => fs.existsSync(path.join(layout.workspacesDir, ws, "flows", `${flowName}.md`)));
+      if (hits.length === 1) return path.join(layout.workspacesDir, hits[0]);
+    }
+    throw new Error(`which workspace? --workspace <name> — this account has ${layout.workspaces.join(", ") || "none"} (--to <workspace> edits the deployed copy instead)`);
+  }
+  throw new Error("this is not a workspace — `foldrun init <dir>` makes one, or cd into an existing one (--to <workspace> reaches a deployed one)");
+}
+
+/**
+ * Where an edit lands, and what is there now. A local desk is a folder; a
+ * platform desk is a workspace read through the source API — the whole of
+ * it, because the check that vets the edit reads the whole of it.
+ */
+async function openDesk(flags, layout, what, flowName) {
+  const { isSourcePath } = await core();
+  if (namesPlatform(flags)) {
+    const url = platformFor(flags, what);
+    const ws = platformWorkspace(flags, layout, what);
+    const { files = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`);
+    const wanted = files.filter(isSourcePath);
+    const contents = await pool(wanted, 8, async (rel) => {
+      const { content } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=${enc(rel)}`);
+      return [rel, content];
+    });
+    return { platform: true, url, ws, label: `${ws} on ${url}`, files: new Map(contents) };
+  }
+  const dir = localDeskDir(layout, flowName);
+  return { platform: false, dir, ws: path.basename(dir), label: path.relative(process.cwd(), dir) || ".", files: localSourceFiles(dir, isSourcePath) };
+}
+
+/**
+ * Lay a set of workspace files down in a scratch folder and run `fn` with
+ * the core pointed at it. A platform desk gets an empty account around it —
+ * its library is the platform's; a local one keeps this account's library.
+ */
+async function inTree(desk, files, fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-desk-"));
+  const dir = path.join(root, "workspaces", desk.ws);
+  const before = { workspace: process.env.FOLDRUN_WORKSPACE, account: process.env.FOLDRUN_ACCOUNT };
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [rel, content] of files) {
+      const abs = path.join(dir, rel);
+      if (!abs.startsWith(dir + path.sep)) continue;
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    }
+    process.env.FOLDRUN_WORKSPACE = dir;
+    if (desk.platform) process.env.FOLDRUN_ACCOUNT = root;
+    return await fn(dir);
+  } finally {
+    if (before.workspace === undefined) delete process.env.FOLDRUN_WORKSPACE;
+    else process.env.FOLDRUN_WORKSPACE = before.workspace;
+    if (before.account === undefined) delete process.env.FOLDRUN_ACCOUNT;
+    else process.env.FOLDRUN_ACCOUNT = before.account;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** A problem's identity across an edit: where (without its line, which an
+ *  inserted step moves) and what. */
+const problemKey = (p) => `${p.where.replace(/:\d+$/, "")}\u0000${p.message}`;
+
+/**
+ * What an edit would add to `check`'s findings: the problems present after
+ * it and not before, by count, so a second copy of an old one still counts.
+ * Offline — the platform's library is not asked, and it would answer the
+ * same before and after.
+ */
+async function problemsAdded(desk, changes) {
+  const after = new Map(desk.files);
+  for (const [rel, content] of changes) after.set(rel, content);
+  // Each run checks a fresh temporary copy, so a message naming a path
+  // names a different folder each time; with the folder taken out, the same
+  // problem before and after the edit is the same problem.
+  const run = (files) =>
+    inTree(desk, files, async (dir) => {
+      const root = path.dirname(path.dirname(dir));
+      return (await checkProblems(dir, { local: true })).problems.map((p) => ({ ...p, message: p.message.split(root).join("<desk>") }));
+    });
+  const was = await run(desk.files);
+  const now = await run(after);
+  const left = new Map();
+  for (const p of was) left.set(problemKey(p), (left.get(problemKey(p)) ?? 0) + 1);
+  const added = [];
+  for (const p of now) {
+    const k = problemKey(p);
+    if (left.get(k)) left.set(k, left.get(k) - 1);
+    else if (p.level !== "info") added.push(p);
+  }
+  return added;
+}
+
+/** A line diff with two lines of context, `…` between the hunks. */
+function printOps(rel, ops, context = 2) {
+  console.log(`  ${c.bold(rel)}`);
+  const changed = ops.map((o) => o.kind !== "same");
+  let last = -1;
+  ops.forEach((o, i) => {
+    if (!changed.slice(Math.max(0, i - context), i + context + 1).some(Boolean)) return;
+    if (i > last + 1) console.log(`    ${c.dim("…")}`);
+    last = i;
+    console.log(`    ${o.kind === "add" ? c.green(`+ ${o.text}`) : o.kind === "del" ? c.red(`- ${o.text}`) : c.dim(`  ${o.text}`)}`);
+  });
+  if (last !== -1 && last < ops.length - 1) console.log(`    ${c.dim("…")}`);
+}
+
+async function printDiff(rel, before, after) {
+  const { diffLines } = await import("@foldrun/core/history");
+  printOps(rel, diffLines(before, after));
+}
+
+/** The file under flows/ that holds a flow: flows/<name>.md, else the one
+ *  whose `name:` says so — the rule the platform's flow route uses. */
+async function flowFileOf(desk, flow) {
+  const { parseFlow } = await core();
+  if (!flow) throw new Error("which flow?");
+  if (desk.files.has(`flows/${flow}.md`)) return `flows/${flow}.md`;
+  for (const [rel, content] of desk.files) {
+    if (/^flows\/[^/]+\.md$/.test(rel) && parseFlow(path.basename(rel), content).name === flow) return rel;
+  }
+  const have = [...desk.files.keys()].filter((r) => /^flows\/[^/]+\.md$/.test(r)).map((r) => path.basename(r, ".md"));
+  throw new Error(`no flow "${flow}" in ${desk.label}${have.length ? ` — it has ${have.join(", ")}` : ""}`);
+}
+
+/** The flows whose steps run an agent — how far an edit to its file reaches. */
+async function flowsUsing(desk, agent) {
+  const { parseFlow } = await core();
+  const out = [];
+  for (const [rel, content] of desk.files) {
+    if (!/^flows\/[^/]+\.md$/.test(rel)) continue;
+    const f = parseFlow(path.basename(rel), content);
+    if (f.steps.some((s) => s.agent === agent && !s.subflow)) out.push(f.name);
+  }
+  return out.sort();
+}
+
+/** A seconds count the way a flow file spells it: 90s, 30m, 4h, 3d. */
+function waitSpan(secs) {
+  if (secs % 86400 === 0) return `${secs / 86400}d`;
+  if (secs % 3600 === 0) return `${secs / 3600}h`;
+  if (secs % 60 === 0) return `${secs / 60}m`;
+  return `${secs}s`;
+}
+
+/** The palette, in the canvas's order, with every spelling the CLI takes. */
+const FLOW_PATTERNS = {
+  chain: ["chain", "step"],
+  parallel: ["parallel"],
+  router: ["router", "route"],
+  "fan-out": ["fan-out", "fanout", "each"],
+  loop: ["loop", "evaluator"],
+  approval: ["approval", "approve", "gate"],
+  ask: ["ask"],
+  wait: ["wait"],
+  rescue: ["rescue", "on-fail"],
+  subflow: ["subflow", "flow"],
+};
+const patternOf = (word) => Object.keys(FLOW_PATTERNS).find((k) => FLOW_PATTERNS[k].includes(word));
+
+/** A step, named by its place in the file (1 = the first step line) or by
+ *  the agent it runs. */
+function pickStep(steps, spec, flow) {
+  const list = steps.map((s, i) => `${i + 1} ${s.subflow ? `flow:${s.subflow}` : s.agent}`).join(", ");
+  if (spec === undefined || spec === true) throw new Error(`which step? --step <n> or --step <agent> — ${flow} has ${list || "no steps"}`);
+  if (/^\d+$/.test(String(spec))) {
+    const i = Number(spec) - 1;
+    if (!steps[i]) throw new Error(`${flow} has no step ${spec} — ${list}`);
+    return i;
+  }
+  const hits = steps.map((s, i) => (s.agent === spec && !s.subflow ? i : -1)).filter((i) => i >= 0);
+  if (!hits.length) throw new Error(`no step of ${flow} runs ${spec} — ${list}`);
+  if (hits.length > 1) throw new Error(`${spec} runs ${hits.length} steps of ${flow} (${hits.map((i) => i + 1).join(", ")}) — --step <n> says which`);
+  return hits[0];
+}
+
+/** Where a new group goes: --after <n> (0 = before the first), --before <n>, else last. */
+function railOf(flags, groups) {
+  let rail = groups.length;
+  if (flags.after !== undefined) rail = Number(flags.after);
+  else if (flags.before !== undefined) rail = Number(flags.before) - 1;
+  if (!Number.isInteger(rail) || rail < 0 || rail > groups.length) {
+    throw new Error(`--after takes 0 to ${groups.length} (the groups this flow has; 0 is before the first)`);
+  }
+  return rail;
+}
+
+const need = (v, what) => {
+  if (typeof v !== "string" || !v.trim()) throw new Error(what);
+  return v.trim();
+};
+
+/** One pattern, from the command line, as the edit the canvas sends.
+ *  @returns {any} a core PatternEdit */
+function patternEdit(pattern, flags, steps, groups, flow) {
+  const instruction = typeof flags.instruction === "string" ? flags.instruction : undefined;
+  const off = flags.off === true;
+  switch (pattern) {
+    case "chain":
+      return { op: "insert", target: need(flags.agent, "chain: --agent <name> — the agent the new step runs"), instruction, at: { rail: railOf(flags, groups) } };
+    case "parallel": {
+      const g = Number(flags.group);
+      if (!Number.isInteger(g) || g < 1 || g > groups.length) throw new Error(`parallel: --group <1-${groups.length}> — the group the new step runs beside`);
+      return { op: "insert", target: need(flags.agent, "parallel: --agent <name> — the agent the new step runs"), instruction, at: { column: g - 1 } };
+    }
+    case "router": {
+      const cases = String(need(flags.cases, "router: --cases BUG=bugs,DOCS=docs — each marker and the agent it routes to"))
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => {
+          const m = /^(.+?)\s*[=:]\s*([A-Za-z0-9_-]+)$/.exec(x);
+          if (!m) throw new Error(`router: "${x}" names no agent — --cases ${x}=<agent>`);
+          return { value: m[1], target: m[2] };
+        });
+      return {
+        op: "router",
+        router: need(flags.agent, "router: --agent <name> — the triage agent whose reply is routed on"),
+        instruction,
+        rail: railOf(flags, groups),
+        cases,
+        ...(typeof flags.else === "string" ? { else: flags.else } : {}),
+      };
+    }
+    case "subflow":
+      return { op: "insert", target: need(flags.flow, "subflow: --flow <name> — the other flow to run as a step"), subflow: true, at: { rail: railOf(flags, groups) } };
+  }
+
+  const i = pickStep(steps, flags.step, flow);
+  const s = steps[i];
+  switch (pattern) {
+    case "fan-out":
+      if (off) return { op: "options", step: i, set: { each: null, max: null } };
+      return {
+        op: "options",
+        step: i,
+        set: {
+          each: need(flags.each, 'fan-out: --each lines | items | "rows of <path>"'),
+          max: typeof flags.max === "string" ? flags.max : s.max != null ? String(s.max) : null,
+        },
+      };
+    case "loop": {
+      if (off) return { op: "options", step: i, set: { loop: null, until: null } };
+      const set = {
+        loop: typeof flags.loop === "string" ? flags.loop : String(s.loop ?? 3),
+        until: typeof flags.until === "string" ? flags.until : (s.until ?? "APPROVED"),
+      };
+      if (typeof flags.judge === "string" && flags.judge.trim()) set.verify = `judge: ${flags.judge.trim()}`;
+      return { op: "options", step: i, set };
+    }
+    case "approval":
+      return { op: "approve", step: i, on: !off };
+    case "ask":
+      return { op: "options", step: i, set: { ask: off ? null : need(flags.question, 'ask: --question "…" — what to ask a person before this step (--off removes it)') } };
+    case "wait":
+      return { op: "options", step: i, set: { wait: off ? null : need(flags.wait, "wait: --wait 30m | 4h | event (--off removes it)") } };
+    case "rescue": {
+      if (off) return { op: "options", step: i, set: { "on-fail": null } };
+      const who = need(flags["on-fail"], "rescue: --on-fail <agent> — who takes the step over when it fails (--off removes it)");
+      if (who === s.agent) throw new Error(`rescue: ${who} cannot rescue its own step`);
+      return { op: "options", step: i, set: { "on-fail": who } };
+    }
+  }
+  throw new Error(`unknown pattern "${pattern}"`);
+}
+
+/** The sha256 a flow PATCH sends as `expect`: the text its step numbers were
+ *  read from. The platform refuses the edit (409) when the file has changed
+ *  since — someone edited it while this waited at y/N — rather than apply
+ *  the number to whichever step has it now. */
+const textSha = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
+
+/** The local twin of `expect`: write `next` over a desk file only while it
+ *  still reads `before`, the text the edit was made from. Someone may have
+ *  saved it while this waited at y/N or ran check; writing anyway would put
+ *  their edit back as it was. Refuses, writing nothing, instead. */
+function writeIfUnchanged(desk, rel, before, next) {
+  assertUnchanged(desk, rel, before);
+  fs.writeFileSync(path.join(desk.dir, rel), next);
+}
+
+/** Throw, as writeIfUnchanged does, when a desk file no longer reads `before`. */
+function assertUnchanged(desk, rel, before) {
+  let now = null;
+  try {
+    now = fs.readFileSync(path.join(desk.dir, rel), "utf8");
+  } catch {}
+  if (now !== before) throw new Error(`${rel} changed since it was read — nothing was written; run the command again on the new text`);
+}
+
+/** Say the problems an edit would add, in check's words; true when any is an error. */
+function reportAdded(added) {
+  for (const p of added) {
+    const tag = p.level === "error" ? c.red("error") : c.amber(" warn");
+    console.log(`  ${tag}  ${c.bold(p.where)}  ${p.message}`);
+  }
+  return added.some((p) => p.level === "error");
+}
+
+/**
+ * `foldrun flow add <flow> <pattern> [options]` — one palette block, from
+ * the terminal. Local by default; --to <workspace> edits the deployed copy
+ * through the route the canvas posts to (PATCH …/flows/<flow> { edit }).
+ */
+async function flowAddCmd(positional, flags, layout) {
+  const flow = positional[1];
+  const word = positional[2];
+  const names = Object.keys(FLOW_PATTERNS).join(", ");
+  if (!flow || !word) throw new Error(`\`foldrun flow add <flow> <pattern>\` — the patterns are ${names}`);
+  const pattern = patternOf(word);
+  if (!pattern) throw new Error(`"${word}" is not a pattern — ${names}`);
+
+  const desk = await openDesk(flags, layout, `flow add ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const { applyPatternEdit, flowGroups } = await patterns();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  const edit = patternEdit(pattern, flags, steps, flowGroups(steps), flow);
+
+  let next;
+  try {
+    next = applyPatternEdit(raw, edit);
+  } catch (err) {
+    throw new Error(`${pattern}: ${err instanceof Error ? err.message : err}`);
+  }
+  if (next === raw) {
+    console.log(`\n  ${c.dim(`nothing to change — ${rel} already says that`)}\n`);
+    return 0;
+  }
+
+  console.log(`\n  ${c.bold(flow)} ${c.dim(`· ${pattern} · ${desk.label}`)}\n`);
+  await printDiff(rel, raw, next);
+  console.log();
+  const added = await problemsAdded(desk, [[rel, next]]);
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report ${added.filter((p) => p.level === "error").length === 1 ? "that error" : "those errors"}, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit, expect: textSha(raw) }) });
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
+  } else {
+    writeIfUnchanged(desk, rel, raw, next);
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  }
+  return 0;
+}
+
+/**
+ * `foldrun flow dup-step <flow> --step <n|agent>` — the canvas's Duplicate:
+ * a copy of the step (its `?`/`!` marker and every indented option) goes
+ * directly under it in the same group, so the two run in parallel; nothing
+ * else moves (core's duplicateStep). Shows the diff and refuses one `check`
+ * would call a new error. Additive, so it does not ask. --dry-run writes
+ * nothing; --to <workspace> sends the canvas's PATCH { edit: { op: "duplicate" } }.
+ */
+async function flowDupStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow dup-step <flow> --step <n|agent>`");
+  const desk = await openDesk(flags, layout, `flow dup-step ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const { duplicateStep } = await patterns();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  const i = pickStep(steps, flags.step, flow);
+  const s = steps[i];
+  const label = `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}`;
+
+  console.log(`\n  ${c.bold(flow)} ${c.dim(`· duplicate ${label} · ${desk.label}`)}\n`);
+  let next;
+  try {
+    next = duplicateStep(raw, i);
+  } catch (err) {
+    console.log(`  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
+    return 1;
+  }
+  await printDiff(rel, raw, next);
+  console.log();
+  const added = await problemsAdded(desk, [[rel, next]]);
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report ${added.filter((p) => p.level === "error").length === 1 ? "that error" : "those errors"}, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "duplicate", step: i }, expect: textSha(raw) }) });
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
+  } else {
+    writeIfUnchanged(desk, rel, raw, next);
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  }
+  return 0;
+}
+
+/**
+ * `foldrun flow rm-step <flow> --step <n|agent>` — the canvas's delete: the
+ * step line and its indented options go, the groups after it renumber, the
+ * agent's file is not touched (core's removeStep). Says what else changes,
+ * shows the diff, refuses one `check` would call a new error, then asks —
+ * a delete, so no terminal needs --yes. --dry-run writes nothing; --to
+ * <workspace> sends the canvas's PATCH { edit: { op: "remove" } }.
+ */
+async function flowRmStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow rm-step <flow> --step <n|agent>`");
+  const desk = await openDesk(flags, layout, `flow rm-step ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const { removeStep, removeStepImpact } = await patterns();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  const i = pickStep(steps, flags.step, flow);
+  const impact = removeStepImpact(raw, i);
+
+  console.log(`\n  ${c.bold(flow)} ${c.dim(`· delete ${impact.label} · ${desk.label}`)}\n`);
+  for (const n of impact.notes) console.log(`  ${c.dim("·")} ${n}`);
+  console.log();
+  let next;
+  try {
+    next = removeStep(raw, i);
+  } catch (err) {
+    console.log(`  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
+    return 1;
+  }
+  await printDiff(rel, raw, next);
+  console.log();
+  const added = await problemsAdded(desk, [[rel, next]]);
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report ${added.filter((p) => p.level === "error").length === 1 ? "that error" : "those errors"}, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (!(await confirmed(flags, "flow rm-step", `Delete ${impact.label} from ${flow}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing deleted")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "remove", step: i }, expect: textSha(raw) }) });
+    console.log(`  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
+  } else {
+    writeIfUnchanged(desk, rel, raw, next);
+    console.log(`  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  }
+  return 0;
+}
+
+/** Whether an agent file says what the agent is for. */
+/** `sandbox: own` on an agent as core's listAgents reports it — from core
+ *  2.8 on; an older core does not say, and the agent reads as not own. */
+function ownSandboxOf(agent) {
+  return /** @type {{ sandbox?: string } | undefined} */ (agent)?.sandbox === "own";
+}
+
+/** An agent file's frontmatter as a run reads it, from its text. A run folds
+ *  the four job blocks' keys up to the top (core's configMatter, kept private
+ *  — not in @foldrun/core's publicApi), so `guardrail: { sandbox: own }` reads
+ *  as `sandbox: own`. The CLI reads only two foldable keys off this — `sandbox`
+ *  and `network`, both in an agent's `guardrail:` block — so it lifts just
+ *  those, the same way a run does: a top-level value wins, else the block's is
+ *  lifted. {} when it does not parse. */
+async function effectiveFront(raw) {
+  const { readFrontmatter } = await core();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-front-"));
+  try {
+    fs.writeFileSync(path.join(dir, "agent.md"), raw);
+    const front = /** @type {Record<string, any>} */ (readFrontmatter(path.join(dir, "agent.md")) ?? {});
+    const guardrail = front.guardrail && typeof front.guardrail === "object" ? front.guardrail : {};
+    for (const key of ["sandbox", "network"]) if (!(key in front) && key in guardrail) front[key] = guardrail[key];
+    return front;
+  } catch {
+    return {};
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function hasDescription(raw) {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1] ?? "";
+  const lines = front.split(/\r?\n/);
+  const at = lines.findIndex((l) => /^description:/.test(l));
+  if (at === -1) return false;
+  const v = lines[at].replace(/^description:/, "").replace(/\s+#.*$/, "").trim().replace(/^["']|["']$/g, "");
+  if (v && !/^[|>][-+]?\d*$/.test(v)) return true;
+  return /^\s+\S/.test(lines[at + 1] ?? "");
+}
+
+/** What an import leaves behind: what the agent accumulated, not what it is.
+ *  The same rule as core's agent-import.ts. */
+const NOT_IMPORTED = /^(memory|outputs|state|workspace|\.claude)(\/|$)|^\.claude\.json$/;
+
+/**
+ * `foldrun agent import <workspace>/<agent> [--as <name>]` — bring an agent
+ * you already have in another workspace into this one: its agent.md and its
+ * own skills/, scripts/, knowledge/ — never its memory. With `--to <ws>` it
+ * is the platform's POST /api/workspaces/<ws>/agents/import; without, it
+ * copies between workspaces of this account folder, into the one you stand
+ * in (or `--workspace <name>`).
+ */
+async function agentImportCmd(positional, flags, layout) {
+  // --list: what could be imported into a deployed workspace — every other
+  // workspace this key may read, and its agents (GET …/agents/import).
+  if (flags.list === true) {
+    const url = platformFor(flags, "agent import --list");
+    const ws = platformWorkspace(flags, layout, "agent import --list");
+    const { workspaces = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/import`);
+    if (flags.json === true) {
+      console.log(JSON.stringify(workspaces, null, 2));
+      return 0;
+    }
+    if (!workspaces.length) {
+      console.log(`\n  ${c.dim(`nothing to import into ${ws} — no other workspace you can read has an agent`)}\n`);
+      return 0;
+    }
+    const w = Math.max(...workspaces.flatMap((x) => (x.agents ?? []).map((a) => `${x.name}/${a.name}`.length)));
+    console.log();
+    for (const x of workspaces) {
+      for (const a of x.agents ?? []) console.log(`  ${c.bold(pad(`${x.name}/${a.name}`, w))}  ${c.dim(firstLine(a.description ?? "", 80))}`);
+    }
+    console.log(`\n  ${c.dim(`foldrun agent import <workspace>/<agent> --to ${ws} [--as <name>] copies one in`)}\n`);
+    return 0;
+  }
+  const ref = positional[1];
+  const m = typeof ref === "string" ? /^([^/]+)\/([^/]+)$/.exec(ref) : null;
+  if (!m) throw new Error("which agent? `foldrun agent import <workspace>/<agent> [--as <name>] [--to <workspace>]`");
+  const [, from, agent] = m;
+  const as = typeof flags.as === "string" && flags.as.trim() ? flags.as.trim() : null;
+
+  if (typeof flags.to === "string") {
+    const url = platformFor(flags, "agent import");
+    const body = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(flags.to)}/agents/import`, {
+      method: "POST",
+      body: JSON.stringify({ from, agent, ...(as ? { as } : {}) }),
+    });
+    console.log(`\n  ${c.green("✓")} ${c.bold(body.name)}  ${c.dim(`from ${from} → ${flags.to}`)}`);
+    for (const f of body.files ?? []) console.log(`  ${c.dim(f)}`);
+    for (const w of body.warnings ?? []) console.log(`  ${c.amber("!")} ${w}`);
+    console.log();
+    return 0;
+  }
+
+  if (!layout.workspacesDir) {
+    throw new Error("not in an account folder — pass --to <workspace> to import on the platform");
+  }
+  const name = as ?? agent;
+  assertName(name);
+  const src = path.join(layout.workspacesDir, from, "agents", agent);
+  if (!fs.existsSync(path.join(src, "agent.md"))) {
+    throw new Error(`no agent "${agent}" in ${from} — ${layout.workspaces.includes(from) ? "" : `this account has ${layout.workspaces.join(", ") || "no workspaces"}`}`.replace(/ — $/, ""));
+  }
+  const target =
+    typeof flags.workspace === "string"
+      ? path.join(layout.workspacesDir, flags.workspace)
+      : layout.workspaceDir && layout.kind !== "empty"
+        ? layout.workspaceDir
+        : null;
+  if (!target || !fs.existsSync(target)) throw new Error("into which workspace? cd into it, or --workspace <name>");
+  if (path.resolve(target) === path.resolve(path.join(layout.workspacesDir, from)) && name === agent) {
+    throw new Error(`${agent} is already in ${from} — give the copy another name with --as`);
+  }
+  const dest = path.join(target, "agents", name);
+  if (fs.existsSync(dest)) throw new Error(`${path.basename(target)} already has an agent called "${name}" — import it under another name with --as`);
+
+  const written = [];
+  const walk = (dir, rel = "") => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (NOT_IMPORTED.test(r) || e.isSymbolicLink()) continue;
+      if (e.isDirectory()) walk(path.join(dir, e.name), r);
+      else if (e.isFile()) {
+        let content = fs.readFileSync(path.join(dir, e.name));
+        if (r === "agent.md" && name !== agent) {
+          content = Buffer.from(content.toString("utf8").replace(/^(---\r?\n(?:[\s\S]*?\r?\n)?)name:[^\n]*$/m, `$1name: ${name}`));
+        }
+        fs.mkdirSync(path.dirname(path.join(dest, r)), { recursive: true });
+        fs.writeFileSync(path.join(dest, r), content);
+        written.push(`agents/${name}/${r}`);
+      }
+    }
+  };
+  walk(src);
+  console.log(`\n  ${c.green("✓")} ${c.bold(name)}  ${c.dim(`from ${from} → ${path.basename(target)}`)}`);
+  for (const f of written) console.log(`  ${c.dim(f)}`);
+  console.log(`  ${c.dim("its memory stayed in")} ${from}${c.dim(" — `foldrun check` names any tool, skill or secret it uses that this workspace lacks")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun agent link <agent> --subagent <worker> [--isolated] | --consult <agent> |
+ * --can-ask`, and `unlink` — an agent's team, edited in its frontmatter
+ * list and nowhere else: `subagents:`, `agents:`, `ask` in `tools:`.
+ */
+async function agentLinkCmd(positional, flags, layout) {
+  const verb = positional[0];
+  const add = verb === "link";
+  const name = positional[1];
+  const usage = `\`foldrun agent ${verb} <agent> --subagent <worker> [--isolated] | --consult <agent> | --can-ask\``;
+  if (!name) throw new Error(usage);
+  const picked = [
+    typeof flags.subagent === "string" ? ["subagents", flags.subagent] : null,
+    typeof flags.consult === "string" ? ["agents", flags.consult] : null,
+    flags["can-ask"] === true ? ["tools", "ask"] : null,
+  ].filter(Boolean);
+  if (picked.length !== 1) throw new Error(`${usage} — exactly one of them`);
+  const [key, member] = /** @type {[string, string]} */ (picked[0]);
+  // --isolated: the worker runs each job in its own sandbox (sandbox: own on
+  // its file) — its own tools, secrets and network, not cut to the parent's.
+  const isolated = flags.isolated === true;
+  if (isolated && (key !== "subagents" || !add)) throw new Error("--isolated goes with `agent link <agent> --subagent <worker>`");
+
+  const desk = await openDesk(flags, layout, `agent ${verb} ${name}`);
+  const { editFrontmatterList, setFrontmatterScalar } = await patterns();
+  const fileOf = (a) => `agents/${a}/agent.md`;
+  const agents = [...desk.files.keys()].map((r) => /^agents\/([^/]+)\/agent\.md$/.exec(r)?.[1]).filter(Boolean);
+  if (!desk.files.has(fileOf(name))) throw new Error(`no agent "${name}" in ${desk.label} — it has ${agents.join(", ") || "none"}`);
+  if (key !== "tools") {
+    if (member === name) throw new Error(key === "subagents" ? "an agent does not delegate to itself" : "an agent does not consult itself");
+    if (add && !desk.files.has(fileOf(member))) throw new Error(`no agent "${member}" in ${desk.label} — it has ${agents.join(", ")}`);
+  }
+
+  const raw = desk.files.get(fileOf(name));
+  const next = editFrontmatterList(raw, key, member, add ? "add" : "remove");
+  const said = key === "subagents" ? `${member} as a sub-agent${isolated ? " in its own sandbox" : ""}` : key === "agents" ? `${member} as a consult` : "asking you mid-step";
+  // What a run reads, through core's parser: a `guardrail:` block counts,
+  // and "sandbox: own" inside a description does not.
+  const workerOwn = isolated && (await effectiveFront(desk.files.get(fileOf(member)) ?? "")).sandbox === "own";
+  if (next === raw && (!isolated || workerOwn)) {
+    console.log(`\n  ${c.dim(add ? `${name} already has ${said}` : `${name} does not have ${said} — nothing to remove`)}\n`);
+    return 0;
+  }
+
+  // Description first, as the canvas does it: the model picks a sub-agent
+  // by its description and the runner skips one without.
+  const edits = [];
+  if (add && key === "subagents" && !hasDescription(desk.files.get(fileOf(member)))) {
+    let description = typeof flags.description === "string" ? flags.description.trim() : "";
+    if (!description) {
+      if (!process.stdin.isTTY) {
+        throw new Error(`${member} has no description:, and ${name} picks a sub-agent by it — pass --description "what ${member} is for"`);
+      }
+      description = (await promptVisible(`  ${member} has no description, and ${name} picks sub-agents by it. What is ${member} for? `)).trim();
+      if (!description) throw new Error("no description given — nothing written");
+    }
+    const w = desk.files.get(fileOf(member));
+    edits.push({ agent: member, rel: fileOf(member), before: w, after: setFrontmatterScalar(w, "description", description), bodies: [{ set: { key: "description", value: description } }] });
+  }
+  if (isolated && !workerOwn) {
+    // The worker's file once, whatever is set on it: one diff, one write,
+    // one PATCH per key on the platform.
+    const prior = edits.find((e) => e.agent === member);
+    const set = { set: { key: "sandbox", value: "own" } };
+    if (prior) {
+      prior.after = setFrontmatterScalar(prior.after, "sandbox", "own");
+      prior.bodies.push(set);
+    } else {
+      const w = desk.files.get(fileOf(member));
+      edits.push({ agent: member, rel: fileOf(member), before: w, after: setFrontmatterScalar(w, "sandbox", "own"), bodies: [set] });
+    }
+  }
+  if (next !== raw) edits.push({ agent: name, rel: fileOf(name), before: raw, after: next, bodies: [{ list: { key, name: member, action: add ? "add" : "remove" } }] });
+
+  console.log(`\n  ${c.bold(name)} ${c.dim(`· ${add ? "add" : "remove"} ${said} · ${desk.label}`)}\n`);
+  for (const e of edits) {
+    await printDiff(e.rel, e.before, e.after);
+    const used = await flowsUsing(desk, e.agent);
+    if (used.length > 1) console.log(`  ${c.amber("!")} ${c.dim(`${e.rel} is used by ${used.length} flows (${used.join(", ")}) — the change reaches every one of them`)}`);
+  }
+  console.log();
+  const added = await problemsAdded(desk, edits.map((e) => [e.rel, e.after]));
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report that, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  // Every file checked before any is written: a description put on the
+  // worker with the link refused would be half an edit.
+  if (!desk.platform) for (const e of edits) assertUnchanged(desk, e.rel, e.before);
+  for (const e of edits) {
+    if (desk.platform) {
+      for (const body of e.bodies) {
+        await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/agents/${enc(e.agent)}`, { method: "PATCH", body: JSON.stringify(body) });
+      }
+    } else {
+      writeIfUnchanged(desk, e.rel, e.before, e.after);
+    }
+  }
+  console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${edits.map((e) => e.rel).join(", ")} ${c.dim(desk.platform ? `in ${desk.ws} — a revision on the platform` : "— `foldrun deploy` ships it")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun agent network <agent> [open|trusted|none|inherit] [--add <site>]…
+ * [--remove <site>]…` — which sites the agent's sandbox may reach, its
+ * `network:` line, edited the way the dashboard's Network card edits it
+ * (core network.ts setNetworkSetting: that one line, nothing else). With no
+ * level and no site it prints what a run resolves.
+ */
+async function agentNetworkCmd(positional, flags, layout) {
+  const name = positional[1];
+  const word = positional[2];
+  const usage = "`foldrun agent network <agent> [open|trusted|none|inherit] [--add <site>]… [--remove <site>]…`";
+  if (!name) throw new Error(usage);
+  if (word !== undefined && !["open", "trusted", "none", "inherit"].includes(word)) throw new Error(`${usage} — "${word}" is not a level`);
+  const net = await import("@foldrun/core/network").catch(() => null);
+  if (!net) throw new Error("agent network needs @foldrun/core 1.1 or later — update foldrun");
+  const desk = await openDesk(flags, layout, `agent network ${name}`);
+  const rel = `agents/${name}/agent.md`;
+  if (!desk.files.has(rel)) {
+    const agents = [...desk.files.keys()].map((r) => /^agents\/([^/]+)\/agent\.md$/.exec(r)?.[1]).filter(Boolean);
+    throw new Error(`no agent "${name}" in ${desk.label} — it has ${agents.join(", ") || "none"}`);
+  }
+  const resolve = (files) =>
+    inTree(desk, files, async (dir) => {
+      const { listAgents } = await core();
+      // The folded view a run reads: `network` set inside a `guardrail:` block
+      // counts the same as a top-level one (effectiveFront lifts it).
+      return {
+        info: listAgents("default", "workspace").find((a) => a.name === name),
+        own: net.readNetwork((await effectiveFront(fs.readFileSync(path.join(dir, rel), "utf8"))).network).setting,
+      };
+    });
+  const show = (info) => {
+    const p = info?.network;
+    if (!p) return;
+    console.log(`  ${net.networkLine(p, true)}`);
+    if (p.level !== "open") console.log(`  ${c.dim("a run also allows its MCP servers, its web providers and the sites its secrets are bound to")}`);
+  };
+  const raw = desk.files.get(rel);
+  const now = await resolve(desk.files);
+  const list = (v) => (v === undefined ? [] : Array.isArray(v) ? v : [v]).filter((x) => typeof x === "string").flatMap((x) => x.split(",")).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const adds = list(flags.add);
+  const removes = list(flags.remove);
+  if (word === undefined && !adds.length && !removes.length) {
+    console.log(`\n  ${c.bold(name)} ${c.dim(`· ${desk.label}`)}`);
+    show(now.info);
+    console.log();
+    return 0;
+  }
+  const own = now.own ?? { allow: [] };
+  const level = word === "inherit" ? undefined : word ?? own.level;
+  const allow = [...new Set([...own.allow, ...adds])].filter((x) => !removes.includes(x));
+  const setting = level || allow.length || own.defaults === false
+    ? { ...(level ? { level } : {}), allow, ...(own.defaults === false ? { defaults: false } : {}) }
+    : null;
+  const problems = setting ? net.readNetwork(setting).problems : [];
+  if (problems.length) throw new Error(problems.join(" "));
+  const next = net.setNetworkSetting(raw, setting);
+  if (next === raw) {
+    console.log(`\n  ${c.dim(`${name}'s network: already says that — nothing to change`)}\n`);
+    return 0;
+  }
+  console.log(`\n  ${c.bold(name)} ${c.dim(`· network · ${desk.label}`)}\n`);
+  await printDiff(rel, raw, next);
+  if (flags["dry-run"] === true) {
+    console.log(`\n  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/agents/${enc(name)}`, { method: "PATCH", body: JSON.stringify({ network: setting }) });
+  } else {
+    assertUnchanged(desk, rel, raw);
+    writeIfUnchanged(desk, rel, raw, next);
+  }
+  const after = await resolve(new Map([...desk.files, [rel, next]]));
+  console.log();
+  show(after.info);
+  console.log(`\n  ${c.green("✓")} ${rel} ${c.dim(desk.platform ? `in ${desk.ws} — a revision on the platform` : "— `foldrun deploy` ships it")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun flow show <flow>` — the canvas, in a terminal: the trigger, one
+ * block per group, each step's chips, the team under its agent, and what
+ * `check` says about any of it, where it says it.
+ */
+async function flowShowCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("which flow? `foldrun flow show <flow>` (--to <workspace> for the deployed one)");
+  const desk = await openDesk(flags, layout, `flow show ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const { f, agents, problems } = await inTree(desk, desk.files, async (dir) => {
+    const { listAgents, parseFlow } = await core();
+    return {
+      f: parseFlow(path.basename(rel), desk.files.get(rel)),
+      agents: listAgents("default", "workspace"),
+      problems: (await checkProblems(dir, flags)).problems,
+    };
+  });
+
+  // Colour only for a person: piped, it is plain text a script can read.
+  const tty = process.stdout.isTTY === true && !process.env.NO_COLOR;
+  const p = tty ? c : Object.fromEntries(Object.keys(c).map((k) => [k, (s) => String(s)]));
+  const byAgent = new Map(agents.map((a) => [a.name, a]));
+
+  // check's findings, pinned to what they are about: a flow line to the step
+  // it falls in, an agent's to that agent's team.
+  const mine = problems.filter((x) => x.where.replace(/:\d+$/, "") === rel);
+  const stepLines = f.steps.map((s) => s.line ?? 0);
+  const stepOf = (line) => {
+    let at = -1;
+    stepLines.forEach((l, i) => {
+      if (l && line >= l) at = i;
+    });
+    return at;
+  };
+  const atStep = new Map();
+  const atFlow = [];
+  for (const x of mine) {
+    const line = Number(/:(\d+)$/.exec(x.where)?.[1] ?? 0);
+    const i = line ? stepOf(line) : -1;
+    if (i === -1) atFlow.push(x);
+    else atStep.set(i, [...(atStep.get(i) ?? []), x]);
+  }
+  const ofAgent = (a) => problems.filter((x) => x.where === `agents/${a}`);
+  const mark = (x) => (x.level === "error" ? p.red(`✗ ${x.message}`) : x.level === "warn" ? p.amber(`! ${x.message}`) : p.dim(`· ${x.message}`));
+
+  const trigger =
+    f.trigger === "schedule"
+      ? `schedule ${f.schedule ?? "?"}${f.timezone ? ` · ${f.timezone}` : ""}`
+      : f.trigger === "webhook"
+        ? "webhook"
+        : f.trigger ?? "manual";
+  const extras = [f.overlap ? `overlap ${f.overlap}` : null, f.priority ? `priority ${f.priority}` : null, f.model ? `model ${f.model}` : null, f.effort ? `effort ${f.effort}` : null].filter(Boolean);
+  console.log(`\n  ${p.bold(f.name)}  ${p.dim(`${rel} · ${desk.label}`)}`);
+  console.log(`  ${p.dim("trigger")}  ${trigger}${extras.length ? p.dim(`  · ${extras.join(" · ")}`) : ""}`);
+  for (const x of atFlow) console.log(`  ${mark(x)}`);
+
+  const chips = (s) =>
+    [
+      s.approve ? p.amber("approve") : null,
+      s.optional ? "optional" : null,
+      s.when ? `when: ${s.when}` : null,
+      s.case !== undefined ? `case: ${s.case}` : null,
+      s.else ? "else" : null,
+      s.each ? `each: ${s.each === "rows" && s.eachPath ? `rows of ${s.eachPath}` : s.each}${s.max ? ` ×${s.max}` : ""}` : null,
+      s.loop ? `loop ${s.loop}${s.until ? ` until ${s.until}` : ""}` : null,
+      s.verify ? `verify: ${firstLine(s.verify, 40)}` : null,
+      s.retry ? `retry ${s.retry}` : null,
+      s.waitFor === "event" ? "wait: event" : s.waitSecs != null ? `wait ${waitSpan(s.waitSecs)}` : null,
+      s.ask ? `ask: ${firstLine(s.ask, 40)}` : null,
+      s.onFail ? `on-fail → ${s.onFail}` : null,
+      s.model ? `model ${s.model}` : null,
+      s.output ? `output: ${s.output}` : null,
+    ]
+      .filter(Boolean)
+      .map((x) => `[${x}]`)
+      .join(" ");
+
+  const groups = [...new Set(f.steps.map((s) => s.group))].sort((a, b) => a - b);
+  console.log();
+  if (!f.steps.length) console.log(`  ${p.dim("no steps")}`);
+  groups.forEach((g, gi) => {
+    const members = f.steps.map((s, i) => ({ s, i })).filter(({ s }) => s.group === g);
+    const parallel = members.length > 1;
+    const num = pad(`${gi + 1}.`, 4);
+    if (parallel) console.log(`  ${p.bold(num)}${p.dim(`${members.length} in parallel`)}`);
+    members.forEach(({ s, i }, k) => {
+      const lastOne = k === members.length - 1;
+      const lead = parallel ? `  ${" ".repeat(4)}${lastOne ? "└ " : "├ "}` : `  ${p.bold(num)}`;
+      const under = parallel ? `  ${" ".repeat(4)}${lastOne ? "  " : "│ "}  ` : `  ${" ".repeat(4)}  `;
+      const who = s.subflow ? `flow:${s.subflow}` : s.agent;
+      const ch = chips(s);
+      console.log(`${lead}${p.bold(who)}${ch ? `  ${p.dim(ch)}` : ""}${s.instruction ? p.dim(`  — ${firstLine(s.instruction, 60)}`) : ""}`);
+      for (const x of atStep.get(i) ?? []) console.log(`${under}${mark(x)}`);
+      if (s.subflow) return;
+      const a = byAgent.get(s.agent);
+      if (!a) return;
+      if (a.model) console.log(`${under}${p.dim(`model ${a.model}${a.tools?.length ? ` · ${a.tools.length} tool${a.tools.length === 1 ? "" : "s"}` : ""}`)}`);
+      for (const w of a.subagents ?? []) console.log(`${under}↳ sub-agent ${w}${ownSandboxOf(byAgent.get(w)) ? p.dim(" (own sandbox)") : ""}`);
+      for (const w of a.consults ?? []) console.log(`${under}· consults ${w}`);
+      if ((a.tools ?? []).includes("ask")) console.log(`${under}${p.amber("may ask you")}`);
+      for (const x of ofAgent(s.agent)) console.log(`${under}${mark(x)}`);
+    });
+  });
+  const errors = [...mine, ...f.steps.flatMap((s) => (s.subflow ? [] : ofAgent(s.agent)))].filter((x) => x.level === "error").length;
+  console.log(`\n  ${p.dim(errors ? `${errors} error${errors === 1 ? "" : "s"} — \`foldrun check\` has the rest` : "`foldrun flow add <flow> <pattern>` changes it")}\n`);
+  return errors ? 1 : 0;
+}
+
+/**
+ * `foldrun flow hook <flow>` — the flow's webhook URL as it is now, changing
+ * nothing. Before this the only way to learn it from here was rotate-hook,
+ * which broke the URL whoever was already posting to it had.
+ */
+async function flowHookCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("which flow? `foldrun flow hook <flow> --to <workspace>`");
+  const url = platformFor(flags, "flow hook");
+  const ws = platformWorkspace(flags, layout, `flow hook ${flow}`);
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/hooks/${enc(flow)}`);
+  const full = r.url ?? new URL(r.path, url).toString();
+  if (flags.json) {
+    console.log(JSON.stringify({ flow, url: full, path: r.path }));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(full)}`);
+  console.log(`  ${c.dim("a credential — whoever has it can start this flow; `foldrun flow rotate-hook " + flow + "` replaces it")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun flow rotate-hook <flow>` — a new webhook URL for one flow. The
+ * old one stops working the moment this returns, so it asks first.
+ */
+async function rotateHookCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("which flow? `foldrun flow rotate-hook <flow> --to <workspace>`");
+  const url = platformFor(flags, "flow rotate-hook");
+  const ws = platformWorkspace(flags, layout, `flow rotate-hook ${flow}`);
+  console.log(`\n  ${c.yellow("!")} rotating ${c.bold(flow)}'s webhook in ${ws} stops the old URL at once — anything still posting to it gets refused`);
+  if (!(await confirmed(flags, "rotating a webhook", "Rotate it? [y/N] "))) {
+    console.log(`\n  ${c.dim("nothing rotated")}\n`);
+    return 1;
+  }
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/hooks/${enc(flow)}/rotate`, { method: "POST" });
+  console.log(`\n  ${c.green("✓")} ${c.bold(new URL(r.path, url).toString())}`);
+  console.log(`  ${c.dim("the new URL — a credential; give it to whatever posts to this flow")}\n`);
+  return 0;
+}
+
+// ------------------------------------------------ what the dashboard does, from here
+//
+// Each of these is a page or a button on the dashboard that the terminal
+// could not reach. Same routes, same permissions: a 403 is the platform's
+// answer, said with which credential it refused.
+
+/** One eval's verdict, the same lines locally and on a platform. */
+function printEvalResult(result) {
+  if (result.error) console.log(`  ${c.red("✗")} ${result.error}`);
+  for (const testCase of result.cases ?? []) {
+    console.log(`  ${testCase.passed ? c.green("✓") : c.red("✗")} ${testCase.name}`);
+    for (const a of (testCase.assertions ?? []).filter((x) => !x.passed)) {
+      console.log(`      ${c.dim(`${a.assertion.type}: ${a.assertion.value}`)} — ${String(a.detail ?? "").split("\n")[0]}`);
+    }
+    if (testCase.error) console.log(`      ${c.red(testCase.error)}`);
+  }
+  console.log(`  ${result.passed}/${result.passed + result.failed} passing · $${Number(result.costUsd ?? 0).toFixed(4)}`);
+}
+
+/**
+ * `foldrun eval [name] --to <workspace>` — the deployed workspace's evals,
+ * run there. Each run waits for its verdict: an eval is something you wait
+ * for, and the platform answers when every case has.
+ */
+/**
+ * One eval on the platform, started and polled (POST …/run { async: true },
+ * then GET …/run) — a long eval outlives the proxy in front of the platform,
+ * which cut the old waiting request at 100 s. A platform that answers the
+ * POST with the result itself (older ones) is read as before.
+ */
+async function remoteEvalRun(url, flags, ws, name) {
+  const path = `/api/workspaces/${enc(ws)}/evals/${enc(name)}/run`;
+  const started = await remoteCall(url, flags, path, { method: "POST", body: JSON.stringify({ async: true }) }, { seconds: explicitTimeout(flags) ?? 900 });
+  if (!started?.started) return started;
+  console.log(`  ${c.dim(`run ${started.runId}`)}`);
+  const deadline = Date.now() + (explicitTimeout(flags) ?? 900) * 1000;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error(`${name} is still running after ${explicitTimeout(flags) ?? 900}s — \`foldrun eval ${name} --to ${ws} --run ${started.runId}\` reads this run's verdict when it is done, without running it again`);
+    }
+    await new Promise((r) => setTimeout(r, Number(process.env.FOLDRUN_EVAL_POLL_MS) || 4000));
+    const view = await remoteEvalRunView(url, flags, path, started.runId);
+    if (view.state === "running") continue;
+    return evalRunVerdict(name, view);
+  }
+}
+
+/** GET …/run?run=<id> — that one run's state, and nothing else's. */
+function remoteEvalRunView(url, flags, path, runId) {
+  return remoteCall(url, flags, `${path}?run=${encodeURIComponent(runId)}`);
+}
+
+/** A run's view as the result printEvalResult reads — a failure, a lost
+ *  lease or an unknown id are an error, never a pass. */
+function evalRunVerdict(name, view) {
+  if (view.state === "done" && view.result) return view.result;
+  return { eval: name, passed: 0, failed: 0, cases: [], error: view.error ?? `the run ended as ${view.state ?? "unknown"}, with no result` };
+}
+
+async function remoteEvalsCmd(name, flags, layout) {
+  const url = platformFor(flags, "eval --to <workspace>");
+  const ws = platformWorkspace(flags, layout, "eval");
+  // --run reads one run of one eval: a bare --run, or one with no eval
+  // named, would otherwise start runs or read the id against every eval.
+  if (flags.run !== undefined) {
+    if (typeof flags.run !== "string" || !flags.run.trim()) throw new Error("--run takes the run id the eval printed — `foldrun eval <name> --to <ws> --run <id>`");
+    if (!name) throw new Error("--run reads one eval's run — name it: `foldrun eval <name> --to <ws> --run <id>`");
+  }
+  const { evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`);
+  const named = evals.filter((e) => !name || e.name === name);
+  if (!named.length) {
+    throw new Error(name ? `no eval "${name}" in ${ws} — it has ${evals.map((e) => e.name).join(", ") || "none"}` : `no evals in ${ws} on ${url}`);
+  }
+  // Graders grade real runs; `eval grades` shows what they found.
+  const all = named.filter((e) => e.trigger !== "runs");
+  for (const g of named.filter((e) => e.trigger === "runs")) {
+    console.log(`\n  ${c.bold(g.name)} ${c.dim(`grades live runs — \`foldrun eval grades ${g.name} --to ${ws}\``)}`);
+  }
+  if (!all.length) return 0;
+  let failed = 0;
+  for (const info of all) {
+    console.log(`\n  ${c.bold(info.name)} ${c.dim(`${info.cases?.length ?? "?"} cases · ${ws}`)}`);
+    // --run <id>: that run's verdict, run nothing (GET …/run?run=).
+    if (typeof flags.run === "string") {
+      const view = await remoteEvalRunView(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(info.name)}/run`, flags.run);
+      if (view.state === "running") {
+        console.log(`  ${c.dim(`run ${flags.run} is still running, since ${view.startedAt}`)}`);
+        failed++;
+        continue;
+      }
+      const result = evalRunVerdict(info.name, view);
+      printEvalResult(result);
+      failed += Number(result.failed ?? 0) + (result.error ? 1 : 0);
+      continue;
+    }
+    // --last: what the platform has, run nothing (GET …/run).
+    if (flags.last === true) {
+      const state = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(info.name)}/run`);
+      if (state.running) console.log(`  ${c.dim(`running since ${state.startedAt} — no result yet`)}`);
+      if (state.error) {
+        console.log(`  ${c.red("✗")} the last run could not finish — ${state.error}`);
+        failed++;
+      }
+      if (!state.result) {
+        if (!state.running && !state.error) console.log(`  ${c.dim("never run")}`);
+        continue;
+      }
+      printEvalResult(state.result);
+      failed += Number(state.result.failed ?? 0) + (state.result.error ? 1 : 0);
+      continue;
+    }
+    const result = await remoteEvalRun(url, flags, ws, info.name);
+    printEvalResult(result);
+    failed += Number(result.failed ?? 0) + (result.error ? 1 : 0);
+  }
+  console.log("");
+  return failed ? 1 : 0;
+}
+
+/** Is this eval a grader (`trigger: runs`)? A core that predates graders
+ *  reads the trigger as `deploy`, so the file is asked too. */
+function isGrader(info, dir) {
+  if (info.trigger === "runs") return true;
+  try {
+    const raw = fs.readFileSync(path.join(dir, info.file), "utf8");
+    const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1] ?? "";
+    return /^trigger:\s*["']?runs["']?\s*$/m.test(front);
+  } catch {
+    return false;
+  }
+}
+
+/** One grade, the way `eval grades` and `eval grade` print it. */
+function printGrade(g) {
+  const mark = g.status === "pass" ? c.green("✓ pass") : g.status === "fail" ? c.red("✗ fail") : c.amber("? not decided");
+  const miss = (g.checks ?? []).find((x) => !x.passed);
+  const why = miss ? ` — ${miss.name}: ${miss.error ?? (miss.assertions ?? []).find((a) => !a.passed)?.detail ?? "failed"}` : "";
+  console.log(`  ${mark}  ${c.bold(g.runId)} ${c.dim(String(g.at ?? "").slice(0, 16).replace("T", " "))}${why}`);
+}
+
+/**
+ * `foldrun eval grades <eval> --to <workspace>` — what a grader (an eval with
+ * `trigger: runs`) found in the real runs it graded: the pass rate over
+ * `--days` (default 30), then each graded run, newest first (`--status
+ * fail` for the failures alone, `--limit`). GET …/evals/<e>/grades — the
+ * Evals page's grader card. Exit 1 when any graded run in the window failed.
+ */
+async function evalGradesCmd(name, flags, layout) {
+  if (!name) throw new Error("which grader? `foldrun eval grades <eval> --to <workspace>`");
+  const url = platformFor(flags, "eval grades");
+  const ws = platformWorkspace(flags, layout, `eval grades ${name}`);
+  const q = new URLSearchParams();
+  if (flags.days !== undefined) q.set("days", String(flags.days));
+  if (typeof flags.status === "string") q.set("status", flags.status);
+  if (flags.limit !== undefined) q.set("limit", String(flags.limit));
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(name)}/grades${q.size ? `?${q}` : ""}`);
+  if (flags.json) {
+    console.log(JSON.stringify(r, null, 2));
+    return r.summary?.failed ? 1 : 0;
+  }
+  const s = r.summary ?? {};
+  const rate = s.rate === null || s.rate === undefined ? "—" : `${Math.round(s.rate * 100)}%`;
+  console.log(`\n  ${c.bold(r.eval)} ${c.dim(`grades ${r.sample}% of ${r.flow ? `flow ${r.flow}` : `agent ${r.agent}`} runs · ${ws}`)}`);
+  console.log(`  ${rate} passing over ${r.days} days — ${s.graded ?? 0} graded, ${s.passed ?? 0} passed, ${s.failed ?? 0} failed${s.errors ? `, ${s.errors} not decided` : ""} · judges $${Number(s.costUsd ?? 0).toFixed(4)}\n`);
+  for (const g of r.grades ?? []) printGrade(g);
+  if (!(r.grades ?? []).length) console.log(`  ${c.dim("no graded runs in the window")}`);
+  console.log("");
+  return s.failed ? 1 : 0;
+}
+
+/**
+ * `foldrun eval grade <eval> --run <id> --to <workspace>` — grade one finished
+ * run now, sampled or not (POST …/evals/<e>/grade { run }). The grade is kept
+ * like any other; a run graded again shows its newer grade. Exit 1 unless it
+ * passed.
+ */
+async function evalGradeCmd(name, flags, layout) {
+  if (!name || typeof flags.run !== "string" || !flags.run.trim()) {
+    throw new Error("`foldrun eval grade <eval> --run <run-id> --to <workspace>`");
+  }
+  const url = platformFor(flags, "eval grade");
+  const ws = platformWorkspace(flags, layout, `eval grade ${name}`);
+  const g = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(name)}/grade`, { method: "POST", body: JSON.stringify({ run: flags.run.trim() }) });
+  if (flags.json) console.log(JSON.stringify(g, null, 2));
+  else {
+    console.log("");
+    printGrade(g);
+    for (const ch of g.checks ?? []) {
+      console.log(`    ${ch.passed ? c.green("✓") : ch.error ? c.amber("?") : c.red("✗")} ${ch.name}${ch.error ? c.dim(` — ${ch.error}`) : ""}`);
+      for (const a of ch.assertions ?? []) if (!a.passed) console.log(`        ${c.dim(`${a.type}: ${a.value}`)} — ${a.detail}`);
+    }
+    console.log(`  ${c.dim(`judges $${Number(g.costUsd ?? 0).toFixed(4)}`)}\n`);
+  }
+  return g.status === "pass" ? 0 : 1;
+}
+
+/** One comparison, as a table on a terminal. */
+function printComparison(r) {
+  const pct = (x) => (x === null || x === undefined ? "—" : `${Math.round(x * 100)}%`);
+  const w = Math.max(...(r.configs ?? []).map((x) => String(x.label).length), 7);
+  console.log(`\n  ${c.bold(r.eval)} ${c.dim(`judge ${r.judge?.model ?? "?"} · spent $${Number(r.spentUsd ?? 0).toFixed(2)} of $${Number(r.maxUsd ?? 0).toFixed(2)}${r.repeat > 1 ? ` · ${r.repeat}× each` : ""}`)}`);
+  if (r.stopped) console.log(`  ${c.amber(`stopped early: ${r.stopped}`)}`);
+  console.log(`\n  ${c.dim(`${"setting".padEnd(w)}  passing      cost     per run  time`)}`);
+  for (const x of r.configs ?? []) {
+    const decided = x.trials - (x.notRun ?? 0);
+    console.log(`  ${String(x.label).padEnd(w)}  ${pct(x.rate).padStart(4)} ${`${x.passed}/${decided}`.padEnd(7)} ${`$${Number(x.costUsd).toFixed(4)}`.padStart(9)}  ${x.avgCostUsd === null ? "      —" : `$${Number(x.avgCostUsd).toFixed(4)}`.padStart(8)}  ${x.avgSecs === null ? "—" : `${x.avgSecs}s`}${x.notRun ? c.dim(` (${x.notRun} not run)`) : ""}`);
+  }
+  const differ = (r.cases ?? []).filter((row) => new Set(row.passed.map((p, i) => p / (row.trials[i] || 1))).size > 1);
+  if (differ.length) {
+    console.log(`\n  ${c.dim("where they differ:")}`);
+    for (const row of differ) console.log(`  ${row.case}: ${row.passed.map((p, i) => `${r.configs[i].label} ${p}/${row.trials[i]}`).join(" · ")}`);
+  }
+  console.log("");
+}
+
+/**
+ * `foldrun eval compare <eval> --models fast,default,max --to <workspace>` —
+ * an eval's cases under two to four models, side by side (POST
+ * …/evals/<e>/compare, then polled). `--models` takes model[:effort] items
+ * (`fast:low,max:high`); `--effort` is the effort for the items that name
+ * none; `--agent <name>` compares only that agent's steps of a flow eval;
+ * `--repeat` (1–5) runs each case more than once; `--max-usd` is the spend
+ * limit (default 5). Every run is a test run. Waits for the result
+ * (`--timeout <s>`, default 3600; past it, the id to read it with).
+ * `--run <id>` reads one comparison; `--list` the kept ones. The Evals
+ * page's Compare models.
+ */
+async function evalCompareCmd(name, flags, layout) {
+  if (!name) throw new Error("which eval? `foldrun eval compare <eval> --models fast,default --to <workspace>`");
+  const url = platformFor(flags, "eval compare");
+  const ws = platformWorkspace(flags, layout, `eval compare ${name}`);
+  const base = `/api/workspaces/${enc(ws)}/evals/${enc(name)}/compare`;
+  if (flags.list === true) {
+    const r = await remoteCall(url, flags, base);
+    if (flags.json) return console.log(JSON.stringify(r, null, 2)), 0;
+    if (r.running) console.log(`\n  ${c.dim(`running: ${r.runId}, since ${r.startedAt}${r.progress ? ` — ${r.progress.done}/${r.progress.total} runs` : ""}`)}`);
+    for (const p of r.comparisons ?? []) {
+      const line = p.status === "done" && p.result ? p.result.configs.map((x) => `${x.label} ${x.rate === null ? "—" : `${Math.round(x.rate * 100)}%`}`).join(" · ") : c.red(p.error ?? "failed");
+      console.log(`  ${c.bold(p.runId)} ${c.dim(String(p.startedAt).slice(0, 16).replace("T", " "))}  ${line}`);
+    }
+    if (!(r.comparisons ?? []).length && !r.running) console.log(`\n  ${c.dim(`no comparisons of ${name} yet`)}`);
+    console.log("");
+    return 0;
+  }
+  const finish = (view) => {
+    if (view.state === "done" && view.result) {
+      if (flags.json) console.log(JSON.stringify(view.result, null, 2));
+      else printComparison(view.result);
+      return 0;
+    }
+    throw new Error(view.error ?? `the comparison ended as ${view.state ?? "unknown"}, with no result`);
+  };
+  // --run reads one comparison and starts nothing: a bare --run (an empty
+  // variable in a script) is refused, never read as "start a new one".
+  if (flags.run !== undefined && (typeof flags.run !== "string" || !flags.run.trim())) {
+    throw new Error("--run takes the comparison id it printed — `foldrun eval compare <eval> --to <ws> --run <id>`");
+  }
+  if (typeof flags.run === "string") {
+    const view = await remoteCall(url, flags, `${base}?run=${encodeURIComponent(flags.run)}`);
+    if (view.state === "running") {
+      if (flags.json) console.log(JSON.stringify(view, null, 2));
+      else console.log(`\n  ${c.dim(`still running, since ${view.startedAt}${view.progress ? ` — ${view.progress.done}/${view.progress.total} runs` : ""}`)}\n`);
+      return 1;
+    }
+    return finish(view);
+  }
+  if (typeof flags.models !== "string" || !flags.models.trim()) {
+    throw new Error("--models takes two to four settings, e.g. --models fast,default or --models fast:low,max:high");
+  }
+  const effort = typeof flags.effort === "string" ? flags.effort : undefined;
+  const agent = typeof flags.agent === "string" ? flags.agent : undefined;
+  const configs = flags.models.split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
+    // Only a trailing known effort is an effort: llama3.2:3b stays one model id.
+    const m = /^(.*):(low|medium|high|xhigh|max)$/.exec(item);
+    const model = m ? m[1] : item;
+    const e = m ? m[2] : undefined;
+    return { model, ...((e ?? effort) ? { effort: e ?? effort } : {}), ...(agent ? { agent } : {}) };
+  });
+  const body = { configs, ...(flags.repeat !== undefined ? { repeat: Number(flags.repeat) } : {}), ...(flags["max-usd"] !== undefined ? { maxUsd: Number(flags["max-usd"]) } : {}) };
+  const started = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify(body) });
+  // --json is one JSON document on stdout; what happens on the way goes to stderr.
+  const say = flags.json ? (s) => console.error(s) : (s) => console.log(s);
+  say(`\n  ${c.dim(`comparison ${started.runId}: ${started.trials} test runs, at most $${Number(started.maxUsd).toFixed(2)}`)}`);
+  const wait = explicitTimeout(flags) ?? 3600;
+  const deadline = Date.now() + wait * 1000;
+  let said = -1;
+  for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error(`still running after ${wait}s — \`foldrun eval compare ${name} --to ${ws} --run ${started.runId}\` reads it when it is done`);
+    }
+    await new Promise((r) => setTimeout(r, Number(process.env.FOLDRUN_EVAL_POLL_MS) || 5000));
+    const view = await remoteCall(url, flags, `${base}?run=${encodeURIComponent(started.runId)}`);
+    if (view.state === "running") {
+      if (view.progress && view.progress.done !== said) {
+        said = view.progress.done;
+        say(`  ${c.dim(`${view.progress.done}/${view.progress.total} runs done`)}`);
+      }
+      continue;
+    }
+    return finish(view);
+  }
+}
+
+// ------------------------------------------------------------- proposals
+
+/**
+ * A file's change, as ordered -/+ lines with a little context — the same
+ * reading the dashboard's diff gives. An LCS over the lines, so a reordered
+ * step or a removed duplicate shows; a file too long for that (over 2,000
+ * lines a side) is shown whole as removed and added rather than guessed at.
+ */
+function lineChanges(before, after) {
+  const a = before === null || before === undefined ? [] : String(before).split("\n");
+  const b = String(after ?? "").split("\n");
+  if (a.length > 2000 || b.length > 2000) return [...a.map((l) => ["-", l]), ...b.map((l) => ["+", l])];
+  const n = a.length;
+  const m = b.length;
+  const lcs = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      out.push([" ", a[i]]);
+      i++;
+      j++;
+    } else if (j < m && (i === n || lcs[i][j + 1] >= lcs[i + 1][j])) out.push(["+", b[j++]]);
+    else out.push(["-", a[i++]]);
+  }
+  return out;
+}
+
+function printFileChange(f) {
+  console.log(`\n  ${c.bold(f.path)}${f.before === null ? c.dim(" (new)") : ""}`);
+  const ops = lineChanges(f.before, f.content);
+  const near = (k) => ops.slice(Math.max(0, k - 2), k + 3).some(([op]) => op !== " ");
+  let skipped = false;
+  ops.forEach(([op, line], k) => {
+    if (op === " " && !near(k)) {
+      if (!skipped) console.log(`  ${c.dim("  …")}`);
+      skipped = true;
+      return;
+    }
+    skipped = false;
+    console.log(`  ${op === "+" ? c.green(`+ ${line}`) : op === "-" ? c.red(`- ${line}`) : c.dim(`  ${line}`)}`);
+  });
+}
+
+const PROPOSAL_LABEL = { drafting: "being drafted", ready: "ready to review", applying: "applying", applied: "applied", partial: "partly applied", failed: "draft failed", dismissed: "dismissed" };
+
+/**
+ * `foldrun proposals --to <workspace>` — the proposed fixes in a workspace
+ * (GET …/proposals), newest first: status, the eval, how many failures each
+ * covers. `--status ready` for the ones waiting on a person, `--eval <name>`,
+ * `--json`. `show <id>` prints one (the assistant's reasoning, the failures,
+ * the change per file); `apply <id>` writes its files after asking (`--yes`
+ * without a terminal); `dismiss <id>` sets it aside. The Evals page's
+ * Proposed fixes.
+ */
+async function proposalsCmd(positional, flags, layout) {
+  const url = platformFor(flags, "proposals");
+  const ws = platformWorkspace(flags, layout, "proposals");
+  const verb = positional[0];
+  const id = positional[1];
+  if (verb === "show" || verb === "apply" || verb === "dismiss") {
+    if (!id) throw new Error(`which proposal? \`foldrun proposals ${verb} <id> --to ${ws}\``);
+    const p = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals/${enc(id)}`);
+    if (verb === "show") {
+      if (flags.json) return console.log(JSON.stringify(p, null, 2)), 0;
+      console.log(`\n  ${c.bold(p.id)} ${PROPOSAL_LABEL[p.status] ?? p.status} · ${p.eval} · ${c.dim(`${String(p.createdAt).slice(0, 16).replace("T", " ")} · ${p.by === "auto" ? "opened after repeated failures" : `asked by ${p.by}`}`)}`);
+      if (p.error) console.log(`  ${c.red(p.error)}`);
+      for (const n of p.notes ?? []) console.log(`  ${c.amber(n)}`);
+      console.log(`\n  ${c.dim("covers:")}`);
+      for (const f of p.failures ?? []) console.log(`  · ${f.runId ?? f.case} — ${f.check}: ${f.detail}`);
+      if (p.reply) console.log(`\n${p.reply.split("\n").map((l) => `  ${l}`).join("\n")}`);
+      for (const f of p.files ?? []) printFileChange(f);
+      for (const i of p.issues ?? []) console.log(`  ${i.level === "error" ? c.red("✗") : c.amber("!")} ${i.where}: ${i.message}`);
+      console.log("");
+      return 0;
+    }
+    if (verb === "apply") {
+      if (p.status !== "ready") throw new Error(`${id} is ${p.status} — only a ready proposal can be applied`);
+      // With --json the change is still shown before the yes — on stderr, so stdout stays one document.
+      if (flags.json) {
+        const log = console.log;
+        console.log = (...a) => console.error(...a);
+        try {
+          for (const f of p.files ?? []) printFileChange(f);
+        } finally {
+          console.log = log;
+        }
+      } else for (const f of p.files ?? []) printFileChange(f);
+      const files = (p.files ?? []).map((f) => f.path).join(", ");
+      if (!(await confirmed(flags, "proposals apply", `\n  Write ${files} in ${ws}? [y/N] `))) {
+        console.log(`\n  ${c.dim("nothing written")}\n`);
+        return 1;
+      }
+    }
+    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals/${enc(id)}`, { method: "POST", body: JSON.stringify({ action: verb }) });
+    if (flags.json) console.log(JSON.stringify(r, null, 2));
+    else console.log(`\n  ${c.green(PROPOSAL_LABEL[r.status] ?? r.status)} ${r.id}${r.applied?.length ? c.dim(` — wrote ${r.applied.join(", ")}`) : ""}\n`);
+    return 0;
+  }
+  if (verb && verb !== "ls" && verb !== "list") throw new Error(`\`foldrun proposals\` lists them; show, apply and dismiss take an id — not "${verb}"`);
+  const q = new URLSearchParams();
+  if (typeof flags.status === "string") q.set("status", flags.status);
+  if (typeof flags.eval === "string") q.set("eval", flags.eval);
+  const { proposals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals${q.size ? `?${q}` : ""}`);
+  if (flags.json) return console.log(JSON.stringify(proposals, null, 2)), 0;
+  if (!proposals.length) {
+    console.log(`\n  ${c.dim(`no proposed fixes in ${ws}`)}\n`);
+    return 0;
+  }
+  console.log("");
+  for (const p of proposals) {
+    const tone = p.status === "ready" ? c.amber : p.status === "applied" ? c.green : p.status === "failed" || p.status === "partial" ? c.red : c.dim;
+    console.log(`  ${c.bold(p.id)}  ${tone((PROPOSAL_LABEL[p.status] ?? p.status).padEnd(15))} ${p.eval} ${c.dim(`· ${p.failures?.length ?? 0} failure(s) · ${(p.files ?? []).map((f) => f.path).join(", ") || "no files"} · ${String(p.createdAt).slice(0, 10)}`)}`);
+  }
+  console.log("");
+  return 0;
+}
+
+/**
+ * `foldrun eval improve <eval> --to <workspace>` — ask for a proposed fix now
+ * (POST …/evals/<e>/improve): from a grader's failed grades no proposal has
+ * covered, or an eval's last failed cases. Waits for the draft (`--timeout`,
+ * default 300) and prints it; `--no-wait` returns at once with the id.
+ */
+async function evalImproveCmd(name, flags, layout) {
+  if (!name) throw new Error("which eval? `foldrun eval improve <eval> --to <workspace>`");
+  const url = platformFor(flags, "eval improve");
+  const ws = platformWorkspace(flags, layout, `eval improve ${name}`);
+  const p = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(name)}/improve`, { method: "POST", body: "{}" });
+  const say = flags.json ? (s) => console.error(s) : (s) => console.log(s);
+  say(`\n  ${c.dim(`proposal ${p.id} — the assistant is drafting it from ${p.failures?.length ?? 0} failure(s)`)}`);
+  if (flags.wait === false || flags["no-wait"] === true) {
+    if (flags.json) console.log(JSON.stringify(p, null, 2));
+    else say(`  ${c.dim(`\`foldrun proposals show ${p.id} --to ${ws}\` when it is ready`)}\n`);
+    return 0;
+  }
+  const deadline = Date.now() + (explicitTimeout(flags) ?? 300) * 1000;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, Number(process.env.FOLDRUN_EVAL_POLL_MS) || 4000));
+    const now = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals/${enc(p.id)}`);
+    if (now.status !== "drafting") return proposalsCmd(["show", p.id], flags, layout).then(() => (now.status === "ready" ? 0 : 1));
+    if (Date.now() > deadline) {
+      if (flags.json) console.log(JSON.stringify(now, null, 2));
+      else say(`  ${c.dim(`still drafting — \`foldrun proposals show ${p.id} --to ${ws}\` later`)}\n`);
+      return 1;
+    }
+  }
+}
+
+/**
+ * `foldrun promote <run-id>` — a finished run, kept as a regression case:
+ * its task, and what the next run must still say.
+ */
+async function promoteCmd(runId, flags, layout) {
+  const url = platformFor(flags, "promote");
+  if (!runId) throw new Error('which run? `foldrun promote <run-id> --eval <name> --expect "contains: …"`');
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const expect = many(flags.expect);
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/promote`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(typeof flags.eval === "string" ? { evalName: flags.eval } : {}),
+      ...(typeof flags.case === "string" ? { caseName: flags.case } : {}),
+      ...(expect.length ? { expect } : {}),
+      // A run that went wrong: what it should have done (FOL-72 step 10).
+      ...(typeof flags.should === "string" ? { should: flags.should } : {}),
+    }),
+  });
+  const evalName = path.basename(String(r.file ?? ""), ".md");
+  console.log(`\n  ${c.green("✓")} ${r.created ? "created" : "added to"} ${c.bold(r.file)}  ${c.dim(`case "${r.caseName}" from ${runId} in ${ws}`)}`);
+  console.log(`  ${c.dim(`${expect.length ? `${expect.length} assertion${expect.length === 1 ? "" : "s"}` : "judged against the run's own conclusion"} — \`foldrun eval ${evalName} --to ${ws}\` runs it`)}\n`);
+  return 0;
+}
+
+/** The filters a bulk stop or rerun takes, as the route reads them. */
+function bulkFilter(flags) {
+  const body = {};
+  if (typeof flags.status === "string") body.status = flags.status.split(",").map((s) => s.trim()).filter(Boolean);
+  if (typeof flags.flow === "string") body.flow = flags.flow;
+  if (flags.since !== undefined) body.since = new Date(Date.now() - parseSince(flags.since)).toISOString();
+  if (flags.until !== undefined) body.until = untilInstant(flags.until);
+  return body;
+}
+const hasBulkFilter = (flags) => typeof flags.status === "string" || typeof flags.flow === "string" || flags.since !== undefined || flags.until !== undefined;
+
+/** `--until 2h` (runs started at least that long ago) or a date — as the
+ *  ISO instant runs/bulk reads. A value that is neither refuses: a clause
+ *  that silently fell out would widen the filter. */
+function untilInstant(spec) {
+  if (/^\d+(\.\d+)?\s*[smhdw]$/i.test(String(spec).trim())) return new Date(Date.now() - parseSince(spec)).toISOString();
+  const t = typeof spec === "string" ? Date.parse(spec) : NaN;
+  if (Number.isNaN(t)) throw new Error(`--until wants a span like 2h (runs started before then) or a date, 2026-10-05T09:00 — not "${spec}"`);
+  return new Date(t).toISOString();
+}
+
+/**
+ * `foldrun stop|rerun --status … --since … --flow …` — one decision, many
+ * runs (POST …/runs/bulk). What matches is asked first and printed; then it
+ * asks, and only the runs it printed are touched — a run that starts in
+ * between is not swept up by a filter nobody saw it match.
+ */
+async function bulkCmd(action, flags, layout) {
+  const url = platformFor(flags, action);
+  const filter = bulkFilter(flags);
+  if (action === "rerun") {
+    const from = flags.from === undefined ? 1 : Number(flags.from);
+    if (!Number.isInteger(from) || from < 1) throw new Error("--from is a step number, 1 or more");
+    filter.from = from;
+  }
+  const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
+  const plans = await pool(names, 8, async (ws) => {
+    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action, ...filter, dryRun: true }) });
+    return { ws, ids: r.matched ?? [] };
+  });
+  const total = plans.reduce((n, x) => n + x.ids.length, 0);
+  console.log();
+  for (const { ws, ids } of plans.filter((x) => x.ids.length)) {
+    console.log(`  ${c.bold(ws)}  ${c.dim(`${ids.length} run${ids.length === 1 ? "" : "s"}`)}`);
+    for (const id of ids) console.log(`    ${c.dim(id)}`);
+  }
+  if (!total) {
+    console.log(`  ${c.dim("no runs match — nothing to do")}\n`);
+    return 0;
+  }
+  const verbing = action === "stop" ? "stopping" : "rerunning";
+  if (flags["dry-run"] === true) {
+    console.log(`\n  ${c.dim(`--dry-run: ${total} run${total === 1 ? "" : "s"} would be ${action === "stop" ? "stopped" : `rerun from step ${filter.from}`}; nothing touched`)}\n`);
+    return 0;
+  }
+  if (action === "stop") console.log(`\n  ${c.yellow("!")} stopping destroys each running step's sandbox and throws its work away; costs already incurred stay on the bill.`);
+  if (!(await confirmed(flags, `${verbing} runs in bulk`, `${action === "stop" ? "Stop" : "Rerun"} these ${total}? [y/N] `))) {
+    console.log(`\n  ${c.dim(action === "stop" ? "nothing stopped" : "nothing rerun")}\n`);
+    return 1;
+  }
+  let bad = 0;
+  console.log();
+  for (const { ws, ids } of plans.filter((x) => x.ids.length)) {
+    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, {
+      method: "POST",
+      body: JSON.stringify({ action, runIds: ids, ...(action === "rerun" ? { from: filter.from } : {}) }),
+    });
+    for (const x of r.runs ?? []) {
+      if (!x.ok) bad++;
+      console.log(`  ${x.ok ? c.green("✓") : c.red("✗")} ${ws} ${x.runId}${x.newRunId ? c.dim(` → ${x.newRunId}`) : ""}${x.error ? c.dim(` — ${x.error}`) : ""}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`${total - bad} of ${total} ${action === "stop" ? "stopped" : "rerun"}${bad ? ` · ${bad} refused` : ""}`)}\n`);
+  return bad ? 1 : 0;
+}
+
+/** `foldrun runs rm <run-id>` — erase a run: its record and archived outputs. */
+async function runRmCmd(runId, flags, layout) {
+  const url = platformFor(flags, "runs rm");
+  if (!runId) throw new Error("which run? `foldrun runs rm <run-id>` — `foldrun runs` lists them");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+  const live = run.status !== "completed" && run.status !== "failed";
+  const what = `run ${runId} (${run.flow} in ${ws}, ${run.status}) — its record and archived outputs${live ? "; it is still going and is stopped first" : ""}. The ledger line stays`;
+  if (!(await sureToDelete(flags, "runs rm", what))) return 1;
+  await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`, { method: "DELETE" });
+  console.log(`\n  ${c.green("✓")} ${runId} deleted from ${ws}\n`);
+  return 0;
+}
+
+/** Where downloaded bytes go: --file (or - for stdout), else a default name. Refuses to clobber. */
+function writeDownload(bytes, fallback, flags, from) {
+  if (flags.file === "-") {
+    writeExact(bytes);
+    return 0;
+  }
+  const to = typeof flags.file === "string" ? flags.file : fallback;
+  if (fs.existsSync(to) && flags.force !== true) throw new Error(`${to} already exists — --file <path> puts it somewhere else, --force overwrites`);
+  fs.mkdirSync(path.dirname(path.resolve(to)), { recursive: true });
+  fs.writeFileSync(to, bytes);
+  console.log(`\n  ${c.green("✓")} ${to}  ${c.dim(`${humanBytes(bytes.length)} from ${from}`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun api spec [--out <file>]` — the platform's OpenAPI 3.1 document
+ * (GET /api/openapi.json, open: no sign-in needed), to stdout or a file.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function apiCmd(positional, flags) {
+  const [verb] = positional;
+  if (verb !== "spec") {
+    console.error("usage: foldrun api spec [--out <file>]   the platform's OpenAPI document");
+    return 1;
+  }
+  const url = remoteUrl(flags);
+  if (!url) throw new Error("no platform to ask — foldrun login, or --url / FOLDRUN_URL");
+  const res = await remoteFetch(url, "/api/openapi.json", {}, { seconds: timeoutSeconds(flags) });
+  const text = await res.text();
+  if (!res.ok) throw new HttpError(`/api/openapi.json → HTTP ${res.status}: ${text.slice(0, 160)}`, res.status, {});
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    throw new Error(`/api/openapi.json did not answer JSON — is ${new URL(url).host} a foldrun platform new enough to publish one?`);
+  }
+  const out = typeof flags.out === "string" ? flags.out : typeof flags.file === "string" ? flags.file : "-";
+  const pretty = JSON.stringify(doc, null, 2) + "\n";
+  if (out === "-") {
+    writeExact(pretty);
+    return 0;
+  }
+  fs.writeFileSync(out, pretty);
+  const ops = Object.values(doc.paths ?? {}).reduce((n, item) => n + Object.keys(/** @type {any} */ (item)).length, 0);
+  console.log(`  ${c.green("✓")} wrote ${out} — OpenAPI ${doc.openapi}, API version ${doc.info?.version ?? "?"}, ${Object.keys(doc.paths ?? {}).length} paths, ${ops} operations`);
+  return 0;
+}
+
+/** A GET whose answer is a file, not JSON — the error body still is. */
+async function remoteBytes(url, flags, apiPath, what) {
+  const token = tokenFor(url, flags);
+  const res = await remoteFetch(url, apiPath, {}, { token, seconds: timeoutSeconds(flags) });
+  if (!res.ok) {
+    const said = await res.text();
+    let why = said.slice(0, 200);
+    try {
+      why = JSON.parse(said).error ?? why;
+    } catch {
+      /* not JSON — whatever it said is the message */
+    }
+    throw new HttpError(`${what}: ${why}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, {});
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1];
+  return { bytes: Buffer.from(await res.arrayBuffer()), name };
+}
+
+/**
+ * `foldrun export [workspace] [--flow <name> | --agent <name>]` — a deployed
+ * workspace, one flow or one agent as a .zip: the authored source it needs,
+ * never memory, state, storage or a secret's value (GET …/export). The same
+ * file the dashboard's Export downloads and `foldrun import` takes in.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function exportCmd(positional, flags, layout) {
+  const url = platformFor(flags, "export");
+  const ws = positional[0] ?? platformWorkspace(flags, layout, "export");
+  if (typeof flags.flow === "string" && typeof flags.agent === "string") throw new Error("one at a time: --flow <name> or --agent <name>");
+  const kind = typeof flags.flow === "string" ? "flow" : typeof flags.agent === "string" ? "agent" : "workspace";
+  const name = kind === "flow" ? flags.flow : kind === "agent" ? flags.agent : null;
+  const qs = name ? `?kind=${kind}&name=${enc(name)}` : "";
+  const { bytes, name: served } = await remoteBytes(url, flags, `/api/workspaces/${enc(ws)}/export${qs}`, `export ${name ? `${kind} ${name} from ` : ""}${ws}`);
+  return writeDownload(bytes, served ?? (name ? `${ws}-${kind}-${name}.zip` : `${ws}.zip`), flags, name ? `${ws} · ${kind} ${name}` : ws);
+}
+
+/**
+ * `foldrun import <file.zip> [--to <workspace>]` — take a package in: shows
+ * what it adds, would replace and still needs (POST …/import?dryRun=1), then
+ * asks, then applies. Never deletes; replacing a file needs --overwrite. A
+ * workspace package into a name that does not exist makes that workspace.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function importCmd(positional, flags, layout) {
+  const file = positional[0];
+  if (!file) throw new Error("which package? `foldrun import <file.zip> [--to <workspace>]` — `foldrun export` or the dashboard's Export makes one");
+  if (!fs.existsSync(file)) throw new Error(`${file} does not exist`);
+  const url = platformFor(flags, "import");
+  const ws = platformWorkspace(flags, layout, "import");
+  const bytes = fs.readFileSync(file);
+  const token = tokenFor(url, flags);
+  const send = async (query) => {
+    const res = await remoteFetch(
+      url,
+      `/api/workspaces/${enc(ws)}/import${query}`,
+      { method: "POST", body: bytes, headers: { "content-type": "application/zip" } },
+      { token, seconds: timeoutSeconds(flags) },
+    );
+    const text = await res.text();
+    let body = {};
+    try {
+      body = text.trim() ? JSON.parse(text) : {};
+    } catch {
+      /* not JSON — the status says enough */
+    }
+    if (!res.ok) throw new HttpError(`${body.error ?? `import → HTTP ${res.status}`}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, body);
+    return body;
+  };
+
+  const plan = await send("?dryRun=1");
+  const what = `${plan.kind === "workspace" ? "workspace" : `${plan.kind} ${plan.name}`}${plan.from ? ` from ${plan.from}` : ""}`;
+  if (flags.json === true && flags["dry-run"] === true) {
+    console.log(JSON.stringify(plan, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(what)} → ${c.bold(ws)}${plan.creates ? c.dim("  (a new workspace)") : ""}`);
+  console.log(`  ${plan.added.length} new · ${plan.unchanged.length} identical · ${plan.overwritten.length ? c.amber(`${plan.overwritten.length} would be replaced`) : "0 replaced"}`);
+  for (const p of plan.overwritten.slice(0, 20)) console.log(`    ${c.amber("~")} ${p}`);
+  if (plan.skipped?.length) console.log(`  ${c.dim(`${plan.skipped.length} not imported (memory, state, or outside the authored folders): ${plan.skipped.slice(0, 6).join(", ")}${plan.skipped.length > 6 ? " …" : ""}`)}`);
+  const needs = [
+    ["secrets to set", plan.needs?.secrets],
+    ["tools not here or in the library", plan.needs?.tools],
+    ["skills not found", plan.needs?.skills],
+    ["scripts not found", plan.needs?.scripts],
+    ["agents it names that are not here", plan.needs?.agents],
+    ["flows it runs that are not here", plan.needs?.flows],
+  ].filter(([, v]) => v?.length);
+  for (const [k, v] of needs) console.log(`  ${c.amber("!")} ${k}: ${v.join(", ")}`);
+
+  if (flags["dry-run"] === true) {
+    console.log(`\n  ${c.dim("(--dry-run: nothing written)")}\n`);
+    return 0;
+  }
+  if (plan.added.length + plan.overwritten.length === 0) {
+    console.log(`\n  ${c.dim("nothing to import — every file is already identical")}\n`);
+    return 0;
+  }
+  if (plan.overwritten.length && flags.overwrite !== true) {
+    console.log(`\n  ${c.dim(`nothing written — ${plan.overwritten.length} file${plan.overwritten.length === 1 ? "" : "s"} would be replaced; --overwrite replaces them (History can restore them)`)}\n`);
+    return 1;
+  }
+  if (!(await confirmed(flags, "import", `Import into ${ws}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing written")}\n`);
+    return 0;
+  }
+  const done = await send(flags.overwrite === true ? "?overwrite=1" : "");
+  console.log(`\n  ${c.green("✓")} ${(done.written ?? []).length} file${(done.written ?? []).length === 1 ? "" : "s"} written to ${c.bold(ws)}${done.revision ? c.dim(`  revision ${done.revision}`) : ""}`);
+  if (needs.length) console.log(`  ${c.dim("set what it still needs before its first run — `foldrun secrets set <NAME>` for secrets")}`);
+  console.log();
+  return 0;
+}
+
+/**
+ * `foldrun report <run-id> get <agent>/<path>` — one file a run archived:
+ * whatever an agent left in outputs/, copied under the run when it ended.
+ */
+async function reportGetCmd(runId, spec, flags, layout) {
+  const url = platformFor(flags, "report get");
+  const slash = String(spec ?? "").indexOf("/");
+  if (!runId || slash < 1 || slash === spec.length - 1) {
+    throw new Error("`foldrun report <run-id> get <agent>/<path>` — the agent whose outputs/ it was in, and the path inside it");
+  }
+  const agent = spec.slice(0, slash);
+  const rel = spec.slice(slash + 1);
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const { bytes } = await remoteBytes(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/archive?agent=${enc(agent)}&path=${enc(rel)}`, `${spec} in ${runId}`);
+  return writeDownload(bytes, path.basename(rel), flags, `${runId} · ${spec}`);
+}
+
+/** Days, for a window: `30`, or `30d`. */
+function sinceDays(flags, fallback) {
+  if (flags.since === undefined) return fallback;
+  const m = /^(\d+)d?$/.exec(String(flags.since).trim());
+  if (!m || Number(m[1]) < 1) throw new Error(`--since is a number of days, e.g. 30 — not "${flags.since}"`);
+  return Number(m[1]);
+}
+
+const secs = (n) => (n == null ? "—" : humanDuration(n * 1000));
+/** Seconds that are often under one — start-up phases. */
+const fine = (n) => (n == null ? "—" : n < 1 ? `${Math.round(n * 1000)}ms` : `${n.toFixed(2)}s`);
+const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "—");
+
+/** Characters as a reader sizes them: 52k, 1.2M. */
+const kchars = (v) => (v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1000 ? `${Math.round(v / 1000)}k` : String(v));
+/** p50/p95, or the worst case when there are too few samples, as the Observe page shows it. */
+const spreadOf = (s, unit) => {
+  if (!s || !s.n) return "—";
+  if (s.p50 == null) return `≤${unit(s.max)} (n=${s.n})`;
+  return `${unit(s.p50)}/${unit(s.p95)}`;
+};
+
+/** One workspace's observability report, as the Observe page reads it. */
+function printObservation(o) {
+  console.log(`\n  ${c.bold(o.workspace)}  ${c.dim(`last ${o.sinceDays} days`)}`);
+  console.log(`  ${o.runs} runs · ${o.failedRuns ? c.red(`${o.failedRuns} failed`) : "0 failed"} · ${o.steps} steps · $${Number(o.costUsd ?? 0).toFixed(2)}`);
+  const table = (title, head, rows) => {
+    if (!rows.length) return;
+    const all = [head, ...rows];
+    const w = head.map((_, i) => Math.max(...all.map((r) => String(r[i]).length)));
+    console.log(`\n  ${c.dim(all[0].map((x, i) => pad(x, w[i])).join("  "))}`);
+    for (const r of rows) console.log(`  ${r.map((x, i) => (i === 0 ? c.bold(pad(x, w[i])) : pad(x, w[i]))).join("  ")}`);
+  };
+  table("flows", ["flow", "runs", "failed", "p50", "p95", "cost"], (o.flows ?? []).map((f) => [f.flow, f.runs, f.failed, secs(f.seconds?.p50), secs(f.seconds?.p95), `$${f.costUsd.toFixed(2)}`]));
+  table("agents", ["agent", "steps", "failed", "retried", "skipped", "p95", "turns", "cached", "cost"], (o.agents ?? []).map((a) => [a.agent, a.steps, a.failed, a.retried, a.skipped, secs(a.seconds?.p95), spreadOf(a.turns, String), a.cacheHitRate == null ? "—" : `${Math.round(a.cacheHitRate * 100)}%`, `$${a.costUsd.toFixed(2)}`]));
+  table("tools", ["tool", "calls", "errors", "p95", "result size", "heavy", "used by"], (o.tools ?? []).map((t) => [t.name, t.calls, t.errors, t.ms?.p95 == null ? "—" : `${Math.round(t.ms.p95)}ms`, spreadOf(t.resultSize, kchars), t.heavyCalls || "—", (t.agents ?? []).join(", ")]));
+  // Where a step's first seconds go, phase by phase (FOL-29): each phase's
+  // own share, and when it was done counted from the step's start.
+  table("start-up", ["start-up", "n", "took p50", "p95", "done by p50", "p95"], (o.startup ?? []).map((p) => [p.phase, p.took?.n ?? 0, fine(p.took?.p50), fine(p.took?.p95), fine(p.at?.p50), fine(p.at?.p95)]));
+  const fails = (o.failures ?? []).slice(0, 8);
+  if (fails.length) {
+    console.log(`\n  ${c.dim("recent failures")}`);
+    for (const f of fails) console.log(`  ${c.red("✗")} ${c.dim(when(f.at))}  ${f.flow} · ${c.bold(f.agent)}  ${c.dim(f.runId)}\n      ${c.dim(firstLine(f.text, 100))}`);
+  }
+}
+
+/**
+ * `foldrun observe` — where the account fails, retries and spends, per
+ * workspace. `--to <workspace>` for one in full: flows, agents, tools, and
+ * the recent failures in their own words.
+ */
+async function observeCmd(flags, layout) {
+  const url = platformFor(flags, "observe");
+  const since = sinceDays(flags, 30);
+  const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
+  const unreachable = [];
+  const obs = (
+    await pool(names, 8, async (ws) => {
+      try {
+        return await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/observe?days=${since}`);
+      } catch (err) {
+        if (typeof flags.to === "string") throw err;
+        unreachable.push([ws, explain(err)]);
+        return null;
+      }
+    })
+  ).filter(Boolean);
+  if (flags.json === true) {
+    console.log(JSON.stringify(typeof flags.to === "string" ? obs[0] : obs, null, 2));
+    return 0;
+  }
+  if (typeof flags.to === "string") {
+    printObservation(obs[0]);
+    console.log(`\n  ${c.dim("--since <days> widens it · --json for the whole document")}\n`);
+    return 0;
+  }
+  if (!obs.length) {
+    console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
+    return 0;
+  }
+  const rows = obs.sort((a, b) => b.failedRuns - a.failedRuns || b.runs - a.runs);
+  const w = Math.max(9, ...rows.map((o) => o.workspace.length));
+  console.log(`\n    ${c.dim(`${pad("workspace", w)}  ${pad("runs", 5)}  ${pad("failed", 9)}  ${pad("steps", 6)}  cost   last ${since} days`)}`);
+  for (const o of rows) {
+    const failed = pad(`${o.failedRuns} ${pct(o.failedRuns, o.runs)}`, 9);
+    console.log(`  ${o.failedRuns ? c.red("✗") : c.green("✓")} ${c.bold(pad(o.workspace, w))}  ${pad(o.runs, 5)}  ${o.failedRuns ? c.red(failed) : failed}  ${pad(o.steps, 6)}  $${o.costUsd.toFixed(2)}`);
+  }
+  const total = rows.reduce((t, o) => ({ runs: t.runs + o.runs, failed: t.failed + o.failedRuns, cost: t.cost + o.costUsd }), { runs: 0, failed: 0, cost: 0 });
+  console.log(`\n  ${c.dim(`${total.runs} runs · ${total.failed} failed · $${total.cost.toFixed(2)} across ${rows.length} workspace${rows.length === 1 ? "" : "s"}`)}`);
+  const fails = rows.flatMap((o) => (o.failures ?? []).map((f) => ({ ...f, ws: o.workspace }))).sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 8);
+  if (fails.length) {
+    console.log(`\n  ${c.dim("recent failures")}`);
+    for (const f of fails) console.log(`  ${c.red("✗")} ${c.dim(when(f.at))}  ${f.ws}/${f.flow} · ${c.bold(f.agent)}  ${c.dim(f.runId)}\n      ${c.dim(firstLine(f.text, 100))}`);
+  }
+  for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
+  console.log(`\n  ${c.dim("foldrun observe --to <workspace> for its flows, agents and tools")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun usage` — what the account consumed (the Usage page), and what it
+ * was charged week by week from the ledger (`--days`, default 56).
+ */
+async function usageCmd(flags) {
+  const url = platformFor(flags, "usage");
+  const days = flags.days === undefined ? 56 : Number(flags.days);
+  if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("--days is a whole number of days, 1 to 365");
+  const [u, h] = await Promise.all([remoteCall(url, flags, "/api/usage"), remoteCall(url, flags, `/api/usage/history?days=${days}`)]);
+  if (flags.json === true) {
+    console.log(JSON.stringify({ usage: u, history: h }, null, 2));
+    return 0;
+  }
+  const t = u.totals ?? {};
+  const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+  console.log(`\n  ${c.bold(u.tenant ?? "usage")}  ${c.dim("what the run records hold")}`);
+  const hit = (b) => (b.cacheHitRate == null ? null : `${Math.round(b.cacheHitRate * 100)}% cached`);
+  console.log(`  ${t.runs ?? 0} runs · ${t.steps ?? 0} steps · ${Number(t.inputTokens ?? 0).toLocaleString()} in / ${Number(t.outputTokens ?? 0).toLocaleString()} out tokens${hit(t) ? ` (${hit(t)})` : ""} · ${humanDuration((t.computeSecs ?? 0) * 1000)} compute · ${humanBytes(t.storageBytes ?? 0)} stored`);
+  console.log(`  ${c.dim(`models ${usd(t.modelUsd)} · platform ${usd(t.platformUsd)}${u.waived?.length ? ` · waived: ${u.waived.join(", ")}` : ""}${u.ledger ? ` · balance ${usd(u.ledger.balanceUsd)}` : ""}`)}`);
+  const ws = (u.workspaces ?? []).slice().sort((a, b) => b.modelUsd + b.platformUsd - (a.modelUsd + a.platformUsd));
+  if (ws.length) {
+    const w = Math.max(...ws.map((x) => x.workspace.length));
+    console.log();
+    for (const x of ws) {
+      const stored = (x.storage?.sourceBytes ?? 0) + (x.storage?.filesBytes ?? 0) + (x.storage?.runsBytes ?? 0);
+      console.log(`  ${c.bold(pad(x.workspace, w))}  ${pad(`${x.runs} runs`, 9)}  ${pad(usd(x.modelUsd + x.platformUsd), 9)}  ${pad(hit(x) ?? "—", 11)}  ${c.dim(humanBytes(stored))}`);
+    }
+  }
+  console.log(`\n  ${c.bold("charged")}  ${c.dim(`${h.from?.slice(0, 10)} → ${h.to?.slice(0, 10)}, by ${h.bucket} · the ledger`)}`);
+  console.log(`  ${usd(h.totalUsd)}  ${c.dim(`models ${usd(h.modelUsd)} · platform ${usd(h.platformUsd)}${h.unsplitUsd ? ` · unsplit ${usd(h.unsplitUsd)}` : ""}${h.unattributedUsd ? ` · unattributed ${usd(h.unattributedUsd)}` : ""}`)}`);
+  const series = h.byWorkspace ?? [];
+  if (series.length) {
+    const w = Math.max(...series.map((x) => x.name.length));
+    for (const x of series) {
+      const change = x.change == null ? c.dim("—") : x.change > 0 ? c.amber(`+${Math.round(x.change * 100)}%`) : c.green(`${Math.round(x.change * 100)}%`);
+      console.log(`  ${c.bold(pad(x.name, w))}  ${pad(usd(x.totalUsd), 9)}  ${pad(`${x.runs} runs`, 9)}  ${change} ${c.dim(`vs the ${h.bucket} before`)}`);
+    }
+  }
+  console.log(`\n  ${c.dim("--days <n> for another window · --json for both documents · foldrun billing for the balance")}\n`);
+  return 0;
+}
+
+/** `foldrun billing <verb>` — statement, wallet, details, portal; bare, the balance. */
+async function billingVerbCmd(positional, flags) {
+  const url = platformFor(flags, "billing");
+  const [verb, sub, ...rest] = positional;
+  const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+  const ownerOnly = async (fn, what) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403) {
+        throw new Error(`${what} is the account owner's alone (billing:manage) — ${err.message}`);
+      }
+      if (err instanceof HttpError && err.status === 501) throw new Error(`${what}: ${err.message}`);
+      throw err;
+    }
+  };
+
+  if (verb === "statement") {
+    const month = sub ?? new Date().toISOString().slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) throw new Error(`\`foldrun billing statement [YYYY-MM]\` — not "${month}"`);
+    if (flags.csv === true) {
+      const { bytes, name } = await remoteBytes(url, flags, `/api/billing/statement?month=${month}&format=csv`, `statement ${month}`);
+      if (typeof flags.file !== "string") {
+        writeExact(bytes);
+        return 0;
+      }
+      return writeDownload(bytes, name ?? `foldrun-${month}.csv`, flags, `the ${month} statement`);
+    }
+    const s = await remoteCall(url, flags, `/api/billing/statement?month=${month}`);
+    console.log(`\n  ${c.bold(`statement ${s.month}`)}  ${c.dim(`spent ${usd(s.spentUsd)} · added ${usd(s.addedUsd)}${s.removedUsd ? ` · removed ${usd(s.removedUsd)}` : ""}`)}\n`);
+    const rows = s.rows ?? [];
+    if (!rows.length) console.log(`  ${c.dim("no ledger lines this month")}`);
+    for (const e of rows) {
+      const about = e.flow ? `${e.workspace}/${e.flow}` : e.note ?? "";
+      console.log(`  ${e.usd < 0 ? c.red("−") : e.usd > 0 ? c.green("+") : c.dim("·")} ${c.dim(when(e.t))}  ${pad(e.label ?? e.kind, 18)}  ${pad(`$${Math.abs(e.usd).toFixed(4)}`, 10)}  ${firstLine(about, 60)}`);
+    }
+    console.log(`\n  ${c.dim(`--csv for the file an accountant wants (--file <path> to save it)`)}\n`);
+    return 0;
+  }
+
+  if (verb === "wallet") {
+    if (!sub) {
+      const w = await remoteCall(url, flags, "/api/billing/wallet");
+      const s = w.summary ?? {};
+      console.log(`\n  ${c.bold("wallet")}  ${usd(s.balanceUsd)}  ${c.dim(w.enabled ? "billing on" : "billing off")}`);
+      console.log(`  ${c.dim(`burn ${usd(s.burnPerDayUsd)}/day · 7d ${usd(s.spend7dUsd)} · 30d ${usd(s.spend30dUsd)} · month to date ${usd(s.monthToDateUsd)}`)}`);
+      if (s.daysLeft != null) console.log(`  ${s.daysLeft < 7 ? c.amber("!") : c.dim("·")} ${c.dim(`about ${Math.round(s.daysLeft)} days left at this burn${s.emptyOn ? ` — empty on ${s.emptyOn.slice(0, 10)}` : ""}${s.suggestedTopUpUsd ? `; ${usd(s.suggestedTopUpUsd)} covers about a month` : ""}`)}`);
+      const a = w.autoTopUp;
+      console.log(`  auto top-up  ${a?.enabled ? `${usd(a.amountUsd)} when the balance falls below ${usd(a.thresholdUsd)}` : c.dim("off")}${w.cardSaved ? "" : c.dim(" · no card saved")}`);
+      if (w.email) console.log(`  receipts     ${w.email}`);
+      if (w.dunning && w.dunning.state && w.dunning.state !== "ok") console.log(`  ${c.red("✗")} plan invoice unpaid — ${w.dunning.state}`);
+      console.log(`\n  ${c.dim("foldrun billing wallet set auto-top-up --threshold 10 --amount 50 · set auto-top-up off")}\n`);
+      return 0;
+    }
+    if (sub !== "set" || !["auto-top-up", "email"].includes(rest[0])) {
+      throw new Error("`foldrun billing wallet set auto-top-up --threshold <usd> --amount <usd>` (or `off`), or `wallet set email <address>`");
+    }
+    let body;
+    if (rest[0] === "email") {
+      if (!rest[1]) throw new Error("`foldrun billing wallet set email <address>` — where receipts and low-balance warnings go");
+      body = { email: rest[1] };
+    } else if (rest[1] === "off") {
+      body = { autoTopUp: null };
+    } else {
+      const threshold = Number(flags.threshold);
+      const amount = Number(flags.amount);
+      if (!(threshold > 0) || !(amount >= 5 && amount <= 500)) {
+        throw new Error("auto top-up needs --threshold <usd> above 0 and --amount <usd> between 5 and 500 — or `set auto-top-up off`");
+      }
+      body = { autoTopUp: { enabled: true, thresholdUsd: threshold, amountUsd: amount } };
+    }
+    await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet", { method: "PUT", body: JSON.stringify(body) }), "changing the wallet");
+    const said = body.email ? `receipts go to ${body.email}` : body.autoTopUp ? `auto top-up on: ${usd(body.autoTopUp.amountUsd)} whenever the balance falls below ${usd(body.autoTopUp.thresholdUsd)}` : "auto top-up off";
+    console.log(`\n  ${c.green("✓")} ${said}\n`);
+    return 0;
+  }
+
+  if (verb === "details") {
+    const current = await remoteCall(url, flags, "/api/billing/details");
+    const d = current.details ?? null;
+    const addr = (a) => (a ? [a.line1, a.line2, a.city, [a.state, a.postcode].filter(Boolean).join(" "), a.country].filter(Boolean).join(", ") : null);
+    if (!sub) {
+      console.log(`\n  ${c.bold("billing details")}  ${c.dim("what every tax invoice is made out to")}`);
+      console.log(`  name     ${d?.legalName ?? c.dim("unset")}`);
+      console.log(`  email    ${d?.email ?? c.dim("unset")}`);
+      console.log(`  ABN      ${d?.abn ?? c.dim("none")}`);
+      console.log(`  address  ${addr(d?.address) ?? c.dim("unset")}`);
+      console.log(`  ${c.dim(`${current.stripe ? (current.customer ? "on the Stripe customer" : "Stripe customer not made yet") : "Stripe not configured"}${current.tax ? " · Stripe Tax on" : ""}`)}`);
+      console.log(`\n  ${c.dim('foldrun billing details set --name "…" --abn … --address "line1, city, state, postcode, AU" --email …')}\n`);
+      return 0;
+    }
+    if (sub !== "set") throw new Error("`foldrun billing details` shows them; `details set --name … --abn … --address … --email …` changes them");
+    let address = d?.address;
+    if (typeof flags.address === "string") {
+      // line1[, line2], city, state, postcode, country — the last part is the
+      // two-letter country, the first is line 1, the rest fill in order.
+      const parts = flags.address.split(",").map((x) => x.trim()).filter(Boolean);
+      if (parts.length < 2 || !/^[A-Za-z]{2}$/.test(parts[parts.length - 1])) {
+        throw new Error('--address "line1, city, state, postcode, AU" — the last part is the two-letter country');
+      }
+      const country = parts.pop().toUpperCase();
+      const line1 = parts.shift();
+      const line2 = parts.length > 3 ? parts.shift() : undefined;
+      const [city, state, postcode] = parts;
+      address = { line1, ...(line2 ? { line2 } : {}), ...(city ? { city } : {}), ...(state ? { state } : {}), ...(postcode ? { postcode } : {}), country };
+    }
+    const next = {
+      legalName: typeof flags.name === "string" ? flags.name : d?.legalName ?? "",
+      ...((typeof flags.email === "string" ? flags.email : d?.email) ? { email: typeof flags.email === "string" ? flags.email : d.email } : {}),
+      ...((typeof flags.abn === "string" ? flags.abn : d?.abn) ? { abn: typeof flags.abn === "string" ? flags.abn : d.abn } : {}),
+      ...(address ? { address } : {}),
+    };
+    const r = await ownerOnly(() => remoteCall(url, flags, "/api/billing/details", { method: "PUT", body: JSON.stringify(next) }), "changing the billing details");
+    console.log(`\n  ${c.green("✓")} invoices are made out to ${c.bold(r.details?.legalName ?? next.legalName)}${r.details?.abn ? c.dim(` · ABN ${r.details.abn}`) : ""}`);
+    console.log(`  ${c.dim(r.synced ? "the Stripe customer says the same" : `kept here; not on Stripe yet${r.syncError ? ` — ${r.syncError}` : ""}`)}\n`);
+    return 0;
+  }
+
+  if (verb === "portal") {
+    const r = await ownerOnly(() => remoteCall(url, flags, "/api/billing/portal", { method: "POST", body: "{}" }), "the billing portal");
+    console.log(`\n  ${c.bold(r.url)}\n  ${c.dim("Stripe's own pages for the card, the invoices and the plan — the link lasts minutes")}\n`);
+    return 0;
+  }
+
+  if (verb === "credit") {
+    // A manual credit (POST /api/billing): what a self-hosted or dev install
+    // without Stripe uses to put money on the balance. Once billing is live
+    // the platform refuses it — top-ups go through checkout.
+    const amount = Number(sub);
+    if (!(amount > 0) || !Number.isFinite(amount)) throw new Error("`foldrun billing credit <usd> [--note \"…\"]` — a positive amount in USD");
+    let r;
+    try {
+      r = await remoteCall(url, flags, "/api/billing", { method: "POST", body: JSON.stringify({ usd: amount, ...(typeof flags.note === "string" ? { note: flags.note } : {}) }) });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403 && /checkout/.test(err.message)) {
+        throw new Error(`billing is live on this platform, so credit is not added by hand — \`foldrun billing top-up ${amount}\` (${err.message})`);
+      }
+      if (err instanceof HttpError && err.status === 403) throw new Error(`billing credit is the account owner's alone (billing:manage) — ${err.message}`);
+      throw err;
+    }
+    const bal = r.balanceUsd;
+    console.log(`\n  ${c.green("✓")} credited ${usd(amount)}${bal !== undefined ? c.dim(` · balance ${usd(bal)}`) : ""}${typeof flags.note === "string" ? c.dim(` · "${flags.note}"`) : ""}\n`);
+    return 0;
+  }
+  throw new Error(`unknown billing verb "${verb}" — statement, wallet, details, portal or credit (bare \`foldrun billing\` is the balance)`);
+}
+
+/** The defaults a workspace's AGENTS.md sets, read from its source. */
+async function workspaceDefaults(url, flags, ws) {
+  let content = "";
+  try {
+    ({ content } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=AGENTS.md`));
+  } catch (err) {
+    if (!(err instanceof HttpError && err.status === 404)) throw err;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-ws-"));
+  try {
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), content ?? "");
+    const { readAgentsMdKeys } = await import("@foldrun/core/agents-md");
+    return readAgentsMdKeys(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `foldrun workspace [set|clear] … --to <workspace>` — one workspace's own
+ * settings: its name, description, and the defaults it overrides the
+ * account's with (timezone, budget, notify). Singular; `workspaces` is the list.
+ */
+async function workspaceCmd(positional, flags, layout) {
+  const url = platformFor(flags, "workspace");
+  const ws = platformWorkspace(flags, layout, "workspace");
+  const [verb, written, ...rest] = positional;
+  // `observability.notify` names the job; checked, then sent as the field.
+  const { key, view } = verb === "set" || verb === "clear" ? await jobKey(url, flags, written, ws) : { key: written, view: null };
+  const KEYS = ["name", "description", "timezone", "budget", "notify", "network_enforce", "owner", "alerts", "judge"];
+  const show = (d, title) => {
+    const notify = d.notify ? [d.notify.email, d.notify.url].filter(Boolean).join(", ") + c.dim(` on ${(d.notify.events ?? []).join(", ") || "nothing"}`) : c.dim("the account's");
+    const budget = d.budget == null ? c.dim("the account's") : typeof d.budget === "object" ? `$${d.budget.usd} per ${d.budget.period}` : String(d.budget).includes("/") ? `$${String(d.budget).replace("/", " per ")}` : `$${d.budget} per month`;
+    console.log(`\n  ${c.bold(title)}  ${c.dim(`on ${url} — unset means the account's default`)}\n`);
+    if (d.description !== undefined) console.log(`  description  ${d.description || c.dim("none")}`);
+    console.log(`  timezone     ${d.timezone ?? c.dim("the account's")}`);
+    console.log(`  notify       ${notify}`);
+    console.log(`  budget       ${budget}`);
+    if (d.networkEnforce !== undefined) console.log(`  network      ${networkEnforceText(d.networkEnforce, "the account")}`);
+  };
+
+  if (!verb) {
+    const d = await workspaceDefaults(url, flags, ws);
+    show({ description: typeof d.description === "string" ? d.description : "", timezone: d.timezone ?? null, budget: d.budget ?? null, notify: d.notify ?? null, networkEnforce: d.network_enforce === true }, ws);
+    const halt = await pauseState(remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`));
+    if (halt) console.log(`  paused       ${halt.paused ? c.red(`${halt.paused.scope === "account" ? "by the account: " : ""}${pauseLine(halt.paused)}`) : c.dim("no")}`);
+    console.log(`\n  ${c.dim(`foldrun workspace set timezone Australia/Sydney --to ${ws} · set budget 20/week · set notify email you@example.com · set name <new> · clear budget`)}\n`);
+    return 0;
+  }
+  if (verb === "pause" || verb === "resume") {
+    return pauseCmd(flags, verb, `workspace ${ws}`, {
+      post: (body) => remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`, { method: "POST", body }),
+      del: () => remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`, { method: "DELETE" }),
+    });
+  }
+  if (verb !== "set" && verb !== "clear") throw new Error(`unknown workspace verb "${verb}" — set <key> <value>, clear <key>, pause, resume (bare: show them)`);
+  if (!KEYS.includes(key) || (verb === "clear" && key === "name")) {
+    throw new Error(`which setting? \`foldrun workspace ${verb} <${(verb === "clear" ? KEYS.filter((k) => k !== "name") : KEYS).join("|")}> … --to <workspace>\``);
+  }
+
+  /** @type {Record<string, any>} */
+  let patch;
+  if (verb === "clear") patch = { [key]: key === "description" ? "" : null };
+  else if (key === "alerts" || key === "judge") {
+    patch = { [key]: await mergedEntry(url, flags, key, rest, ws, view, `foldrun workspace set ${key}`) };
+  } else if (key === "notify") {
+    const [channel, value] = rest;
+    if (channel !== "email" && channel !== "url") throw new Error("`foldrun workspace set notify email <address>` or `set notify url <https://…>` — and --events failed,awaiting-approval,completed");
+    if (!value && flags.events === undefined) throw new Error(`\`foldrun workspace set notify ${channel} <value>\` — or --events alone to change only what is notified on`);
+    // Merged against what the file says: the platform replaces the block whole.
+    const current = /** @type {any} */ ((await workspaceDefaults(url, flags, ws)).notify ?? {});
+    const events = typeof flags.events === "string" ? flags.events.split(",").map((e) => e.trim()).filter(Boolean) : Array.isArray(current.events) ? current.events : ["failed", "awaiting-approval"];
+    const unknown = events.filter((e) => !NOTIFY_EVENTS.includes(e));
+    if (unknown.length) throw new Error(`--events takes ${NOTIFY_EVENTS.join(", ")} — not ${unknown.join(", ")}`);
+    patch = { notify: { ...(current.url ? { url: current.url } : {}), ...(current.email ? { email: current.email } : {}), ...(value ? { [channel]: value } : {}), events } };
+  } else {
+    const value = rest.join(" ").trim();
+    if (!value) throw new Error(`\`foldrun workspace set ${key} <value> --to ${ws}\`${key === "name" ? "" : ` — or \`clear ${key}\``}`);
+    patch = { [key]: key === "network_enforce" ? onOff(key, value, `foldrun workspace set network_enforce on --to ${ws}`) : value };
+  }
+
+  if (key === "name" && verb === "set") {
+    console.log(`\n  ${c.yellow("!")} renaming ${c.bold(ws)} to ${c.bold(patch.name)} changes every webhook URL it has — anything posting to the old ones is refused`);
+    if (!(await confirmed(flags, "renaming a workspace", "Rename it? [y/N] "))) {
+      console.log(`\n  ${c.dim("nothing renamed")}\n`);
+      return 1;
+    }
+  }
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}`, { method: "PATCH", body: JSON.stringify(patch) });
+  if (r.defaults) show(r.defaults, r.name ?? ws);
+  console.log(`\n  ${c.green("✓")} ${r.renamed ? `renamed to ${r.name}` : verb === "clear" ? `${key} cleared` : `${key} set`} ${c.dim(`on ${r.name ?? ws}`)}`);
+  if (r.brokeWebhooks?.length) console.log(`  ${c.amber("!")} webhook URLs changed for ${r.brokeWebhooks.join(", ")} — copy the new ones from each flow`);
+  console.log();
+  return 0;
+}
+
+/** `foldrun notify test --to <workspace>` — send one, and say what happened. */
+async function notifyCmd(positional, flags, layout) {
+  if (positional[0] !== "test") throw new Error("`foldrun notify test --to <workspace>` — sends one test notification to whatever that workspace's notify: resolves to");
+  const url = platformFor(flags, "notify test");
+  const ws = platformWorkspace(flags, layout, "notify test");
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/notify/test`, { method: "POST" });
+  console.log(`\n  ${r.ok ? c.green("✓") : c.red("✗")} ${c.bold(r.destination ?? "?")}  ${c.dim(ws)}`);
+  console.log(`  ${r.ok ? c.dim(r.detail) : r.detail}\n`);
+  return r.ok ? 0 : 1;
+}
+
+/**
+ * `foldrun webhooks deliveries [--failed] --to <workspace>` — every notify:
+ * webhook the workspace sent, newest first: event, status, attempts, the
+ * last answer. `--failed` (or `--status failed|pending|delivered|skipped`)
+ * and `--event <e>` narrow it; `--limit`/`--offset` page it.
+ * `foldrun webhooks redeliver <id> --to <workspace>` sends one again now,
+ * with the same X-Foldrun-Delivery id, and exits 1 when it was refused.
+ */
+async function webhooksCmd(positional, flags, layout) {
+  const verb = positional[0] ?? "deliveries";
+  const url = platformFor(flags, `webhooks ${verb}`);
+  const ws = platformWorkspace(flags, layout, `webhooks ${verb}`);
+  const base = `/api/workspaces/${enc(ws)}/notify/deliveries`;
+  if (verb === "redeliver") {
+    const id = positional[1];
+    if (!id) throw new Error("`foldrun webhooks redeliver <delivery-id> --to <workspace>` — the id is in `foldrun webhooks deliveries`");
+    const r = await remoteCall(url, flags, `${base}/${enc(id)}/redeliver`, { method: "POST" });
+    const a = r.attempt ?? {};
+    if (flags.json === true) {
+      console.log(JSON.stringify(r, null, 2));
+      return r.ok ? 0 : 1;
+    }
+    console.log(`\n  ${r.ok ? c.green("✓") : c.red("✗")} ${c.bold(id)}  ${c.dim(`attempt ${a.n ?? "?"} · ${a.durationMs ?? "?"} ms`)}`);
+    console.log(`  ${a.statusCode ? `HTTP ${a.statusCode}` : a.error ?? "no answer"}${a.response ? c.dim(` — ${firstLine(a.response, 100)}`) : ""}\n`);
+    return r.ok ? 0 : 1;
+  }
+  if (verb !== "deliveries" && verb !== "ls") throw new Error("`foldrun webhooks deliveries [--failed]` or `foldrun webhooks redeliver <id>` (--to <workspace>)");
+  const q = new URLSearchParams();
+  const status = flags.failed === true ? "failed" : typeof flags.status === "string" ? flags.status : "";
+  if (status) q.set("status", status);
+  if (typeof flags.event === "string") q.set("event", flags.event);
+  q.set("limit", String(Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 30));
+  if (Number(flags.offset) > 0) q.set("offset", String(Math.floor(Number(flags.offset))));
+  const r = await remoteCall(url, flags, `${base}?${q}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const rows = r.deliveries ?? [];
+  console.log();
+  if (r.endpoint?.disabledAt) {
+    console.log(`  ${c.red("✗ switched off")} since ${when(r.endpoint.disabledAt)} — ${r.endpoint.disabledReason ?? ""}`);
+    console.log(`  ${c.dim(`an accepted redeliver (or \`foldrun notify test --to ${ws}\`) switches it back on`)}\n`);
+  }
+  if (!rows.length) {
+    console.log(`  ${c.dim(`no ${status ? `${status} ` : ""}webhook deliveries in ${ws}`)}\n`);
+    return 0;
+  }
+  const tone = { delivered: c.green, failed: c.red, pending: c.yellow, skipped: c.dim };
+  const ew = Math.max(...rows.map((d) => String(d.event).length));
+  for (const d of rows) {
+    const label = d.status === "pending" ? "retrying" : d.status;
+    const last = d.lastStatusCode ? `HTTP ${d.lastStatusCode}` : d.lastError ?? "";
+    const next = d.status === "pending" && d.nextAttemptAt ? c.dim(` next ${when(d.nextAttemptAt)}`) : "";
+    console.log(`  ${c.dim(when(d.createdAt))}  ${pad(d.event, ew)}  ${(tone[d.status] ?? ((x) => x))(pad(label, 9))}  ${c.dim(`${d.attempts}×`)}  ${firstLine(last, 50)}${next}  ${c.dim(d.id)}`);
+  }
+  const shown = (r.offset ?? 0) + rows.length;
+  console.log(`\n  ${c.dim(`${shown < r.total ? `${shown} of ${r.total} · --offset ${shown} for more · ` : ""}foldrun webhooks redeliver <id> --to ${ws} sends one again`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun notifications` — what mail you get, category by category, and
+ * which are required. `foldrun notifications set <category> on|off`
+ * changes one, account-wide or for one workspace with `--to <workspace>`.
+ * Required mail (security, invites, billing, account) is refused with the
+ * platform's reason.
+ */
+async function notificationsCmd(positional, flags) {
+  const url = platformFor(flags, "notifications");
+  if (positional[0] === "set") {
+    const [, category, value] = positional;
+    if (!category || !["on", "off"].includes(value ?? "")) {
+      throw new Error("`foldrun notifications set <category> on|off` (--to <workspace> for one workspace) — `foldrun notifications` lists the categories");
+    }
+    const body = { category, enabled: value === "on", ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) };
+    const r = await remoteCall(url, flags, "/api/me/notifications", { method: "PATCH", body: JSON.stringify(body) });
+    const cat = (r.categories ?? []).find((x) => x.category === category);
+    console.log(`\n  ${c.green("✓")} ${c.bold(cat?.label ?? category)} ${value}${typeof flags.to === "string" ? ` for ${flags.to}` : ""}  ${c.dim(`for ${r.email}`)}\n`);
+    return 0;
+  }
+  if (positional[0]) throw new Error("`foldrun notifications` or `foldrun notifications set <category> on|off`");
+  const r = await remoteCall(url, flags, "/api/me/notifications");
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const w = Math.max(...(r.categories ?? []).map((x) => x.category.length));
+  console.log(`\n  ${c.bold(r.email)}\n`);
+  for (const x of r.categories ?? []) {
+    const state = x.required ? c.dim("always") : x.enabled ? c.green("on    ") : c.red("off   ");
+    const ws = Object.entries(x.workspaces ?? {}).map(([k, v]) => `${k} ${v ? "on" : "off"}`);
+    console.log(`  ${pad(x.category, w)}  ${state}  ${x.description}${ws.length ? c.dim(`  (${ws.join(", ")})`) : ""}`);
+  }
+  console.log(`\n  ${c.dim("foldrun notifications set <category> on|off [--to <workspace>] · required ones cannot be turned off")}\n`);
+  return 0;
+}
+
+/** Why a flag is what it is, as `foldrun flags` says it. */
+const FLAG_SOURCES = {
+  account: "set for this account",
+  global: "set for every account",
+  rollout: "staged rollout",
+  default: "default",
+};
+
+/**
+ * `foldrun flags` — the feature flags as they stand for this account: on or
+ * off, and what decided it (this account's override, the install-wide
+ * setting, a percentage rollout, or the default). Read-only: only the
+ * platform's super admin changes a flag, in the console, with a session —
+ * an API key never reaches those routes, so the CLI has no verb for them.
+ */
+async function flagsCmd(positional, flags) {
+  const url = platformFor(flags, "flags");
+  if (positional[0]) throw new Error("`foldrun flags` lists this account's feature flags — they are changed by the platform's super admin, not from here");
+  const r = await remoteCall(url, flags, "/api/account/flags");
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const list = r.flags ?? [];
+  if (!list.length) {
+    console.log(`\n  ${c.dim("no feature flags on this platform")}\n`);
+    return 0;
+  }
+  const w = Math.max(...list.map((f) => f.name.length));
+  const sw = Math.max(...list.map((f) => why(f).length));
+  console.log("");
+  for (const f of list) {
+    const state = f.on ? c.green("on ") : c.dim("off");
+    console.log(`  ${pad(f.name, w)}  ${state}  ${c.dim(pad(why(f), sw))}  ${f.description}`);
+  }
+  console.log(`\n  ${c.dim("read-only — the platform's super admin turns flags on and off")}\n`);
+  return 0;
+  function why(f) {
+    const base = FLAG_SOURCES[f.source] ?? String(f.source ?? "");
+    return f.source === "rollout" && typeof f.rollout === "number" ? `${base} ${f.rollout}%` : base;
+  }
+}
+
+/**
+ * `foldrun history [path] --to <workspace>` — every change to a deployed
+ * workspace, newest first: who, what, which files. `--id <revision>` shows
+ * one in full, as diffs.
+ */
+async function historyCmd(positional, flags, layout) {
+  const url = platformFor(flags, "history");
+  const ws = platformWorkspace(flags, layout, "history");
+  const file = positional[0];
+  const base = `/api/workspaces/${enc(ws)}/history`;
+  if (typeof flags.id === "string") {
+    const rev = await remoteCall(url, flags, `${base}?id=${enc(flags.id)}${file ? `&path=${enc(file)}` : ""}`);
+    console.log(`\n  ${c.bold(rev.id)}  ${c.dim(`${when(rev.at)} · ${rev.by}${rev.commit ? ` · ${String(rev.commit).slice(0, 7)}` : ""}`)}`);
+    if (rev.message) console.log(`  ${rev.message}`);
+    console.log();
+    for (const f of rev.files ?? []) {
+      if (Array.isArray(f.diff)) printOps(f.path, f.diff);
+      else console.log(`  ${c.bold(f.path)}  ${c.dim("(no inline content)")}`);
+      console.log();
+    }
+    return 0;
+  }
+  const limit = Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 30;
+  const { revisions = [] } = await remoteCall(url, flags, `${base}?limit=${limit}${file ? `&path=${enc(file)}` : ""}`);
+  if (!revisions.length) {
+    console.log(`\n  ${c.dim(`no revisions${file ? ` of ${file}` : ""} in ${ws}`)}\n`);
+    return 0;
+  }
+  const w = Math.max(...revisions.map((r) => String(r.by ?? "").length));
+  console.log();
+  for (const r of revisions) {
+    const paths = r.paths ?? [];
+    console.log(`  ${c.dim(r.id)}  ${c.dim(when(r.at))}  ${pad(r.by ?? "", w)}  ${firstLine(r.message, 60)}${r.commit ? c.dim(` ${String(r.commit).slice(0, 7)}`) : ""}`);
+    console.log(`      ${c.dim(paths.slice(0, 4).join(", ") + (paths.length > 4 ? ` +${paths.length - 4} more` : ""))}`);
+  }
+  console.log(`\n  ${c.dim(`foldrun history --id <revision> --to ${ws} for the diff · a path narrows it to one file`)}\n`);
+  return 0;
+}
+
+
+/**
+ * `foldrun onboarding` — the account's getting-started steps, each worked
+ * out from what is really there, the next one first. Hiding the dashboard
+ * card is a person's own setting, so it is done there, not with a key.
+ */
+async function onboardingCmd(flags) {
+  const url = platformFor(flags, "onboarding");
+  const o = await remoteCall(url, flags, "/api/me/onboarding");
+  if (flags.json === true) {
+    console.log(JSON.stringify(o, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold("Getting started")}  ${c.dim(`${o.done} of ${o.total}${o.complete ? " — all done" : ""}`)}\n`);
+  for (const s of o.steps ?? []) {
+    const mark = s.done ? c.green("✓") : s.id === o.next?.id ? c.yellow("→") : c.dim("○");
+    console.log(`  ${mark} ${s.done ? c.dim(s.title) : c.bold(s.title)}`);
+    if (!s.done) {
+      console.log(`      ${c.dim(s.why)}`);
+      console.log(`      ${c.dim(`${String(url).replace(/\/$/, "")}${s.href}${s.cli ? `  ·  ${s.cli}` : ""}`)}`);
+    }
+  }
+  console.log();
+  return 0;
+}
+
+const BACKUP_KINDS = { files: "files", database: "database", keys: "keys (sealed)" };
+
+/**
+ * `foldrun backups` — how the account is backed up and the snapshots it is
+ * in; `foldrun backups request` asks the platform team to restore runs,
+ * state, storage or everything from one (it restores nothing itself).
+ */
+async function backupsCmd(positional, flags) {
+  const url = platformFor(flags, "backups");
+  const [verb = "ls"] = positional;
+  if (verb === "request") {
+    const what = typeof flags.what === "string" ? flags.what : "";
+    if (!["runs", "state", "storage", "everything"].includes(what)) {
+      throw new Error("`foldrun backups request --what runs|state|storage|everything --at \"<when>\" [--to <workspace>] [--note \"…\"]`");
+    }
+    if (typeof flags.at !== "string" || !flags.at.trim()) throw new Error("--at \"<date and time to restore to>\" — the point you want back");
+    const body = {
+      what,
+      target: flags.at,
+      workspace: typeof flags.to === "string" ? flags.to : null,
+      backupId: typeof flags.backup === "string" ? flags.backup : null,
+      note: typeof flags.note === "string" ? flags.note : null,
+    };
+    const { request } = await remoteCall(url, flags, "/api/account/backups/requests", { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} asked ${c.dim(`· ${request.id} · ${what} in ${request.workspace ?? "every workspace"} as at ${request.target}`)}`);
+    console.log(`  ${request.notified ? c.dim("the platform team has been emailed; nothing is restored until they do it") : c.yellow("recorded, but the email to the platform team did not send — contact them as well")}\n`);
+    return 0;
+  }
+  if (verb === "requests") {
+    // Every restore this account has asked the platform team for, and where
+    // each stands (GET /api/account/backups/requests) — `backups` shows five.
+    const { requests = [] } = await remoteCall(url, flags, "/api/account/backups/requests");
+    if (flags.json === true) {
+      console.log(JSON.stringify(requests, null, 2));
+      return 0;
+    }
+    if (!requests.length) {
+      console.log(`\n  ${c.dim("no restore requests — foldrun backups request --what runs --at \"<when>\" asks for one")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const r of requests) {
+      console.log(`  ${when(r.at)}  ${c.bold(r.status)}  ${r.what} · ${r.workspace ?? "every workspace"} · to ${r.target}  ${c.dim(`${r.id} · ${r.by}${r.notified ? "" : " · platform team not emailed"}`)}`);
+      if (r.note) console.log(`      ${c.dim(firstLine(r.note, 100))}`);
+    }
+    console.log(`\n  ${c.dim(`${requests.length} request${requests.length === 1 ? "" : "s"} · the platform team restores; nothing here changes until they do`)}\n`);
+    return 0;
+  }
+  if (verb !== "ls" && verb !== "list") throw new Error(`unknown backups verb "${verb}" — ls, request, requests`);
+  const b = await remoteCall(url, flags, "/api/account/backups");
+  if (flags.json === true) {
+    console.log(JSON.stringify(b, null, 2));
+    return 0;
+  }
+  const p = b.policy ?? {};
+  console.log(`\n  ${c.bold("Backups")}  ${c.dim(`${p.schedule ?? "—"} · the last ${p.keepLocal ?? "?"} kept on the server${p.keepOffsiteDays ? `, ${p.keepOffsiteDays} days off it` : ""}${p.encrypted ? " · encrypted before they leave the server" : ""}`)}`);
+  if (b.last) {
+    console.log(`  last  ${when(b.last.at)}  ${b.last.verified ? c.green("verified") : c.yellow("not verified")}  ${b.last.offsite ? c.dim(`copied to ${b.last.offsite}`) : c.yellow("on the server only")}  ${b.last.encrypted ? c.green("encrypted") : c.yellow("not encrypted")}`);
+  } else {
+    console.log(`  ${c.dim("no snapshot recorded for this account yet")}`);
+  }
+  if (b.backups?.length) {
+    console.log(`\n  ${c.dim("snapshots")}`);
+    for (const s of b.backups.slice(0, Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 15)) {
+      console.log(`  ${when(s.at)}  ${pad(typeof s.bytes === "number" ? humanBytes(s.bytes) : "—", 8)}  ${pad((s.kinds ?? []).map((k) => BACKUP_KINDS[k] ?? k).join(", "), 30)}  ${s.verified ? c.green("✓") : c.yellow("?")} ${pad(c.dim(s.offsite ? `server + ${s.offsite}` : "server only"), 14)}  ${s.encrypted ? c.green("encrypted") : c.yellow("not encrypted")}`);
+    }
+  }
+  if (b.workspaces?.length) {
+    console.log(`\n  ${c.dim("restore a workspace's source yourself — foldrun restore <workspace> --to <revision|time|3d> --dry-run")}`);
+    const w = Math.max(...b.workspaces.map((x) => x.name.length));
+    for (const x of b.workspaces) {
+      console.log(`  ${pad(x.name, w)}  ${x.lastChange ? c.dim(`last change ${when(x.lastChange.at)} — ${firstLine(x.lastChange.message, 50)}`) : c.dim("no history yet")}`);
+    }
+  }
+  if (b.requests?.length) {
+    console.log(`\n  ${c.dim("restore requests")}`);
+    for (const r of b.requests.slice(0, 5)) console.log(`  ${when(r.at)}  ${r.what} · ${r.workspace ?? "all"} · to ${r.target}  ${c.dim(`${r.status} · ${r.by}`)}`);
+  }
+  console.log(`\n  ${c.dim("runs, state/ and storage come back from a snapshot by the platform team: foldrun backups request --what runs --at \"<when>\" [--to <workspace>]")}\n`);
+  return 0;
+}
+
+/** A revision as the CLI prints it: a git sha shortened as git does, a
+ *  platform revision id (r-…) whole — it is what --to takes back. */
+const revShort = (id) => (/^[0-9a-f]{40}$/.test(String(id)) ? String(id).slice(0, 7) : String(id));
+
+/**
+ * `foldrun restore <workspace> --to <revision|time|age> [--dry-run]`
+ * — the workspace's source as it was then. Always shows the change first;
+ * the restore asks for the workspace's name typed back (or --yes), and
+ * sends the removals it showed, so a file added in between refuses it.
+ */
+async function restoreCmd(positional, flags) {
+  const url = platformFor(flags, "restore");
+  const ws = positional[0];
+  if (!ws) throw new Error("`foldrun restore <workspace> --to <revision|time|3d> [--dry-run]`");
+  if (typeof flags.to !== "string" || !flags.to.trim()) throw new Error("--to <revision, date or age> — the point to restore to, e.g. --to 2026-09-28T14:00 or --to 3d");
+  const base = `/api/workspaces/${enc(ws)}/restore`;
+  const plan = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify({ to: flags.to, dryRun: true }) });
+  console.log(`\n  ${c.bold(ws)} → ${c.bold(revShort(plan.to.id ?? plan.to.sha))}  ${c.dim(`${when(plan.to.at)} · ${plan.to.by} · ${firstLine(plan.to.message, 60)}`)}`);
+  if (plan.noop) {
+    console.log(`  ${c.dim(`${ws} already matches that point — nothing to restore`)}\n`);
+    return 0;
+  }
+  console.log(`  ${c.dim(`${plan.updated.length} changed · ${plan.added.length} brought back · ${plan.removed.length} removed — runs, state/, storage and secrets are not touched`)}\n`);
+  for (const f of plan.files ?? []) {
+    if (flags["dry-run"] === true) {
+      printOps(`${f.path} ${c.dim(`(${f.change})`)}`, f.diff ?? []);
+      console.log();
+    } else {
+      console.log(`  ${f.change === "removed" ? c.red("-") : f.change === "added" ? c.green("+") : c.yellow("~")} ${f.path}`);
+    }
+  }
+  if (plan.blockedBy?.length) console.log(`\n  ${c.yellow("!")} runs in flight (${plan.blockedBy.join(", ")}) — a restore waits for them, as a deploy does`);
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim(`nothing changed — run it without --dry-run to restore`)}\n`);
+    return 0;
+  }
+  console.log();
+  if (!(await confirmed(flags, "restore", `Type ${ws} to restore it: `, ws))) {
+    console.log(`\n  ${c.dim("nothing restored")}\n`);
+    return 1;
+  }
+  const r = await remoteCall(url, flags, base, {
+    method: "POST",
+    body: JSON.stringify({ to: plan.to.id ?? plan.to.sha, confirm: ws, expectRemoved: plan.removed }),
+  });
+  if (r.noop) {
+    console.log(`\n  ${c.dim(`${ws} already matches ${revShort(plan.to.id ?? plan.to.sha)}`)}\n`);
+    return 0;
+  }
+  console.log(`\n  ${c.green("✓")} ${ws} restored to ${revShort(r.to.id ?? r.to.sha)} ${c.dim(`· main ${revShort(r.main ?? "")} · undo: foldrun restore ${ws} --to ${String(r.from ?? "")}`)}\n`);
+  return 0;
+}
+
+/** `foldrun account export` — everything the platform holds about the account, as one JSON file. */
+async function accountExportCmd(url, flags) {
+  let got;
+  try {
+    got = await remoteBytes(url, flags, "/api/account/export", "account export");
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 403) throw new Error(`account export is the account owner's alone — ${err.message}`);
+    throw err;
+  }
+  const code = writeDownload(got.bytes, got.name ?? "foldrun-export.json", flags, "the account");
+  try {
+    const x = JSON.parse(got.bytes.toString("utf8"));
+    if (flags.file !== "-") console.log(`  ${c.dim(`${x.workspaces?.length ?? 0} workspaces · ${x.runs?.length ?? 0} runs · ${x.members?.length ?? 0} members · ${x.ledger?.length ?? 0} ledger lines — the markdown itself comes down with \`foldrun pull\``)}\n`);
+  } catch {
+    /* the file is written; the counts are a courtesy */
+  }
+  return code;
+}
+
+// ---------------------------------------------------------------- parity, 2 Oct
+//
+// What the dashboard could do on 2 Oct 2026 and the terminal could not, one
+// verb each: the canvas's step options, trigger, regrouping, copy and paste;
+// AI flow drafts; restoring one file from history; the library shelf; saved
+// OAuth clients and every secret kind the Connections form stores; plans,
+// top-ups and the card; the API version pin; the theme; release notes; the
+// ⌘K search; the scheduler tick; the demo workspace; a run's live browser
+// frame; the editor's vocabulary; branch delete and the mirror.
+
+/**
+ * One flow edit, the way flow add / dup-step / rm-step do it: read the file
+ * (here or on the platform), compute the new text with core's own rewriter,
+ * show the diff, refuse what `check` would call a new error, --dry-run stops
+ * there, then write — locally only when the file still reads
+ * what was read, on the platform with `expect` so a newer edit wins.
+ * `bodies(raw)` is the PATCH bodies the dashboard sends for the same edit.
+ */
+async function flowEditCmd(flags, layout, { flow, what, label, compute, bodies }) {
+  const desk = await openDesk(flags, layout, `${what} ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  let next;
+  let meta;
+  try {
+    ({ next, meta } = await compute(raw, steps));
+  } catch (err) {
+    console.log(`\n  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
+    return 1;
+  }
+  console.log(`\n  ${c.bold(flow)} ${c.dim(`· ${typeof label === "function" ? label(meta) : label} · ${desk.label}`)}\n`);
+  if (next === raw) {
+    console.log(`  ${c.dim(`nothing to change — ${rel} already says that`)}\n`);
+    return 0;
+  }
+  await printDiff(rel, raw, next);
+  console.log();
+  const added = await problemsAdded(desk, [[rel, next]]);
+  if (reportAdded(added)) {
+    console.log(`\n  ${c.red("✗")} refused — \`foldrun check\` would report ${added.filter((p) => p.level === "error").length === 1 ? "that error" : "those errors"}, so nothing was written\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`${added.length ? "\n" : ""}  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (desk.platform) {
+    // Each body is checked against the text the one before it left, so a
+    // second write can never land on a file someone else changed between.
+    let seen = raw;
+    for (const { body, after } of bodies(raw, meta)) {
+      await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...body, expect: textSha(seen) }) });
+      seen = after;
+    }
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the dashboard writes it`)}\n`);
+  } else {
+    writeIfUnchanged(desk, rel, raw, next);
+    console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${path.join(desk.label, rel)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  }
+  return 0;
+}
+
+/** Two parsed flows that run the same: equal but for key order and the
+ *  line numbers a reflow moves. */
+function sameFlow(a, b) {
+  const canon = (v) =>
+    Array.isArray(v) ? v.map(canon)
+    : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).filter((k) => k !== "line").sort().map((k) => [k, canon(v[k])]))
+    : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+
+/** The step options the dashboard's step editor writes (core updateFlowStep). */
+const STEP_OPTION_KEYS = ["model", "effort", "retry", "timeout", "verify", "when", "case", "else", "loop", "until", "each", "max", "limits"];
+
+/**
+ * `foldrun flow set <flow> --step <n|agent> key=value …` — the step editor on
+ * the Flows page: model, effort, retry, timeout, verify, when, case, else,
+ * loop, until, each, max, limits — and `instruction=` for the step's text.
+ * `key=` with nothing after it clears that option. Only the keys named are
+ * touched; every other line of the step stays as written.
+ */
+async function flowSetCmd(positional, flags, layout) {
+  const flow = positional[1];
+  const pairs = positional.slice(2);
+  const usage = `\`foldrun flow set <flow> --step <n|agent> key=value …\` — keys: ${STEP_OPTION_KEYS.join(", ")}, instruction (key= clears)`;
+  if (!flow || !pairs.length) throw new Error(usage);
+  const { resolveEffort, EFFORT_LEVELS, parseDuration } = await core();
+  // The counted options, in the ranges core's rewriter and parseFlow share.
+  // Outside them the rewriter clamps, zeroes (retry=abc wrote 0) or drops
+  // the line (timeout=15m deleted timeout: 900) and the edit "succeeded".
+  const COUNTS = { retry: [0, 5, "extra attempts"], loop: [1, 5, "extra cycles"], max: [1, 20, "items"] };
+  const options = {};
+  let instruction;
+  for (const p of pairs) {
+    const eq = p.indexOf("=");
+    if (eq < 1) throw new Error(`"${p}" is not key=value — ${usage}`);
+    const key = p.slice(0, eq).trim();
+    const value = p.slice(eq + 1).trim();
+    if (key === "instruction") {
+      if (!value) throw new Error("instruction= needs the text — a step with no instruction is a step that does nothing");
+      instruction = value;
+      continue;
+    }
+    if (!STEP_OPTION_KEYS.includes(key)) throw new Error(`"${key}" is not a step option flow set writes — ${STEP_OPTION_KEYS.join(", ")}, instruction. Patterns (ask, wait, on-fail, approve, each: items/rows) are \`foldrun flow add\``);
+    // The editor's rewriter keeps only `each: lines`; anything else would be
+    // dropped without a word. Refuse it here and say where it lives.
+    if (key === "each" && value && value !== "lines") throw new Error(`each=${value}: flow set writes \`each: lines\` only — \`foldrun flow add <flow> fan-out --each "${value}"\` writes the rest`);
+    if (key === "else" && value && !["true", "1"].includes(value)) throw new Error("else=true, or else= to clear it");
+    if (key === "effort" && value && !resolveEffort(value)) throw new Error(`effort=${value} is not an effort — ${EFFORT_LEVELS.join(", ")} (or effort= to clear it)`);
+    if (key === "timeout" && value && !/^[1-9]\d*$/.test(value)) {
+      const secs = parseDuration(value);
+      throw new Error(`timeout=${value}: flow set writes a whole number of seconds — ${secs ? `timeout=${secs}` : "e.g. timeout=900 for 15 minutes"} (or timeout= to clear it)`);
+    }
+    if (key in COUNTS && value) {
+      const [lo, hi, what] = COUNTS[key];
+      if (!/^\d+$/.test(value) || Number(value) < lo || Number(value) > hi) throw new Error(`${key}=${value}: a whole number of ${what}, ${lo} to ${hi} (or ${key}= to clear it)`);
+    }
+    options[key] = value === "" ? null : value;
+  }
+  const { updateFlowStep, updateFlowStepInstruction, parseFlow } = await core();
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow set",
+    label: (m) => `set ${m.label}`,
+    compute: async (raw, steps) => {
+      const i = pickStep(steps, flags.step, flow);
+      const s = steps[i];
+      let next = raw;
+      const afterInstruction = instruction !== undefined ? updateFlowStepInstruction(next, i, instruction) : next;
+      next = afterInstruction;
+      if (Object.keys(options).length) next = updateFlowStep(next, i, options);
+      // The rewriter re-emits the managed lines at the top of the step, so a
+      // value the step already has still came back reordered — a diff, and on
+      // the platform a revision, for no change. Same flow when parsed: none.
+      if (next !== raw && sameFlow(parseFlow("flow.md", raw), parseFlow("flow.md", next))) next = raw;
+      return { next, meta: { i, afterInstruction, label: `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}` } };
+    },
+    bodies: (raw, m) => [
+      ...(instruction !== undefined ? [{ body: { step: m.i, instruction }, after: m.afterInstruction }] : []),
+      ...(Object.keys(options).length ? [{ body: { step: m.i, options }, after: null }] : []),
+    ],
+  });
+}
+
+/**
+ * `foldrun flow trigger <flow> manual|webhook|schedule [--schedule "<cron>"]
+ * [--timezone <zone>]` — the trigger picker on a flow card: the frontmatter's
+ * trigger:, schedule: and timezone: lines and nothing else.
+ */
+async function flowTriggerCmd(positional, flags, layout) {
+  const flow = positional[1];
+  const kind = positional[2];
+  const KINDS = ["manual", "schedule", "webhook"];
+  if (!flow || !KINDS.includes(kind)) throw new Error('`foldrun flow trigger <flow> manual|webhook|schedule --schedule "0 9 * * 1" [--timezone Australia/Sydney]`');
+  const schedule = typeof flags.schedule === "string" ? flags.schedule : undefined;
+  const timezone = typeof flags.timezone === "string" ? flags.timezone : undefined;
+  if (kind === "schedule" && !schedule) throw new Error('a schedule needs its cron line: --schedule "0 9 * * 1" (5 fields, or @daily)');
+  if (kind !== "schedule" && (schedule || timezone)) throw new Error(`--schedule and --timezone go with \`schedule\`, not ${kind}`);
+  const trigger = { trigger: kind, ...(schedule ? { schedule } : {}), ...(timezone ? { timezone } : {}) };
+  const { setFlowTrigger } = await core();
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow trigger",
+    label: `trigger ${kind}${schedule ? ` "${schedule}"` : ""}${timezone ? ` ${timezone}` : ""}`,
+    compute: async (raw) => ({ next: setFlowTrigger(raw, trigger), meta: {} }),
+    bodies: () => [{ body: { trigger }, after: null }],
+  });
+}
+
+/**
+ * `foldrun flow filter <flow> --payload <file|-|json> [--to <workspace>]` —
+ * would this delivery start the flow? Its `filter:` (core trigger-filter.ts)
+ * against a payload: a webhook's JSON body, an email's { from, to, subject,
+ * text }, a chained run's { run, flow, status, ending, verdict, summary }, a
+ * storage event's { by, paths }. With --to, the deployed flow answers (POST
+ * …/flows/<flow>/filter — the Triggers page's Test box); without, the local
+ * file. Nothing starts. Exit 0 when it would start a run, 1 when not.
+ */
+async function flowFilterCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow || flags.payload === undefined || flags.payload === true) {
+    throw new Error("`foldrun flow filter <flow> --payload <file.json|->` (or inline JSON); --to <workspace> tests the deployed flow");
+  }
+  const spec = String(flags.payload);
+  const text = spec === "-" ? fs.readFileSync(0, "utf8") : /^\s*[{[]/.test(spec) ? spec : fs.readFileSync(spec, "utf8");
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = text; // read as a webhook body: not JSON, so no filter matches
+  }
+  let answer;
+  if (namesPlatform(flags)) {
+    const url = platformFor(flags, "flow filter");
+    const ws = platformWorkspace(flags, layout, "flow filter");
+    answer = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/flows/${enc(flow)}/filter`, { method: "POST", body: JSON.stringify({ payload }) });
+  } else {
+    const desk = await openDesk(flags, layout, `flow filter ${flow}`, flow);
+    const rel = await flowFileOf(desk, flow);
+    const lib = /** @type {any} */ (await core());
+    if (typeof lib.matchFilter !== "function") {
+      throw new Error("this install's @foldrun/core predates filter: — update foldrun, or test the deployed flow with --to <workspace>");
+    }
+    const f = lib.parseFlow(path.basename(rel), desk.files.get(rel));
+    const read = typeof payload === "string" ? lib.webhookFilterPayload(payload) : payload;
+    answer = { flow: f.name, trigger: f.trigger, filter: f.filter, applies: lib.FILTERABLE_TRIGGERS.includes(f.trigger), ...(f.filter != null ? lib.matchFilter(f.filter, read) : { match: true, reason: "this flow has no filter: — every delivery starts it" }) };
+  }
+  if (flags.json) {
+    console.log(JSON.stringify(answer, null, 2));
+  } else {
+    console.log(`\n  ${answer.match ? c.green("would start a run") : c.amber("would not start a run")} — ${answer.reason}`);
+    if (answer.applies === false) console.log(`  ${c.dim(`trigger: ${answer.trigger} delivers no payload, so its filter never applies`)}`);
+    console.log("");
+  }
+  return answer.match ? 0 : 1;
+}
+
+/**
+ * `foldrun flow move-step <flow> --step <n|agent> --group <g> | --after <g>`
+ * — dragging a card on the board: into group g, in parallel with what is
+ * there, or into a group of its own after group g (0 = first). Only step
+ * numbers change on disk (core reorderFlowSteps).
+ */
+async function flowMoveStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow || (flags.group === undefined) === (flags.after === undefined)) {
+    throw new Error("`foldrun flow move-step <flow> --step <n|agent> --group <g>` (beside group g) or `--after <g>` (its own group after g; 0 = first)");
+  }
+  const { reorderFlowSteps } = await core();
+  const { flowGroups } = await patterns();
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow move-step",
+    label: (m) => m.label,
+    compute: async (raw, steps) => {
+      const i = pickStep(steps, flags.step, flow);
+      const groups = flowGroups(steps).map((g) => ({ ids: [...g] }));
+      const n = groups.length;
+      const target = flags.group !== undefined ? Number(flags.group) : Number(flags.after);
+      if (flags.group !== undefined && (!Number.isInteger(target) || target < 1 || target > n)) throw new Error(`--group takes 1 to ${n} (the groups ${flow} has)`);
+      if (flags.after !== undefined && (!Number.isInteger(target) || target < 0 || target > n)) throw new Error(`--after takes 0 to ${n} (0 is before the first group)`);
+      const anchor = flags.group !== undefined ? groups[target - 1] : target === 0 ? null : groups[target - 1];
+      for (const g of groups) g.ids = g.ids.filter((x) => x !== i);
+      if (flags.group !== undefined) /** @type {{ ids: number[] }} */ (anchor).ids.push(i);
+      else groups.splice(anchor ? groups.indexOf(anchor) + 1 : 0, 0, { ids: [i] });
+      const next = groups.map((g) => g.ids).filter((g) => g.length);
+      const s = steps[i];
+      const name = `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}`;
+      return {
+        next: reorderFlowSteps(raw, next),
+        meta: { groups: next, label: flags.group !== undefined ? `move ${name} beside group ${target}` : `move ${name} to its own group after ${target}` },
+      };
+    },
+    bodies: (raw, m) => [{ body: { groups: m.groups }, after: null }],
+  });
+}
+
+/**
+ * `foldrun flow copy-step <flow> --step <n|agent>[,<n>…]` — the canvas's Copy:
+ * the steps' markdown (step line, marker, every option) on stdout, for
+ * `flow paste` into this flow or another. Reads only.
+ */
+async function flowCopyStepCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow copy-step <flow> --step <n|agent>` — several as --step 1,3");
+  const desk = await openDesk(flags, layout, `flow copy-step ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { parseFlow } = await core();
+  const { stepSource } = await patterns();
+  const steps = parseFlow(path.basename(rel), raw).steps;
+  const specs = String(flags.step ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const picked = [...new Set((specs.length ? specs : [undefined]).map((s) => pickStep(steps, s, flow)))].sort((a, b) => a - b);
+  process.stdout.write(picked.map((i) => stepSource(raw, i)).join("\n") + "\n");
+  return 0;
+}
+
+/**
+ * `foldrun flow paste <flow> [--after <g> | --group <g>] [--file <path>]` —
+ * the canvas's Paste: step markdown (from `flow copy-step`, a file, or stdin)
+ * goes in as new groups after group g (default: last), or beside group g.
+ * Group numbers are renumbered to fit (core pasteSteps).
+ */
+async function flowPasteCmd(positional, flags, layout) {
+  const flow = positional[1];
+  if (!flow) throw new Error("`foldrun flow paste <flow> [--after <g> | --group <g>]` — the steps from --file <path>, else stdin");
+  let text;
+  if (typeof flags.file === "string" && flags.file !== "-") text = fs.readFileSync(flags.file, "utf8");
+  else if (process.stdin.isTTY) throw new Error("nothing to paste — pipe it in (`foldrun flow copy-step a --step 2 | foldrun flow paste b`) or --file <path>");
+  else text = fs.readFileSync(0, "utf8");
+  if (!/^\s*\d+[?!]?\.\s+\[\[/m.test(text)) throw new Error("that is not step markdown — a step reads like `2. [[writer]] — draft it`");
+  if (flags.group !== undefined && flags.after !== undefined) throw new Error("--group or --after, not both");
+  const { pasteSteps, flowGroups } = await patterns();
+  let at;
+  return flowEditCmd(flags, layout, {
+    flow,
+    what: "flow paste",
+    label: () => ("column" in at ? `paste beside group ${at.column + 1}` : `paste after group ${at.rail}`),
+    compute: async (raw, steps) => {
+      const n = flowGroups(steps).length;
+      if (flags.group !== undefined) {
+        const g = Number(flags.group);
+        if (!Number.isInteger(g) || g < 1 || g > n) throw new Error(`--group takes 1 to ${n}`);
+        at = { column: g - 1 };
+      } else {
+        const a = flags.after === undefined ? n : Number(flags.after);
+        if (!Number.isInteger(a) || a < 0 || a > n) throw new Error(`--after takes 0 to ${n}`);
+        at = { rail: a };
+      }
+      return { next: pasteSteps(raw, text, at).text, meta: {} };
+    },
+    bodies: () => [{ body: { edit: { op: "paste", text, at } }, after: null }],
+  });
+}
+
+/**
+ * `foldrun flow draft "<description>" --to <ws> [--flow <existing>]` — Draft
+ * with AI: the platform has a model write the flow (and any agent files it
+ * needs), checks it, repairs once, and answers with the files. Nothing is
+ * written until they are shown and agreed to (--yes; --dry-run never); each
+ * is saved with ifMatch, so a file that changed meanwhile is refused.
+ */
+async function flowDraftCmd(positional, flags, layout) {
+  const description = positional.slice(1).join(" ").trim();
+  if (!description) throw new Error('`foldrun flow draft "<what the flow should do>" --to <workspace>` — --flow <name> redrafts an existing one');
+  const url = platformFor(flags, "flow draft");
+  const ws = platformWorkspace(flags, layout, "flow draft");
+  const existing = typeof flags.flow === "string" ? flags.flow : undefined;
+  console.log(`\n  ${c.dim(`drafting in ${ws}${existing ? ` (redraft of ${existing})` : ""} — one model call, charged like a step…`)}`);
+  const d = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/flows/draft`, { method: "POST", body: JSON.stringify({ description, ...(existing ? { flow: existing } : {}) }) }, { seconds: Math.max(timeoutSeconds(flags), 180) });
+  /** @type {{ path: string, content: string, before: string | null, sha256?: string | null }[]} */
+  const files = d.files ?? [];
+  if (d.notes) console.log(`\n  ${d.notes}`);
+  console.log();
+  for (const f of files) {
+    console.log(`  ${c.dim(f.before === null ? "new" : "replaces")}`);
+    await printDiff(f.path, f.before ?? "", f.content);
+    console.log();
+  }
+  for (const i of d.issues ?? []) console.log(`  ${i.level === "error" ? c.red("error") : c.amber(" warn")}  ${c.bold(i.where)}  ${i.message}`);
+  if ((d.issues ?? []).length) console.log();
+  if (d.repaired) console.log(`  ${c.dim("the first answer had errors; the model was asked once more")}`);
+  if (!files.length) {
+    console.log(`  ${c.dim("the draft came back with no files")}\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim("--dry-run: nothing saved")}\n`);
+    return 0;
+  }
+  if (flags.yes !== true && !process.stdin.isTTY) {
+    // The model call was made and charged; a script must not read that as done.
+    console.log(`  ${c.dim(`the draft call was made (charged like a step), but this is not a terminal to ask — nothing saved — run it again with --yes to save ${files.length === 1 ? "this file" : `these ${files.length} files`} (the draft will differ), or save them with \`foldrun source put\``)}\n`);
+    return 1;
+  }
+  if (!(await confirmed(flags, "flow draft", `Save ${files.length} file${files.length === 1 ? "" : "s"} to ${ws}${files.some((f) => f.before !== null) ? " (replacing what is there)" : ""}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing saved")}\n`);
+    return 0;
+  }
+  const message = `drafted with AI: ${description.replace(/\s+/g, " ").slice(0, 80)}`;
+  for (const f of files) {
+    try {
+      await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: f.path, content: f.content, message, ifMatch: f.sha256 ?? null }) });
+      console.log(`  ${c.green("✓")} ${f.path}`);
+    } catch (err) {
+      console.log(`  ${c.red("✗")} ${f.path} — ${err instanceof Error ? err.message : err}`);
+      return 1;
+    }
+  }
+  console.log(`\n  ${c.dim(`each is a revision — \`foldrun history --to ${ws}\` · \`foldrun check --to ${ws}\``)}\n`);
+  return 0;
+}
+
+/** `foldrun assistant history` — your kept conversations, newest first
+ *  (`--q` searches them, `--workspace` narrows to one, `--json`). */
+async function assistantHistoryCmd(url, flags) {
+  const q = new URLSearchParams();
+  if (typeof flags.q === "string" && flags.q.trim()) q.set("q", flags.q.trim());
+  if (typeof flags.workspace === "string") q.set("workspace", flags.workspace);
+  if (typeof flags.limit === "string") q.set("limit", flags.limit);
+  const d = await remoteCall(url, flags, `/api/assistant/conversations${q.size ? `?${q}` : ""}`);
+  const list = d.conversations ?? [];
+  if (flags.json) {
+    console.log(JSON.stringify(d, null, 2));
+    return 0;
+  }
+  if (!list.length) {
+    console.log(`\n  ${c.dim(flags.q ? "nothing matches" : "no conversations yet")}\n`);
+    return 0;
+  }
+  console.log();
+  for (const x of list) {
+    console.log(`  ${c.bold(x.id)}  ${x.workspace}  ${c.dim(`${ago(x.updatedAt)} ago · ${x.messages} message${x.messages === 1 ? "" : "s"}${x.unsaved ? ` · ${x.unsaved} unsaved` : ""}`)}`);
+    console.log(`    ${x.title}`);
+  }
+  console.log(`\n  ${c.dim("foldrun assistant show <id> · foldrun assistant --conversation <id> \"…\" · foldrun assistant rm <id>")}\n`);
+  return 0;
+}
+
+/** `foldrun assistant show <id>` — one kept conversation, whole. */
+async function assistantShowCmd(url, flags, id) {
+  const d = await remoteCall(url, flags, `/api/assistant/conversations/${enc(id)}`);
+  if (flags.json) {
+    console.log(JSON.stringify(d, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(d.title)}  ${c.dim(`${d.workspace} · ${ago(d.updatedAt)} ago`)}\n`);
+  for (const m of d.messages ?? []) {
+    console.log(`  ${m.role === "user" ? c.bold("you ›") : c.dim("assistant ›")}`);
+    console.log(`${String(m.content).split("\n").map((l) => `    ${l}`).join("\n")}\n`);
+  }
+  if ((d.files ?? []).length) console.log(`  ${c.dim(`${d.files.length} proposed file${d.files.length === 1 ? "" : "s"} not saved: ${d.files.map((f) => f.path).join(", ")}`)}\n`);
+  return 0;
+}
+
+/** `foldrun assistant rm <id>` — delete one kept conversation (asks; --yes). */
+async function assistantRmCmd(url, flags, id) {
+  if (!(await sureToDelete(flags, "assistant rm", `Delete the conversation ${id}`))) return 0;
+  await remoteCall(url, flags, `/api/assistant/conversations/${enc(id)}`, { method: "DELETE" });
+  console.log(`  ${c.green("✓")} deleted ${id}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun assistant ["<message>"] --to <ws>` (also `foldrun ai`) — the
+ * dashboard's assistant from a terminal: it answers from foldrun's docs and
+ * the deployed workspace's files only, and writes agents, flows, tools and
+ * skills as proposals (POST …/assistant). With a message it answers once;
+ * with none, in a terminal, it is a conversation (/save, /files, /drop
+ * <path>, /new, /quit). Proposals are shown as diffs with what the check
+ * finds and saved only on yes (--yes; --dry-run never), each through
+ * `PUT …/source` with ifMatch, so a file that changed meanwhile is refused.
+ * --json prints the platform's answer as it is.
+ */
+async function assistantCmd(positional, flags, layout) {
+  const url = platformFor(flags, "assistant");
+  // The kept conversations: `history`, `show <id>`, `rm <id>`.
+  const sub = positional[0];
+  if (sub === "history" && positional.length === 1) return assistantHistoryCmd(url, flags);
+  if ((sub === "show" || sub === "rm") && positional.length === 2 && /^c_[a-z0-9]{8,40}$/.test(positional[1])) {
+    return sub === "show" ? assistantShowCmd(url, flags, positional[1]) : assistantRmCmd(url, flags, positional[1]);
+  }
+  // A kept conversation knows its workspace; --to may still say another.
+  let ws = typeof flags.conversation === "string" && typeof flags.to !== "string" ? "" : platformWorkspace(flags, layout, "assistant");
+  const first = positional.join(" ").trim();
+  /** A new workspace the last reply proposed.
+   *  @type {{ name: string, purpose: string } | null} */
+  let proposedWs = null;
+  if (!first && !process.stdin.isTTY) {
+    throw new Error('`foldrun assistant "<question or what to build>" --to <workspace>` — with no message it needs a terminal to talk in');
+  }
+  /** @type {{ role: "user" | "assistant", content: string }[]} */
+  let messages = [];
+  /** @type {{ path: string, content: string, before: string | null, sha256: string | null }[]} */
+  let files = [];
+  /** @type {{ where: string, message: string, level: string }[]} */
+  let issues = [];
+  /** The kept conversation this one continues; null until the first reply. */
+  let conversation = typeof flags.conversation === "string" ? flags.conversation : null;
+  if (conversation) {
+    // Carry a kept one on: its messages and its unsaved files come back.
+    const kept = await remoteCall(url, flags, `/api/assistant/conversations/${enc(conversation)}`);
+    messages = (kept.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
+    files = kept.files ?? [];
+    if (!ws) ws = kept.workspace;
+    if (!flags.json) console.log(`\n  ${c.dim(`carrying on "${kept.title}" in ${kept.workspace} — ${messages.length} message${messages.length === 1 ? "" : "s"}`)}`);
+  }
+
+  const showFiles = async () => {
+    for (const f of files) {
+      console.log(`  ${c.dim(f.before === null ? "new" : "replaces")}`);
+      await printDiff(f.path, f.before ?? "", f.content);
+      console.log();
+    }
+    for (const i of issues) console.log(`  ${i.level === "error" ? c.red("error") : c.amber(" warn")}  ${c.bold(i.where)}  ${i.message}`);
+    if (issues.length) console.log();
+  };
+
+  const ask = async (text) => {
+    messages.push({ role: "user", content: text });
+    if (!flags.json) console.log(`\n  ${c.dim("reading the docs and the workspace — one reply, charged like a step…")}`);
+    let d;
+    try {
+      d = await remoteCall(
+        url,
+        flags,
+        `/api/workspaces/${enc(ws)}/assistant`,
+        { method: "POST", body: JSON.stringify({ messages, files: files.map(({ path: p, content }) => ({ path: p, content })), ...(conversation ? { conversation } : {}) }) },
+        { seconds: Math.max(timeoutSeconds(flags), 300) },
+      );
+    } catch (err) {
+      messages.pop();
+      throw err;
+    }
+    messages.push({ role: "assistant", content: d.reply ?? "" });
+    files = d.files ?? [];
+    issues = d.issues ?? [];
+    proposedWs = d.workspace ?? null;
+    if (typeof d.conversation === "string" && d.conversation) conversation = d.conversation;
+    if (flags.json) {
+      console.log(JSON.stringify(d, null, 2));
+      return;
+    }
+    console.log(`\n${(d.reply ?? "").split("\n").map((l) => `  ${l}`).join("\n")}\n`);
+    if ((d.sources ?? []).length) console.log(`  ${c.dim(`read: ${d.sources.map((s) => `${s.doc} › ${s.section}`).join(" · ")}`)}\n`);
+    if (conversation) console.log(`  ${c.dim(`kept as ${conversation} — carry on with --conversation ${conversation}`)}\n`);
+    if (d.usage) {
+      const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+      const paid = d.supply === "provider" ? "on your own model key" : typeof d.chargedUsd === "number" ? `$${d.chargedUsd.toFixed(d.chargedUsd > 0 && d.chargedUsd < 0.01 ? 4 : 2)} charged` : "";
+      const u = d.usage;
+      const share = u.cacheReadTokens !== undefined && u.inputTokens > 0 ? ` (${Math.round((u.cacheReadTokens / u.inputTokens) * 100)}% cached)` : "";
+      console.log(`  ${c.dim(`${k(u.inputTokens)} tokens in${share} · ${k(u.outputTokens)} out${paid ? ` · ${paid}` : ""}`)}\n`);
+    }
+    if (proposedWs) console.log(`  ${c.bold("new workspace")} ${proposedWs.name} ${c.dim(`— ${proposedWs.purpose}`)}\n`);
+    await showFiles();
+  };
+
+  /** What the last reply proposed — read through a call, because ask()
+   *  sets it and a type checker narrowing the variable cannot see that. */
+  const proposal = () => proposedWs;
+
+  /** Create the proposed workspace, blank, as the dashboard does — after a
+   *  yes, and never over one that exists (the same POST deploys over it).
+   *  @param {{ name: string, purpose: string }} p */
+  const createProposed = async (p) => {
+    const name = p.name;
+    if (!(await confirmed(flags, "assistant", `Create the workspace ${name}? [y/N] `))) {
+      console.log(`\n  ${c.dim("not created")}\n`);
+      return false;
+    }
+    // ifAbsent: the server refuses a name that exists (409) rather than
+    // deploying over it — atomically, where a list-then-create could race.
+    try {
+      await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ name, template: true, ifAbsent: true }) });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 409) {
+        console.log(`  ${c.red("✗")} a workspace called ${name} exists — nothing created\n`);
+        return false;
+      }
+      throw err;
+    }
+    console.log(`  ${c.green("✓")} created ${name}\n`);
+    proposedWs = null;
+    return name;
+  };
+
+  const save = async (note) => {
+    if (!files.length) {
+      console.log(`  ${c.dim("nothing proposed to save")}\n`);
+      return true;
+    }
+    if (!(await confirmed(flags, "assistant", `Save ${files.length} file${files.length === 1 ? "" : "s"} to ${ws}${files.some((f) => f.before !== null) ? " (replacing what is there)" : ""}? [y/N] `))) {
+      console.log(`\n  ${c.dim("nothing saved")}\n`);
+      return true;
+    }
+    const message = `written with the assistant: ${note.replace(/\s+/g, " ").slice(0, 80)}`;
+    for (const f of [...files]) {
+      try {
+        await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: f.path, content: f.content, message, ifMatch: f.sha256 ?? null }) });
+        console.log(`  ${c.green("✓")} ${f.path}`);
+        files = files.filter((x) => x.path !== f.path);
+        issues = issues.filter((i) => !(i.where === f.path || i.where.startsWith(`${f.path}:`)));
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${f.path} — ${err instanceof Error ? err.message : err}`);
+        return false;
+      }
+    }
+    console.log(`\n  ${c.dim(`each is a revision — \`foldrun history --to ${ws}\` · \`foldrun check --to ${ws}\``)}\n`);
+    return true;
+  };
+
+  if (first) {
+    await ask(first);
+    const p = proposal();
+    if (p && !flags.json) {
+      if (flags["dry-run"] === true) {
+        console.log(`  ${c.dim("--dry-run: no workspace created")}\n`);
+        return 0;
+      }
+      if (flags.yes !== true && !process.stdin.isTTY) {
+        console.log(`  ${c.dim(`not a terminal to ask — no workspace created; run it again with --yes, or create it with \`foldrun new ${p.name}\` and deploy`)}\n`);
+        return 1;
+      }
+      const made = await createProposed(p);
+      if (made) console.log(`  ${c.dim(`carry on there: foldrun assistant --to ${made} "<what it should do>"`)}\n`);
+      return made ? 0 : 1;
+    }
+    if (!files.length || flags.json) return 0;
+    if (flags["dry-run"] === true) {
+      console.log(`  ${c.dim("--dry-run: nothing saved")}\n`);
+      return 0;
+    }
+    if (flags.yes !== true && !process.stdin.isTTY) {
+      console.log(`  ${c.dim(`the reply was made (charged like a step), but this is not a terminal to ask — nothing saved — run it again with --yes to save ${files.length === 1 ? "this file" : `these ${files.length} files`}, or save them with \`foldrun source put\``)}\n`);
+      return 1;
+    }
+    return (await save(first)) ? 0 : 1;
+  }
+
+  const { createInterface } = await import("node:readline/promises");
+  console.log(`\n  ${c.bold("foldrun assistant")} ${c.dim(`· ${ws} · answers from the foldrun docs; nothing is saved until you /save`)}`);
+  console.log(`  ${c.dim("/save  /files  /drop <path>  /new  /quit")}\n`);
+  for (;;) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    let line;
+    try {
+      line = (await rl.question(`${c.bold("you ›")} `)).trim();
+    } catch {
+      line = "/quit"; // the input closed (Ctrl-D)
+    } finally {
+      rl.close();
+    }
+    if (!line) continue;
+    if (line === "/quit" || line === "/exit") {
+      if (files.length) console.log(`\n  ${c.dim(`${files.length} proposed file${files.length === 1 ? "" : "s"} not saved`)}`);
+      console.log();
+      return 0;
+    }
+    if (line === "/new") {
+      messages = [];
+      files = [];
+      issues = [];
+      conversation = null;
+      console.log(`  ${c.dim("a new conversation")}\n`);
+      continue;
+    }
+    if (line === "/files") {
+      if (files.length) await showFiles();
+      else console.log(`  ${c.dim("nothing proposed")}\n`);
+      continue;
+    }
+    if (line.startsWith("/drop")) {
+      const target = line.slice(5).trim();
+      const before = files.length;
+      files = files.filter((f) => f.path !== target);
+      issues = issues.filter((i) => !(i.where === target || i.where.startsWith(`${target}:`)));
+      console.log(`  ${c.dim(files.length < before ? `dropped ${target}` : `${target || "(no path)"} is not proposed`)}\n`);
+      continue;
+    }
+    if (line === "/save") {
+      await save(messages.find((m) => m.role === "user")?.content ?? "");
+      continue;
+    }
+    try {
+      await ask(line);
+      const p = proposal();
+      if (p) {
+        const made = await createProposed(p);
+        if (made) {
+          // The conversation moves into the new workspace and carries on.
+          ws = made;
+          files = [];
+          issues = [];
+          messages.push({ role: "assistant", content: `Created the workspace \`${made}\`.` });
+          console.log(`  ${c.dim(`now working in ${made}`)}`);
+          await ask(`The workspace "${made}" now exists and you are working in it. Carry on with what I asked for: write its agents, flows, tools and skills.`);
+        }
+      }
+    } catch (err) {
+      console.log(`\n  ${c.red("✗")} ${err instanceof Error ? err.message : err}\n`);
+    }
+  }
+}
+
+/**
+ * `foldrun history restore <path> --id <revision> --to <ws>` — the History
+ * drawer's "Restore this version": the file is rewritten with that
+ * revision's text as a new revision, so the restore is itself undoable.
+ */
+async function historyRestoreCmd(positional, flags, layout) {
+  const file = positional[1];
+  if (!file || typeof flags.id !== "string") throw new Error("`foldrun history restore <path> --id <revision> --to <workspace>` — `foldrun history <path>` lists the revisions");
+  const url = platformFor(flags, "history restore");
+  const ws = platformWorkspace(flags, layout, "history restore");
+  const rev = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/history?id=${enc(flags.id)}&path=${enc(file)}`);
+  const f = (rev.files ?? [])[0];
+  if (!f) throw new Error(`revision ${flags.id} did not touch ${file}`);
+  if (f.after === null || f.after === undefined) throw new Error(`revision ${flags.id} deleted ${file} — \`foldrun source rm ${file} --to ${ws}\` does that`);
+  let current = { content: null, sha256: null };
+  try {
+    current = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=${enc(file)}`);
+  } catch (err) {
+    if (!(err instanceof HttpError && err.status === 404)) throw err;
+  }
+  const label = rev.commit ? String(rev.commit).slice(0, 7) : rev.id;
+  console.log(`\n  ${c.bold(file)} ${c.dim(`· back to ${label} (${when(rev.at)} · ${rev.by}) · ${ws}`)}\n`);
+  if (current.content === f.after) {
+    console.log(`  ${c.dim("it already reads that way — nothing to restore")}\n`);
+    return 0;
+  }
+  await printDiff(file, current.content ?? "", f.after);
+  console.log();
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  if (!(await confirmed(flags, "history restore", `Restore ${file} to ${label}? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing restored")}\n`);
+    return 0;
+  }
+  // The dashboard's own message, so the two read alike in the history.
+  // A restore is an exact version someone picked: saved unchecked, and it
+  // says so when today's checks would refuse it, as the dashboard does (FOL-57).
+  const saved = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, {
+    method: "PUT",
+    body: JSON.stringify({ path: file, content: f.after, message: `restored ${label} from history`, ifMatch: current.sha256 ?? null }),
+  });
+  console.log(`  ${c.green("✓")} ${file} ${c.dim(`reads as it did at ${label} — a new revision; what it said before is still in the history`)}\n`);
+  for (const i of (saved?.issues ?? []).filter((x) => x.level === "error")) console.log(`  ${c.amber("!")} ${c.dim("does not pass today's checks:")} ${i.where} — ${i.message}`);
+  return 0;
+}
+
+/** `foldrun schedule tick` — Settings' "Run scheduler now": fire what is due now. */
+async function scheduleTickCmd(flags) {
+  const url = platformFor(flags, "schedule tick");
+  const r = await remoteCall(url, flags, "/api/schedule", { method: "POST", body: "{}" });
+  const fired = r.fired ?? [];
+  console.log(fired.length ? `\n  ${c.green("✓")} fired ${fired.join(", ")}\n` : `\n  ${c.dim("nothing due right now — the scheduler checks every 30 seconds anyway")}\n`);
+  return 0;
+}
+
+const LIBRARY_KINDS_CLI = ["skills", "tools", "hooks", "scripts", "knowledge", "memory"];
+
+/**
+ * `foldrun library [ls [kind]] | cat <kind>/<path> | put <kind>/<path> | rm
+ * <kind>/<path>` — the account's shared shelf on the platform, as the Library
+ * page lists, edits and deletes it. `deploy` still pushes the whole of it.
+ */
+async function libraryCmd(positional, flags) {
+  const url = platformFor(flags, "library");
+  const [verb = "ls", spec] = positional;
+  const split = (s) => {
+    const slash = String(s ?? "").indexOf("/");
+    const kind = slash > 0 ? s.slice(0, slash) : "";
+    const rel = slash > 0 ? s.slice(slash + 1) : "";
+    if (!LIBRARY_KINDS_CLI.includes(kind) || !rel) throw new Error(`\`foldrun library ${verb} <kind>/<path>\` — kind is ${LIBRARY_KINDS_CLI.join(", ")}, e.g. skills/house-style/SKILL.md`);
+    return { kind, rel };
+  };
+  if (verb === "ls" || verb === "list") {
+    const kinds = spec ? [spec] : LIBRARY_KINDS_CLI;
+    for (const k of kinds) if (!LIBRARY_KINDS_CLI.includes(k)) throw new Error(`no library kind "${k}" — ${LIBRARY_KINDS_CLI.join(", ")}`);
+    // Listing everything, a kind an older platform does not have yet (hooks
+    // before 11 Oct 2026) is left out rather than failing the whole list;
+    // asked for by name, it fails with the platform's own answer.
+    const lists = await Promise.all(kinds.map((k) => remoteCall(url, flags, `/api/library/${k}`).catch((err) => {
+      if (spec) throw err;
+      return null;
+    })));
+    console.log();
+    lists.forEach((l, n) => {
+      if (!l) return;
+      const entries = l.entries ?? [];
+      console.log(`  ${c.bold(kinds[n])} ${c.dim(`${entries.length}`)}`);
+      for (const e of entries) console.log(`    ${pad(e.name ?? e.path ?? "", 28)} ${c.dim(firstLine(e.description ?? "", 70))}`);
+    });
+    console.log(`\n  ${c.dim("foldrun library cat <kind>/<path> · put <kind>/<path> (--file, else stdin) · new <kind>/<name> · rm <kind>/<path>")}\n`);
+    return 0;
+  }
+  if (verb === "cat") {
+    const { kind, rel } = split(spec);
+    const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${enc(rel)}`);
+    writeExact(content ?? "");
+    return 0;
+  }
+  if (verb === "put") {
+    const { kind, rel } = split(spec);
+    let content;
+    if (typeof flags.file === "string" && flags.file !== "-") content = fs.readFileSync(flags.file, "utf8");
+    else if (process.stdin.isTTY) throw new Error("what goes in it? --file <path>, or pipe it in");
+    else content = fs.readFileSync(0, "utf8");
+    await remoteCall(url, flags, `/api/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: rel, content }) });
+    console.log(`\n  ${c.green("✓")} library/${kind}/${rel} ${c.dim(`${humanBytes(Buffer.byteLength(content))} — every workspace in the account sees it`)}\n`);
+    return 0;
+  }
+  if (verb === "new") {
+    // The Library page's New (POST /api/library/<kind>): the platform writes
+    // the template — a blank one, a tool of a transport, or a gallery entry
+    // under this name (--template).
+    const { kind, rel: name } = split(spec);
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw new Error(`"${name}" is not a name — kebab-case only, e.g. skills/house-style`);
+    const body = { name, ...(typeof flags.template === "string" ? { template: flags.template } : {}), ...(typeof flags.language === "string" ? { language: flags.language } : {}) };
+    const r = await remoteCall(url, flags, `/api/library/${kind}`, { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("✓")} library/${kind}/${r.path ?? name} ${c.dim("— every workspace in the account sees it")}\n`);
+    return 0;
+  }
+  if (verb === "rm") {
+    const { kind, rel } = split(spec);
+    if (!(await sureToDelete(flags, "library rm", `library/${kind}/${rel} — every workspace that names it loses it`))) return 1;
+    await remoteCall(url, flags, `/api/library/${kind}`, { method: "DELETE", body: JSON.stringify({ path: rel }) });
+    console.log(`\n  ${c.green("✓")} removed library/${kind}/${rel}\n`);
+    return 0;
+  }
+  throw new Error(`unknown library verb "${verb}" — ls [kind], cat, put, new, rm`);
+}
+
+/**
+ * `foldrun secrets clients [add <name> | rm <name>]` — the OAuth apps saved on
+ * the platform (Settings → Connections), which a consent runs from without
+ * anyone typing a client id again. The client secret is never shown.
+ */
+async function oauthClientsCmd(positional, flags) {
+  const url = platformFor(flags, "secrets clients");
+  const [, verb, name] = positional;
+  if (!verb || verb === "ls") {
+    const { clients = [] } = await remoteCall(url, flags, "/api/oauth/clients");
+    if (!clients.length) {
+      console.log(`\n  ${c.dim("no saved OAuth clients — foldrun secrets clients add <name> --provider google …")}\n`);
+      return 0;
+    }
+    console.log();
+    for (const k of clients) {
+      const host = (() => {
+        try {
+          return new URL(k.authorize_url ?? k.config?.authorize_url ?? "").host;
+        } catch {
+          return "";
+        }
+      })();
+      console.log(`  ${c.bold(pad(k.name, 24))} ${c.dim([host, k.client_id ?? k.config?.client_id, k.scopes ?? k.config?.scopes].filter(Boolean).join(" · "))}`);
+    }
+    console.log(`\n  ${c.dim("foldrun connect NAME --client <name> runs a consent from one into a secret")}\n`);
+    return 0;
+  }
+  if (verb === "rm") {
+    if (!name) throw new Error("`foldrun secrets clients rm <name>`");
+    if (!(await sureToDelete(flags, "secrets clients rm", `the saved OAuth client ${name} (secrets made from it keep working; reconnecting them will ask for the client again)`))) return 1;
+    await remoteCall(url, flags, "/api/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: name }) });
+    console.log(`\n  ${c.green("✓")} ${name} removed\n`);
+    return 0;
+  }
+  if (verb === "add") {
+    if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error("`foldrun secrets clients add <name> --authorize-url … --token-url … --client-id … [--authorize-param name=value …] [--scopes …]` — the name in kebab-case");
+    warnProviderDeprecated(flags);
+    const { OAUTH_PRESETS } = await core();
+    const preset = flags.provider ? OAUTH_PRESETS[flags.provider] : undefined;
+    if (flags.provider && !preset) throw new Error(`unknown provider "${flags.provider}" — one of ${Object.keys(OAUTH_PRESETS).join(", ")}, or pass --authorize-url and --token-url`);
+    const authorize_url = flags["authorize-url"] ?? preset?.authorize_url;
+    const token_url = flags["token-url"] ?? preset?.token_url;
+    if (!authorize_url || !token_url) throw new Error("--authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
+    const authorize_extra = { ...(preset?.authorize_extra ?? {}), ...authorizeParams(flags) };
+    const client_id = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
+    const pkce = flags["no-pkce"] !== true;
+    const client_secret = flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
+    if (!client_id) throw new Error("client_id is required");
+    if (!client_secret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
+    if (flags.issuer !== undefined && (typeof flags.issuer !== "string" || !/^https:\/\/[^?#]+$/.test(flags.issuer))) throw new Error("--issuer is the provider's https issuer URL, no query or fragment");
+    const config = {
+      authorize_url, token_url, client_id, client_secret: client_secret ?? "", scopes: flags.scopes ?? preset?.scopes_example ?? "",
+      ...(Object.keys(authorize_extra).length ? { authorize_extra } : {}),
+      ...(pkce ? {} : { pkce: false }),
+      ...(typeof flags.issuer === "string" ? { issuer: flags.issuer } : {}),
+    };
+    await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
+    console.log(`\n  ${c.green("✓")} saved ${name} ${c.dim(`— \`foldrun connect NAME --client ${name}\` runs a consent from it`)}\n`);
+    return 0;
+  }
+  throw new Error(`unknown secrets clients verb "${verb}" — ls, add <name>, rm <name>`);
+}
+
+/**
+ * `foldrun connect NAME --client <saved>` — the Connections page's Connect: a
+ * consent from a client saved on the platform, the grant landing as NAME by
+ * the platform's own callback. Waits for it to arrive.
+ */
+async function connectFromClient(name, flags) {
+  const url = platformFor(flags, "connect --client");
+  const workspace = typeof flags.to === "string" ? flags.to : undefined;
+  const before = (await remoteCall(url, flags, "/api/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace)?.connectedAt ?? null;
+  // --scopes: this connection's own, instead of the saved client's default;
+  // the platform keeps them with the connection for its reconnects.
+  const scopes = typeof flags.scopes === "string" && flags.scopes.trim() ? { scopes: flags.scopes } : {};
+  const started = await remoteCall(url, flags, "/api/oauth/start", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
+  const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(started.url);
+  // The platform answers a hand-off page: a signed-in person accepts the
+  // connection there, then the provider's consent runs in that browser.
+  const what = started.handoff ? "accept the connection, then consent" : "consent";
+  console.log(opened ? `\n  Opened your browser to ${what} with the saved ${c.bold(flags.client)} app.\n` : `\n  Open this address in your browser to ${what}:\n\n    ${started.url}\n`);
+  console.log(`  ${c.dim("Waiting for the platform to store it…")}`);
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Number(env("FOLDRUN_CONNECT_POLL_MS") ?? 3000)));
+    const row = (await remoteCall(url, flags, "/api/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace);
+    if (row?.connectedAt && row.connectedAt !== before) {
+      console.log(`\n  ${c.green("✓")} ${name} connected on ${url}${workspace ? ` · ${workspace}` : " · account"}\n`);
+      return 0;
+    }
+  }
+  throw new Error("no consent arrived within 10 minutes — run it again");
+}
+
+/**
+ * The secret kinds the Connections form stores besides a plain value and a
+ * browser OAuth grant, as `secrets set NAME --kind <k>`: the PUT body the
+ * form sends, or the core setter for this machine's store.
+ */
+async function secretOfKind(kind, flags) {
+  const read = (p, what) => {
+    if (typeof p !== "string") throw new Error(`--kind ${kind} needs ${what}`);
+    return fs.readFileSync(p, "utf8");
+  };
+  switch (kind) {
+    case "file":
+      return { body: { file: read(flags.file, "--file <path> — the file the secret holds") }, local: (k, n, b, s) => k.setFileSecret("default", n, b.file, s) };
+    case "ssh": {
+      if (typeof flags.host !== "string" || typeof flags.user !== "string") throw new Error("--kind ssh needs --host <host> --user <user> (--port, and --key-file <path> or a password, prompted)");
+      const port = flags.port !== undefined ? Number(flags.port) : undefined;
+      const auth = typeof flags["key-file"] === "string" ? { private_key: read(flags["key-file"], "--key-file <path>") } : { password: typeof flags.value === "string" ? flags.value : await promptHidden("  password: ") };
+      return { body: { ssh: { host: flags.host, user: flags.user, ...(port ? { port } : {}), ...auth } }, local: (k, n, b, s) => k.setSshSecret("default", n, b.ssh, s) };
+    }
+    case "api": {
+      const lines = [].concat(flags.header ?? []);
+      // --basic-user: HTTP Basic from a username and password (prompted, or
+      // --basic-password); the platform builds the Authorization header.
+      const basicUser = typeof flags["basic-user"] === "string" ? flags["basic-user"] : null;
+      const basic = basicUser ? { basic: { username: basicUser, password: typeof flags["basic-password"] === "string" ? flags["basic-password"] : await promptHidden("  password: ") } } : {};
+      if (!lines.length && !basicUser) lines.push(await promptHidden("  header (Name: value): "));
+      const headers = Object.fromEntries(
+        lines.filter(Boolean).map((l) => {
+          const i = String(l).indexOf(":");
+          if (i < 1) throw new Error(`--header "Name: value" — not "${l}"`);
+          return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
+        }),
+      );
+      const base = typeof flags["base-url"] === "string" ? { base_url: flags["base-url"] } : {};
+      return { body: { api: { ...base, headers, ...basic } }, local: (k, n, b, s) => k.setApiSecret("default", n, b.api, s) };
+    }
+    case "identity": {
+      // A keyless cloud identity: only the audience; the platform signs the
+      // tokens (`foldrun identity` prints what the cloud must trust).
+      if (typeof flags.audience !== "string" || !flags.audience.trim()) throw new Error("--kind identity needs --audience <value your cloud's trust expects in aud>");
+      return { body: { identity: { audience: flags.audience } }, local: (k, n, b, s) => k.setIdentitySecret("default", n, b.identity, s) };
+    }
+    case "client-cert": {
+      // A client certificate for mutual TLS. Bind it to the exact hosts it is
+      // for with `foldrun secrets sites NAME host`; the egress proxy presents
+      // it there. --export also puts it in the sandbox as files.
+      const cert = read(flags["cert-file"], "--cert-file <cert.pem> — the certificate, chain included");
+      const key = read(flags["key-file"], "--key-file <key.pem> — its private key");
+      const passphrase = typeof flags.passphrase === "string" ? flags.passphrase : undefined;
+      const client_cert = { cert, key, ...(passphrase ? { passphrase } : {}), ...(flags.export === true ? { export: true } : {}) };
+      return { body: { client_cert }, local: (k, n, b, s) => k.setClientCertSecret("default", n, b.client_cert, s) };
+    }
+    case "service-account": {
+      let j;
+      try {
+        j = JSON.parse(read(flags.file, "--file <key.json> — the service account's JSON key"));
+      } catch (err) {
+        if (err instanceof SyntaxError) throw new Error(`${flags.file} is not JSON — the key file Google gives you`);
+        throw err;
+      }
+      // --subject: the user it acts as (domain-wide delegation, granted by the
+      // provider's admin); without it the account acts as itself.
+      const sa = { token_url: j.token_uri ?? "https://oauth2.googleapis.com/token", issuer: j.client_email, private_key: j.private_key, scope: flags.scopes ?? "", ...(typeof flags.subject === "string" ? { subject: flags.subject } : {}) };
+      return { body: { service_account: sa }, local: (k, n, b, s) => k.setServiceAccountSecret("default", n, b.service_account, s) };
+    }
+    case "m2m": {
+      if (typeof flags["token-url"] !== "string") throw new Error("--kind m2m needs --token-url, --client-id (and the client secret, prompted or --client-secret)");
+      const client_id = flags["client-id"] ?? (await promptVisible("  client_id: "));
+      const client_secret = flags["client-secret"] ?? (await promptHidden("  client_secret: "));
+      const oauth2 = { token_url: flags["token-url"], client_id, client_secret, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}) };
+      return { body: { oauth2 }, local: (k, n, b, s) => k.setOAuth2Secret("default", n, b.oauth2, s) };
+    }
+    default:
+      throw new Error(`unknown --kind "${kind}" — file, ssh, api, service-account, m2m, client-cert or identity (a plain value needs no --kind; --oauth2 a refresh token; \`foldrun connect\` a browser sign-in)`);
+  }
+}
+
+/**
+ * `foldrun billing plans | plan <id>|cancel|resume | top-up <usd> | card` —
+ * the Plans and Payment pages. Anything that takes a card answers with
+ * Stripe's own page to open; nothing here touches card data.
+ */
+async function billingPlansCmd(verb, sub, flags) {
+  const url = platformFor(flags, `billing ${verb}`);
+  const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+  const billingOnly = async (fn, what) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403) throw new Error(`${what} needs billing:manage — the owner's — ${err.message}`);
+      if (err instanceof HttpError && err.status === 501) throw new Error(`${what}: ${err.message}`);
+      throw err;
+    }
+  };
+  const follow = async (link, what) => {
+    const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(link);
+    console.log(`\n  ${opened ? `Opened Stripe's page for ${what}.` : `Open Stripe's page for ${what}:`}\n\n    ${link}\n\n  ${c.dim("the link lasts minutes; the balance moves when Stripe confirms the payment, not before")}\n`);
+    return 0;
+  };
+  if (verb === "plans") {
+    const p = await remoteCall(url, flags, "/api/billing/plans");
+    const cur = p.current;
+    console.log(`\n  ${c.bold("plans")}  ${c.dim(`one credit is ${usd(p.creditUsd)}${cur?.plan ? ` · on ${cur.plan} (${cur.status})` : " · no plan — pay as you go"}`)}`);
+    for (const x of p.plans ?? []) {
+      const mark = cur?.plan === x.id ? c.green("●") : c.dim("○");
+      console.log(`  ${mark} ${c.bold(pad(x.id, 8))} ${pad(`$${x.monthlyUsd}/mo`, 9)} ${pad(`${Number(x.credits).toLocaleString()} credits`, 16)} ${pad(`${x.concurrency} at once`, 10)} ${pad(x.workspaces == null ? "any workspaces" : `${x.workspaces} workspaces`, 15)} ${c.dim(x.pitch ?? "")}`);
+    }
+    if (cur?.plan) console.log(`\n  ${c.dim(`this cycle: ${cur.cycleRemainingCredits ?? "?"} of ${cur.cycleCredits ?? "?"} credits left${cur.resetsAt ? `, resets ${String(cur.resetsAt).slice(0, 10)}` : ""}`)}`);
+    console.log(`  ${c.dim(`balance ${usd(p.balanceUsd)}${p.cards ? "" : " · card payments are not configured on this install"}`)}`);
+    console.log(`\n  ${c.dim("foldrun billing plan <id> · plan cancel · plan resume · top-up <usd> · card")}\n`);
+    return 0;
+  }
+  if (verb === "plan") {
+    if (!sub) throw new Error("`foldrun billing plan <starter|creator|pro|scale>`, `plan cancel` or `plan resume` — `billing plans` lists them");
+    if (sub === "cancel") {
+      if (!(await confirmed(flags, "billing plan cancel", "Cancel the plan at the end of this cycle? [y/N] "))) {
+        console.log(`\n  ${c.dim("nothing changed")}\n`);
+        return 0;
+      }
+      const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/subscribe", { method: "DELETE" }), "cancelling the plan");
+      console.log(`\n  ${c.green("✓")} the plan stops ${r.endsAt ? `on ${String(r.endsAt).slice(0, 10)}` : "at the end of this cycle"} ${c.dim("— `foldrun billing plan resume` undoes it until then")}\n`);
+      return 0;
+    }
+    const body = sub === "resume" ? { resume: true } : { plan: sub };
+    if (sub !== "resume" && !(await confirmed(flags, "billing plan", `Move the account to the ${sub} plan? A change on a live plan is prorated at Stripe now. [y/N] `))) {
+      console.log(`\n  ${c.dim("nothing changed")}\n`);
+      return 0;
+    }
+    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/subscribe", { method: "POST", body: JSON.stringify(body) }), "choosing a plan");
+    if (r.url) return follow(r.url, `the ${sub} plan`);
+    console.log(`\n  ${c.green("✓")} ${r.resumed ? `${r.plan} resumed — it renews as before` : r.unchanged ? `already on ${sub}` : `moving to ${r.plan}; the invoice Stripe raises grants the new credits`}\n`);
+    return 0;
+  }
+  if (verb === "top-up") {
+    const amount = Number(sub);
+    if (!(amount > 0)) throw new Error("`foldrun billing top-up <usd>` — how much to add, e.g. 50");
+    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/checkout", { method: "POST", body: JSON.stringify({ usd: amount }) }), "a top-up");
+    return follow(r.url, `a ${usd(amount)} top-up`);
+  }
+  if (verb === "card") {
+    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/card", { method: "POST", body: "{}" }), "saving a card");
+    return follow(r.url, "saving a card for auto top-up");
+  }
+  throw new Error(`unknown billing verb "${verb}"`);
+}
+
+/**
+ * `foldrun api version [pin <YYYY-MM-DD> | unpin]` — Settings → API: the API
+ * version this account's requests get when they send no Foldrun-Version, the
+ * versions still served, and the rate limits.
+ */
+async function apiVersionCmd(positional, flags) {
+  const url = platformFor(flags, "api version");
+  const [, verb, date] = positional;
+  let facts;
+  if (verb === "pin" || verb === "unpin") {
+    if (verb === "pin" && !/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) throw new Error("`foldrun api version pin YYYY-MM-DD` — one of the versions `foldrun api version` lists");
+    try {
+      facts = await remoteCall(url, flags, "/api/account/api", { method: "PATCH", body: JSON.stringify({ version: verb === "pin" ? date : null }) });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 403) throw new Error(`pinning the API version needs keys:manage (an admin) — ${err.message}`);
+      throw err;
+    }
+    console.log(`\n  ${c.green("✓")} ${verb === "pin" ? `requests with no Foldrun-Version header now get ${date}` : "unpinned — requests with no header get the current version"}`);
+  } else if (verb === undefined) {
+    facts = await remoteCall(url, flags, "/api/account/api");
+  } else {
+    throw new Error(`unknown api version verb "${verb}" — pin <YYYY-MM-DD> or unpin`);
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify(facts, null, 2));
+    return 0;
+  }
+  const v = facts.version ?? {};
+  const l = facts.limits ?? {};
+  console.log(`\n  ${c.bold("API version")}  ${v.effective}  ${c.dim(v.pinned ? `pinned (current is ${v.current})` : "current — not pinned")}`);
+  console.log(`  ${c.dim(`served: ${(v.supported ?? []).join(", ") || "—"} · each for ${v.supportMonths ?? "?"} months after the next · this CLI sends ${API_VERSION}`)}`);
+  if (l.perCredential) console.log(`  ${c.bold("rate limits")}  ${c.dim(`${l.plan} · per key ${l.perCredential.read} reads / ${l.perCredential.write} writes, per account ${l.perAccount?.read} / ${l.perAccount?.write} — every ${l.windowSeconds}s`)}`);
+  apiUsageLines(facts.usage);
+  console.log(`\n  ${c.dim("foldrun api version pin YYYY-MM-DD · unpin")}\n`);
+  return 0;
+}
+
+/** The account's use of the API, last 30 days: requests by version, and any
+ *  deprecated route it still calls, by whom, and when it stops. An older
+ *  platform sends no `usage`; null means it could not be read. */
+function apiUsageLines(usage) {
+  if (usage === undefined) return;
+  if (usage === null) {
+    console.log(`  ${c.bold("your use")}  ${c.dim("could not be read just now")}`);
+    return;
+  }
+  const total = (usage.versions ?? []).reduce((s, v) => s + (v.requests ?? 0), 0);
+  const day = (iso) => String(iso ?? "").slice(0, 10);
+  console.log(`  ${c.bold("your use")}  ${c.dim(total ? `last ${usage.days} days: ` + usage.versions.map((v) => `${v.version} ${v.requests} (last ${day(v.lastSeen)})`).join(" · ") : `no API requests in the last ${usage.days} days`)}`);
+  for (const d of usage.deprecated ?? []) {
+    console.log(`  ${c.amber("deprecated")}  ${d.route} — ${d.requests} request${d.requests === 1 ? "" : "s"}, last ${day(d.lastSeen)}; ${d.sunsetAt ? `stops answering ${day(d.sunsetAt)}` : "no end date yet"}${d.link ? ` · ${d.link}` : ""}`);
+    for (const who of d.callers ?? []) console.log(`    ${c.dim(`${who.credential || "an unknown caller"}: ${who.requests}, last ${day(who.lastSeen)}`)}`);
+  }
+}
+
+const THEMES_CLI = ["system", "light", "dark"];
+
+/**
+ * `foldrun preferences [set theme system|light|dark]` — Profile → Appearance.
+ * A person's own setting, kept with them on every browser; a key acts for the
+ * person who minted it.
+ */
+async function preferencesCmd(positional, flags) {
+  const url = platformFor(flags, "preferences");
+  const [verb, key, value] = positional;
+  let p;
+  if (verb === "set") {
+    if (key !== "theme" || !THEMES_CLI.includes(value)) throw new Error(`\`foldrun preferences set theme ${THEMES_CLI.join("|")}\``);
+    p = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ theme: value }) });
+    console.log(`\n  ${c.green("✓")} theme ${p.theme} ${c.dim("— on every browser you sign in on")}\n`);
+    return 0;
+  }
+  if (verb !== undefined) throw new Error("`foldrun preferences` shows them; `preferences set theme <system|light|dark>` changes it");
+  p = await remoteCall(url, flags, "/api/me/preferences");
+  if (flags.json === true) {
+    console.log(JSON.stringify(p, null, 2));
+    return 0;
+  }
+  console.log(`\n  theme  ${c.bold(p.theme)}${p.theme === "system" ? c.dim(" — follows the device") : ""}\n\n  ${c.dim(`foldrun preferences set theme ${THEMES_CLI.join("|")}`)}\n`);
+  return 0;
+}
+
+/** `foldrun changelog [--limit n]` — What's new: the API's versions, what each
+ *  broke and what is deprecated, then each release and what it changed. */
+async function changelogCmd(flags) {
+  const url = platformFor(flags, "changelog");
+  const limit = Number(flags.limit) > 0 ? Math.min(50, Math.floor(Number(flags.limit))) : 5;
+  const r = await remoteCall(url, flags, `/api/changelog?limit=${limit}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  if (r.api) apiChangelogLines(r.api);
+  const releases = r.releases ?? [];
+  if (!releases.length) {
+    console.log(`\n  ${c.dim(`no release notes on this install (it runs ${r.version ?? "an unreleased build"})`)}\n`);
+    return 0;
+  }
+  for (const rel of releases) {
+    console.log(`\n  ${c.bold(rel.version)}${rel.version === r.version ? c.green("  ← running") : ""}  ${c.dim(rel.released_at ? when(rel.released_at) : "")}`);
+    if (!rel.notes) {
+      console.log(`    ${c.dim("no notes for this one")}`);
+      continue;
+    }
+    for (const [title, key] of [["features", "features"], ["fixes", "fixes"], ["docs", "docs"], ["other", "other"]]) {
+      const lines = rel.notes[key] ?? [];
+      if (!lines.length) continue;
+      console.log(`    ${c.dim(title)}`);
+      for (const n of lines) console.log(`    · ${firstLine(typeof n === "string" ? n : n.subject ?? n.text ?? JSON.stringify(n), 110)}`);
+    }
+  }
+  console.log(`\n  ${c.dim("--limit <n> for more (up to 50) · --json for the document")}\n`);
+  return 0;
+}
+
+/** The API part of What's new: the current version, the breaking changes by
+ *  version, and routes on their way out. Older platforms send no `api`. */
+function apiChangelogLines(api) {
+  const p = printable;
+  const broke = (api.versions ?? []).filter((v) => v.changes?.length);
+  const deps = api.deprecations ?? [];
+  console.log(`\n  ${c.bold(`API ${p(api.current)}`)}  ${c.dim(`each version works ${Number(api.supportMonths) || 12} months or more after the next · pin: foldrun api version pin <date>`)}`);
+  if (!broke.length && !deps.length) {
+    console.log(`    ${c.dim("nothing existing code would break on, and nothing deprecated")}`);
+    return;
+  }
+  if (broke.length) console.log(`    ${c.dim("breaking changes")}`);
+  for (const v of broke) for (const ch of v.changes) console.log(`    · ${p(v.version)}  ${firstLine(p(ch), 100)}`);
+  if (deps.length) console.log(`    ${c.dim("deprecated")}`);
+  for (const d of deps) {
+    console.log(`    · ${p(d.route)} — since ${p(d.deprecatedAt)}, ${d.sunsetAt ? `stops answering ${p(d.sunsetAt)}` : "no end date yet"}${d.link ? ` · ${p(d.link)}` : ""}`);
+  }
+}
+
+/**
+ * `foldrun find <query>` — the ⌘K search: workspaces, agents, flows, tools,
+ * skills, knowledge, memory and runs across the account, ranked as the
+ * dashboard ranks them.
+ */
+async function findCmd(positional, flags) {
+  const url = platformFor(flags, "find");
+  const q = positional.join(" ").trim();
+  if (!q) throw new Error("`foldrun find <words>` — a name, a run id, or words from a run's headline");
+  const { hits = [] } = await remoteCall(url, flags, `/api/search?q=${enc(q)}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(hits, null, 2));
+    return 0;
+  }
+  if (!hits.length) {
+    console.log(`\n  ${c.dim(`nothing matches "${q}"`)}\n`);
+    return 0;
+  }
+  console.log();
+  const kw = Math.max(...hits.map((h) => h.kind.length));
+  for (const h of hits) {
+    const where = h.workspace ? c.dim(`${h.workspace} · `) : "";
+    console.log(`  ${c.dim(pad(h.kind, kw))}  ${c.bold(h.title)}${h.status ? c.dim(` ${h.status}`) : ""}  ${where}${c.dim(firstLine(h.subtitle ?? "", 70))}`);
+  }
+  console.log();
+  return 0;
+}
+
+/** `foldrun workspaces demo` — "Try the demo pipeline": the demo workspace, made on the platform. */
+/**
+ * `foldrun workspaces show <name>` — what is deployed in one workspace (GET
+ * /api/workspaces/<name>): its agents, its flows and how they fire, and its
+ * files, counted by top-level folder.
+ */
+async function workspacesShowCmd(name, flags) {
+  const url = platformFor(flags, "workspaces show");
+  if (!name) throw new Error("which workspace? `foldrun workspaces show <name>`");
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(name)}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const agents = r.agents ?? [];
+  const flows = r.flows ?? [];
+  const files = r.files ?? [];
+  console.log(`\n  ${c.bold(r.name ?? name)}  ${c.dim(`on ${url} — ${agents.length} agent${agents.length === 1 ? "" : "s"}, ${flows.length} flow${flows.length === 1 ? "" : "s"}, ${files.length} file${files.length === 1 ? "" : "s"}`)}`);
+  if (agents.length) {
+    const w = Math.max(...agents.map((a) => a.name.length));
+    console.log(`\n  ${c.dim("agents")}`);
+    for (const a of agents) console.log(`  ${c.bold(pad(a.name, w))}  ${pad(a.model ?? "", 8)} ${c.dim(firstLine(a.description ?? "", 70))}`);
+  }
+  if (flows.length) {
+    const w = Math.max(...flows.map((f) => f.name.length));
+    console.log(`\n  ${c.dim("flows")}`);
+    for (const f of flows) {
+      const fires = f.trigger === "schedule" && f.schedule ? `schedule ${f.schedule}${f.timezone ? ` ${f.timezone}` : ""}` : (f.trigger ?? "manual");
+      console.log(`  ${c.bold(pad(f.name, w))}  ${c.dim(fires)}`);
+    }
+  }
+  if (files.length) {
+    const by = new Map();
+    for (const f of files) {
+      const top = f.includes("/") ? `${f.slice(0, f.indexOf("/"))}/` : f;
+      by.set(top, (by.get(top) ?? 0) + 1);
+    }
+    console.log(`\n  ${c.dim("files")}`);
+    console.log(`  ${[...by].map(([k, n]) => (n > 1 || k.endsWith("/") ? `${k} ${c.dim(String(n))}` : k)).join("  ")}`);
+  }
+  console.log(`\n  ${c.dim(`foldrun source ls --to ${r.name ?? name} lists every file · --json for the whole document`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun eval new <name> --to <workspace>` — the Evals page's New: the
+ * platform writes an eval whose agent is the workspace's first (POST
+ * …/evals). Edit the cases, then `foldrun eval <name> --to` runs it.
+ */
+async function evalNewCmd(name, flags, layout) {
+  const url = platformFor(flags, "eval new");
+  const ws = platformWorkspace(flags, layout, `eval new ${name}`);
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw new Error(`"${name}" is not an eval name — kebab-case only, e.g. researcher-quality`);
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`, { method: "POST", body: JSON.stringify({ name }) });
+  console.log(`\n  ${c.green("created")} eval ${c.bold(name)} in ${ws} ${c.dim(`on ${url}`)}`);
+  console.log(`    ${c.dim(r.path ?? `evals/${name}.md`)}`);
+  console.log(`\n  ${c.dim(`its cases are placeholders: foldrun source cat ${r.path ?? `evals/${name}.md`} --to ${ws}, then foldrun eval ${name} --to ${ws}`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun team` — who is in the account, their role and which workspaces
+ * they may open (GET /api/team). Read-only on purpose: inviting, changing a
+ * role or workspace access, removing someone and transferring the account are
+ * a person's acts, and the platform refuses them from a key (requirePerson,
+ * server/api.ts) — so there is nothing for a key-holding CLI to send.
+ */
+async function teamCmd(positional, flags) {
+  if (positional[0]) {
+    throw new Error("`foldrun team` lists the members — inviting, changing a role or workspace access, removing a member and transferring the account are a signed-in person's acts, done in Settings → Team; the platform refuses them from a key");
+  }
+  const url = platformFor(flags, "team");
+  const { members = [] } = await remoteCall(url, flags, "/api/team");
+  if (flags.json === true) {
+    console.log(JSON.stringify(members, null, 2));
+    return 0;
+  }
+  if (!members.length) {
+    console.log(`\n  ${c.dim("no members visible to this key")}\n`);
+    return 0;
+  }
+  const w = Math.max(...members.map((m) => m.email.length));
+  console.log();
+  for (const m of members) {
+    const scope = m.workspaces === null || m.workspaces === undefined ? "every workspace" : m.workspaces.length ? m.workspaces.join(", ") : "no workspaces";
+    console.log(`  ${c.bold(pad(m.email, w))}  ${pad(m.owner ? "owner" : m.role, 7)} ${c.dim(scope)}  ${c.dim(m.createdAt ? `joined ${String(m.createdAt).slice(0, 10)}` : "")}`);
+  }
+  console.log(`\n  ${c.dim(`${members.length} member${members.length === 1 ? "" : "s"} · invites, roles and removals: Settings → Team in the dashboard (a person's, never a key's)`)}\n`);
+  return 0;
+}
+
+async function workspacesDemoCmd(flags) {
+  const url = platformFor(flags, "workspaces demo");
+  const r = await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ demo: true }) });
+  console.log(`\n  ${c.green("✓")} ${c.bold(r.name)} ${c.dim(`on ${url} — ${r.agents} agents, ${r.flows} flow${r.flows === 1 ? "" : "s"}`)}`);
+  console.log(`  ${c.dim(`foldrun flow show <flow> --to ${r.name} · foldrun flow run <flow> --to ${r.name} --test · foldrun pull ${r.name}`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun report <run-id> live [--agent <a>] [--file <path>]` — the run page's
+ * live browser view: which agents have a frame, and the newest frame as a JPEG,
+ * with the page's address and whether the browser has closed.
+ */
+async function reportLiveCmd(runId, flags, layout) {
+  const url = platformFor(flags, "report live");
+  if (!runId) throw new Error("`foldrun report <run-id> live [--agent <name>]`");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const base = `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/live`;
+  const { agents = {} } = await remoteCall(url, flags, base);
+  const names = Object.keys(agents);
+  let agent = typeof flags.agent === "string" ? flags.agent : names.length === 1 ? names[0] : null;
+  if (!agent) {
+    if (!names.length) {
+      console.log(`\n  ${c.dim(`no live browser frames for ${runId} — a step's browser posts them while it runs`)}\n`);
+      return 0;
+    }
+    console.log();
+    for (const n of names) console.log(`  ${c.bold(n)}  ${c.dim(`last frame ${when(agents[n])}`)}`);
+    console.log(`\n  ${c.dim(`foldrun report ${runId} live --agent <name> saves its newest frame`)}\n`);
+    return 0;
+  }
+  const res = await remoteFetch(url, `${base}?agent=${enc(agent)}`, {}, { token: tokenFor(url, flags), seconds: timeoutSeconds(flags) });
+  if (res.status === 204) {
+    console.log(`\n  ${c.dim(`${agent} has no frame — its browser has not shown anything yet`)}\n`);
+    return 0;
+  }
+  if (!res.ok) {
+    const said = await res.text();
+    let why = said.slice(0, 200);
+    try {
+      why = JSON.parse(said).error ?? why;
+    } catch {}
+    throw new HttpError(`live view of ${agent}: ${why}`, res.status, {});
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const page = (() => {
+    try {
+      return decodeURIComponent(res.headers.get("x-live-url") ?? "");
+    } catch {
+      return res.headers.get("x-live-url") ?? "";
+    }
+  })();
+  const code = writeDownload(bytes, `${runId}-${agent}.jpg`, flags, `${runId} · ${agent} live`);
+  if (flags.file !== "-") console.log(`  ${c.dim(`${page || "(no address)"} · ${res.headers.get("x-live-engine") ?? "?"} · ${when(res.headers.get("x-live-at"))}${res.headers.get("x-live-ended") === "1" ? " · browser closed" : ""}`)}\n`);
+  return code;
+}
+
+/**
+ * `foldrun workspace vocabulary --to <ws>` — what the dashboard's editor
+ * offers as you type: agents, flows, skills, tools, secrets (names only),
+ * scripts, document types and linkable documents.
+ */
+async function vocabularyCmd(flags, layout) {
+  const url = platformFor(flags, "workspace vocabulary");
+  const ws = platformWorkspace(flags, layout, "workspace vocabulary");
+  const v = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/vocabulary`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(v, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(ws)}  ${c.dim("names the editor completes")}`);
+  for (const [k, list] of Object.entries(v)) {
+    if (!Array.isArray(list)) continue;
+    const names = list.map((x) => (typeof x === "string" ? x : x.name ?? x.path ?? x.title ?? JSON.stringify(x)));
+    console.log(`\n  ${c.dim(`${k} (${names.length})`)}`);
+    if (names.length) console.log(`  ${wrap(names.join(", "), 100).join("\n  ")}`);
+  }
+  console.log();
+  return 0;
+}
+
+/** A stored file's preview, as text: tables, documents, slides, archives. */
+function printPreview(p, rel) {
+  const out = (s = "") => console.log(s);
+  switch (p.kind) {
+    case "text":
+    case "html":
+    case "svg":
+      writeExact(`${p.text ?? p.html ?? p.svg ?? ""}`.replace(/\n?$/, "\n"));
+      if (p.truncated) out(c.dim("… (truncated)"));
+      return;
+    case "table":
+      for (const sheet of p.sheets ?? []) {
+        if ((p.sheets ?? []).length > 1) out(c.bold(`# ${sheet.name}`));
+        const cols = Math.max(0, ...sheet.rows.map((r) => r.length));
+        const w = Array.from({ length: cols }, (_, i) => Math.min(40, Math.max(...sheet.rows.map((r) => String(r[i] ?? "").length))));
+        for (const r of sheet.rows) out(r.map((x, i) => pad(String(x ?? "").slice(0, 40), w[i])).join("  ").trimEnd());
+        if (sheet.truncated) out(c.dim("… (more rows)"));
+        out();
+      }
+      return;
+    case "document":
+      for (const b of p.blocks ?? []) out(b.style === "h1" ? `# ${b.text}` : b.style === "h2" ? `## ${b.text}` : b.style === "h3" ? `### ${b.text}` : b.style === "li" ? `- ${b.text}` : b.text);
+      if (p.note) out(c.dim(p.note));
+      if (p.truncated) out(c.dim("… (truncated)"));
+      return;
+    case "slides":
+      (p.slides ?? []).forEach((s, i) => {
+        out(c.bold(`— slide ${i + 1}: ${s.title}`));
+        for (const l of s.lines ?? []) out(`  ${l}`);
+      });
+      return;
+    case "archive":
+      for (const e of p.entries ?? []) out(`${pad(humanBytes(e.size), 9)}  ${e.name}`);
+      if (p.truncated) out(c.dim("… (more entries)"));
+      return;
+    case "email":
+      for (const h of p.headers ?? []) out(`${h.name}: ${h.value}`);
+      out();
+      out(p.body ?? "");
+      if (p.attachments?.length) out(c.dim(`attachments: ${p.attachments.join(", ")}`));
+      return;
+    case "calendar":
+      for (const e of p.events ?? []) out(`${e.start}${e.end ? ` → ${e.end}` : ""}  ${c.bold(e.title)}${e.where ? `  @ ${e.where}` : ""}${e.notes ? `\n  ${e.notes}` : ""}`);
+      return;
+    case "contacts":
+      for (const x of p.people ?? []) out(`${c.bold(x.name)}${(x.lines ?? []).map((l) => `\n  ${l}`).join("")}`);
+      return;
+    case "notebook":
+      for (const cell of p.cells ?? []) {
+        out(c.dim(`[${cell.type}]`));
+        out(cell.source);
+        for (const o of cell.outputs ?? []) out(c.dim(o));
+      }
+      return;
+    case "link":
+      out(p.url);
+      return;
+    case "image":
+      out(c.dim(`${rel} is an image (${p.mime})${p.note ? ` — ${p.note}` : ""}; \`foldrun storage get ${rel}\` writes it to a file`));
+      return;
+    case "mesh":
+      out(c.dim(`${rel} is a 3D mesh, ${p.count} triangles — \`foldrun storage get\` for the file`));
+      return;
+    case "binary":
+      out(p.hex);
+      out(c.dim(`${humanBytes(p.size)}${p.note ? ` — ${p.note}` : ""}`));
+      return;
+    default:
+      out(JSON.stringify(p, null, 2));
+  }
+}
+
+export async function run(command, positional, flags, workspace, layout) {
+  // Nothing outside the CLI's own entry point passes a layout — the tests
+  // that call run() directly, an embedder. A lone workspace is the safe
+  // reading of "no layout given", and the one every command handled before
+  // account folders existed.
+  layout ??= { kind: "flat", accountRoot: path.resolve(workspace ?? ".", ".."), workspacesDir: null, workspaceDir: path.resolve(workspace ?? "."), workspace: path.basename(path.resolve(workspace ?? ".")), workspaces: [path.basename(path.resolve(workspace ?? "."))] };
+  switch (command) {
+    case "login":
+      // `foldrun login` signs this machine in to the platform. `foldrun login
+      // <site> --url …` is the other direction: a browser window for a person
+      // to sign in to a site, and the session stored for an agent to wear.
+      return positional.length ? siteLogin(positional, flags, layout) : login(flags);
+    case "logout":
+      return logout(flags);
+    case "whoami":
+      return whoami(flags);
+    case "doctor":
+      return doctor(flags);
+    case "version":
+      return versionCmd(flags);
+    case "api":
+      if (positional[0] === "version") return apiVersionCmd(positional, flags);
+      return apiCmd(positional, flags);
+    case "keys":
+      return keysCmd(positional, flags);
+    case "audit":
+      return auditCmd(positional, flags);
+    case "accounts":
+    case "profiles":
+      return accountsCmd(positional);
+    case "use":
+    case "switch":
+      return useCmd(positional);
+    case "init":
+      return init(workspace, flags.from, flags);
+    case "new":
+      return newWorkspace(positional[0], flags, layout);
+    case "check":
+      // A coding agent is running `check` in a folder without the current
+      // rules: write them, once, and say so — what `next dev` does.
+      if (layout.kind !== "empty" && codingAgent() && !hasCurrentAgentRules(layout.accountRoot)) {
+        const r = writeAgentFiles(layout.accountRoot);
+        // JSON and SARIF own stdout; a note there would break the parse.
+        const say = flags.json === true || (typeof flags.format === "string" && flags.format !== "text") ? console.error : console.log;
+        say(`  ${c.dim(`coding-agent rules written for ${codingAgent()} — AGENTS.md ${r.agentsMd}, CLAUDE.md ${r.claudeMd}; read \`foldrun docs\` before editing`)}`);
+      }
+      if (flags.rules === true) return checkRulesCmd(flags);
+      // --online (FOL-58): the network checks run on the platform, which has
+      // the guarded fetch and the deployed copy — so it needs --to.
+      if (flags.online === true && typeof flags.to !== "string") {
+        throw new Error("`foldrun check --to <workspace> --online` — the online checks (OSV, remote MCP tool text) run on the platform, against the deployed copy");
+      }
+      if (flags.online === true && (flags.json === true || (typeof flags.format === "string" && flags.format !== "text"))) {
+        throw new Error("--online prints text; for JSON ask the API: GET /api/workspaces/<ws>/check?online=1");
+      }
+      // --to names a workspace on a PLATFORM, so there is nothing local to
+      // check and the folder this terminal stands in is beside the point.
+      return typeof flags.to === "string"
+        ? checkRemote(flags, layout)
+        : layout.kind === "account"
+          ? checkAccount(layout, flags)
+          : check(workspace, flags);
+    case "pull":
+      return pullCmd(layout, flags, positional[0]);
+    case "export":
+      return exportCmd(positional, flags, layout);
+    case "import":
+      return importCmd(positional, flags, layout);
+    case "status":
+      return statusCmd(layout, flags, positional[0]);
+    case "workspaces":
+      if (positional[0] === "demo") return workspacesDemoCmd(flags);
+      if (positional[0] === "show") return workspacesShowCmd(positional[1], flags);
+      return workspacesCmd(positional, flags, layout);
+    case "extract":
+      return extract(workspace, flags);
+    case "deploy":
+      return deploy(positional[0] ?? ".", flags, layout);
+    case "run":
+      needsOne(layout, "run");
+      return runTarget(positional[0], flags);
+    case "eval":
+      // `eval new <name>` makes one on the platform; an eval called "new"
+      // still runs as `foldrun eval new` with nothing after it.
+      if (positional[0] === "new" && positional[1]) return evalNewCmd(positional[1], flags, layout);
+      // `eval grades <name>` / `eval grade <name> --run <id>`: a grader's
+      // findings, or one run graded now (an eval called "grades" or "grade"
+      // still runs as `foldrun eval grades` with nothing after it).
+      if (positional[0] === "grades" && positional[1]) return evalGradesCmd(positional[1], flags, layout);
+      if (positional[0] === "grade" && positional[1]) return evalGradeCmd(positional[1], flags, layout);
+      if (positional[0] === "compare" && positional[1]) return evalCompareCmd(positional[1], flags, layout);
+      if (positional[0] === "improve" && positional[1]) return evalImproveCmd(positional[1], flags, layout);
+      // --to names a deployed workspace: its evals run there.
+      if (typeof flags.to === "string") return remoteEvalsCmd(positional[0], flags, layout);
+      // --last reads the platform's results; a local eval has none to read,
+      // and running the cases instead would break its promise to run nothing.
+      if (flags.last === true || flags.run !== undefined) throw new Error("--last and --run read a deployed workspace's results — add --to <workspace>");
+      needsOne(layout, "eval");
+      return runEvals(positional[0], flags);
+    case "promote":
+      return promoteCmd(positional[0], flags, layout);
+    case "proposals":
+    case "proposal":
+      return proposalsCmd(positional, flags, layout);
+    case "observe":
+      return observeCmd(flags, layout);
+    case "usage":
+      return usageCmd(flags);
+    case "workspace":
+      if (positional[0] === "vocabulary") return vocabularyCmd(flags, layout);
+      return workspaceCmd(positional, flags, layout);
+    case "notify":
+      return notifyCmd(positional, flags, layout);
+    case "webhooks":
+      return webhooksCmd(positional, flags, layout);
+    case "notifications":
+      return notificationsCmd(positional, flags);
+    case "flags":
+      return flagsCmd(positional, flags);
+    case "history":
+      if (positional[0] === "restore") return historyRestoreCmd(positional, flags, layout);
+      return historyCmd(positional, flags, layout);
+    case "repo":
+      // The platform's own git went on 17 Oct 2026.
+      throw new Error("`foldrun repo` is gone with the platform's own git — `foldrun history` lists a workspace's revisions and `foldrun restore <ws> --to <revision|time|age>` rolls back");
+    case "restore":
+      return restoreCmd(positional, flags);
+    case "backups":
+      return backupsCmd(positional, flags);
+    case "team":
+      return teamCmd(positional, flags);
+    case "onboarding":
+      return onboardingCmd(flags);
+    case "probe":
+      return probeCmd(positional[0]);
+    case "connect":
+      if (typeof flags.client === "string") {
+        if (!/^[A-Z][A-Z0-9_]*$/.test(positional[0] ?? "")) throw new Error("`foldrun connect NAME --client <saved client>` — NAME in UPPER_SNAKE_CASE, the secret the grant becomes");
+        return connectFromClient(positional[0], flags);
+      }
+      return connect(positional, flags);
+    case "secrets":
+      if (positional[0] === "clients") return oauthClientsCmd(positional, flags);
+      return secretsCmd(positional, flags, layout);
+    case "logs":
+      return logsCmd(positional, flags, layout);
+    case "runs":
+      // `runs` was a second spelling of `logs`, and --local keeps it one:
+      // the local store has no table to draw across workspaces, because a
+      // folder on a laptop is one workspace.
+      if (positional[0] === "rm") return runRmCmd(positional[1], flags, layout);
+      if (positional[0] === "views") return runViewsCmd(flags);
+      // The run doctor (FOL-22): the assistant reads the run and its files,
+      // says why it failed and proposes the fix as diffs — saved on yes.
+      if (positional[0] === "doctor") {
+        if (positional.length !== 2 || !/^[A-Za-z0-9_.-]{1,80}$/.test(positional[1])) {
+          throw new Error("`foldrun runs doctor <run-id> --to <workspace>` — the run doctor reads that run and proposes the fix");
+        }
+        return assistantCmd([`Doctor: why did run ${positional[1]} fail, and how do I fix it?`], flags, layout);
+      }
+      return flags.local === true ? logsCmd(positional, flags, layout) : runsCmd(flags, layout);
+    case "approvals":
+      return approvalsCmd(flags, layout);
+    case "issues":
+      return issuesCmd(positional, flags, layout);
+    case "inbox":
+      return inboxCmd(positional, flags);
+    case "insights":
+      return insightsCmd(flags);
+    case "approve":
+    case "reject":
+      return decideCmd(command, positional[0], flags, layout);
+    case "report":
+      if (positional[1] === "live") return reportLiveCmd(positional[0], flags, layout);
+      if (positional[1] === "call") return reportCallCmd(positional[0], positional[2], flags, layout);
+      return positional[1] === "get" ? reportGetCmd(positional[0], positional[2], flags, layout) : reportCmd(positional[0], flags, layout);
+    case "stop":
+      // No run id and a filter: every run the filter matches (runs/bulk).
+      if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("stop", flags, layout);
+      return stopCmd(positional[0], flags, layout);
+    case "answer":
+      return answerCmd(positional, flags);
+    case "message":
+      return messageCmd(positional, flags, layout);
+    case "rerun":
+      if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("rerun", flags, layout);
+      return rerunCmd(positional[0], flags, layout);
+    case "account":
+      return accountCmd(positional, flags);
+    case "identity":
+      return identityCmd(flags);
+    case "jobs":
+      return jobsCmd(flags, layout);
+    case "schedule":
+      if (positional[0] === "tick") return scheduleTickCmd(flags);
+      return scheduleCmd(flags);
+    case "triggers":
+      return triggersCmd(flags, layout);
+    case "guide":
+      return guideCmd(flags, layout);
+    case "docs":
+      return docsCmd(positional, flags);
+    case "billing":
+      if (["plans", "plan", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
+      return positional.length ? billingVerbCmd(positional, flags) : billingCmd(flags);
+    case "library":
+      return libraryCmd(positional, flags);
+    case "preferences":
+      return preferencesCmd(positional, flags);
+    case "changelog":
+      return changelogCmd(flags);
+    case "find":
+      return findCmd(positional, flags);
+    case "gallery":
+      return galleryCmd(positional, flags);
+    case "storage":
+      return storageCmd(positional, flags, layout);
+    case "runtimes":
+      return runtimesCmd(flags, layout);
+    case "agent":
+      // `new` scaffolds one here; `run` runs one there. The noun is the same
+      // thing in both cases, which is why they share a command.
+      if (positional[0] === "link" || positional[0] === "unlink") return agentLinkCmd(positional, flags, layout);
+      if (positional[0] === "network") return agentNetworkCmd(positional, flags, layout);
+      if (positional[0] === "import") return agentImportCmd(positional, flags, layout);
+      if (positional[0] === "ls" || positional[0] === "list") return remoteListCmd("agents", flags, layout);
+      return positional[0] === "run"
+        ? agentRunCmd(positional, flags, layout)
+        : scaffoldCmd("agents", positional, flags, layout);
+    case "assistant":
+    case "ai":
+      return assistantCmd(positional, flags, layout);
+    case "flow":
+      // `new` scaffolds a file; `add`, `rm-step` and `show` are the canvas; `run` is
+      // `invoke`, spelled the way `agent run` is; `rotate-hook` a new URL.
+      if (positional[0] === "add") return flowAddCmd(positional, flags, layout);
+      if (positional[0] === "rm-step") return flowRmStepCmd(positional, flags, layout);
+      if (positional[0] === "dup-step") return flowDupStepCmd(positional, flags, layout);
+      if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
+      if (positional[0] === "run") return invoke(positional[1], flags);
+      if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);
+      if (positional[0] === "hook") return flowHookCmd(positional, flags, layout);
+      if (positional[0] === "set") return flowSetCmd(positional, flags, layout);
+      if (positional[0] === "trigger") return flowTriggerCmd(positional, flags, layout);
+      if (positional[0] === "filter") return flowFilterCmd(positional, flags, layout);
+      if (positional[0] === "move-step") return flowMoveStepCmd(positional, flags, layout);
+      if (positional[0] === "copy-step") return flowCopyStepCmd(positional, flags, layout);
+      if (positional[0] === "paste") return flowPasteCmd(positional, flags, layout);
+      if (positional[0] === "draft") return flowDraftCmd(positional, flags, layout);
+      if (positional[0] === "ls" || positional[0] === "list") return remoteListCmd("flows", flags, layout);
+      return scaffoldCmd("flows", positional, flags, layout);
+    case "tool":
+      return positional[0] === "test"
+        ? toolTestCmd(positional, flags, layout)
+        : scaffoldCmd("tools", positional, flags, layout);
+    case "hook":
+    case "hooks":
+      return hookCmd(positional, flags, layout);
+    case "invoke":
+      return invoke(positional[0], flags);
+    case "source":
+      return sourceCmd(positional, flags);
+    case "open":
+      return openCmd(positional, flags);
+    default:
+      throw new Error(`unknown command "${command}" — try \`foldrun --help\``);
+  }
+}
