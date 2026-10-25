@@ -39,22 +39,12 @@ jobs:
       # (`../foldrun-core`, the layout is the wiring). Tests import
       # @foldrun/core, never the sibling's path, because release.yml has no
       # sibling and tests against the published core.
-      # Read access to the sibling: every foldrun repository is private since
-      # 17 Oct 2026, so the job's own token cannot read it. The foldrun-bot
-      # App mints one per run, read-only, for that repository alone.
-      - name: a read token for the sibling, from the App
-        id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.FOLDRUN_BOT_CLIENT_ID }}
-          private-key: ${{ secrets.FOLDRUN_BOT_PRIVATE_KEY }}
-          owner: foldrun-io
-          repositories: foldrun-core
-          permission-contents: read
+      # foldrun-core is public (since 25 Oct 2026), so the job's own token
+      # reads it: no App token, which pull requests from Dependabot or a fork
+      # are never given (their secrets are empty) and failed on.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: foldrun-io/foldrun-core
-          token: ${{ steps.app.outputs.token }}
           path: foldrun-core
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
