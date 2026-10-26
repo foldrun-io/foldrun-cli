@@ -147,7 +147,6 @@ declared the same way.
 | `foldrun storage put <file>` | upload a file into a workspace's storage (`--as <path>` names it) — also `rm <path>` |
 | `foldrun storage share <path>` | a public link to one produced file (`--ttl <days>`, default 7; `--forever`) — also `shares` (`--all`) and `unshare <token>` |
 | `foldrun billing` | the account's balance and its recent ledger entries, with what each was for — on foldrun's hosted platform (a self-hosted install has no billing) |
-| `foldrun billing credit <usd>` | credit added by hand — on foldrun's hosted platform without Stripe (dev) |
 | `foldrun billing plans` | the plans and this cycle's credits — also `plan <id>`, `plan cancel`, `plan resume`, `top-up <usd>`, `card` (Stripe's own pages for anything with a card) |
 | `foldrun account` | the account's defaults: timezone, notify, budget, concurrency — also `set <key> <value>` and `clear <key>` |
 | `foldrun account providers` | which model providers the account's files use and whether each key still answers (`--check` asks now) |

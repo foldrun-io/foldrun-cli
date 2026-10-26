@@ -1,9 +1,9 @@
 // The platform routes the CLI had no verb for (5 Oct 2026): what a workspace
 // holds, its agents and flows, what could be imported, New for every kind
 // (agents, flows, evals, assets, the library, a workspace), the restore
-// requests, the status page's history, the team, runs/bulk's `until`, and
-// the manual billing credit. Each test asserts the request the dashboard
-// sends — method, path, body — against a fake platform.
+// requests, the status page's history, the team, and runs/bulk's `until`
+// (the manual billing credit was retired by FOL-94). Each test asserts the
+// request the dashboard sends — method, path, body — against a fake platform.
 //
 //   node --test tests/cli-api-coverage.test.ts
 
@@ -308,21 +308,13 @@ test("stop/rerun --until sends until with the filter to runs/bulk — a span or 
   assert.equal(writes(s).length, 2, "a bad --until sends nothing");
 });
 
-test("billing credit <usd> posts { usd, note } to /api/billing; a live platform's refusal points at top-up", async () => {
-  const s = await serve({ "POST /api/billing": () => ({ ok: true, entry: {}, balanceUsd: 25 }) });
+test("billing credit is retired (FOL-94): it sends nothing and points at top-up", async () => {
+  const s = await serve({});
   const r = await at(s.url, "billing", "credit", "20", "--note", "dev credit");
-  const bad = await at(s.url, "billing", "credit", "-5");
   s.close();
-  assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /credited \$20\.00 · balance \$25\.00 · "dev credit"/);
-  assert.equal(bad.code, 1);
-  assert.deepEqual(writes(s), [{ method: "POST", url: "/api/billing", body: { usd: 20, note: "dev credit" } }]);
-
-  const live = await serve({ "POST /api/billing": () => failing(403, { error: "top-ups go through checkout — POST /api/billing/checkout" }) });
-  const refused = await at(live.url, "billing", "credit", "20");
-  live.close();
-  assert.equal(refused.code, 1);
-  assert.match(refused.out, /billing is live on this platform.*foldrun billing top-up 20/);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /not added by hand.*foldrun billing top-up <usd>/);
+  assert.deepEqual(writes(s), [], "no request");
 });
 
 test("observe and triggers send their window as days", async () => {
@@ -352,7 +344,7 @@ test("--help for each new verb names it and calls nothing", async () => {
     [["library"], /library new <kind>\/<name>/],
     [["backups"], /backups requests/],
     [["status"], /status --platform --history/],
-    [["billing"], /billing credit <usd>.*without Stripe/],
+    [["billing"], /billing top-up <usd>.*checkout/],
     [["stop"], /--until/],
   ] as const) {
     const r = await at(s.url, ...args, "--help");

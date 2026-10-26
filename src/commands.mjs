@@ -9838,26 +9838,12 @@ async function billingVerbCmd(positional, flags) {
   }
 
   if (verb === "credit") {
-    // A manual credit (POST /api/billing): what a self-hosted or dev install
-    // without Stripe uses to put money on the balance. Once billing is live
-    // the platform refuses it — top-ups go through checkout.
-    const amount = Number(sub);
-    if (!(amount > 0) || !Number.isFinite(amount)) throw new Error("`foldrun billing credit <usd> [--note \"…\"]` — a positive amount in USD");
-    let r;
-    try {
-      r = await remoteCall(url, flags, "/api/billing", { method: "POST", body: JSON.stringify({ usd: amount, ...(typeof flags.note === "string" ? { note: flags.note } : {}) }) });
-    } catch (err) {
-      if (err instanceof HttpError && err.status === 403 && /checkout/.test(err.message)) {
-        throw new Error(`billing is live on this platform, so credit is not added by hand — \`foldrun billing top-up ${amount}\` (${err.message})`);
-      }
-      if (err instanceof HttpError && err.status === 403) throw new Error(`billing credit is the account owner's alone (billing:manage) — ${err.message}`);
-      throw err;
-    }
-    const bal = r.balanceUsd;
-    console.log(`\n  ${c.green("✓")} credited ${usd(amount)}${bal !== undefined ? c.dim(` · balance ${usd(bal)}`) : ""}${typeof flags.note === "string" ? c.dim(` · "${flags.note}"`) : ""}\n`);
-    return 0;
+    // Credit by hand is gone (FOL-94): the platform's POST /api/billing
+    // answers 404 to every caller. A customer adds credit through checkout;
+    // the platform team credits an account from its console. Nothing is sent.
+    throw new Error("credit is not added by hand — `foldrun billing top-up <usd>` opens Stripe's checkout; for a credit from the platform, ask the platform team");
   }
-  throw new Error(`unknown billing verb "${verb}" — statement, wallet, details, portal or credit (bare \`foldrun billing\` is the balance)`);
+  throw new Error(`unknown billing verb "${verb}" — statement, wallet, details or portal (bare \`foldrun billing\` is the balance)`);
 }
 
 /** The defaults a workspace's AGENTS.md sets, read from its source. */

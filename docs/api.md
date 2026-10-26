@@ -394,7 +394,7 @@ person: a key names an account, never a who.
 
 | Route | Methods | |
 |---|---|---|
-| `/api/billing` | GET, POST | balance and recent ledger entries; POST adds credit (`usd`, `note`) on a self-hosted install only — `403` wherever billing is live |
+| `/api/billing` | GET, POST | balance and recent ledger entries; POST answers `404` to every caller — credit comes through checkout (`/api/billing/checkout`) or the platform's console adjustment |
 | `/api/billing/checkout` | POST | a Stripe session (`usd`) |
 | `/api/billing/confirm?session_id=` | GET | settle one |
 | `/api/billing/card` | POST | save a card |
