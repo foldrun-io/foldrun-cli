@@ -32,7 +32,22 @@ curl -fsSL https://foldrun.io/install.sh | sh
 
 It checks Docker, puts `docker-compose.yml` in `~/foldrun`, writes `.env`
 there once (a fresh secret key, the address, the version), pulls the
-ready-made images and starts foldrun on port 3900. Then open
+ready-made images for your machine's chip and starts foldrun on port 3900.
+
+**No Docker yet?** The installer offers to set it up, and asks before each
+step (`[y/N]`):
+
+| on | Docker missing | Docker stopped | Docker not reachable by you |
+|---|---|---|---|
+| **macOS** | installs Colima (a small Linux VM), `docker` and `docker-compose` with [Homebrew](https://brew.sh), then starts Colima with up to 4 CPUs and 8 GiB — enough for a `heavy` step | starts Colima, or opens Docker Desktop | — |
+| **Linux** | runs Docker's official script ([get.docker.com](https://get.docker.com): the engine and the Compose plugin) as root, through `sudo` | `sudo systemctl start docker` | adds you to the `docker` group (root-equivalent), and uses `sudo` for the rest of that run; the group applies from your next login |
+
+Answer after each question appears: anything typed ahead is lost while
+Docker installs. With no terminal (a provisioning script), nothing is
+installed unless you say so in advance with `FOLDRUN_INSTALL_DOCKER=yes`;
+`FOLDRUN_INSTALL_DOCKER=no` never asks. Without Homebrew on a Mac, install
+it or [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/)
+first. Then open
 `http://localhost:3900/signup` in a browser — the first account to
 sign up becomes the owner — then sign the CLI in and deploy:
 
@@ -67,6 +82,7 @@ edit `~/foldrun/.env` and run `docker compose up -d` there.
 | `ANTHROPIC_API_KEY` | none | the install's model key. Without one, each account adds its own in Settings → Model; a step with neither is refused with what to set |
 | `FOLDRUN_DIR` | `~/foldrun` | where the install lives (installer only) |
 | `FOLDRUN_DOCKER_SOCK` | `/var/run/docker.sock` | the Docker socket; rootless Docker is found by the installer |
+| `FOLDRUN_INSTALL_DOCKER` | ask | `yes` installs or starts Docker without asking (for a script with no terminal); `no` never offers to |
 | `FOLDRUN_EGRESS_BIND` | `0.0.0.0` | the egress proxy's port 8090, which steps reach through `host.docker.internal`. On a server that faces a network, bind it to the Docker bridge (`172.17.0.1`); Docker-published ports skip host firewalls such as ufw |
 | `FOLDRUN_DATA_DIR` | a named volume | a host path for the data instead |
 
