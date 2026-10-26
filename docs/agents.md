@@ -346,6 +346,7 @@ What holds:
 | field | |
 |---|---|
 | `size` | `small` \| `large` (default) \| `heavy` — the sandbox reservation |
+| `resources` | `{cpu, memory, disk}` in numbers, over the `size` class's figures one key at a time |
 | `runtime` | language runtimes, packages and Debian system packages the agent's own scripts need |
 
 `size` is a price and a limit. Each class gives the sandbox a number of cores,
@@ -375,6 +376,44 @@ renders a browser or holds real data. The step's `resources:` line reports CPU
 busy time, **throttled** time (how long the cap held it back), and peak memory.
 A step that is throttled for much of its run wants a bigger class; one whose
 peak memory is a fraction of the class's figure can take a smaller one.
+
+### `resources:` — your own numbers
+
+When no class fits, write the numbers. Each key replaces that one figure of
+the class; the rest stay the class's:
+
+```yaml
+size: large
+resources:
+  cpu: 1          # cores, 0.5 to 8, in halves
+  memory: 6Gi     # 256Mi to 16Gi, in steps of 256Mi
+  disk: 30Gi      # whole GiB, 1Gi to 40Gi
+```
+
+Examples:
+
+- One core and a lot of memory, for an agent that loads a big CSV.
+- A lot of disk, for one that renders video.
+
+The figures are hard limits and what the step is billed at, exactly as for a
+class. The step's header on the run page shows what it held ("1 vCPU ·
+6 GiB"), with the class and your `resources:` in its tooltip.
+
+The keys are bounded and stepped the way sandbox platforms sell them, so
+steps pack onto a machine predictably. `foldrun check` reports a value
+outside them (`config/invalid-value`); at run time that one key is dropped,
+the class's figure is used, and the step's log says so. Sizes need a unit:
+`4Gi` or `512Mi`, never a bare `4`, and not `4G` (Kubernetes reads `G` as
+decimal, Docker as binary).
+
+`resources:` may also be written inside `guardrail:` ([four jobs](four-jobs)).
+When a retry moves a step up a class after it ran out of memory or disk, each
+of your figures is raised to the bigger class's, so the retry never runs
+smaller than the class it moved to.
+
+Your account's plan may also cap what one step can hold, and how much all of
+an account's running steps hold together
+([budgets and billing](budgets-and-billing)).
 
 ```yaml
 runtime:
