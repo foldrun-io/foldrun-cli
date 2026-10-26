@@ -12,6 +12,17 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.8.1] — 2026-10-26
+
+### ci
+
+- read the public foldrun-core with the job's own token ([0cfa6b8](https://github.com/foldrun-io/foldrun-cli/commit/0cfa6b8))
+
+### deps
+
+- @foldrun/core ^2.12.1 ([15220fa](https://github.com/foldrun-io/foldrun-cli/commit/15220fa))
+- TypeScript 7.0.2 ([af89c00](https://github.com/foldrun-io/foldrun-cli/commit/af89c00))
+
 ## [2.8.0] — 2026-10-25
 
 ### billing
