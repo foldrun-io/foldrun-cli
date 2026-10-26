@@ -348,12 +348,33 @@ What holds:
 | `size` | `small` \| `large` (default) \| `heavy` — the sandbox reservation |
 | `runtime` | language runtimes, packages and Debian system packages the agent's own scripts need |
 
-`size` is a price, not just a limit. Memory is a **hard ceiling** because it is
-not compressible: a step over it is killed, which on a single-node host
-protects every other tenant. CPU is not capped — a step bursts to whatever is
-free and bills at its class rate. Reference figures: 1Gi, 2Gi, 8Gi. Pick
-`small` for an agent that mostly waits on an API, `heavy` for one that renders
-a browser or holds real data.
+`size` is a price and a limit. Each class gives the sandbox a number of cores,
+an amount of memory and an amount of disk, and its seconds are billed at those
+figures:
+
+| `size` | cores | memory | disk |
+|---|---|---|---|
+| `small` | 1 | 1Gi | 2Gi |
+| `large` | 2 | 2Gi | 8Gi |
+| `heavy` | 4 | 8Gi | 20Gi |
+
+These are the defaults; an install can set its own
+([environment](environment)), and the step's log says what it held.
+
+All three are **hard ceilings**:
+
+- **Memory:** a step over it is killed, because memory is not compressible.
+  On a single-node host, that protects every other tenant.
+- **Cores:** CPU is capped at the class's figure, so a step cannot take the
+  whole machine from the steps beside it. When every core is busy, a bigger
+  class gets a bigger share.
+- **Disk:** a step over it is evicted rather than the node filling up.
+
+Pick `small` for an agent that mostly waits on an API, `heavy` for one that
+renders a browser or holds real data. The step's `resources:` line reports CPU
+busy time, **throttled** time (how long the cap held it back), and peak memory.
+A step that is throttled for much of its run wants a bigger class; one whose
+peak memory is a fraction of the class's figure can take a smaller one.
 
 ```yaml
 runtime:
