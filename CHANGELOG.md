@@ -12,6 +12,17 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.9.1] — 2026-10-26
+
+### docs
+
+- synced (installer needs a local Docker) ([587b53a](https://github.com/foldrun-io/foldrun-cli/commit/587b53a))
+- synced (setup link and tunnel) ([7796f79](https://github.com/foldrun-io/foldrun-cli/commit/7796f79))
+- synced (setup link on 127.0.0.1) ([1ce2c0e](https://github.com/foldrun-io/foldrun-cli/commit/1ce2c0e))
+- synced (self-hosting setup link and checks) ([d1d1227](https://github.com/foldrun-io/foldrun-cli/commit/d1d1227))
+- synced (the installer sets Docker up) ([52ceb56](https://github.com/foldrun-io/foldrun-cli/commit/52ceb56))
+- synced (a step's disk is scratch space) ([cfff659](https://github.com/foldrun-io/foldrun-cli/commit/cfff659))
+
 ## [2.9.0] — 2026-10-26
 
 ### New in the public API
