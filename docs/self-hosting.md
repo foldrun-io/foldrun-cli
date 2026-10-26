@@ -57,9 +57,11 @@ protect, as is a key written to slip past these checks.
 `FOLDRUN_DATA_DIR` (a host folder instead of the data volume) holds the
 accounts and the vault, so it must be private: the installer makes it
 owner-only when it does not exist, refuses one that others can read or
-write, keeps its real path (symlinks resolved) in `.env`, and refuses it with
-a remote Docker (`DOCKER_HOST` or a context on another machine), which
-would mount a folder of that name over there.
+write, and keeps its real path (symlinks resolved) in `.env`.
+
+The installer sets foldrun up on the machine it runs on, and refuses a
+remote Docker (`DOCKER_HOST` or a context pointing at another machine): run
+it on the Docker host itself.
 Compose is always given these files by name, so a `compose.yaml` beside them
 or a `COMPOSE_FILE` in `.env` cannot stand in. Before starting, it checks
 that the Docker the platform will be given (`FOLDRUN_DOCKER_SOCK`) is the
