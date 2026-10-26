@@ -178,7 +178,7 @@ const HELP = `foldrun — agents are just folders
   foldrun rerun --status failed [--since 24h] [--until 2h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
   foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
-  foldrun usage compute     the cores and GiB its running steps may hold together and in one step, and hold now (--json)
+  foldrun usage compute     the cores and GiB its running steps may hold together and in one step, hold now, and the steps waiting for room (--json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun schedule tick     fire whatever is due now — Settings' "Run scheduler now"
   foldrun guide             write the coding-agent rules: a block in AGENTS.md and CLAUDE.md importing it (--check, --print)

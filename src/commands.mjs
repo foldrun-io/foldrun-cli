@@ -9629,8 +9629,8 @@ async function usageCmd(flags) {
 
 /**
  * `foldrun usage compute` — the cores and GiB the account's running steps
- * may hold together and in one step, and what they hold now (Settings →
- * Governance, GET /api/usage/compute).
+ * may hold together and in one step, what they hold now, and the steps
+ * waiting for room (Settings → Governance, GET /api/usage/compute).
  */
 async function usageComputeCmd(flags) {
   const url = platformFor(flags, "usage compute");
@@ -9646,7 +9646,19 @@ async function usageComputeCmd(flags) {
   console.log(`\n  ${c.bold("compute")}  ${c.dim(from ? `${from} — what all running steps may hold together` : "no pool set")}`);
   console.log(`  ${of(u.vcpu, p.vcpu, "vCPU")} · ${of(u.memGiB, p.memGiB, "GiB")}  ${c.dim(`held by ${u.steps} running step${u.steps === 1 ? "" : "s"}`)}`);
   if (p.stepVcpu != null || p.stepMemGiB != null) console.log(`  ${c.dim(`one step: up to ${p.stepVcpu ?? "any"} vCPU · ${p.stepMemGiB ?? "any"} GiB`)}`);
-  console.log(`\n  ${c.dim("a step past the pool waits for one to finish · lower it: foldrun account set compute vcpu <n> memory <GiB>")}\n`);
+  // Waiting for room (27 Oct 2026): oldest first, each starts in turn.
+  const waiting = Array.isArray(d.waiting) ? d.waiting : [];
+  if (waiting.length) {
+    console.log(`\n  ${c.bold(`${waiting.length} waiting for room`)}  ${c.dim("oldest first — each starts in turn; not charged while it waits")}`);
+    for (const w of waiting.slice(0, 20)) {
+      const mins = Math.max(0, Math.round((Date.now() - Date.parse(w.since)) / 60_000));
+      const age = mins < 120 ? `${mins} min` : `${Math.round(mins / 60)} h`;
+      console.log(`  ${pad(age, 7)} ${c.bold(`${w.workspace}/${w.flow}`)} ${w.agent}  ${w.cpus} vCPU · ${w.memGiB} GiB  ${c.dim(w.runId)}`);
+      console.log(`          ${c.dim(w.why)}`);
+    }
+    if (waiting.length > 20) console.log(`  ${c.dim(`and ${waiting.length - 20} more — --json for all`)}`);
+  }
+  console.log(`\n  ${c.dim("a step past the pool waits, as long as it takes, and starts in turn · lower it: foldrun account set compute vcpu <n> memory <GiB>")}\n`);
   return 0;
 }
 
