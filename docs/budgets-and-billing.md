@@ -328,7 +328,7 @@ avatar, with eight tabs:
 
 | tab | what it is |
 |---|---|
-| **Balance** | the number, large, with how long it lasts in words, thirty days of spend as a sparkline, what is held against runs in flight, and Add credit with the amount that covers a month already chosen. While billing is off on an install (self-hosted, or a test platform), Add credit puts credit on by hand instead — no payment, and an empty balance stops nothing then — the same as `foldrun billing credit <usd>` |
+| **Balance** | the number, large, with how long it lasts in words, thirty days of spend as a sparkline, what is held against runs in flight, and Add credit with the amount that covers a month already chosen |
 | **Plan** | the plan you are on, this cycle's credits and when they reset, and the plans you could move to |
 | **Usage** | what was consumed, from the run records, and what each flow and agent cost by week from the ledger |
 | **Statement** | the ledger as a statement: grouped by day, human labels, month-to-date, filters, and a CSV for the month |

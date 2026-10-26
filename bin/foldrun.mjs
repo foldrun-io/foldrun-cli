@@ -28,7 +28,7 @@
 //   foldrun team           who is in the account, their roles and workspaces (read-only)
 //   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
 //   foldrun onboarding     the account's getting-started steps, the next one first
-//   foldrun billing        the balance, and what the money went on — credit <usd> on an install without Stripe
+//   foldrun billing        the balance, and what the money went on
 //   foldrun gallery        the tools the platform ships to every account — list, pull, upgrade <tool>
 //   foldrun storage <verb>  ls / cat / get / put / rm / share / shares / unshare — what the agents produced, and public links to it
 //   foldrun runtimes        the environments a workspace's agents need, and whether each is built
@@ -195,7 +195,6 @@ const HELP = `foldrun — agents are just folders
   foldrun billing plans     the plans, which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
   foldrun billing top-up <usd>  Stripe's checkout page for adding credit (owner only; --no-browser prints it)
   foldrun billing card      Stripe's page for saving a card for auto top-up (owner only)
-  foldrun billing credit <usd>  put credit on the balance by hand (--note "…") — only on an install without Stripe (self-hosted, dev); refused once billing is live
   foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun identity          what your cloud must trust for keyless identities: the issuer and each agent's subject (--to <workspace>, --json)
   foldrun jobs              the four jobs — governance, guardrail, observability, evaluation — and what each has set (--to <workspace>, --json)
