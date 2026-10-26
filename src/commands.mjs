@@ -883,6 +883,7 @@ async function scanCore() {
 }
 
 // The scanner module, once scanCore has loaded it — categoryOf and SARIF read it.
+/** @type {any} */
 let scanRules = null;
 
 const SECURITY_CATEGORIES = new Set(["secret", "security", "content", "supply-chain"]);
@@ -1027,6 +1028,7 @@ function narrowCheck(findings, root, opts, label, accountRoot = root) {
   }
   let baselined = 0;
   if (opts.baseline && fs.existsSync(file)) {
+    /** @type {any} */
     let b = null;
     try {
       b = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -1540,6 +1542,7 @@ async function checkHooks(workspace, agents, libraryRoot, platform, note) {
   missing("account AGENTS.md", accountNames);
   missing("AGENTS.md", workspaceNames);
 
+  /** @type {any} */
   let resolveSearch = null;
   try {
     ({ resolveSearch } = /** @type {any} */ (await import("@foldrun/core/providers")));
@@ -1812,6 +1815,7 @@ async function probeCmd(modelArg) {
   // provider gets the same translator a run would, on loopback, for the
   // length of the probe — so what passes here passes there.
   let env = { ...process.env };
+  /** @type {any} */
   let translator = null;
   // No AGENTS.md, or no provider block, means Anthropic direct — like a run.
   // Anything else that goes wrong here is said, not swallowed: a provider
@@ -2446,6 +2450,7 @@ async function versionCmd(flags) {
   const url = remoteUrl(flags);
   /** @type {Record<string, any> | null} */
   let platform = null;
+  /** @type {string | null} */
   let unreachable = null;
   if (url) {
     try {
@@ -3671,6 +3676,7 @@ async function connect(positional, flags) {
   // secret, nothing typed. The redirect is the platform's own callback, which
   // rewrites the same secret at the same scope; we wait for it to land.
   if (url && !flags["client-id"] && !env("OAUTH_CLIENT_ID") && flags["new-client"] !== true) {
+    /** @type {any} */
     let started = null;
     try {
       started = await remoteCall(url, flags, "/api/oauth/reconnect", {
@@ -4492,6 +4498,7 @@ async function deployAccount(layout, flags, only) {
 
 /** "<profile> (<email or key label>)" — who a deploy is about to act as,
  *  asked of the platform once per command. */
+/** @type {string | null} */
 let identityCache = null;
 async function deployIdentity(url, flags) {
   if (identityCache) return identityCache;
@@ -4889,6 +4896,7 @@ async function pullCmd(layout, flags, only) {
 
   let written = 0;
   for (const f of incoming) {
+    /** @type {string | null} */
     let before = null;
     try {
       before = fs.readFileSync(f.file, "utf8");
@@ -4968,6 +4976,7 @@ async function workspacesCmd(positional, flags, layout) {
 
   const here = layout.workspaces;
   let there = [];
+  /** @type {string | null} */
   let reach = null;
   if (url) {
     try {
@@ -8064,6 +8073,7 @@ function writeIfUnchanged(desk, rel, before, next) {
 
 /** Throw, as writeIfUnchanged does, when a desk file no longer reads `before`. */
 function assertUnchanged(desk, rel, before) {
+  /** @type {string | null} */
   let now = null;
   try {
     now = fs.readFileSync(path.join(desk.dir, rel), "utf8");
