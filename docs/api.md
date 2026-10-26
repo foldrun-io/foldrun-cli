@@ -428,7 +428,7 @@ X-Foldrun-Cli: 0.6.0               # the CLI released with this version (absent 
 
 | Route | Methods | |
 |---|---|---|
-| `/api/auth/signup` | POST | `email`, `password`, `account`, `invite`. Rate limited per address and per caller. With signups closed every address gets the same refusal, so the form cannot be used to discover which addresses are registered |
+| `/api/auth/signup` | POST | `email`, `password`, `account`, `invite`, `setup`. An install with `FOLDRUN_SETUP_TOKEN` set creates its first account only with `setup` equal to it (403 otherwise); once an account exists the token does nothing. Rate limited per address and per caller. With signups closed every address gets the same refusal, so the form cannot be used to discover which addresses are registered |
 | `/api/auth/login` | POST | `email`, `password` |
 | `/api/auth/logout` | POST | ends the session |
 | `/api/auth/session` | GET | who am I |

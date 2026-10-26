@@ -43,13 +43,36 @@ step (`[y/N]`):
 | **Linux** | runs Docker's official script ([get.docker.com](https://get.docker.com): the engine and the Compose plugin) as root, through `sudo` | `sudo systemctl start docker` | adds you to the `docker` group (root-equivalent), and uses `sudo` for the rest of that run; the group applies from your next login |
 
 Answer after each question appears: anything typed ahead is lost while
-Docker installs. With no terminal (a provisioning script), nothing is
+Docker installs.
+
+**What it checks first.** The install folder and every file Compose reads
+there (`.env`, `docker-compose.yml`, `docker-compose.override.yml`) must be
+yours alone — owned by you, writable by nobody else, no access control list,
+no symlinks — because Docker runs what they say with root's reach. The
+override must stand alone: no `include` or `extends`, and no `env_file` —
+put settings in `.env` or in the override's own `environment:`. Anything
+else it names, such as a secret's file, is your own configuration to
+protect, as is a key written to slip past these checks.
+
+`FOLDRUN_DATA_DIR` (a host folder instead of the data volume) holds the
+accounts and the vault, so it must be private: the installer makes it
+owner-only when it does not exist, refuses one that others can read or
+write, keeps its real path (symlinks resolved) in `.env`, and refuses it with
+a remote Docker (`DOCKER_HOST` or a context on another machine), which
+would mount a folder of that name over there.
+Compose is always given these files by name, so a `compose.yaml` beside them
+or a `COMPOSE_FILE` in `.env` cannot stand in. Before starting, it checks
+that the Docker the platform will be given (`FOLDRUN_DOCKER_SOCK`) is the
+same daemon it installed into. With no terminal (a provisioning script), nothing is
 installed unless you say so in advance with `FOLDRUN_INSTALL_DOCKER=yes`;
 `FOLDRUN_INSTALL_DOCKER=no` never asks. Without Homebrew on a Mac, install
 it or [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/)
-first. Then open
-`http://localhost:3900/signup` in a browser — the first account to
-sign up becomes the owner — then sign the CLI in and deploy:
+first. Then open the signup link it prints —
+`http://localhost:3900/signup?setup=…` — in a browser. The first account
+becomes the owner, and only that link can create it: anyone else using the
+same machine can reach `localhost` too, so the installer ties the owner to
+whoever ran it (the token is `FOLDRUN_SETUP_TOKEN` in `~/foldrun/.env`, and
+does nothing once the owner exists). Then sign the CLI in and deploy:
 
 ```sh
 npm install -g foldrun
@@ -82,6 +105,7 @@ edit `~/foldrun/.env` and run `docker compose up -d` there.
 | `ANTHROPIC_API_KEY` | none | the install's model key. Without one, each account adds its own in Settings → Model; a step with neither is refused with what to set |
 | `FOLDRUN_DIR` | `~/foldrun` | where the install lives (installer only) |
 | `FOLDRUN_DOCKER_SOCK` | `/var/run/docker.sock` | the Docker socket; rootless Docker is found by the installer |
+| `FOLDRUN_SETUP_TOKEN` | made once | the first account (the owner) is created only with this, through the printed `/signup?setup=…` link |
 | `FOLDRUN_INSTALL_DOCKER` | ask | `yes` installs or starts Docker without asking (for a script with no terminal); `no` never offers to |
 | `FOLDRUN_EGRESS_BIND` | `0.0.0.0` | the egress proxy's port 8090, which steps reach through `host.docker.internal`. On a server that faces a network, bind it to the Docker bridge (`172.17.0.1`); Docker-published ports skip host firewalls such as ufw |
 | `FOLDRUN_DATA_DIR` | a named volume | a host path for the data instead |
