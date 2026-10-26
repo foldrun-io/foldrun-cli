@@ -27,8 +27,8 @@ wins, and the step's error says which line set it: `budget: in the flow
 file` or `budget: on the writer agent`.
 | **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`) or plan number (`FOLDRUN_PLAN_CONCURRENCY`, which applies only where billing is on), or no cap. Your own number can lower that, never raise it; a higher number comes with a plan |
 | **the queue lane** | the plan's lane (`high` \| `normal` \| `low`); `priority: low` in the account's `AGENTS.md` lowers it, and `high` there counts only with a plan that gives it | when slots are short, accounts take turns, weighted by lane — high 3, normal 2, low 1: every account's first run goes before anyone's second, a fast lane takes three turns to a slow lane's one and never all of them, an account with runs going waits behind one with none, and a run that has waited ten minutes moves up a turn. A flow's own `priority:` orders runs within that. The cap above still holds |
-| **compute at once** | the plan's cores and GiB (below); `compute: { vcpu: 4, memory: 8Gi }` in the account's `AGENTS.md`, or Settings → Governance, lowers it | what all the account's running steps may hold together — each step's cores and memory, its `size:` class's or its own `resources:` ([agents](agents#resources-your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts when one of the account's steps ends. A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
-| **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed; the run page's start-up chip shows it as `room`. A step still waiting after 30 minutes (`FOLDRUN_ROOM_WAIT_SEC`) fails, saying why |
+| **compute at once** | the plan's cores and GiB (below); `compute: { vcpu: 4, memory: 8Gi }` in the account's `AGENTS.md`, or Settings → Governance, lowers it | what all the account's running steps may hold together — each step's cores and memory, its `size:` class's or its own `resources:` ([agents](agents#resources-your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
+| **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed and has no time limit; the run page's start-up chip shows it as `room` ([waiting for room](#waiting-for-room)) |
 
 A cap is a literal, never an expression, so it is readable off the file. The
 run cap is hard: a step that reaches its share of the remainder is stopped
@@ -57,6 +57,37 @@ Size the run cap from the run records, at two or three times the median — real
 work never trips it, a runaway is stopped where it went wrong, and the
 failure notification says why. The dashboard's Usage page shows spend by
 workspace and by meter.
+
+### Waiting for room
+
+A step that finds no room — the account's compute pool, its most sandboxes
+at once, or the node's memory — **waits; a wait never fails a step**. There
+is no time limit (until 27 Oct 2026 a step failed after 30 minutes). Only a
+step that alone is bigger than the pool or the plan's most for one step
+fails, at once, because nothing finishing would make room.
+
+- **In turn.** Within an account the oldest waiting step starts first: a
+  later, smaller step never takes the gap an older, bigger one is waiting
+  for. Across accounts, the node's last room is kept for the oldest step
+  whose own account would let it start. A step's place in line is when it
+  first found no room, and it keeps it.
+- **In the queue, not on a worker.** After a minute of waiting
+  (`FOLDRUN_ROOM_PARK_AFTER_SEC`), once nothing else of its group is
+  running, the run goes back to the queue with its place and looks again
+  every 20 seconds (`FOLDRUN_ROOM_RECHECK_SEC`), so waiting runs never hold
+  the workers other accounts' runs need. A step whose sibling is still
+  running waits beside it. A wait is not a try: it spends none of the
+  step's `retry:`, and a stop ends it like any other.
+- **Seen.** The run page says *Waiting for room to start*, why, and since
+  when; Settings → Governance and `foldrun usage compute` list every
+  waiting step, oldest first (`waiting` in `GET /api/usage/compute`).
+- **Told.** After an hour (`FOLDRUN_ROOM_ALERT_MIN`) the workspace's
+  `notify:` hears of it once, as event `room`, with what to change: ask for
+  less (`size:`, `resources:`) or allow the account more compute.
+
+Nothing is charged while a step waits — the meter starts when its sandbox
+does. On a self-hosted Docker install there is no room gate, so nothing
+waits.
 
 ## Plans and credits
 

@@ -73,8 +73,8 @@ summary leads with none.
 
 ## The three that are about nothing happening
 
-`failed`, `completed`, `blocked` and `awaiting-approval` are all about a run. Three
-more events are about a run that **did not** happen, or has not finished,
+`failed`, `completed`, `blocked` and `awaiting-approval` are all about a run. The
+events below are about a run that **did not** happen, or has not finished,
 which is the class of failure that otherwise reaches nobody:
 
 | event | sent when |
@@ -83,6 +83,7 @@ which is the class of failure that otherwise reaches nobody:
 | `sla` | a run has passed its flow's `sla:` and is still going |
 | `budget` | a workspace has spent 80%, then 95%, of its `budget:` for the window — today, this week or this month |
 | `security` | the daily rescan found a security finding that was not there before — see [Checks](checks#online-checks-and-the-daily-rescan) |
+| `room` | a run has waited an hour for room to start (`FOLDRUN_ROOM_ALERT_MIN`) — it keeps its place and starts when there is room; see [waiting for room](budgets-and-billing#waiting-for-room) |
 
 Each is sent once per occurrence, not once per check: an alarm that repeats
 every thirty seconds gets muted, and a muted alarm is the same as no alarm.
@@ -230,7 +231,7 @@ Every attempt carries these headers:
 | header | |
 |---|---|
 | `X-Foldrun-Delivery` | the delivery's id, `dlv_…` — **the same on every attempt and every redelivery**. Dedupe on it: a receiver that took attempt 2 but timed out answering may see attempt 3 |
-| `X-Foldrun-Event` | `failed`, `completed`, `blocked`, `awaiting-approval`, `quarantined`, `sla`, `budget`, or `test` |
+| `X-Foldrun-Event` | `failed`, `completed`, `blocked`, `awaiting-approval`, `quarantined`, `sla`, `budget`, `room`, or `test` |
 | `X-Foldrun-Attempt` | 1, 2, … |
 | `X-Foldrun-Timestamp`, `X-Foldrun-Signature` | when `signing_secret:` is set — see below |
 
