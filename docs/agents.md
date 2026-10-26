@@ -370,6 +370,10 @@ All three are **hard ceilings**:
   whole machine from the steps beside it. When every core is busy, a bigger
   class gets a bigger share.
 - **Disk:** a step over it is evicted rather than the node filling up.
+  This is the step's scratch space, not the account's storage: the
+  sandbox's copy of the workspace and whatever the step writes while it
+  runs. When the step ends, the files it changed are copied back to the
+  workspace and the sandbox, scratch space included, is deleted.
 
 Pick `small` for an agent that mostly waits on an API, `heavy` for one that
 renders a browser or holds real data. The step's `resources:` line reports CPU
