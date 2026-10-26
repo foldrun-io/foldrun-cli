@@ -68,7 +68,7 @@ installed unless you say so in advance with `FOLDRUN_INSTALL_DOCKER=yes`;
 `FOLDRUN_INSTALL_DOCKER=no` never asks. Without Homebrew on a Mac, install
 it or [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/)
 first. Then open the signup link it prints —
-`http://localhost:3900/signup?setup=…` — in a browser. The first account
+`http://127.0.0.1:3900/signup?setup=…` (127.0.0.1, not `localhost`, which a browser may send to IPv6 where another user could be listening) — in a browser. The first account
 becomes the owner, and only that link can create it: anyone else using the
 same machine can reach `localhost` too, so the installer ties the owner to
 whoever ran it (the token is `FOLDRUN_SETUP_TOKEN` in `~/foldrun/.env`, and
