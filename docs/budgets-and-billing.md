@@ -27,6 +27,7 @@ wins, and the step's error says which line set it: `budget: in the flow
 file` or `budget: on the writer agent`.
 | **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`) or plan number (`FOLDRUN_PLAN_CONCURRENCY`, which applies only where billing is on), or no cap. Your own number can lower that, never raise it; a higher number comes with a plan |
 | **the queue lane** | the plan's lane (`high` \| `normal` \| `low`); `priority: low` in the account's `AGENTS.md` lowers it, and `high` there counts only with a plan that gives it | when slots are short, accounts take turns, weighted by lane — high 3, normal 2, low 1: every account's first run goes before anyone's second, a fast lane takes three turns to a slow lane's one and never all of them, an account with runs going waits behind one with none, and a run that has waited ten minutes moves up a turn. A flow's own `priority:` orders runs within that. The cap above still holds |
+| **compute at once** | the plan's cores and GiB (below); `compute: { vcpu: 4, memory: 8Gi }` in the account's `AGENTS.md`, or Settings → Governance, lowers it | what all the account's running steps may hold together — each step's cores and memory, its `size:` class's or its own `resources:` ([agents](agents#resources-your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts when one of the account's steps ends. A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now |
 | **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed; the run page's start-up chip shows it as `room`. A step still waiting after 30 minutes (`FOLDRUN_ROOM_WAIT_SEC`) fails, saying why |
 
 A cap is a literal, never an expression, so it is readable off the file. The
@@ -64,12 +65,18 @@ at the platform's rates. The ledger stays in dollars underneath — every
 statement, budget and refund reconciles to one column — and a credit is how
 the money is shown and bought.
 
-| plan | a month | credits a month | an extra credit | runs at once | workspaces | queue lane |
-|---|---|---|---|---|---|---|
-| **Starter** | $29 | 2,900 | 1.00¢ | 1 | 3 | standard |
-| **Creator** | $79 | 8,800 | 0.90¢ | 2 | 10 | standard |
-| **Pro** | $249 | 29,000 | 0.86¢ | 4 | unlimited | fast |
-| **Scale** | $799 | 100,000 | 0.80¢ | 8 | unlimited | fast |
+| plan | a month | credits a month | an extra credit | runs at once | compute at once | one step, at most | workspaces | queue lane |
+|---|---|---|---|---|---|---|---|---|
+| **Starter** | $29 | 2,900 | 1.00¢ | 1 | 4 vCPU · 8 GiB | 4 vCPU · 8 GiB | 3 | standard |
+| **Creator** | $79 | 8,800 | 0.90¢ | 2 | 8 vCPU · 16 GiB | 4 vCPU · 8 GiB | 10 | standard |
+| **Pro** | $249 | 29,000 | 0.86¢ | 4 | 16 vCPU · 32 GiB | 8 vCPU · 16 GiB | unlimited | fast |
+| **Scale** | $799 | 100,000 | 0.80¢ | 8 | 32 vCPU · 64 GiB | 8 vCPU · 16 GiB | unlimited | fast |
+
+**Compute at once** is what all of an account's running steps may hold
+together, counted by the cores and memory each step's sandbox is capped at.
+**One step, at most** is the largest single step the plan runs: `heavy`
+(4 vCPU · 8 GiB) on every plan, and up to 8 vCPU · 16 GiB with `resources:`
+on Pro and Scale.
 
 **How long a credit lasts.** A plan's credits land when its invoice is paid,
 and what is unused **rolls over** into the next cycle up to **twice** the
