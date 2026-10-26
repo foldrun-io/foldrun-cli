@@ -12,6 +12,27 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.9.0] — 2026-10-26
+
+### New in the public API
+
+- `foldrun usage compute`
+
+### deps
+
+- @foldrun/core ^2.13.0 (resources:, compute:, the compute pool) ([ac8bd2a](https://github.com/foldrun-io/foldrun-cli/commit/ac8bd2a))
+
+### docs
+
+- synced (the compute pool needs k8s isolation) ([c5946a3](https://github.com/foldrun-io/foldrun-cli/commit/c5946a3))
+- size: and resources: in the agent guide; synced docs ([cac0b2d](https://github.com/foldrun-io/foldrun-cli/commit/cac0b2d))
+- synced (size classes cap cores) ([e0bba39](https://github.com/foldrun-io/foldrun-cli/commit/e0bba39))
+- synced (self-hosting: one command, ready-made images) ([e5337f0](https://github.com/foldrun-io/foldrun-cli/commit/e5337f0))
+
+### feat
+
+- foldrun usage compute, and foldrun account set compute vcpu <n> memory <GiB> ([322df02](https://github.com/foldrun-io/foldrun-cli/commit/322df02))
+
 ## [2.8.1] — 2026-10-26
 
 ### ci
