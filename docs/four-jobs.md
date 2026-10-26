@@ -37,7 +37,7 @@ top. Either way works, and the two can be mixed in one file.
 
 | File | `governance:` | `guardrail:` | `observability:` | `evaluation:` |
 |---|---|---|---|---|
-| `AGENTS.md` | `owner`, `budget`, `priority`, `concurrency`, `deploy_block` | `limits`, `network`, `network_enforce`, `hooks` | `alerts`, `telemetry`, `notify`, `capture` | `judge` |
+| `AGENTS.md` | `owner`, `budget`, `priority`, `concurrency`, `compute`, `deploy_block` | `limits`, `network`, `network_enforce`, `hooks` | `alerts`, `telemetry`, `notify`, `capture` | `judge` |
 | an agent | `owner`, `budget` | `limits`, `network`, `hooks`, `disallowedTools`, `permissionMode`, `secrets`, `sandbox`, `resources` | — | — |
 | a flow | `owner`, `approvers`, `approve_within`, `budget`, `priority` | `throttle`, `debounce`, `overlap`, `disable_after`, `live` | `issues`, `sla` | — |
 

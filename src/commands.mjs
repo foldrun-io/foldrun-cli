@@ -5650,6 +5650,7 @@ function printDefaults(d) {
   console.log(`  notify       ${notify}`);
   console.log(`  budget       ${d.budget ? `$${d.budget.usd} per ${d.budget.period}` : c.dim("no cap")}`);
   console.log(`  concurrency  ${d.concurrency ?? c.dim("the plan's number")}`);
+  console.log(`  compute      ${d.compute ? `${d.compute.vcpu ?? "plan's"} vCPU · ${d.compute.memGiB ?? "plan's"} GiB ${c.dim("— at most, for all running steps")}` : c.dim("the plan's (foldrun usage compute)")}`);
   console.log(`  deploy_block ${d.deployBlock && d.deployBlock !== "none" ? `${d.deployBlock} ${c.dim(d.deployBlock === "secrets" ? "— a written-in key refuses a deploy" : "— any security finding refuses a deploy")}` : c.dim("none — security findings only warn")}`);
   console.log(`  network      ${networkEnforceText(d.networkEnforce, "the install")}`);
 }
@@ -5951,7 +5952,7 @@ async function accountCmd(positional, flags) {
   if (key === "telemetry" && verb === "set") {
     throw new Error("telemetry has its own verb — `foldrun account telemetry set <otlp-url> [--header name=value]`; `foldrun account clear telemetry` turns it off");
   }
-  const KEYS = ["timezone", "notify", "budget", "concurrency", "deploy_block", "network_enforce", "owner", "alerts", "judge", ...(verb === "clear" ? ["telemetry"] : [])];
+  const KEYS = ["timezone", "notify", "budget", "concurrency", "compute", "deploy_block", "network_enforce", "owner", "alerts", "judge", ...(verb === "clear" ? ["telemetry"] : [])];
   if (!KEYS.includes(key)) {
     throw new Error(`which setting? \`foldrun account ${verb} <${KEYS.join("|")}> …\` — or <job>.<field>, e.g. governance.owner (\`foldrun jobs\` lists them)`);
   }
@@ -5961,6 +5962,20 @@ async function accountCmd(positional, flags) {
     patch = { [key]: null };
   } else if (key === "alerts" || key === "judge") {
     patch = { [key]: await mergedEntry(url, flags, key, positional.slice(2), null, view, `foldrun account set ${key}`) };
+  } else if (key === "compute") {
+    // `set compute vcpu 4 memory 8` (GiB) — either or both, over what is set.
+    const pairs = positional.slice(2);
+    const usage = "`foldrun account set compute vcpu <cores> memory <GiB>` — either or both";
+    if (!pairs.length || pairs.length % 2) throw new Error(usage);
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const next = { vcpu: defaults?.compute?.vcpu ?? null, memGiB: defaults?.compute?.memGiB ?? null };
+    for (let i = 0; i < pairs.length; i += 2) {
+      const [k, v] = [pairs[i], pairs[i + 1]];
+      if (k !== "vcpu" && k !== "memory") throw new Error(`${usage} — not "${k}"`);
+      if (!/^\d+(\.\d+)?$/.test(v)) throw new Error(`compute ${k} is a number${k === "memory" ? " of GiB" : " of cores"} — not "${v}"`);
+      next[k === "vcpu" ? "vcpu" : "memGiB"] = Number(v);
+    }
+    patch = { compute: next };
   } else if (key === "notify") {
     // `set notify email you@example.com` / `set notify url https://…`, and
     // --events to change what is notified on.
@@ -9612,6 +9627,29 @@ async function usageCmd(flags) {
   return 0;
 }
 
+/**
+ * `foldrun usage compute` — the cores and GiB the account's running steps
+ * may hold together and in one step, and what they hold now (Settings →
+ * Governance, GET /api/usage/compute).
+ */
+async function usageComputeCmd(flags) {
+  const url = platformFor(flags, "usage compute");
+  const d = await remoteCall(url, flags, "/api/usage/compute");
+  if (flags.json === true) {
+    console.log(JSON.stringify(d, null, 2));
+    return 0;
+  }
+  const p = d.compute ?? {};
+  const u = d.inUse ?? { vcpu: 0, memGiB: 0, steps: 0 };
+  const of = (used, cap, unit) => (cap == null ? `${used} ${unit} ${c.dim("(no cap)")}` : `${used} of ${cap} ${unit}`);
+  const from = { plan: "the plan's", account: "the account's own compute:", install: "this install's" }[p.source] ?? null;
+  console.log(`\n  ${c.bold("compute")}  ${c.dim(from ? `${from} — what all running steps may hold together` : "no pool set")}`);
+  console.log(`  ${of(u.vcpu, p.vcpu, "vCPU")} · ${of(u.memGiB, p.memGiB, "GiB")}  ${c.dim(`held by ${u.steps} running step${u.steps === 1 ? "" : "s"}`)}`);
+  if (p.stepVcpu != null || p.stepMemGiB != null) console.log(`  ${c.dim(`one step: up to ${p.stepVcpu ?? "any"} vCPU · ${p.stepMemGiB ?? "any"} GiB`)}`);
+  console.log(`\n  ${c.dim("a step past the pool waits for one to finish · lower it: foldrun account set compute vcpu <n> memory <GiB>")}\n`);
+  return 0;
+}
+
 /** `foldrun billing <verb>` — statement, wallet, details, portal; bare, the balance. */
 async function billingVerbCmd(positional, flags) {
   const url = platformFor(flags, "billing");
@@ -11778,6 +11816,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "observe":
       return observeCmd(flags, layout);
     case "usage":
+      if (positional[0] === "compute") return usageComputeCmd(flags);
       return usageCmd(flags);
     case "workspace":
       if (positional[0] === "vocabulary") return vocabularyCmd(flags, layout);
