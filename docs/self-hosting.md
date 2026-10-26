@@ -72,7 +72,10 @@ first. Then open the signup link it prints —
 becomes the owner, and only that link can create it: anyone else using the
 same machine can reach `localhost` too, so the installer ties the owner to
 whoever ran it (the token is `FOLDRUN_SETUP_TOKEN` in `~/foldrun/.env`, and
-does nothing once the owner exists). Then sign the CLI in and deploy:
+does nothing once the owner exists). With `FOLDRUN_BIND` set to one address
+the link uses that address; from another machine, open it through the
+tunnel the installer prints (`ssh -o ExitOnForwardFailure=yes -L …`), never
+over plain http. Then sign the CLI in and deploy:
 
 ```sh
 npm install -g foldrun
