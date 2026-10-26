@@ -446,8 +446,9 @@ X-Foldrun-Cli: 0.6.0               # the CLI released with this version (absent 
 | `/api/auth/mfa/disable` | POST | `password` and `code` — a session alone is not enough to remove the second factor |
 | `/api/auth/timezone` | POST | `timezone` — what a cron expression means |
 
-Login is rate limited per IP, which only works when `FOLDRUN_TRUST_PROXY=1`
-tells the platform a real proxy is reporting the caller.
+Login is rate limited per IP, which only works when `FOLDRUN_TRUST_PROXY`
+(`1`, or `cloudflare` with `FOLDRUN_EDGE_SECRET`) tells the platform a real
+proxy is reporting the caller.
 
 ### Signing the CLI in
 
