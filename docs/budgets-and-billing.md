@@ -27,8 +27,8 @@ wins, and the step's error says which line set it: `budget: in the flow
 file` or `budget: on the writer agent`.
 | **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`) or plan number (`FOLDRUN_PLAN_CONCURRENCY`, which applies only where billing is on), or no cap. Your own number can lower that, never raise it; a higher number comes with a plan |
 | **the queue lane** | the plan's lane (`high` \| `normal` \| `low`); `priority: low` in the account's `AGENTS.md` lowers it, and `high` there counts only with a plan that gives it | when slots are short, accounts take turns, weighted by lane — high 3, normal 2, low 1: every account's first run goes before anyone's second, a fast lane takes three turns to a slow lane's one and never all of them, an account with runs going waits behind one with none, and a run that has waited ten minutes moves up a turn. A flow's own `priority:` orders runs within that. The cap above still holds |
-| **compute at once** | the plan's cores and GiB (below); `compute: { vcpu: 4, memory: 8Gi }` in the account's `AGENTS.md`, or Settings → Governance, lowers it | what all the account's running steps may hold together — each step's cores and memory, its `size:` class's or its own `resources:` ([agents](agents#resources-your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
-| **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed and has no time limit; the run page's start-up chip shows it as `room` ([waiting for room](#waiting-for-room)) |
+| **compute at once** | the plan's cores, GiB and disk (below); `compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }` in the account's `AGENTS.md`, or Settings → Governance, lowers it — and a workspace's and a flow's `compute:` narrow it further ([four levels](#compute-at-four-levels)) | what all the account's running steps may hold together — each step's cores, memory and disk, its `size:` class's or its own `resources:` ([agents](agents#resources-your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB` / `FOLDRUN_ACCOUNT_DISK_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
+| **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB`, `FOLDRUN_RUN_DISK_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed and has no time limit; the run page's start-up chip shows it as `room` ([waiting for room](#waiting-for-room)) |
 
 A cap is a literal, never an expression, so it is readable off the file. The
 run cap is hard: a step that reaches its share of the remainder is stopped
@@ -58,10 +58,38 @@ work never trips it, a runaway is stopped where it went wrong, and the
 failure notification says why. The dashboard's Usage page shows spend by
 workspace and by meter.
 
+### Compute at four levels
+
+CPU, memory and disk are each capped at four levels (27 Oct 2026). Every
+level only narrows the one above it; a step must fit all of them.
+
+| level | where | what it caps |
+|---|---|---|
+| **account** | the plan (or the install's `FOLDRUN_ACCOUNT_*`); `compute:` in the account's `AGENTS.md`, Settings → Governance or `foldrun account set compute` lowers it | everything the account's running steps hold together |
+| **workspace** | `compute:` in the workspace's `AGENTS.md`, its Settings → Governance, or `foldrun workspace set compute … --to <ws>` | what that workspace's running steps hold together |
+| **run** | `compute:` in the flow, the flow's card, or `foldrun flow compute <flow> …` | what one run of the flow holds at once across its parallel steps — each run has its own |
+| **step** | the agent's `size:` or `resources: { cpu, memory, disk }`; the plan's (or install's `FOLDRUN_STEP_MAX_*`) most for one step | one step's sandbox |
+
+```yaml
+# AGENTS.md (the account's or a workspace's), or a flow's frontmatter
+compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }
+```
+
+Any of the three may be left out. A step that would pass a cap waits, in
+turn, and its trail says which level holds it — `room: waiting to start —
+3 of this run's 4 vCPU is held by its running steps…`. A step that **alone**
+is bigger than a level's whole cap fails at once, naming it. A workspace's
+figure above the account's grants nothing: the account's still applies.
+`foldrun usage compute` and `GET /api/usage/compute` show every level — the
+account, each workspace and each live run — with what it holds. Before
+27 Oct 2026 a workspace's `compute:` was read nowhere; it now caps that
+workspace.
+
 ### Waiting for room
 
-A step that finds no room — the account's compute pool, its most sandboxes
-at once, or the node's memory — **waits; a wait never fails a step**. There
+A step that finds no room — its run's, workspace's or account's pool, its
+account's most sandboxes at once, or the node's memory or disk —
+**waits; a wait never fails a step**. There
 is no time limit (until 27 Oct 2026 a step failed after 30 minutes). Only a
 step that alone is bigger than the pool or the plan's most for one step
 fails, at once, because nothing finishing would make room.
@@ -85,8 +113,16 @@ fails, at once, because nothing finishing would make room.
   `notify:` hears of it once, as event `room`, with what to change: ask for
   less (`size:`, `resources:`) or allow the account more compute.
 
+- **In turn, by scope.** An older step goes first among the steps of the
+  scope that holds it back: its run's own pool among that run's steps, its
+  workspace's among that workspace's, otherwise among all its account's —
+  so a step stuck behind a narrow pool of its own never holds back the rest.
+
 Nothing is charged while a step waits — the meter starts when its sandbox
-does. On a self-hosted Docker install there is no room gate, so nothing
+does. A sandbox the cluster has no node with room for yet — not enough cpu,
+memory or disk free (it says so: *no node has room for this sandbox yet*)
+— waits too, and that time is credited off the bill; one it can never
+place (a claim that does not exist, no node that matches) still fails. On a self-hosted Docker install there is no room gate, so nothing
 waits.
 
 ## Plans and credits
@@ -98,16 +134,18 @@ the money is shown and bought.
 
 | plan | a month | credits a month | an extra credit | runs at once | compute at once | one step, at most | workspaces | queue lane |
 |---|---|---|---|---|---|---|---|---|
-| **Starter** | $29 | 2,900 | 1.00¢ | 1 | 4 vCPU · 8 GiB | 4 vCPU · 8 GiB | 3 | standard |
-| **Creator** | $79 | 8,800 | 0.90¢ | 2 | 8 vCPU · 16 GiB | 4 vCPU · 8 GiB | 10 | standard |
-| **Pro** | $249 | 29,000 | 0.86¢ | 4 | 16 vCPU · 32 GiB | 8 vCPU · 16 GiB | unlimited | fast |
-| **Scale** | $799 | 100,000 | 0.80¢ | 8 | 32 vCPU · 64 GiB | 8 vCPU · 16 GiB | unlimited | fast |
+| **Starter** | $29 | 2,900 | 1.00¢ | 1 | 4 vCPU · 8 GiB · 40 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 3 | standard |
+| **Creator** | $79 | 8,800 | 0.90¢ | 2 | 8 vCPU · 16 GiB · 80 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 10 | standard |
+| **Pro** | $249 | 29,000 | 0.86¢ | 4 | 16 vCPU · 32 GiB · 160 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
+| **Scale** | $799 | 100,000 | 0.80¢ | 8 | 32 vCPU · 64 GiB · 320 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
 
 **Compute at once** is what all of an account's running steps may hold
-together, counted by the cores and memory each step's sandbox is capped at.
-**One step, at most** is the largest single step the plan runs: `heavy`
-(4 vCPU · 8 GiB) on every plan, and up to 8 vCPU · 16 GiB with `resources:`
-on Pro and Scale.
+together, counted by the cores, memory and disk each step's sandbox is
+capped at (disk is what a step may write: its `size:` class's — 2, 8 or 20
+GiB — or its own `resources: { disk }`). **One step, at most** is the largest
+single step the plan runs: `heavy` (4 vCPU · 8 GiB · 20 GiB disk) on every
+plan, and up to 8 vCPU · 16 GiB · 40 GiB disk with `resources:` on Pro and
+Scale.
 
 **How long a credit lasts.** A plan's credits land when its invoice is paid,
 and what is unused **rolls over** into the next cycle up to **twice** the
@@ -172,7 +210,7 @@ provider's own invoice.
 | meter | what it counts |
 |---|---|
 | **tokens** | model usage at cost, times a margin. **Bring your own key and the margin does not apply** — a BYOK step is billed nothing for tokens |
-| **compute** | sandbox seconds: what a step reserved (cores and memory, while it ran) and what it actually burned |
+| **compute** | sandbox seconds: what a step reserved (cores, memory and disk, while it ran) and what it actually burned. Disk is billed by the GiB a step is allowed to write, per second, like memory (since 27 Oct 2026) |
 | **storage and network** | GB-months in the file store, accrued daily; GB the sandbox moved, both directions |
 
 There is deliberately **no per-step fee**. Steps are sandbox-seconds, so a

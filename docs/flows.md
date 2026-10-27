@@ -332,6 +332,7 @@ normal outcome, recorded as one.
 | `filter` | for a `webhook`, `email`, `flow` or `storage` trigger: the fields a delivery must have to start a run — see [Which deliveries start a run](#which-deliveries-start-a-run) |
 | `model` / `effort` | defaults for every step |
 | `budget` | the most one run may spend, in USD — a number, or `unlimited`; unset is no limit |
+| `compute` | what one run's steps may hold together at once — `{ vcpu: 2, memory: 4Gi, disk: 20Gi }`, any of them. Each run has its own; it only narrows the workspace's and account's. A step past it waits for one of its run's steps to finish; one bigger than it fails at once ([four levels](budgets-and-billing#compute-at-four-levels)) |
 | `overlap` | `skip` or `queue` when a run is already live |
 | `issues` | `stay-open` (the default: a person resolves this flow's [issues](runs#issues)) or `auto-close` (a run that goes fine closes them) |
 | `priority` | `high`, `normal` or `low` — where this flow's runs stand in the queue against everyone else's |

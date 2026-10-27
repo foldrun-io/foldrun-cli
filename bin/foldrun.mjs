@@ -126,6 +126,7 @@ const HELP = `foldrun — agents are just folders
   foldrun flow rotate-hook <flow>  a new webhook URL for a flow; the old one stops at once — asks first, --yes means it
   foldrun flow set <flow> --step <n|agent> key=value …  the step editor: model, effort, retry, timeout, verify, when, case, else, loop, until, each, max, limits, instruction (key= clears) — diff, checked, --dry-run
   foldrun flow trigger <flow> manual|webhook|schedule  the trigger picker (--schedule "<cron>", --timezone <zone>) — diff, checked, --dry-run
+  foldrun flow compute <flow> vcpu <n> memory <GiB> disk <GiB>  what one run may hold at once across its steps (its compute:) — any of them, --clear for none
   foldrun flow filter <flow> --payload <file|-|json>   would this delivery start it? its filter: and the condition that held it back (--to <ws>: the deployed flow); exit 1 when not
   foldrun flow move-step <flow> --step <n|agent>  drag a card: --group <g> runs it beside group g, --after <g> gives it its own group after g (0 = first) — diff, checked, --dry-run
   foldrun flow copy-step <flow> --step <n|agent>[,<n>…]  the steps' markdown on stdout, as the canvas's Copy
@@ -178,7 +179,7 @@ const HELP = `foldrun — agents are just folders
   foldrun rerun --status failed [--since 24h] [--until 2h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
   foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
-  foldrun usage compute     the cores and GiB its running steps may hold together and in one step, hold now, and the steps waiting for room (--json)
+  foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each workspace, each live run — what they hold now, and the steps waiting for room (--json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun schedule tick     fire whatever is due now — Settings' "Run scheduler now"
   foldrun guide             write the coding-agent rules: a block in AGENTS.md and CLAUDE.md importing it (--check, --print)
@@ -198,10 +199,10 @@ const HELP = `foldrun — agents are just folders
   foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun identity          what your cloud must trust for keyless identities: the issuer and each agent's subject (--to <workspace>, --json)
   foldrun jobs              the four jobs — governance, guardrail, observability, evaluation — and what each has set (--to <workspace>, --json)
-  foldrun account           the account's defaults — also set <key> <value>, clear <key> (timezone, notify, budget, concurrency, deploy_block none|secrets|security, network_enforce on|off, owner, alerts <threshold> <value>, judge model|effort <value>; or <job>.<field>, e.g. governance.owner), pause [--reason] [--stop] / resume (the kill switch), telemetry [set <url> --header name=\${SECRET} | clear | test] (runs as OpenTelemetry traces), providers (--check) (singular; accounts lists logins)
+  foldrun account           the account's defaults — also set <key> <value>, clear <key> (timezone, notify, budget, concurrency, compute vcpu <n> memory <GiB> disk <GiB>, deploy_block none|secrets|security, network_enforce on|off, owner, alerts <threshold> <value>, judge model|effort <value>; or <job>.<field>, e.g. governance.owner), pause [--reason] [--stop] / resume (the kill switch), telemetry [set <url> --header name=\${SECRET} | clear | test] (runs as OpenTelemetry traces), providers (--check) (singular; accounts lists logins)
   foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
   foldrun account model     the account's own model key — set <provider> --key <api key> (--key - reads stdin; custom --base-url --format), remove
-  foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|notify|network_enforce|owner|alerts|judge> <value> (or <job>.<field>), clear <key>, pause [--reason] [--stop] / resume (the kill switch)
+  foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|compute|notify|network_enforce|owner|alerts|judge> <value> (compute vcpu <n> memory <GiB> disk <GiB>: this workspace's pool) (or <job>.<field>), clear <key>, pause [--reason] [--stop] / resume (the kill switch)
   foldrun workspace vocabulary  the names the dashboard's editor completes in a workspace: agents, flows, skills, tools, secrets, scripts, types, documents (--to, --json)
   foldrun notify test       send one test notification from a workspace and say what happened (--to <workspace>)
   foldrun webhooks deliveries  the notify: webhooks a workspace sent, newest first — status, attempts, last answer (--failed, --status <s>, --event <e>, --limit, --offset, --to)
@@ -335,7 +336,7 @@ Options
   --limit <n>               runs, billing, history, changelog: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
-  --clear                   secrets sites: unbind it
+  --clear                   secrets sites: unbind it; flow compute: no cap of its own
   --add <site>              agent network: add a site to its network: list (repeatable)
   --remove <site>           agent network: take a site off its network: list (repeatable)
   --out <file>              api spec: where to write the OpenAPI document (default: stdout); check: where to write the JSON or SARIF report
@@ -377,7 +378,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --overwrite               import: replace files the workspace already has with different text (refused otherwise)
-  --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow move-step, flow paste, flow draft, assistant, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; import: the preview only, write nothing; stop, rerun (bulk): list what matches, touch nothing
+  --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow compute, flow move-step, flow paste, flow draft, assistant, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; import: the preview only, write nothing; stop, rerun (bulk): list what matches, touch nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
   --yes                     deploy: allow deleting files this folder no longer has (asked otherwise; required with no terminal)
