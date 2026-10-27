@@ -370,9 +370,11 @@ when. If the invoice is still unpaid when the grace ends, the hourly sweep
 suspends the account for new runs with the reason **payment overdue**, and
 one more email says so; the banner turns red. Runs in flight finish, people
 can still sign in, nothing is deleted. The moment `invoice.paid` arrives
-for it — or `invoice.voided`, `invoice.marked_uncollectible`, or Stripe
-cancelling the subscription — the suspension is lifted, and a payment
-gets a thank-you email. Every step is once per invoice, however often
+for it — or `invoice.voided` or `invoice.marked_uncollectible`, which is
+how a debt is written off — the suspension is lifted, and a payment gets a
+thank-you email. The subscription ending does not settle it: the plan
+ends, but an invoice it left unpaid is still owed and still payable, and
+the account stays paused until it is paid or written off. Every step is once per invoice, however often
 Stripe retries or redelivers; a second invoice failing during the grace
 does not restart it. Dunning lifts only a suspension it placed: an account
 the super admin suspended for another reason stays suspended. The super
@@ -496,7 +498,7 @@ is `<public url>/api/billing/stripe`, sending exactly:
 | `invoice.voided` | an overdue invoice cancelled; dunning ends |
 | `invoice.marked_uncollectible` | an overdue invoice written off; dunning ends |
 | `customer.subscription.updated` | a plan swap, or a status change |
-| `customer.subscription.deleted` | the plan it paid for ends; its dunning ends |
+| `customer.subscription.deleted` | the plan it paid for ends; what it left unpaid stays owed (dunning and its pause stay) |
 | `payment_intent.succeeded` | an auto top-up credited |
 | `payment_intent.payment_failed` | an auto top-up refused; the warning goes |
 | `charge.refunded` | a refunded top-up's credits come off |
