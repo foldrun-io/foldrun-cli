@@ -53,8 +53,20 @@ jobs:
 
       - name: is there a newer core?
         id: what
+        env:
+          ANNOUNCED: ${{ github.event.client_payload.version }}
         run: |
           latest="$(npm view @foldrun/core@latest version --prefer-online)"
+          # The dispatch can land before npm's `latest` moves (27 Oct 2026:
+          # it read 2.14.0 a minute after 2.14.1 was published). Wait up to
+          # ten minutes for the announced version, and take it.
+          if [[ "$ANNOUNCED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            for _ in $(seq 1 40); do
+              # The higher of the two: a late, older dispatch never moves it back.
+              npm view "@foldrun/core@$ANNOUNCED" version --prefer-online >/dev/null 2>&1 && { latest="$(printf '%s\n%s\n' "$latest" "$ANNOUNCED" | sort -V | tail -1)"; break; }
+              sleep 15
+            done
+          fi
           [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "npm answered '$latest' — not a stable version"; exit 1; }
           range="$(node -p "require('./package.json').dependencies['@foldrun/core']")"
           floor="${range#^}"
