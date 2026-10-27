@@ -12,6 +12,23 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.0] — 2026-10-27
+
+### New in the public API
+
+- `foldrun flow compute`
+
+- feat(compute): flow compute, workspace and account compute with disk, every level in usage compute ([f1f757f](https://github.com/foldrun-io/foldrun-cli/commit/f1f757f))
+- feat(usage): foldrun usage compute lists the steps waiting for room ([7b359fe](https://github.com/foldrun-io/foldrun-cli/commit/7b359fe))
+
+### deps
+
+- @foldrun/core ^2.14.0 — compute at four levels, disk, flow compute: in check ([3951ae1](https://github.com/foldrun-io/foldrun-cli/commit/3951ae1))
+
+### docs
+
+- synced (cloudflare trust mode) ([723a388](https://github.com/foldrun-io/foldrun-cli/commit/723a388))
+
 ## [2.9.1] — 2026-10-26
 
 ### docs
