@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.6] — 2026-10-27
+
+### docs
+
+- synced (cold-start wait) ([ebeebc6](https://github.com/foldrun-io/foldrun-cli/commit/ebeebc6))
+
 ## [2.10.5] — 2026-10-27
 
 ### deps
