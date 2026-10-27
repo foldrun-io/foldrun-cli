@@ -142,6 +142,17 @@ name only — for the owner and admins to read or export. Support can view an
 account only [read-only, for thirty minutes, with a reason the customer
 reads](team-and-access#support-access).
 
+## The dashboard in your browser
+
+Every page is sent with an enforced Content-Security-Policy: scripts run
+only with that response's own nonce (a fresh one per request) or when one of
+those scripts loads them, and nothing is loaded from another site. Plugins,
+framing by another site, a changed `<base>` and forms posting elsewhere are
+refused. Pages are not cacheable, and also carry `X-Frame-Options: DENY`,
+`nosniff`, COOP and CORP. HTML and SVG you store are never rendered on the
+dashboard's origin. A self-hosted install can switch the policy to
+report-only with `FOLDRUN_CSP` ([Environment](environment)).
+
 ## Your terminal
 
 The CLI prints what a platform sends it — agents' replies, logs, files,
