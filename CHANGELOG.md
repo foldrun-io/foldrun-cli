@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.4] — 2026-10-27
+
+- ci(release): the same change rule and release recovery as core ([7a31780](https://github.com/foldrun-io/foldrun-cli/commit/7a31780))
+
 ## [2.10.3] — 2026-10-27
 
 - ci(release): bump-core starts over from a fresh main when its push loses, forward only ([c44e8e6](https://github.com/foldrun-io/foldrun-cli/commit/c44e8e6))
