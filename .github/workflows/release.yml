@@ -87,6 +87,10 @@ jobs:
 
       - run: npm ci
         if: steps.what.outputs.go == 'true'
+      # Against the registry's core — what users install — as core's own
+      # release does (Codex review, 27 Oct 2026: it only ran the tests).
+      - run: npm run typecheck
+        if: steps.what.outputs.go == 'true'
       - run: npm test
         if: steps.what.outputs.go == 'true'
 
