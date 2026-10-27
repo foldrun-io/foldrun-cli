@@ -5650,7 +5650,7 @@ function printDefaults(d) {
   console.log(`  notify       ${notify}`);
   console.log(`  budget       ${d.budget ? `$${d.budget.usd} per ${d.budget.period}` : c.dim("no cap")}`);
   console.log(`  concurrency  ${d.concurrency ?? c.dim("the plan's number")}`);
-  console.log(`  compute      ${d.compute ? `${d.compute.vcpu ?? "plan's"} vCPU · ${d.compute.memGiB ?? "plan's"} GiB ${c.dim("— at most, for all running steps")}` : c.dim("the plan's (foldrun usage compute)")}`);
+  console.log(`  compute      ${d.compute ? `${d.compute.vcpu ?? "plan's"} vCPU · ${d.compute.memGiB ?? "plan's"} GiB · ${d.compute.diskGiB ?? "plan's"} GiB disk ${c.dim("— at most, for all running steps")}` : c.dim("the plan's (foldrun usage compute)")}`);
   console.log(`  deploy_block ${d.deployBlock && d.deployBlock !== "none" ? `${d.deployBlock} ${c.dim(d.deployBlock === "secrets" ? "— a written-in key refuses a deploy" : "— any security finding refuses a deploy")}` : c.dim("none — security findings only warn")}`);
   console.log(`  network      ${networkEnforceText(d.networkEnforce, "the install")}`);
 }
@@ -5963,19 +5963,9 @@ async function accountCmd(positional, flags) {
   } else if (key === "alerts" || key === "judge") {
     patch = { [key]: await mergedEntry(url, flags, key, positional.slice(2), null, view, `foldrun account set ${key}`) };
   } else if (key === "compute") {
-    // `set compute vcpu 4 memory 8` (GiB) — either or both, over what is set.
-    const pairs = positional.slice(2);
-    const usage = "`foldrun account set compute vcpu <cores> memory <GiB>` — either or both";
-    if (!pairs.length || pairs.length % 2) throw new Error(usage);
-    const { defaults } = await remoteCall(url, flags, "/api/account");
-    const next = { vcpu: defaults?.compute?.vcpu ?? null, memGiB: defaults?.compute?.memGiB ?? null };
-    for (let i = 0; i < pairs.length; i += 2) {
-      const [k, v] = [pairs[i], pairs[i + 1]];
-      if (k !== "vcpu" && k !== "memory") throw new Error(`${usage} — not "${k}"`);
-      if (!/^\d+(\.\d+)?$/.test(v)) throw new Error(`compute ${k} is a number${k === "memory" ? " of GiB" : " of cores"} — not "${v}"`);
-      next[k === "vcpu" ? "vcpu" : "memGiB"] = Number(v);
-    }
-    patch = { compute: next };
+    // `set compute vcpu 4 memory 8 disk 40` (GiB) — any of them; the
+    // platform merges them over what is set.
+    patch = { compute: computePairs(positional.slice(2), "`foldrun account set compute vcpu <cores> memory <GiB> disk <GiB>` — any of them") };
   } else if (key === "notify") {
     // `set notify email you@example.com` / `set notify url https://…`, and
     // --events to change what is notified on.
@@ -9628,6 +9618,53 @@ async function usageCmd(flags) {
 }
 
 /**
+ * `vcpu 4 memory 8 disk 40` → { vcpu, memGiB, diskGiB } with only what was
+ * given — the platform merges it over what is set (27 Oct 2026), so naming
+ * one figure never clears the others. `memory`/`disk` are GiB.
+ */
+function computePairs(pairs, usage) {
+  if (!pairs.length || pairs.length % 2) throw new Error(usage);
+  const names = { vcpu: "vcpu", memory: "memGiB", disk: "diskGiB" };
+  /** @type {Record<string, number>} */
+  const out = {};
+  for (let i = 0; i < pairs.length; i += 2) {
+    const [k, v] = [pairs[i], pairs[i + 1]];
+    if (!(k in names)) throw new Error(`${usage} — not "${k}"`);
+    if (!/^\d+(\.\d+)?$/.test(v)) throw new Error(`compute ${k} is a number${k === "vcpu" ? " of cores" : " of GiB"} — not "${v}"`);
+    const n = Number(v);
+    // The bounds core's readCompute holds a file to, said here too, so a
+    // local edit never writes what `foldrun check` then refuses.
+    if (k === "vcpu" && (n < 0.5 || !Number.isInteger(n * 2))) throw new Error(`compute vcpu is 0.5 or more, in halves — not ${v}`);
+    if (k === "memory" && n < 0.25) throw new Error(`compute memory is 0.25 GiB (256Mi) or more — not ${v}`);
+    if (k === "disk" && n < 1) throw new Error(`compute disk is 1 GiB or more — not ${v}`);
+    out[names[k]] = n;
+  }
+  return out;
+}
+
+/** A size as AGENTS.md writes it — 8Gi, 1536Mi, 8g — in GiB; null when none. */
+function quantityGiB(q) {
+  const m = /^(\d+(?:\.\d+)?)\s*(Mi|Gi|m|g)$/.exec(String(q ?? "").trim());
+  if (!m) return null;
+  return m[2] === "Gi" || m[2] === "g" ? Number(m[1]) : Number(m[1]) / 1024;
+}
+
+/** `compute:` as a file writes it ({vcpu, memory: 8Gi, disk: 40Gi}) in
+ *  numbers, or null when it is not one. */
+function computeOfFile(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = /** @type {Record<string, unknown>} */ (raw);
+  return { vcpu: typeof o.vcpu === "number" ? o.vcpu : null, memGiB: quantityGiB(o.memory), diskGiB: quantityGiB(o.disk) };
+}
+
+/** "4 vCPU · 8 GiB · 40 GiB disk", or the fallback when nothing is set. */
+function computeText(p, none) {
+  if (!p) return none;
+  const parts = [p.vcpu != null ? `${p.vcpu} vCPU` : null, p.memGiB != null ? `${p.memGiB} GiB` : null, p.diskGiB != null ? `${p.diskGiB} GiB disk` : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : none;
+}
+
+/**
  * `foldrun usage compute` — the cores and GiB the account's running steps
  * may hold together and in one step, what they hold now, and the steps
  * waiting for room (Settings → Governance, GET /api/usage/compute).
@@ -9640,12 +9677,26 @@ async function usageComputeCmd(flags) {
     return 0;
   }
   const p = d.compute ?? {};
-  const u = d.inUse ?? { vcpu: 0, memGiB: 0, steps: 0 };
+  const u = d.inUse ?? { vcpu: 0, memGiB: 0, diskGiB: 0, steps: 0 };
   const of = (used, cap, unit) => (cap == null ? `${used} ${unit} ${c.dim("(no cap)")}` : `${used} of ${cap} ${unit}`);
+  const held = (h, pool) => `${of(h.vcpu ?? 0, pool?.vcpu, "vCPU")} · ${of(h.memGiB ?? 0, pool?.memGiB, "GiB")} · ${of(h.diskGiB ?? 0, pool?.diskGiB, "GiB disk")}`;
   const from = { plan: "the plan's", account: "the account's own compute:", install: "this install's" }[p.source] ?? null;
-  console.log(`\n  ${c.bold("compute")}  ${c.dim(from ? `${from} — what all running steps may hold together` : "no pool set")}`);
-  console.log(`  ${of(u.vcpu, p.vcpu, "vCPU")} · ${of(u.memGiB, p.memGiB, "GiB")}  ${c.dim(`held by ${u.steps} running step${u.steps === 1 ? "" : "s"}`)}`);
-  if (p.stepVcpu != null || p.stepMemGiB != null) console.log(`  ${c.dim(`one step: up to ${p.stepVcpu ?? "any"} vCPU · ${p.stepMemGiB ?? "any"} GiB`)}`);
+  console.log(`\n  ${c.bold("account")}  ${c.dim(from ? `${from} — what all running steps may hold together` : "no pool set")}`);
+  console.log(`  ${held(u, p)}  ${c.dim(`held by ${u.steps} running step${u.steps === 1 ? "" : "s"}`)}`);
+  if (p.stepVcpu != null || p.stepMemGiB != null || p.stepDiskGiB != null) console.log(`  ${c.dim(`one step: up to ${p.stepVcpu ?? "any"} vCPU · ${p.stepMemGiB ?? "any"} GiB · ${p.stepDiskGiB ?? "any"} GiB disk`)}`);
+  // Each workspace's own pool and each live run's (27 Oct 2026): a step
+  // must fit every level it belongs to.
+  const wss = Array.isArray(d.workspaces) ? d.workspaces.filter((w) => w.inUse?.steps || w.pool?.vcpu != null || w.pool?.memGiB != null || w.pool?.diskGiB != null) : [];
+  if (wss.length) {
+    console.log(`\n  ${c.bold("workspaces")}  ${c.dim("each one's own pool, inside the account's")}`);
+    const width = Math.max(...wss.map((w) => w.workspace.length));
+    for (const w of wss) console.log(`  ${pad(w.workspace, width)}  ${held(w.inUse ?? {}, w.pool)}`);
+  }
+  const runs = Array.isArray(d.runs) ? d.runs : [];
+  if (runs.length) {
+    console.log(`\n  ${c.bold("runs")}  ${c.dim("live, each with its flow's pool")}`);
+    for (const r of runs.slice(0, 20)) console.log(`  ${c.bold(`${r.workspace}/${r.flow}`)} ${c.dim(r.runId)}  ${held(r.inUse ?? {}, r.pool)}`);
+  }
   // Waiting for room (27 Oct 2026): oldest first, each starts in turn.
   const waiting = Array.isArray(d.waiting) ? d.waiting : [];
   if (waiting.length) {
@@ -9653,12 +9704,12 @@ async function usageComputeCmd(flags) {
     for (const w of waiting.slice(0, 20)) {
       const mins = Math.max(0, Math.round((Date.now() - Date.parse(w.since)) / 60_000));
       const age = mins < 120 ? `${mins} min` : `${Math.round(mins / 60)} h`;
-      console.log(`  ${pad(age, 7)} ${c.bold(`${w.workspace}/${w.flow}`)} ${w.agent}  ${w.cpus} vCPU · ${w.memGiB} GiB  ${c.dim(w.runId)}`);
+      console.log(`  ${pad(age, 7)} ${c.bold(`${w.workspace}/${w.flow}`)} ${w.agent}  ${w.cpus} vCPU · ${w.memGiB} GiB${w.diskGiB ? ` · ${w.diskGiB} GiB disk` : ""}  ${c.dim(w.runId)}${w.level ? c.dim(` · held by its ${w.level}`) : ""}`);
       console.log(`          ${c.dim(w.why)}`);
     }
     if (waiting.length > 20) console.log(`  ${c.dim(`and ${waiting.length - 20} more — --json for all`)}`);
   }
-  console.log(`\n  ${c.dim("a step past the pool waits, as long as it takes, and starts in turn · lower it: foldrun account set compute vcpu <n> memory <GiB>")}\n`);
+  console.log(`\n  ${c.dim("a step past any pool waits, as long as it takes, and starts in turn · set them: foldrun account set compute … · foldrun workspace set compute … --to <ws> · foldrun flow compute <flow> …")}\n`);
   return 0;
 }
 
@@ -9838,7 +9889,7 @@ async function workspaceCmd(positional, flags, layout) {
   const [verb, written, ...rest] = positional;
   // `observability.notify` names the job; checked, then sent as the field.
   const { key, view } = verb === "set" || verb === "clear" ? await jobKey(url, flags, written, ws) : { key: written, view: null };
-  const KEYS = ["name", "description", "timezone", "budget", "notify", "network_enforce", "owner", "alerts", "judge"];
+  const KEYS = ["name", "description", "timezone", "budget", "compute", "notify", "network_enforce", "owner", "alerts", "judge"];
   const show = (d, title) => {
     const notify = d.notify ? [d.notify.email, d.notify.url].filter(Boolean).join(", ") + c.dim(` on ${(d.notify.events ?? []).join(", ") || "nothing"}`) : c.dim("the account's");
     const budget = d.budget == null ? c.dim("the account's") : typeof d.budget === "object" ? `$${d.budget.usd} per ${d.budget.period}` : String(d.budget).includes("/") ? `$${String(d.budget).replace("/", " per ")}` : `$${d.budget} per month`;
@@ -9847,12 +9898,13 @@ async function workspaceCmd(positional, flags, layout) {
     console.log(`  timezone     ${d.timezone ?? c.dim("the account's")}`);
     console.log(`  notify       ${notify}`);
     console.log(`  budget       ${budget}`);
+    console.log(`  compute      ${computeText(d.compute, c.dim("no cap of its own — the account's"))}`);
     if (d.networkEnforce !== undefined) console.log(`  network      ${networkEnforceText(d.networkEnforce, "the account")}`);
   };
 
   if (!verb) {
     const d = await workspaceDefaults(url, flags, ws);
-    show({ description: typeof d.description === "string" ? d.description : "", timezone: d.timezone ?? null, budget: d.budget ?? null, notify: d.notify ?? null, networkEnforce: d.network_enforce === true }, ws);
+    show({ description: typeof d.description === "string" ? d.description : "", timezone: d.timezone ?? null, budget: d.budget ?? null, notify: d.notify ?? null, networkEnforce: d.network_enforce === true, compute: computeOfFile(d.compute) }, ws);
     const halt = await pauseState(remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`));
     if (halt) console.log(`  paused       ${halt.paused ? c.red(`${halt.paused.scope === "account" ? "by the account: " : ""}${pauseLine(halt.paused)}`) : c.dim("no")}`);
     console.log(`\n  ${c.dim(`foldrun workspace set timezone Australia/Sydney --to ${ws} · set budget 20/week · set notify email you@example.com · set name <new> · clear budget`)}\n`);
@@ -9874,6 +9926,9 @@ async function workspaceCmd(positional, flags, layout) {
   if (verb === "clear") patch = { [key]: key === "description" ? "" : null };
   else if (key === "alerts" || key === "judge") {
     patch = { [key]: await mergedEntry(url, flags, key, rest, ws, view, `foldrun workspace set ${key}`) };
+  } else if (key === "compute") {
+    // This workspace's pool (27 Oct 2026) — it only narrows the account's.
+    patch = { compute: computePairs(rest, `\`foldrun workspace set compute vcpu <cores> memory <GiB> disk <GiB> --to ${ws}\` — any of them`) };
   } else if (key === "notify") {
     const [channel, value] = rest;
     if (channel !== "email" && channel !== "url") throw new Error("`foldrun workspace set notify email <address>` or `set notify url <https://…>` — and --events failed,awaiting-approval,completed");
@@ -10446,6 +10501,63 @@ async function flowTriggerCmd(positional, flags, layout) {
     compute: async (raw) => ({ next: setFlowTrigger(raw, trigger), meta: {} }),
     bodies: () => [{ body: { trigger }, after: null }],
   });
+}
+
+/**
+ * `foldrun flow compute <flow> vcpu 2 memory 4 disk 20` — what one run of the
+ * flow may hold at once across its parallel steps (27 Oct 2026; the flow's
+ * `compute:`); any of the three, merged over what is set; `--clear` for
+ * none. On the platform it is the flows route's { compute } (the flow
+ * page's card); here, the flow file's frontmatter.
+ */
+async function flowComputeCmd(positional, flags, layout) {
+  const flow = positional[1];
+  const usage = "`foldrun flow compute <flow> vcpu <cores> memory <GiB> disk <GiB>` — any of them; `--clear` for no cap of its own";
+  if (!flow) throw new Error(usage);
+  const asked = flags.clear === true ? null : computePairs(positional.slice(2), usage);
+  const dry = flags["dry-run"] === true;
+  if (namesPlatform(flags)) {
+    // On the platform: the route merges, so nothing needs reading first.
+    const url = platformFor(flags, "flow compute");
+    const ws = platformWorkspace(flags, layout, "flow compute");
+    if (dry) {
+      console.log(`\n  ${c.bold(flow)} ${c.dim(`in ${ws}`)} — would send compute ${JSON.stringify(asked)} (merged over what the flow says)\n  ${c.dim("--dry-run: nothing sent")}\n`);
+      return 0;
+    }
+    const d = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ compute: asked }) });
+    console.log(`\n  ${c.green("✓")} ${c.bold(flow)} ${c.dim(`in ${ws}`)} — each run may hold ${computeText(d.flow?.compute, "no cap of its own")}\n`);
+    return 0;
+  }
+  const desk = await openDesk(flags, layout, `flow compute ${flow}`, flow);
+  const rel = await flowFileOf(desk, flow);
+  const raw = desk.files.get(rel);
+  const { patchFrontmatter, readAgentsMdKeys } = await import("@foldrun/core/agents-md");
+  // The flow's frontmatter now, read the way AGENTS.md is (a temp copy).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-flow-"));
+  let current = {};
+  try {
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), raw);
+    current = readAgentsMdKeys(dir).compute ?? {};
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  /** @type {Record<string, unknown> | null} */
+  let value = null;
+  if (asked) {
+    value = typeof current === "object" && current && !Array.isArray(current) ? { ...current } : {};
+    if (asked.vcpu !== undefined) value.vcpu = asked.vcpu;
+    if (asked.memGiB !== undefined) value.memory = `${asked.memGiB}Gi`;
+    if (asked.diskGiB !== undefined) value.disk = `${asked.diskGiB}Gi`;
+  }
+  const next = patchFrontmatter(raw, { compute: value });
+  if (dry) {
+    await printDiff(rel, raw, next);
+    console.log(`\n  ${c.dim("--dry-run: nothing written")}\n`);
+    return 0;
+  }
+  writeIfUnchanged(desk, rel, raw, next);
+  console.log(`\n  ${c.green("✓")} ${rel} — each run may hold ${computeText(computeOfFile(value), "no cap of its own")}\n`);
+  return 0;
 }
 
 /**
@@ -11966,6 +12078,7 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "hook") return flowHookCmd(positional, flags, layout);
       if (positional[0] === "set") return flowSetCmd(positional, flags, layout);
       if (positional[0] === "trigger") return flowTriggerCmd(positional, flags, layout);
+      if (positional[0] === "compute") return flowComputeCmd(positional, flags, layout);
       if (positional[0] === "filter") return flowFilterCmd(positional, flags, layout);
       if (positional[0] === "move-step") return flowMoveStepCmd(positional, flags, layout);
       if (positional[0] === "copy-step") return flowCopyStepCmd(positional, flags, layout);
