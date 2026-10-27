@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.9] — 2026-10-27
+
+### docs
+
+- sync budgets-and-billing.md ([74d2ed4](https://github.com/foldrun-io/foldrun-cli/commit/74d2ed4))
+
 ## [2.10.8] — 2026-10-27
 
 ### docs
