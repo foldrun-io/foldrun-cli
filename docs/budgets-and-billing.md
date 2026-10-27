@@ -176,7 +176,9 @@ asked. Without a plan, credit costs 1¢ each, one run at a time, up to 3
 workspaces, standard lane — a plan is cheaper from the first month you would have spent its fee
 anyway. Changing plan is charged at once, prorated by Stripe; the new plan
 and its bundle land when that invoice is paid — a change whose payment
-fails leaves you on the plan you had. Ending one ends it with the cycle.
+fails leaves you on the plan you had, with Stripe's page to pay it; paid
+within 23 hours it goes through, otherwise Stripe drops it and voids the
+invoice. Ending one ends it with the cycle.
 
 **Seats are unlimited** on every plan: agents work, people supervise, and a
 per-seat fee would tax the approver the safety story depends on.
