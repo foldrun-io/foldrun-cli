@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.8] — 2026-10-27
+
+### docs
+
+- sync security.md (dashboard CSP) ([12cf7de](https://github.com/foldrun-io/foldrun-cli/commit/12cf7de))
+
 ## [2.10.7] — 2026-10-27
 
 ### docs

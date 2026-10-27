@@ -1,6 +1,6 @@
 {
   "name": "foldrun",
-  "version": "2.10.7",
+  "version": "2.10.8",
   "description": "Agents are just folders. Write them, check them, run them — on your machine.",
   "license": "FSL-1.1-ALv2",
   "type": "module",
