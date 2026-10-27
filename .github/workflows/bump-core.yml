@@ -79,32 +79,48 @@ jobs:
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "newer=$newer" >> "$GITHUB_OUTPUT"
 
-      - name: move onto it, and check it
+      # Move, check, push — from a fresh main each time. Releases merge on
+      # their own now, so main can move while this tests (27 Oct 2026: the
+      # 2.10.2 merge landed mid-run and the push was refused). A refused push
+      # starts over from the new main, at most three times; it never rebases
+      # untested work onto what moved.
+      - name: move onto it, check it, push it
         if: steps.what.outputs.newer != 'no'
         env:
           V: ${{ steps.what.outputs.latest }}
-        run: |
-          npm install "@foldrun/core@^$V" --save --ignore-scripts
-          # From the file itself: core's exports map has no ./package.json.
-          got="$(node -p "require('./node_modules/@foldrun/core/package.json').version")"
-          [ "$got" = "$V" ] || { echo "resolved @foldrun/core $got, not $V"; exit 1; }
-          npm run typecheck
-          npm test
-
-      - name: push it
-        if: steps.what.outputs.newer != 'no'
-        env:
-          V: ${{ steps.what.outputs.latest }}
-          MAJOR: ${{ steps.what.outputs.newer == 'major' }}
         run: |
           git config user.name "foldrun-bot[bot]"
           git config user.email "foldrun-bot[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
-          if [ "$MAJOR" = "true" ]; then
-            git commit -m "deps!: @foldrun/core ^$V" -m "BREAKING CHANGE: the CLI now runs on @foldrun/core $V, a new major."
-          else
-            git commit -m "deps: @foldrun/core ^$V"
-          fi
-          # No laptop hooks here: the checks are the step above. A push that
-          # loses to a newer main fails, and the next run starts from it.
-          git -c core.hooksPath=/dev/null push origin HEAD:main
+          for try in 1 2 3; do
+            git fetch -q origin main
+            git reset -q --hard origin/main
+            # Against THIS main: forward only. Someone (or a run before this
+            # one) may already have moved it to $V or past it (Codex review).
+            cmp="$(node -e '
+              const floor = require("./package.json").dependencies["@foldrun/core"].replace(/^\^/, "");
+              const [a, b] = [process.argv[1], floor].map((v) => v.split(".").map(Number));
+              const c = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+              process.stdout.write(c > 0 ? (a[0] > b[0] ? "major" : "newer") : "not-newer");
+            ' "$V")"
+            [ "$cmp" != "not-newer" ] || { echo "main already asks for ^$V or later — nothing to do"; exit 0; }
+            MAJOR="$([ "$cmp" = "major" ] && echo true || echo false)"
+            npm install "@foldrun/core@^$V" --save --ignore-scripts
+            # From the file itself: core's exports map has no ./package.json.
+            got="$(node -p "require('./node_modules/@foldrun/core/package.json').version")"
+            [ "$got" = "$V" ] || { echo "resolved @foldrun/core $got, not $V"; exit 1; }
+            npm run typecheck
+            npm test
+            git add package.json package-lock.json
+            if [ "$MAJOR" = "true" ]; then
+              git commit -q -m "deps!: @foldrun/core ^$V" -m "BREAKING CHANGE: the CLI now runs on @foldrun/core $V, a new major."
+            else
+              git commit -q -m "deps: @foldrun/core ^$V"
+            fi
+            # No laptop hooks here: the checks are the lines above.
+            if git -c core.hooksPath=/dev/null push origin HEAD:main; then
+              echo "pushed deps: @foldrun/core ^$V (try $try)"; exit 0
+            fi
+            echo "main moved while this tested — starting over from it"
+          done
+          echo "main kept moving — three tries, nothing pushed; the next run picks it up"
+          exit 1
