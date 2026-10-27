@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.7] — 2026-10-27
+
+### docs
+
+- synced (extra credits, pay as you go) ([9bd9d99](https://github.com/foldrun-io/foldrun-cli/commit/9bd9d99))
+
 ## [2.10.6] — 2026-10-27
 
 ### docs
