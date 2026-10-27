@@ -504,12 +504,17 @@ is `<public url>/api/billing/stripe`, sending exactly:
 | `charge.dispute.closed` | won: it goes back on; lost: it stays off |
 
 Every delivery is logged — the event, the account, what was done or the
-error, and a hash of the payload (never the payload, which carries names
-and addresses). The super admin lists the log at `GET
-/api/admin/stripe-events` and replays one event with `POST
-/api/admin/stripe-events/<id>/replay`, which re-fetches it from Stripe and
-runs it through the same handler; every write it makes is keyed once, so a
-replay of an event that was handled changes nothing.
+error, and a hash of the payload. Since 28 Oct 2026 the event itself is
+kept too, for the types above only, up to 256 KB, set when it first
+arrives and emptied after **180 days**: Stripe keeps events for 30, and a
+replay after that needs a copy. It carries what Stripe sends (names,
+emails, addresses, a card's last four digits — never a full card number),
+so only the super admin's console reads it and lists never load it. The
+super admin lists the log at `GET /api/admin/stripe-events` and replays
+one event with `POST /api/admin/stripe-events/<id>/replay` — Stripe's copy
+while Stripe has it, the kept copy after — through the same handler; every
+write it makes is keyed once, so a replay of an event that was handled
+changes nothing.
 
 ## Plan gates
 
