@@ -135,9 +135,12 @@ waits.
 Usage is sold in **credits: one credit is one cent** of what a step consumes
 at the platform's rates. The ledger stays in dollars underneath — every
 statement, budget and refund reconciles to one column — and a credit is how
-the money is shown and bought.
+the money is shown and bought. Credits bought on top — on any plan, or on
+none — are **1¢ each**; the falling figure below is what a plan's bundle
+works out to, and it is the reason to pick a bigger plan rather than buy
+more credits.
 
-| plan | a month | credits a month | an extra credit | runs at once | compute at once | one step, at most | workspaces | queue lane |
+| plan | a month | credits a month | works out to, a credit | runs at once | compute at once | one step, at most | workspaces | queue lane |
 |---|---|---|---|---|---|---|---|---|
 | **Starter** | $29 | 2,900 | 1.00¢ | 1 | 4 vCPU · 8 GiB · 40 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 3 | standard |
 | **Creator** | $79 | 8,800 | 0.90¢ | 2 | 8 vCPU · 16 GiB · 80 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 10 | standard |
@@ -169,8 +172,8 @@ Which credit a run spends is the order that favours the customer: the
 plan's granted credits first, then bought credit oldest-first — so the
 credit closest to expiring is always the credit being used. Spend draws on the cycle's credits first, then
 on the balance. A new account starts with **300 trial credits**, no card
-asked. Without a plan, credit costs 1¢ each, one run at a time, standard
-lane — a plan is cheaper from the first month you would have spent its fee
+asked. Without a plan, credit costs 1¢ each, one run at a time, up to 3
+workspaces, standard lane — a plan is cheaper from the first month you would have spent its fee
 anyway. Changing plan happens at once, prorated by Stripe, and the new
 bundle lands with the invoice; ending one ends it with the cycle.
 
