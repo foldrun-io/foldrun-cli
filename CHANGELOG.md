@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.3] — 2026-10-27
+
+- ci(release): bump-core starts over from a fresh main when its push loses, forward only ([c44e8e6](https://github.com/foldrun-io/foldrun-cli/commit/c44e8e6))
+
+### deps
+
+- @foldrun/core ^2.14.1 ([d2d32f3](https://github.com/foldrun-io/foldrun-cli/commit/d2d32f3))
+
 ## [2.10.2] — 2026-10-27
 
 - ci(release): bump-core waits for the core it was told of — npm's latest lags the dispatch ([4f02749](https://github.com/foldrun-io/foldrun-cli/commit/4f02749))
