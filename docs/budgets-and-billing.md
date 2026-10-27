@@ -174,8 +174,9 @@ credit closest to expiring is always the credit being used. Spend draws on the c
 on the balance. A new account starts with **300 trial credits**, no card
 asked. Without a plan, credit costs 1¢ each, one run at a time, up to 3
 workspaces, standard lane — a plan is cheaper from the first month you would have spent its fee
-anyway. Changing plan happens at once, prorated by Stripe, and the new
-bundle lands with the invoice; ending one ends it with the cycle.
+anyway. Changing plan is charged at once, prorated by Stripe; the new plan
+and its bundle land when that invoice is paid — a change whose payment
+fails leaves you on the plan you had. Ending one ends it with the cycle.
 
 **Seats are unlimited** on every plan: agents work, people supervise, and a
 per-seat fee would tax the approver the safety story depends on.
@@ -419,13 +420,16 @@ The bookkeeping rules behind the numbers, for whoever has to answer "why is
 my balance this".
 
 **One grant per plan cycle.** A cycle is the subscription, the plan and the
-end of the period it pays for, and that is the grant's key. Stripe tells us
-about a paid cycle several ways — the checkout returning, the checkout
-webhook, `invoice.paid`, `customer.subscription.updated` — and in no fixed
-order; whichever arrives first grants and the rest find it done. A plan
-change inside a period is a new cycle on the new plan (the prorated invoice
-and the updated event are the same cycle, one grant); a renewal is a new
-period. A change inside a period grants the new plan's bundle **pro-rated
+end of the period it pays for, and that is the grant's key. A grant needs
+the money: a paid checkout (or one with nothing to pay), the checkout
+returning paid, or `invoice.paid` — whichever arrives first grants and the
+rest find it done. `customer.subscription.updated` moves the plan's
+status, never its credits: Stripe applies a price change even when its
+invoice then fails. Each invoice grants the plan **it** paid for, read off
+its own lines, not whatever the subscription has moved to since; and a
+paid invoice for a period older than the one already granted grants
+nothing. A plan change inside a period is a new cycle on the new plan; a
+renewal is a new period. A change inside a period grants the new plan's bundle **pro-rated
 by the share of the period left**, the way Stripe prorates the charge; a
 renewal grants it whole. Going back to a plan already granted this period
 switches the plan and its gates back but grants nothing again. Downgrades
