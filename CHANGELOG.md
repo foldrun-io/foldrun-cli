@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.1] — 2026-10-27
+
+- ci(release): release-merge looks for its own evidence; connect tests take free ports ([1ca98cb](https://github.com/foldrun-io/foldrun-cli/commit/1ca98cb))
+- ci(release): automatic CLI releases — move onto each new core, merge the release PR once ci passes ([184ab6f](https://github.com/foldrun-io/foldrun-cli/commit/184ab6f))
+
 ## [2.10.0] — 2026-10-27
 
 ### New in the public API
