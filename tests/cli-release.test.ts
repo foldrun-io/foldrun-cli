@@ -106,7 +106,7 @@ function repo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cli-release-"));
   fs.mkdirSync(path.join(dir, "scripts"));
   fs.mkdirSync(path.join(dir, "bin"));
-  for (const f of ["release.mjs", "surface.mjs"]) fs.copyFileSync(path.join(ROOT, "scripts", f), path.join(dir, "scripts", f));
+  for (const f of ["release.mjs", "surface.mjs", "surface-change.mjs"]) fs.copyFileSync(path.join(ROOT, "scripts", f), path.join(dir, "scripts", f));
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "foldrun", version: "1.0.0", bin: { foldrun: "bin/foldrun.mjs" }, engines: { node: ">=22" } }, null, 2) + "\n");
   fs.writeFileSync(path.join(dir, "CHANGELOG.md"), "# Changelog\n\n<!-- releases -->\n");
   fs.writeFileSync(path.join(dir, "bin", "foldrun.mjs"), HELP(BASE));
