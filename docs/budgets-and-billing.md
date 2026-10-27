@@ -121,8 +121,13 @@ fails, at once, because nothing finishing would make room.
 Nothing is charged while a step waits — the meter starts when its sandbox
 does. A sandbox the cluster has no node with room for yet — not enough cpu,
 memory or disk free (it says so: *no node has room for this sandbox yet*)
-— waits too, and that time is credited off the bill; one it can never
-place (a claim that does not exist, no node that matches) still fails. On a self-hosted Docker install there is no room gate, so nothing
+— waits too, and that time is credited off the bill. So does one an
+autoscaled cluster is adding a machine for (*a node is being added for
+it*) or whose node pool is at its size cap (*the cluster is at its size
+limit*); a sandbox placed on a machine that has just started gets its full
+start-up time from the moment it is placed. One it can never place (a
+claim that does not exist, no node that matches and none being added)
+still fails. On a self-hosted Docker install there is no room gate, so nothing
 waits.
 
 ## Plans and credits
