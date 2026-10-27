@@ -1,0 +1,98 @@
+name: bump-core
+
+# Moves the CLI onto the newest @foldrun/core on npm (27 Oct 2026: "all
+# releases should be automated"). Woken by core's release.yml (dispatch
+# core-released), daily as a net under a lost dispatch, or by hand.
+#
+# It reads npm itself — the dispatch is only a wake-up — and moves only
+# forward. It installs the REGISTRY's core (never a sibling checkout: that
+# is what users get), typechecks and tests, and only then pushes
+# "deps: @foldrun/core ^X.Y.Z" to main as the bot. That push opens the
+# CLI's release pull request (release-pr.yml), ci passes on it, and
+# release-merge.yml merges it, which publishes.
+#
+# A core MAJOR is adopted as a CLI major (`deps!:`): the CLI's users get a
+# different core under the same command, which is the CLI's break too.
+# Tests that fail push nothing; the run fails, and says why.
+on:
+  repository_dispatch:
+    types: [core-released]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-core
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app
+        with:
+          client-id: ${{ vars.FOLDRUN_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.FOLDRUN_BOT_PRIVATE_KEY }}
+          owner: foldrun-io
+          repositories: foldrun-cli
+          permission-contents: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ steps.app.outputs.token }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: is there a newer core?
+        id: what
+        run: |
+          latest="$(npm view @foldrun/core@latest version --prefer-online)"
+          [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "npm answered '$latest' — not a stable version"; exit 1; }
+          range="$(node -p "require('./package.json').dependencies['@foldrun/core']")"
+          floor="${range#^}"
+          newer="$(node -e '
+            const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
+            const cmp = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+            process.stdout.write(cmp > 0 ? (a[0] > b[0] ? "major" : "yes") : "no");
+          ' "$latest" "$floor")"
+          echo "core on npm: $latest; the CLI asks for $range → $newer"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "newer=$newer" >> "$GITHUB_OUTPUT"
+
+      - name: move onto it, and check it
+        if: steps.what.outputs.newer != 'no'
+        env:
+          V: ${{ steps.what.outputs.latest }}
+        run: |
+          npm install "@foldrun/core@^$V" --save --ignore-scripts
+          # From the file itself: core's exports map has no ./package.json.
+          got="$(node -p "require('./node_modules/@foldrun/core/package.json').version")"
+          [ "$got" = "$V" ] || { echo "resolved @foldrun/core $got, not $V"; exit 1; }
+          npm run typecheck
+          npm test
+
+      - name: push it
+        if: steps.what.outputs.newer != 'no'
+        env:
+          V: ${{ steps.what.outputs.latest }}
+          MAJOR: ${{ steps.what.outputs.newer == 'major' }}
+        run: |
+          git config user.name "foldrun-bot[bot]"
+          git config user.email "foldrun-bot[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if [ "$MAJOR" = "true" ]; then
+            git commit -m "deps!: @foldrun/core ^$V" -m "BREAKING CHANGE: the CLI now runs on @foldrun/core $V, a new major."
+          else
+            git commit -m "deps: @foldrun/core ^$V"
+          fi
+          # No laptop hooks here: the checks are the step above. A push that
+          # loses to a newer main fails, and the next run starts from it.
+          git -c core.hooksPath=/dev/null push origin HEAD:main
