@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [2.10.2] — 2026-10-27
+
+- ci(release): bump-core waits for the core it was told of — npm's latest lags the dispatch ([4f02749](https://github.com/foldrun-io/foldrun-cli/commit/4f02749))
+
 ## [2.10.1] — 2026-10-27
 
 - ci(release): release-merge looks for its own evidence; connect tests take free ports ([1ca98cb](https://github.com/foldrun-io/foldrun-cli/commit/1ca98cb))
