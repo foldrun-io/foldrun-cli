@@ -12,6 +12,21 @@ import path from "node:path";
 import http from "node:http";
 import { spawn } from "node:child_process";
 
+/** A port nothing holds right now, from the OS — a fixed one sat inside
+ *  Linux's ephemeral range and a CI runner's own connection took it
+ *  (27 Oct 2026: "port 48132 is in use"). */
+async function freePort(): Promise<number> {
+  const { createServer } = await import("node:net");
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as { port: number }).port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
 const ROOT = path.join(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "bin/foldrun.mjs");
 
@@ -59,6 +74,7 @@ async function runConnect(args: string[], env: Record<string, string | undefined
 }
 
 test("connect: consent → exchange → refresh recipe stored on the platform, nothing secret printed", async () => {
+  const port1 = await freePort();
   const exchanges: string[] = [];
   const stored: unknown[] = [];
   // Token endpoints must be https in the vault; the fake is loopback, which
@@ -82,13 +98,13 @@ test("connect: consent → exchange → refresh recipe stored on the platform, n
   try {
     const r = await runConnect(
       ["LI_TOKEN", "--authorize-url", `${provider.url}/authorize`, "--token-url", `${provider.url}/token`,
-       "--scopes", "a b", "--port", "48131", "--client-id", "cid", "--client-secret", "csec",
+       "--scopes", "a b", "--port", String(port1), "--client-id", "cid", "--client-secret", "csec",
        "--url", platform.url, "--token", "ptok", "--to", "desk", "--no-browser"],
       {},
     );
     assert.equal(r.status, 0, r.out);
     assert.equal(r.authorize.searchParams.get("scope"), "a b", "scopes are one space-separated string");
-    assert.equal(r.authorize.searchParams.get("redirect_uri"), "http://localhost:48131/callback");
+    assert.equal(r.authorize.searchParams.get("redirect_uri"), `http://localhost:${port1}/callback`);
     assert.match(r.page, /Connected/);
     assert.match(exchanges[0], /grant_type=authorization_code/);
     assert.match(exchanges[0], /code=c0de/);
@@ -116,7 +132,7 @@ test("connect: a provider with no refresh token stores the access token and says
   try {
     const r = await runConnect(
       ["GH_TOKEN", "--authorize-url", `${provider.url}/authorize`, "--token-url", `${provider.url}/token`,
-       "--port", "48132", "--client-id", "cid", "--client-secret", "csec", "--local", "--no-browser"],
+       "--port", String(await freePort()), "--client-id", "cid", "--client-secret", "csec", "--local", "--no-browser"],
       { FOLDRUN_DATA: root },
     );
     assert.equal(r.status, 0, r.out);
@@ -169,6 +185,7 @@ test("connect: a secret with a saved client reconnects through the platform — 
 });
 
 test("connect: PKCE by default — the challenge is S256 of the verifier sent with the code; a public app sends no secret", async () => {
+  const port3 = await freePort();
   const exchanges: string[] = [];
   const provider = await serve(async (req, res) => {
     if (req.url === "/token") {
@@ -184,7 +201,7 @@ test("connect: PKCE by default — the challenge is S256 of the verifier sent wi
   try {
     const r = await runConnect(
       ["PUB_TOKEN", "--authorize-url", `${provider.url}/authorize`, "--token-url", `${provider.url}/token`,
-       "--port", "48133", "--client-id", "pub-id", "--client-secret", "", "--url", platform.url, "--token", "ptok", "--no-browser",
+       "--port", String(port3), "--client-id", "pub-id", "--client-secret", "", "--url", platform.url, "--token", "ptok", "--no-browser",
        "--authorize-param", "access_type=offline", "--authorize-param", "redirect_uri=https://evil.example"],
       {},
     );
@@ -199,7 +216,7 @@ test("connect: PKCE by default — the challenge is S256 of the verifier sent wi
     // What the provider documents beyond OAuth rides along; the flow's own
     // parameters cannot be overridden by one.
     assert.equal(r.authorize.searchParams.get("access_type"), "offline");
-    assert.match(r.authorize.searchParams.get("redirect_uri") ?? "", /^http:\/\/localhost:48133\/callback$/);
+    assert.match(r.authorize.searchParams.get("redirect_uri") ?? "", new RegExp(`^http://localhost:${port3}/callback$`));
   } finally {
     provider.close();
     platform.close();
