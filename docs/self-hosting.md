@@ -186,6 +186,9 @@ What is different from the platform, and why:
 - **No sandbox by default.** Steps run as your user, in your workspace. Set
   `FOLDRUN_RUN_ISOLATION=container` with Docker installed to get one hardened
   container per step, the same executor the platform's single-box shape uses.
+  Without one, a step's file tools may not write the workspace's configuration
+  or code (`AGENTS.md`, agents, flows, tools, skills, evals, scripts), but its
+  shell is not confined: only a sandbox keeps those files out of a step's reach.
 - **Gates wait in the terminal.** A `!` step parks the run; `foldrun run`
   shows the approval and waits for your answer.
 - **Budgets cap, and nothing meters.** `budget:` stops a run at its cap; the
