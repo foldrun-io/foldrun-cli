@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [5.0.2] — 2026-10-28
+
+- fix(security): pull and downloads never write outside their folder; browser opens web pages only ([7d4af08](https://github.com/foldrun-io/foldrun-cli/commit/7d4af08))
+
 ## [5.0.1] — 2026-10-28
 
 ### docs
