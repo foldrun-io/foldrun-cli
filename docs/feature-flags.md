@@ -46,11 +46,8 @@ foldrun flags --json
 
 ## Running the platform yourself
 
-On a hosted install the super admin changes flags at **/admin → Flags**:
-the install-wide on/off and rollout, and an override per account. The same
-is `PUT`/`DELETE /api/admin/flags/<flag>` and
-`/api/admin/flags/<flag>/accounts/<account>` (see the API reference's
-super admin section). Every change is on the platform's audit as
+On the hosted platform the operator changes flags from its own console:
+the install-wide on/off and rollout, and an override per account. Every change is on the platform's audit as
 `operator.flag.global`, `operator.flag.global_cleared`,
 `operator.flag.account` or `operator.flag.account_cleared`, with who made
 it and what it was before. The settings are rows in Postgres

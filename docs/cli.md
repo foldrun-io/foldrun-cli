@@ -449,7 +449,7 @@ this way: they can take it back without changing a password.
 
 **You reset it, as the platform.** Only the platform's own super admin can,
 only on the hosted platform, and it ends every session that account had:
-`/admin/<account>` → the member → **reset password**. The new password is
+from its console, the member → **reset password**. The new password is
 shown once. Sign in as them in a private window, then `foldrun login
 --profile <name>` and approve the code in that window.
 

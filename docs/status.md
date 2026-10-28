@@ -46,8 +46,7 @@ not see a network problem between you and the platform — the page saying
 
 ## Incidents and maintenance
 
-The super admin posts them from **Admin → Incidents** (or
-`/api/admin/incidents`): a title, what customers should read, the impact
+The platform's operator posts them from its console: a title, what customers should read, the impact
 (minor or major) and the components affected. Each update adds a line with
 a status — `investigating`, `identified`, `monitoring`, `resolved`.
 Maintenance is a window with a start and an end; it shows as upcoming before

@@ -198,7 +198,7 @@ and on the audit; it is a term, never a surprise.
 
 **Charges an account does not pay.** The platform can waive any of the three
 meters for one account: model tokens, sandbox time, network. It is set per
-account from the admin console, never as an install-wide rate, because a
+account by the platform, never as an install-wide rate, because a
 rate turned off globally would quietly stop charging every customer. The
 meters still run and the Usage page still shows everything measured; what
 changes is the bill. Every run still writes a ledger line — at zero when
@@ -390,26 +390,6 @@ runs, schedules stop firing — while the platform team settles the last
 invoice and any refund. Nothing is deleted by the request itself; people can
 still sign in and take the copy.
 
-## The admin console's money levers
-
-Each customer (account) in the super admin console has a Billing tab with
-every lever that changes what the customer pays, each behind a confirmation
-that names the amount and the account: **credit or debit** with a reason on
-the ledger (the console sends an idempotency key, so a double click is one
-line), **extend the trial** (more trial credits as a grant, with whatever
-trial credit is left carried into it; not for an account on a plan), the
-**plan** (grant a cycle by hand, end it, and the lane and limits that ride
-with it), **going into minus**, and **charges this account does not pay**.
-The overview beside it holds the contact on record (name, email, phone,
-company, ABN), notes, suspension, and the customer's Stripe customer and
-subscription with links into Stripe's own dashboard — test or live, read
-from the install's key.
-
-Revenue has a CSV per month for the accountant (`GET /api/admin/export`):
-one row per customer and a total, charges by leg, fees, top-ups, grants,
-expiries, refunds, disputes, adjustments and net, with Stripe's own figures
-for the month beside them when Stripe is connected.
-
 ## The wallet
 
 Usage is settled from a credit balance. Add credit by card, once or with
@@ -469,11 +449,7 @@ dispute-won, plan, trial, grant-expired, credits-expired — and lines written
 before the field have theirs derived from their key and note. Statements
 label lines by it. **Burn**, the 30-day spend and month-to-date count usage
 and the daily fees only — not expiries, refunds, chargebacks or an
-operator's debit. The admin console's **charged** figure is usage (runs and
-account pod sessions) in the customer list and the money report alike;
-**paid in** is top-ups paid plus plan fees from the invoices Stripe said
-were paid; **held in wallets** is credit bought and unspent — granted
-credit is shown apart, because nobody paid for it by the dollar.
+operator's debit.
 
 **Hand-placed plans renew.** A plan the super admin grants runs a month and
 is renewed by the hourly sweep at its period's end, with the same grant and
@@ -481,9 +457,6 @@ rollover rules. Granting a plan to an account Stripe is billing is refused
 (end it first, or change it at Stripe); ending a Stripe-billed plan cancels
 the subscription at Stripe first, at once, and changes nothing if Stripe
 refuses.
-
-**An operator's credit or debit is written once** per idempotency key the
-console sends, and audited once.
 
 **Stripe.** Every call pins its API version (`2025-03-31.basil`;
 `STRIPE_API_VERSION` overrides) — create the webhook endpoint on the same
@@ -513,12 +486,10 @@ kept too, for the types above only, up to 256 KB, set when it first
 arrives and emptied after **180 days**: Stripe keeps events for 30, and a
 replay after that needs a copy. It carries what Stripe sends (names,
 emails, addresses, a card's last four digits — never a full card number),
-so only the super admin's console reads it and lists never load it. The
-super admin lists the log at `GET /api/admin/stripe-events` and replays
-one event with `POST /api/admin/stripe-events/<id>/replay` — Stripe's copy
-while Stripe has it, the kept copy after — through the same handler; every
-write it makes is keyed once, so a replay of an event that was handled
-changes nothing.
+so it is never shown to the account. The platform can replay an event
+through the same handler — Stripe's copy while Stripe has it, the kept
+copy after; every write it makes is keyed once, so a replay of an event
+that was handled changes nothing.
 
 ## Plan gates
 
