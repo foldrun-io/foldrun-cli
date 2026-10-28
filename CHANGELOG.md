@@ -12,6 +12,17 @@ edited by a person.
 
 <!-- releases -->
 
+## [3.0.1] — 2026-10-28
+
+### deps
+
+- @foldrun/core ^2.14.3 ([52ada05](https://github.com/foldrun-io/foldrun-cli/commit/52ada05))
+
+### docs
+
+- sync security.md and api.md (FOL-96) ([444f07d](https://github.com/foldrun-io/foldrun-cli/commit/444f07d))
+- sync self-hosting note (FOL-96) ([e913958](https://github.com/foldrun-io/foldrun-cli/commit/e913958))
+
 ## [3.0.0] — 2026-10-28
 
 ### Breaking changes
