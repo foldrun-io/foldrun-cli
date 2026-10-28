@@ -50,6 +50,13 @@ because a key names an account and never a who — and exceed its role.
 A scoped admin sees and revokes only keys inside its own scope; a key wider
 than that, the owner's included, is not in its list.
 
+A key stays no wider than its maker **after** it is made, too. Remove a
+member and every key they minted in the account stops working at once —
+the one `foldrun login` made included. Lower their role, or narrow their
+workspaces, and each of their keys that would now reach more than they can
+stops; they mint a new one at their new standing. Each such revocation is
+in the audit log (`apikey.revoked`, and `keysRevoked` on `member.removed`).
+
 A CI job or a contractor should hold a key that opens one workspace —
 `foldrun keys create ci --workspaces leads`, or Settings → API keys. (Deploy
 keys, for the platform's own git, went with it on 17 October 2026; one

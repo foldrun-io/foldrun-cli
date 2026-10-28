@@ -506,6 +506,15 @@ and snapshots as `runtime: system:`, so a package anyone in the account
 installed before is back in about a second. pip and npm packages need no root
 and are installed as the agent, into a directory of the step's own.
 
+A pip or npm package runs none of its own code on the way in. npm installs
+with `--ignore-scripts` — no `preinstall` or `postinstall` — and pip takes
+built wheels only (`--only-binary :all:`), because building a source package
+runs its `setup.py`. Debian packages are different: apt runs their
+maintainer scripts as root, which is why only the start-up's helper installs
+them, and only by a checked package name from Debian's own archive. A package that exists only as source is refused with the line
+to add instead: `runtime: packages:` builds it before the step, where the
+build is declared and cached.
+
 Each install is in the run log with the line that would have it ready before
 the step starts — `install: apt ffmpeg — ready (snapshot, 1s). To have it
 before the step starts: runtime: system: [ffmpeg]`. Moving it into `runtime:`
