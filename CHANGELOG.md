@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [5.0.1] — 2026-10-28
+
+### docs
+
+- sync api.md, budgets-and-billing.md, cli.md, feature-flags.md, status.md ([99fd980](https://github.com/foldrun-io/foldrun-cli/commit/99fd980))
+
 ## [5.0.0] — 2026-10-28
 
 ### Breaking changes
