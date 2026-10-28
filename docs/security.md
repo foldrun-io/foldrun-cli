@@ -61,6 +61,16 @@ and the generated index of a knowledge bundle.
 Refusals are counted per step and shown on the run page. Each one is a
 wasted turn; a prompt that names the exact path brings the count to zero.
 
+**A run does not change its own configuration or code.** What a step
+writes to `AGENTS.md`, `agents/`, `flows/`, `tools/`, `hooks/`, `skills/`,
+`evals/` or `scripts/` is not kept: the workspace keeps its own copy, and
+the run page lists each such path under "Not kept". A prompt injection
+cannot widen what later runs may do. Data comes back as before — `state/`,
+`storage/`, `memory/`, `knowledge/`. The one exception is a step a person
+approved before it ran (`!` or `approve: true`): the person read what it
+would do, so its changes to configuration and code are kept, and listed
+on the trail as "kept with approval". That is how an approved fix lands.
+
 ## Secrets
 
 An agent names a secret in `secrets:`; the model never sees the value — it
