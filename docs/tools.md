@@ -1890,7 +1890,13 @@ tool is broken" and "the agent used it wrong", and it costs no model call.
 
 Every tool has a Test button, and `POST /api/workspaces/<ws>/tools/<tool>/test`
 behind it: it calls the tool with typed arguments from where a run would call
-it, shows the raw result, and costs no model call. A single-file tool that
+it, shows the raw result, and costs no model call. On an install that
+isolates runs (the hosted platform, a Docker or Kubernetes self-host) a
+script tool or an MCP server started by `command:` is your own code, which
+runs only inside a step's sandbox — the button says so and points to
+`foldrun tool test` on your machine, or a test run. An HTTP tool is tested
+as before, except that a secret bound to sites
+(`foldrun secrets sites`) is never sent to a host outside them. A single-file tool that
 carries its program in a fenced block is materialised for the test exactly as
 a call materialises it, so the test runs the identical program from the
 identical directory — for a long time it did not, and every fenced-code tool

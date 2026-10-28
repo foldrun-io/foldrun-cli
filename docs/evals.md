@@ -47,9 +47,9 @@ satisfy. The heading is the case's name, so make it the thing being checked.
 |---|---|
 | `contains:` | the text must appear |
 | `not-contains:` | the text must not appear |
-| `matches:` | a JavaScript regular expression over the reply, case-insensitive. No inline flags such as `(?m)`: write `(^\|\n)` for the start of a line. `foldrun check` reports one that does not compile |
+| `matches:` | a JavaScript regular expression over the reply, case-insensitive, given a quarter of a second (a pattern that backtracks fails the check). No inline flags such as `(?m)`: write `(^\|\n)` for the start of a line. `foldrun check` reports one that does not compile |
 | `file:` | the path exists and is non-empty |
-| `run:` | a shell command that must exit 0 |
+| `run:` | a shell command that must exit 0 — `foldrun eval` on your machine only: an install that isolates runs refuses it (the check fails, saying so), because there it would run on the platform's own web server rather than in a sandbox |
 | `judge:` | a model grades the reply against this sentence |
 
 **Deterministic checks run first and cost nothing.** The judge only runs if they

@@ -93,6 +93,13 @@ function write(current, profiles) {
     JSON.stringify({ current, default: current && profiles[current] ? normaliseUrl(profiles[current].url) : null, profiles, platforms }, null, 2) + "\n",
     { mode: 0o600 },
   );
+  // `mode` applies only when the file is created; one made before (or by
+  // hand) keeps whatever it had. It holds tokens: owner-only, every write.
+  try {
+    fs.chmodSync(file(), 0o600);
+  } catch {
+    /* not ours to fix (Windows ACLs, a read-only home) */
+  }
 }
 
 /**

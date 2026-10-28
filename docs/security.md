@@ -152,6 +152,30 @@ name only — for the owner and admins to read or export. Support can view an
 account only [read-only, for thirty minutes, with a reason the customer
 reads](team-and-access#support-access).
 
+Signing in, in particular:
+
+- a password reset or change, two-step sign-in turned on or off, and a new
+  API key each send a notice to the person's address;
+- signing out ends the session on the server, not just in the browser;
+- a two-step code works once; replacing a second factor means turning it
+  off first, which needs the password and a code;
+- the sign-in forms refuse a request from another site, and `?next=` only
+  ever leads to a page on the same site;
+- `foldrun login` asks you to type the code your terminal shows — a link
+  with the code in it, sent by someone else, cannot sign their machine in
+  as you;
+- before the first sign-up, a self-hosted install's setup token guards key
+  minting as it guards sign-up;
+- only the account's owner can set the account's `RESEND_API_KEY` and
+  `EMAIL_FROM`, because that sender carries everyone's reset links;
+- a member or key limited to some workspaces cannot change what every
+  workspace shares — the library, the account's AGENTS.md defaults, its
+  model provider, its OAuth apps — nor people who work outside its
+  workspaces.
+
+Frontmatter is YAML only: a file opened with `---js` (which some parsers
+run as code) is refused.
+
 ## The dashboard in your browser
 
 Every page is sent with an enforced Content-Security-Policy: scripts run

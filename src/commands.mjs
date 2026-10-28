@@ -3835,6 +3835,13 @@ async function connect(positional, flags) {
 const DEFAULT_PLATFORM = "https://app.foldrun.io";
 
 function openInBrowser(target) {
+  // A server-supplied address: only a web page, never a file, an app or a
+  // custom scheme handed to `open`.
+  try {
+    if (!/^https?:$/.test(new URL(target).protocol)) return Promise.resolve(false);
+  } catch {
+    return Promise.resolve(false);
+  }
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   return import("node:child_process")
     .then(({ spawn }) => {
@@ -4872,11 +4879,13 @@ async function pullCmd(layout, flags, only) {
   /** @type {{file: string, content: string}[]} */
   const incoming = [];
   for (const name of names) {
+    if (!SAFE_NAME.test(name)) throw new Error(`the platform named a workspace "${name}", which is not a workspace name — refusing to write it`);
     const there = await remoteWorkspaceFiles(url, flags, name, isSourcePath);
-    for (const [rel, content] of there) incoming.push({ file: path.join(wsRoot, name, rel), content });
+    for (const [rel, content] of there) incoming.push({ file: within(path.join(wsRoot, name), rel), content });
   }
   for (const f of await remoteLibrary(url, flags, LIBRARY_KINDS)) {
-    incoming.push({ file: path.join(root, "library", f.kind, f.path), content: f.content });
+    if (!LIBRARY_KINDS.includes(f.kind)) throw new Error(`the platform sent a library kind "${f.kind}" this CLI does not know — refusing to write it`);
+    incoming.push({ file: within(path.join(root, "library", f.kind), f.path), content: f.content });
   }
 
   const clashes = incoming.filter((f) => {
@@ -9299,6 +9308,22 @@ async function runRmCmd(runId, flags, layout) {
   return 0;
 }
 
+const SAFE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/**
+ * `rel` under `base`, or a refusal. Every path a server names is written
+ * through this: a server (or anyone in between) must not be able to say
+ * "../../.ssh/authorized_keys" and have pull write it.
+ */
+function within(base, rel) {
+  const root = path.resolve(base);
+  const to = path.resolve(root, String(rel));
+  if (path.isAbsolute(String(rel)) || (to !== root && !to.startsWith(root + path.sep))) {
+    throw new Error(`the platform sent a path outside ${root} ("${rel}") — refusing to write it`);
+  }
+  return to;
+}
+
 /** Where downloaded bytes go: --file (or - for stdout), else a default name. Refuses to clobber. */
 function writeDownload(bytes, fallback, flags, from) {
   if (flags.file === "-") {
@@ -9361,7 +9386,11 @@ async function remoteBytes(url, flags, apiPath, what) {
     }
     throw new HttpError(`${what}: ${why}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, {});
   }
-  const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1];
+  // The server's name is a suggestion for a file in THIS folder: only its
+  // last segment, and never a dot-file (".zshrc", "..").
+  const said = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1];
+  const base = said ? path.basename(said.replaceAll("\\", "/")) : undefined;
+  const name = base && !base.startsWith(".") ? base : undefined;
   return { bytes: Buffer.from(await res.arrayBuffer()), name };
 }
 
