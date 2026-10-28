@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [4.0.1] — 2026-10-28
+
+### docs
+
+- sync agents.md, team-and-access.md ([8bee35e](https://github.com/foldrun-io/foldrun-cli/commit/8bee35e))
+
 ## [4.0.0] — 2026-10-28
 
 ### Breaking changes
