@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [6.0.0] — 2026-10-28
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 5.0.0, a new major. (ac33b83)
+
+### deps
+
+- @foldrun/core ^5.0.0 ([ac33b83](https://github.com/foldrun-io/foldrun-cli/commit/ac33b83))
+
 ## [5.0.2] — 2026-10-28
 
 - fix(security): pull and downloads never write outside their folder; browser opens web pages only ([7d4af08](https://github.com/foldrun-io/foldrun-cli/commit/7d4af08))
