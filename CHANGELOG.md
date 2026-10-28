@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [3.0.0] — 2026-10-28
+
+### Breaking changes
+
+- `foldrun billing credit` is gone (it was never deprecated)
+
+- fix(cli): retire billing credit, point at billing top-up (FOL-94) ([7922099](https://github.com/foldrun-io/foldrun-cli/commit/7922099))
+
 ## [2.10.12] — 2026-10-27
 
 ### docs
