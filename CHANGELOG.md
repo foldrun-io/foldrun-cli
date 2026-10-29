@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [7.1.0] — 2026-10-29
+
+### New in the public API
+
+- `foldrun team invites`
+- `foldrun team invites revoke`
+
+- feat(team): foldrun team invites [--all] and team invites revoke <id> ([83a03b4](https://github.com/foldrun-io/foldrun-cli/commit/83a03b4))
+
 ## [7.0.0] — 2026-10-29
 
 ### Breaking changes
