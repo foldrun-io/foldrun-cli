@@ -92,6 +92,16 @@ At rest, each account has its own encryption key; the account keys are
 wrapped by one root key the platform holds. A stolen copy of an account's
 secrets opens nothing without it.
 
+The egress proxy can run without that root key
+([`FOLDRUN_EGRESS_MINIMAL_BOOT`](environment)). It is then given only what it
+uses, each derived from the root key for that one purpose: the public half
+of the key the worker signs every step's lease with, the key of the
+certificate authority it signs bound sites with, and the key that seals the
+identity signing keys. A lease is sealed under the step's own token, which
+the lease store never holds, so the proxy opens a step's credentials only
+when that step presents its token — and a lease nobody but the worker could
+have signed is refused.
+
 Backups are encrypted before they leave the server. The nightly archive —
 every workspace, run record and the database — and the server's key file
 are encrypted with age to a public key whose private half is not on the
