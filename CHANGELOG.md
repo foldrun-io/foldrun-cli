@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [8.0.0] — 2026-10-29
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 7.0.0, a new major. (dbf2b2e)
+
+### deps
+
+- @foldrun/core ^7.0.0 ([dbf2b2e](https://github.com/foldrun-io/foldrun-cli/commit/dbf2b2e))
+
 ## [7.1.0] — 2026-10-29
 
 ### New in the public API
