@@ -3559,13 +3559,14 @@ async function invoke(target, flags) {
   // used to land here after 100 s while the run carried on was the trigger.
   const WAIT_PIECE_S = 25;
   const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
-  // A waited run that FAILS is answered with 500 and a full record (see
-  // server/wait.ts). That is not an error in the call, it is the answer to
-  // it, so it is reported as a failed run rather than thrown as a transport
-  // fault — the difference between "your flow failed" and "the platform is
-  // down", which is the first thing anyone reading this needs to know.
+  // A waited run that FAILS is the answer to the call, not an error in it:
+  // reported as a failed run, with why, never thrown as a transport fault —
+  // the difference between "your flow failed" and "the platform is down".
+  // A platform since FOL-106 answers it 200 with `status` and `failure`;
+  // one before answered 500 with the same record, which is still read.
   const reportFailedRun = (body, ws) => {
     if (body?.result) console.log(`\n${body.result}\n`);
+    if (body?.failure?.reason) console.log(`  ${c.red("why")} ${c.dim(body.failure.agent ?? "?")}  ${firstLine(body.failure.reason, 200)}`);
     for (const st of body?.steps ?? []) {
       const mark = st.status === "completed" ? c.green("✓") : st.status === "skipped" ? c.dim("–") : c.red("✗");
       console.log(`  ${mark} ${c.dim(st.agent ?? "?")}  ${st.status}${st.skipReason ? c.dim(` (${st.skipReason})`) : ""}`);
@@ -3638,6 +3639,7 @@ async function invoke(target, flags) {
   const run = body.run ?? body;
   const status = run.status ?? body.status ?? "finished";
   const ok = status === "completed";
+  if (!ok && status !== "awaiting-approval" && body.runId && body.status) return reportFailedRun(body, ws);
   if (body.result) console.log(`\n${body.result}\n`);
   const mark = ok ? c.green("✓") : status === "awaiting-approval" ? c.amber("⏸") : c.red("✗");
   console.log(`  ${mark} ${status}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}${status === "awaiting-approval" ? c.dim(` — ${url}/dashboard/${ws}/runs/${body.runId}`) : ""}\n`);
@@ -6997,7 +6999,15 @@ export function podTries(step) {
 }
 
 /** Whichever error this step recorded — on the step, or on its last try. */
-const stepError = (step) => step.error ?? [...(step.tries ?? [])].reverse().find((t) => t.error)?.error ?? null;
+// A step refused before its agent started (no model key, a login token)
+// records only an error event — no `error`, no tries — so a failed step
+// falls back to its last error event: the reason was in the record all
+// along, and `report` and `agent run --wait` printed nothing about it (FOL-106).
+const stepError = (step) =>
+  step.error ??
+  [...(step.tries ?? [])].reverse().find((t) => t.error)?.error ??
+  (step.status === "failed" ? [...(step.events ?? [])].reverse().find((e) => e.type === "error")?.text : null) ??
+  null;
 
 /**
  * `foldrun report <run-id>` — one run, whole, readable without a browser.
@@ -7236,6 +7246,7 @@ async function reportCmd(runId, flags, layout) {
     if (err) {
       console.log(`      ${c.red(firstLine(err, 96))}`);
       for (const e of (step.events ?? []).slice(-4)) {
+        if (e.text === err) continue; // already the red line above
         console.log(`      ${EVENT_MARK(e)} ${c.dim(firstLine(e.text, 92))}`);
       }
     }
@@ -7391,9 +7402,10 @@ async function agentRunCmd(positional, flags, layout) {
   const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
   const base = `/api/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
 
-  // A waited run that FAILS is answered with 500 and a full record — the
-  // answer to the question, not a fault in the call. So the run id is taken
-  // off it and the report is printed like any other.
+  // A waited run that FAILS is the answer to the question, not a fault in
+  // the call: 200 with its status since FOL-106, 500 with the same record
+  // from a platform before. Either way the run id is taken off it and the
+  // report is printed like any other.
   const waited = async (fn) => {
     try {
       return await fn();
