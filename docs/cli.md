@@ -320,6 +320,9 @@ workspaces) and stores the new one, saying so on one dim line. A machine in
 use never sees its sign-in end; one left unused for 90 days is signed out,
 and the next command says to run `foldrun login` again. A key handed in with
 `--token` or `FOLDRUN_TOKEN` is never renewed — its end is its owner's.
+A credentials file the CLI cannot write is not renewed either (the new key
+would be lost); if storing a renewed key fails, the CLI says so, and the next
+command within ten minutes tries again.
 
 `foldrun login --url https://foldrun.example.com` signs in to your own
 installation; the last one signed in to is the default afterwards, and
