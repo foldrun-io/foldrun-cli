@@ -12,6 +12,20 @@ edited by a person.
 
 <!-- releases -->
 
+## [8.1.1] — 2026-10-29
+
+### deps
+
+- @foldrun/core ^7.0.1 ([7855d3a](https://github.com/foldrun-io/foldrun-cli/commit/7855d3a))
+
+### docs
+
+- sync from foldrun-docs (CLI renewal retry and unwritable credentials) ([d71e311](https://github.com/foldrun-io/foldrun-cli/commit/d71e311))
+
+### fix
+
+- renewal never loses the new key, and runs on every remote command (FOL-71 review) ([1f3b21f](https://github.com/foldrun-io/foldrun-cli/commit/1f3b21f))
+
 ## [8.1.0] — 2026-10-29
 
 ### feat
