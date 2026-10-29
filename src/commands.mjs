@@ -2512,6 +2512,48 @@ async function versionCmd(flags) {
 }
 
 /**
+ * Renew this machine's `foldrun login` key before it ends (FOL-71). Such a
+ * key lives 90 days; with under RENEW_DAYS left the CLI rotates it itself
+ * (POST /api/keys/<own id>/rotate — a cli-login key may, whatever its role)
+ * and stores the new one, so a machine in use never sees it end. Once per
+ * command, only for a key `login` minted and stored here — never --token or
+ * FOLDRUN_TOKEN, whose holder chose them — and it never fails the command
+ * it rides on: any problem leaves the old key in place to try next time.
+ * Costs a request only when the end is near or not yet known (/api/me, at
+ * most daily for a key that does not renew, e.g. on an older platform).
+ */
+const RENEW_DAYS = 14;
+const DAY_MS = 86_400_000;
+let renewChecked = false;
+async function renewIfDue(url, flags) {
+  if (renewChecked || flags.token || env("FOLDRUN_TOKEN")) return;
+  renewChecked = true;
+  try {
+    const p = chosenProfile(flags);
+    if (!p?.minted || !p.token) return;
+    const now = Date.now();
+    const ends = p.expiresAt ? Date.parse(p.expiresAt) : NaN;
+    if (p.renews === true && ends - now > RENEW_DAYS * DAY_MS) return;
+    if (p.renews === false && p.checkedAt && now - Date.parse(p.checkedAt) < DAY_MS) return;
+    const { name, current: _c, url: at, loggedInAt: _l, ...entry } = p;
+    const save = (fields) => saveCredential(at, { ...entry, ...fields }, { name, makeDefault: false });
+    const meRes = await remoteFetch(at, "/api/me", {}, { token: p.token });
+    if (!meRes.ok) return;
+    const a = /** @type {any} */ (await meRes.json())?.actor ?? {};
+    if (a.kind !== "key" || a.origin !== "cli-login") return void save({ renews: false, checkedAt: new Date(now).toISOString() });
+    if (!a.expiresAt || Date.parse(a.expiresAt) - now > RENEW_DAYS * DAY_MS) return void save({ renews: true, expiresAt: a.expiresAt ?? null, checkedAt: undefined });
+    const res = await remoteFetch(at, `/api/keys/${enc(a.id)}/rotate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, { token: p.token });
+    if (!res.ok) return;
+    const r = /** @type {any} */ (await res.json());
+    if (typeof r.key !== "string") return;
+    save({ token: r.key, renews: true, expiresAt: r.expiresAt ?? null, checkedAt: undefined });
+    if (flags.quiet !== true) console.error(`  ${c.dim(`renewed this machine's sign-in as "${name}"${r.expiresAt ? ` — it now lasts until ${String(r.expiresAt).slice(0, 10)}` : ""}`)}`);
+  } catch {
+    // Offline, an old platform, a read-only home: the old key still works.
+  }
+}
+
+/**
  * A call to the platform's API, as JSON. A body that is not JSON is not the
  * platform talking — a Cloudflare challenge, a proxy's error page, a tunnel
  * that is down — and used to be read as {} and reported as a bare "HTTP
@@ -2521,6 +2563,7 @@ async function versionCmd(flags) {
  * @returns {Promise<any>}
  */
 async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
+  await renewIfDue(url, flags);
   const token = tokenFor(url, flags);
   const res = await remoteFetch(
     url,
@@ -3919,7 +3962,7 @@ async function login(flags) {
       // elsewhere; logout only forgets it.
       const name = saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
       console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}\n`);
-      console.log(`  ${c.dim(`Stored as the account "${name}" in ~/.foldrun/credentials.json. \`foldrun accounts\` lists every account signed in here; \`foldrun use ${name}\` switches.`)}\n`);
+      console.log(`  ${c.dim(`Stored as the account "${name}" in ${credentialsShown()}. \`foldrun accounts\` lists every account signed in here; \`foldrun use ${name}\` switches.`)}\n`);
       return 0;
     }
   }
@@ -3975,7 +4018,7 @@ async function whoami(flags) {
   console.log(`  role        ${me.role}`);
   console.log(`  workspaces  ${me.workspaces === null ? "all" : me.workspaces.join(", ") || "none"}`);
   const profile = flags.token || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
-  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : `~/.foldrun/credentials.json as "${profile?.name ?? "?"}"`;
+  const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : `${credentialsShown()} as "${profile?.name ?? "?"}"`;
   console.log(`  ${c.dim(`credential from ${source}`)}`);
   const others = listProfiles().filter((p) => p.name !== profile?.name);
   console.log(others.length ? `  ${c.dim(`also signed in as: ${others.map((p) => p.name).join(", ")} — \`foldrun accounts\``)}\n` : "\n");
@@ -4870,7 +4913,10 @@ async function pullCmd(layout, flags, only) {
   const { isSourcePath, LIBRARY_KINDS } = await core();
   const url = remoteUrl(flags);
   if (!url) throw new Error("pull brings a platform's account down — pass --url, or `foldrun login` first");
-  const root = layout.accountRoot;
+  // A bare folder (nothing of foldrun's yet) is the account root itself, as
+  // in guideCmd — core reads it as a flat workspace whose account is the
+  // PARENT, and pull would write workspaces/, AGENTS.md and CLAUDE.md there.
+  const root = layout.kind === "empty" ? (layout.workspaceDir ?? process.cwd()) : layout.accountRoot;
   const wsRoot = layout.workspacesDir ?? path.join(root, "workspaces");
 
   const names = (await remoteWorkspaceNames(url, flags)).filter((n) => (only ? n === only : true));
@@ -4921,6 +4967,7 @@ async function pullCmd(layout, flags, only) {
     `\n  ${c.green("✓")} pulled ${names.length} workspace${names.length === 1 ? "" : "s"} from ${url}  ` +
       c.dim(`${written} file${written === 1 ? "" : "s"} written, ${incoming.length - written} already current`),
   );
+  console.log(`  ${c.dim(`into ${root}`)}`);
   const rules = writeAgentFiles(root);
   for (const [file, what] of [["AGENTS.md", rules.agentsMd], ["CLAUDE.md", rules.claudeMd]]) {
     if (what === "created" || what === "updated") console.log(`  ${c.green("✓")} ${file} ${c.dim(`${what} — the coding-agent rules, pointing at \`foldrun docs\``)}`);
@@ -5667,8 +5714,32 @@ function printDefaults(d) {
 /** network_enforce: as a person reads it. Off is never "allowed" outright:
  *  the level above (the account, or the install's own switch) may refuse
  *  anyway, and this file cannot see either, so off says what it leaves to. */
-function networkEnforceText(on, above) {
-  return on ? `refused ${c.dim("— a site off an agent's network: list gets a 403")}` : c.dim(`${above}'s — this file does not ask to refuse`);
+function networkEnforceText(on, above, aboveOn = false) {
+  if (on) return `refused ${c.dim("— a site off an agent's network: list gets a 403")}`;
+  // Either level's true is enough (core networkEnforceWanted), so the level
+  // below cannot turn it off: say what a run here actually gets.
+  if (aboveOn) return `refused ${c.dim(`— ${above} enforces it; this file does not ask, and cannot turn it off`)}`;
+  return c.dim(`${above}'s — this file does not ask to refuse`);
+}
+
+/** Whether the account's own AGENTS.md has network_enforce on — null when
+ *  this credential may not read the account (a workspace-scoped key). */
+async function accountEnforces(url, flags) {
+  try {
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    return defaults?.networkEnforce === true;
+  } catch (err) {
+    if (err instanceof HttpError && (err.status === 403 || err.status === 404)) return null;
+    throw err;
+  }
+}
+
+/** Where this machine keeps its keys, written the way a person would type it.
+ *  FOLDRUN_HOME moves the folder, so the path is read, never assumed. */
+function credentialsShown() {
+  const file = path.join(credentialsDir(), "credentials.json");
+  const home = os.homedir();
+  return file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file;
 }
 
 /** `on`/`off` (or true/false, yes/no) for network_enforce, or an error. */
@@ -9914,11 +9985,14 @@ async function workspaceCmd(positional, flags, layout) {
     console.log(`  notify       ${notify}`);
     console.log(`  budget       ${budget}`);
     console.log(`  compute      ${computeText(d.compute, c.dim("no cap of its own — the account's"))}`);
-    if (d.networkEnforce !== undefined) console.log(`  network      ${networkEnforceText(d.networkEnforce, "the account")}`);
+    if (d.networkEnforce !== undefined) console.log(`  network      ${networkEnforceText(d.networkEnforce, "the account", aboveOn === true)}`);
   };
+  /** @type {boolean | null} */
+  let aboveOn = null;
 
   if (!verb) {
     const d = await workspaceDefaults(url, flags, ws);
+    aboveOn = await accountEnforces(url, flags);
     show({ description: typeof d.description === "string" ? d.description : "", timezone: d.timezone ?? null, budget: d.budget ?? null, notify: d.notify ?? null, networkEnforce: d.network_enforce === true, compute: computeOfFile(d.compute) }, ws);
     const halt = await pauseState(remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`));
     if (halt) console.log(`  paused       ${halt.paused ? c.red(`${halt.paused.scope === "account" ? "by the account: " : ""}${pauseLine(halt.paused)}`) : c.dim("no")}`);
@@ -9968,8 +10042,13 @@ async function workspaceCmd(positional, flags, layout) {
     }
   }
   const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}`, { method: "PATCH", body: JSON.stringify(patch) });
+  const turnedOff = key === "network_enforce" && patch.network_enforce !== true;
+  if (turnedOff) aboveOn = await accountEnforces(url, flags);
   if (r.defaults) show(r.defaults, r.name ?? ws);
   console.log(`\n  ${c.green("✓")} ${r.renamed ? `renamed to ${r.name}` : verb === "clear" ? `${key} cleared` : `${key} set`} ${c.dim(`on ${r.name ?? ws}`)}`);
+  // FOL-105: "off" here only drops this file's own true — the account's on
+  // still refuses, and a ✓ alone read as if runs here were now allowed.
+  if (turnedOff && aboveOn) console.log(`  ${c.amber("!")} still refused here: the account enforces network_enforce — \`foldrun account set network_enforce off\` turns it off for every workspace`);
   if (r.brokeWebhooks?.length) console.log(`  ${c.amber("!")} webhook URLs changed for ${r.brokeWebhooks.join(", ")} — copy the new ones from each flow`);
   console.log();
   return 0;

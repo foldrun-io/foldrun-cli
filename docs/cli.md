@@ -314,6 +314,13 @@ revoked like any other — and the CLI stored it in `~/.foldrun/credentials.json
 (mode 0600; `FOLDRUN_HOME` moves the directory). An owner's terminal is an
 admin's: a key is never an owner.
 
+That key lasts 90 days, and renews itself: when a command finds fewer than
+14 days left, the CLI rotates the key from itself (same label, role and
+workspaces) and stores the new one, saying so on one dim line. A machine in
+use never sees its sign-in end; one left unused for 90 days is signed out,
+and the next command says to run `foldrun login` again. A key handed in with
+`--token` or `FOLDRUN_TOKEN` is never renewed — its end is its owner's.
+
 `foldrun login --url https://foldrun.example.com` signs in to your own
 installation; the last one signed in to is the default afterwards, and
 `--url` on any command picks another. `foldrun login --token <key>` stores a
