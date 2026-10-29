@@ -3545,6 +3545,9 @@ async function invoke(target, flags) {
   try {
     body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
       method: "POST",
+      // The route reads the Idempotency-Key header before the body's key, and
+      // every write carries a fresh one — so --once must BE that header.
+      ...(typeof flags.once === "string" && flags.once ? { headers: { "idempotency-key": flags.once } } : {}),
       body: JSON.stringify({
         task,
         ...(from !== undefined ? { from } : {}),

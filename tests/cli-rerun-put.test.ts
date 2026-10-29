@@ -125,4 +125,6 @@ test("invoke --once sends the idempotency key", async () => {
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(JSON.parse(s.seen[0].body).idempotencyKey, "ci-1234");
+  // The platform reads the header first; a random one there hid the key.
+  assert.equal(s.seen[0].headers["idempotency-key"], "ci-1234");
 });
