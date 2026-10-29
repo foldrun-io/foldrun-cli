@@ -11666,12 +11666,15 @@ async function evalNewCmd(name, flags, layout) {
 
 /**
  * `foldrun team` — who is in the account, their role and which workspaces
- * they may open (GET /api/team). Read-only on purpose: inviting, changing a
- * role or workspace access, removing someone and transferring the account are
- * a person's acts, and the platform refuses them from a key (requirePerson,
- * server/api.ts) — so there is nothing for a key-holding CLI to send.
+ * they may open (GET /api/team). Inviting, changing a role or workspace
+ * access, removing someone and transferring the account are a person's acts,
+ * and the platform refuses them from a key (requirePerson, server/api.ts) —
+ * so there is nothing for a key-holding CLI to send. The one write a key may
+ * make is taking an invite back: `foldrun team invites` lists the links
+ * still out, `foldrun team invites revoke <id>` ends one.
  */
 async function teamCmd(positional, flags) {
+  if (positional[0] === "invites") return teamInvitesCmd(positional.slice(1), flags);
   if (positional[0]) {
     throw new Error("`foldrun team` lists the members — inviting, changing a role or workspace access, removing a member and transferring the account are a signed-in person's acts, done in Settings → Team; the platform refuses them from a key");
   }
@@ -11692,6 +11695,51 @@ async function teamCmd(positional, flags) {
     console.log(`  ${c.bold(pad(m.email, w))}  ${pad(m.owner ? "owner" : m.role, 7)} ${c.dim(scope)}  ${c.dim(m.createdAt ? `joined ${String(m.createdAt).slice(0, 10)}` : "")}`);
   }
   console.log(`\n  ${c.dim(`${members.length} member${members.length === 1 ? "" : "s"} · invites, roles and removals: Settings → Team in the dashboard (a person's, never a key's)`)}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun team invites [--all] [--json]` — the account's invites (GET
+ * /api/team/invites): pending ones, or every one with --all. Never a link:
+ * that is shown once, to the person who made it. `foldrun team invites
+ * revoke <id>` takes one back (DELETE /api/team/invites/<id>) — its link
+ * stops working at once. Settings → Team does the same.
+ */
+async function teamInvitesCmd(positional, flags) {
+  const url = platformFor(flags, "team invites");
+  if (positional[0] === "revoke") {
+    const id = positional[1];
+    if (!id) throw new Error("which invite? `foldrun team invites revoke <id>` — `foldrun team invites` lists them");
+    const r = await remoteCall(url, flags, `/api/team/invites/${enc(id)}`, { method: "DELETE" });
+    if (flags.json === true) {
+      console.log(JSON.stringify(r, null, 2));
+      return 0;
+    }
+    const who = r.invite?.email ?? "anyone with the link";
+    console.log(r.revoked
+      ? `\n  ${c.green("revoked")} the invite for ${c.bold(who)} ${c.dim(`(${id}) — its link no longer works`)}\n`
+      : `\n  ${c.dim(`the invite for ${who} (${id}) was already ${r.invite?.status ?? "revoked"} — nothing changed`)}\n`);
+    return 0;
+  }
+  if (positional[0]) throw new Error(`\`foldrun team invites\` lists the invites; \`foldrun team invites revoke <id>\` takes one back — not "${positional[0]}"`);
+  const { invites = [] } = await remoteCall(url, flags, `/api/team/invites${flags.all === true ? "?all=1" : ""}`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(invites, null, 2));
+    return 0;
+  }
+  if (!invites.length) {
+    console.log(`\n  ${c.dim(flags.all === true ? "no invites" : "no pending invites")}\n`);
+    return 0;
+  }
+  const label = (i) => i.email ?? "anyone with the link";
+  const w = Math.max(...invites.map((i) => label(i).length));
+  console.log();
+  for (const i of invites) {
+    const scope = i.workspaces === null || i.workspaces === undefined ? "every workspace" : i.workspaces.length ? i.workspaces.join(", ") : "no workspaces";
+    const state = i.status === "pending" ? `expires ${when(i.expiresAt)}` : i.status;
+    console.log(`  ${c.bold(pad(label(i), w))}  ${pad(i.role, 6)} ${c.dim(scope)}  ${c.dim(`by ${i.invitedBy} · ${state}`)}  ${c.dim(i.id)}`);
+  }
+  console.log(`\n  ${c.dim(`${invites.length} invite${invites.length === 1 ? "" : "s"} · each works once · foldrun team invites revoke <id> takes one back`)}\n`);
   return 0;
 }
 

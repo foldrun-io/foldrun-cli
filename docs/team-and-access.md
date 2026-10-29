@@ -35,9 +35,38 @@ everyone's workspaces at once.
 
 ## Invites
 
-An invite carries a role, a workspace scope, and an email address it is bound
-to — only that address can accept it. It is sent through the account's email
-connection, or returned as a link to pass on yourself.
+An invite carries a role, a workspace scope, and usually an email address it
+is bound to — only that address can accept it. It is sent through the
+account's email connection, or returned as a link to pass on yourself; an
+invite with no address is a link for one person, whoever opens it first.
+
+- **It works once.** The first signup on it uses it up, in the same step that
+  creates the member; a second person, or the same person again, is refused.
+  It lasts seven days.
+- **Pending invites are listed.** Settings → Team shows the links still out —
+  the address or "anyone with the link", role, workspaces, who made it, when
+  it expires — with **Revoke** on each. The same list is
+  `GET /api/team/invites` (`?all=1` adds accepted, revoked and expired ones)
+  and `foldrun team invites`. The link itself is never listed: it is shown
+  once, to the person who made it.
+- **Revoke one** with that button, `DELETE /api/team/invites/<id>` or
+  `foldrun team invites revoke <id>`; its link stops working at once. An
+  admin invite is the owner's to revoke, and a member scoped to some
+  workspaces sees and revokes only the invites inside its scope.
+- **Other things revoke them too.** A new invite to an address revokes the
+  older ones still pending to it. Removing a member revokes every pending
+  invite they made and any pending invite to their address — a removed
+  member cannot rejoin with an old link. Lowering a member's role or
+  narrowing their workspaces revokes the invites they made that they could
+  no longer make. An invite is also checked against its maker when it is
+  accepted: if they have left or can no longer grant it, it is refused.
+- **Old links are refused.** Invite links made before 29 October 2026 were
+  signed statements with no record behind them; they no longer work. Send a
+  new invite.
+
+Each revocation is in the audit log as `member.invite_revoked`;
+`member.removed` lists `invitesRevoked`, and `member.joined` names the
+`inviteId`.
 
 ## API keys
 

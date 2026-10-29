@@ -26,6 +26,7 @@
 //   foldrun flags          the feature flags for this account — on or off, and why (read-only)
 //   foldrun backups        how the account is backed up, its snapshots — request a restore from one, requests lists them
 //   foldrun team           who is in the account, their roles and workspaces (read-only)
+//   foldrun team invites   the invites still out; `revoke <id>` takes one back
 //   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
 //   foldrun onboarding     the account's getting-started steps, the next one first
 //   foldrun billing        the balance, and what the money went on
@@ -249,6 +250,8 @@ Signing in
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
   foldrun team              who is in the account: role, the workspaces each may open, when they joined (--json). Read-only: invites, roles, removal and transfer are a signed-in person's, in Settings → Team
+  foldrun team invites      the account's pending invites — address or "anyone with the link", role, workspaces, who made it, when it expires, its id (--all for accepted, revoked and expired too; --json). Never the link: each works once, shown only to its maker
+  foldrun team invites revoke <id>   take an invite back: its link stops working at once (an admin's; a key may)
   foldrun onboarding        the account's getting-started steps, done or not, the next one first (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
   foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /api/healthz

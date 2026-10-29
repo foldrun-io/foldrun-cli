@@ -286,6 +286,46 @@ test("team lists members, roles and scopes from GET /api/team — and refuses ev
   assert.equal(s.seen.length, 2, "the refused verb sent nothing");
 });
 
+test("team invites lists GET /api/team/invites (--all asks for every one) and revoke sends DELETE …/invites/<id>", async () => {
+  const invites = [
+    { id: "a".repeat(32), email: "new@x.com", role: "editor", workspaces: ["blog-desk"], invitedBy: "owner@x.com", createdAt: "2026-10-29T00:00:00Z", expiresAt: "2026-11-05T00:00:00Z", status: "pending" },
+    { id: "b".repeat(32), email: null, role: "viewer", workspaces: null, invitedBy: "owner@x.com", createdAt: "2026-10-28T00:00:00Z", expiresAt: "2026-11-04T00:00:00Z", status: "pending" },
+  ];
+  const s = await serve({
+    "/api/team/invites": (_b, q) => ({ invites: q.get("all") === "1" ? [...invites, { ...invites[0], id: "c".repeat(32), status: "accepted" }] : invites }),
+    [`DELETE /api/team/invites/${"a".repeat(32)}`]: () => ({ ok: true, revoked: true, invite: { ...invites[0], status: "revoked" } }),
+    [`DELETE /api/team/invites/${"b".repeat(32)}`]: () => ({ ok: true, revoked: false, invite: { ...invites[1], status: "expired" } }),
+    [`DELETE /api/team/invites/${"d".repeat(32)}`]: () => ({ __status: 409, body: { error: "that invite was already accepted — remove the member instead" } }),
+  });
+  const r = await at(s.url, "team", "invites");
+  const all = await at(s.url, "team", "invites", "--all", "--json");
+  const revoke = await at(s.url, "team", "invites", "revoke", "a".repeat(32));
+  const again = await at(s.url, "team", "invites", "revoke", "b".repeat(32));
+  const used = await at(s.url, "team", "invites", "revoke", "d".repeat(32));
+  const none = await at(s.url, "team", "invites", "revoke");
+  const odd = await at(s.url, "team", "invites", "resend");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /new@x\.com\s+editor\s+blog-desk\s+by owner@x\.com · expires/);
+  assert.match(r.out, /anyone with the link\s+viewer\s+every workspace/);
+  assert.match(r.out, /2 invites · each works once/);
+  assert.doesNotMatch(r.out, /signup\?invite=/, "never a link");
+  assert.equal(s.seen[0].query.get("all"), null);
+  assert.equal(s.seen[1].query.get("all"), "1");
+  assert.equal(json(all.out).length, 3);
+  assert.equal(revoke.code, 0, revoke.out);
+  assert.match(revoke.out, /revoked the invite for new@x\.com/);
+  assert.equal(again.code, 0, again.out);
+  assert.match(again.out, /already expired — nothing changed/);
+  assert.equal(used.code, 1);
+  assert.match(used.out, /already accepted/);
+  assert.deepEqual(writes(s).map((w) => `${w.method} ${w.url}`), ["a", "b", "d"].map((c) => `DELETE /api/team/invites/${c.repeat(32)}`));
+  assert.equal(none.code, 1);
+  assert.match(none.out, /which invite\?/);
+  assert.equal(odd.code, 1);
+  assert.match(odd.out, /not "resend"/);
+});
+
 // ------------------------------------------------------------ runs, billing, windows
 
 test("stop/rerun --until sends until with the filter to runs/bulk — a span or a date", async () => {
@@ -335,7 +375,7 @@ test("observe and triggers send their window as days", async () => {
 test("--help for each new verb names it and calls nothing", async () => {
   const s = await serve({});
   for (const [args, want] of [
-    [["team"], /foldrun team\s+who is in the account/],
+    [["team"], /foldrun team\s+who is in the account[\s\S]*team invites revoke <id>/],
     [["workspaces"], /workspaces show <name>[\s\S]*workspaces new <name> --platform/],
     [["agent"], /agent new <name> --platform[\s\S]*agent ls[\s\S]*agent import --list/],
     [["flow"], /flow new <name> --platform/],
