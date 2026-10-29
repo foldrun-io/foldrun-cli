@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [8.1.0] — 2026-10-29
+
+### feat
+
+- renew CLI-login keys; clearer login and network_enforce output; pull into an empty folder stays there (FOL-71, FOL-105, FOL-104) ([1155ae6](https://github.com/foldrun-io/foldrun-cli/commit/1155ae6))
+
+### fix
+
+- --wait shows why a run failed (FOL-106) ([d77fc92](https://github.com/foldrun-io/foldrun-cli/commit/d77fc92))
+
 ## [8.0.0] — 2026-10-29
 
 ### Breaking changes
