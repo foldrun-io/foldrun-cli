@@ -362,6 +362,24 @@ test("pull brings workspaces and the library down into the folder", async () => 
   }
 });
 
+test("pull from an empty folder writes into that folder, never its parent, and says where (FOL-104)", async () => {
+  const parent = tmp();
+  const here = path.join(parent, "empty");
+  fs.mkdirSync(here);
+  const p = await fakePlatform();
+  p.workspaces.set("ads-desk", new Map([["AGENTS.md", "# ads\n"], ["flows/daily.md", "1. [[writer]] — go.\n"]]));
+  try {
+    const r = await foldrunAsync(here, "pull", "--url", p.url, "--token", "k");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(read(here, "workspaces/ads-desk/flows/daily.md"), "1. [[writer]] — go.\n");
+    assert.ok(exists(here, "AGENTS.md"));
+    assert.deepEqual(fs.readdirSync(parent), ["empty"], "nothing written beside the folder");
+    assert.ok(r.stdout.includes(`into ${fs.realpathSync(here)}`) || r.stdout.includes(`into ${here}`), r.stdout);
+  } finally {
+    p.close();
+  }
+});
+
 test("pull refuses to clobber a local edit, names it, and changes nothing until --force", async () => {
   const root = path.join(tmp(), "acme");
   foldrun("init", root);
