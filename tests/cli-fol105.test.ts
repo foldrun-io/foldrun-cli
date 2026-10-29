@@ -30,12 +30,14 @@ test("login and whoami name the credentials file FOLDRUN_HOME chose, not ~/.fold
     const who = await cli(["whoami"], { env: { FOLDRUN_HOME: home } });
     s.close();
     const file = path.join(home, "credentials.json");
+    // Under the home folder the CLI writes it as ~/… (a TMPDIR inside $HOME).
+    const shown = file.startsWith(os.homedir() + path.sep) ? `~${file.slice(os.homedir().length)}` : file;
     assert.equal(login.code, 0, login.out);
     assert.ok(fs.existsSync(file), "the key is where FOLDRUN_HOME says");
-    assert.ok(login.out.replace(/\s+/g, " ").includes(`in ${file}.`), login.out);
+    assert.ok(login.out.replace(/\s+/g, " ").includes(`in ${shown}.`), login.out);
     assert.doesNotMatch(login.out, /~\/\.foldrun\/credentials\.json/);
     assert.equal(who.code, 0, who.out);
-    assert.ok(who.out.includes(`credential from ${file} as "acme"`), who.out);
+    assert.ok(who.out.includes(`credential from ${shown} as "acme"`), who.out);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

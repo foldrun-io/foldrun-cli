@@ -711,7 +711,7 @@ async function platformLibrary(flags) {
   if (!url) return { url: undefined, tools: new Set(), skills: new Set(), warning: null };
   let token;
   try {
-    token = tokenFor(url, { ...flags, quiet: true });
+    token = await renewedToken(url, { ...flags, quiet: true });
   } catch {
     return { url, tools: new Set(), skills: new Set(), warning: `${url} is the platform but this machine is not signed in — library tools there cannot be seen` };
   }
@@ -1948,7 +1948,7 @@ async function runEvals(name, flags = {}) {
  * read exactly like one refused on disk.
  */
 async function deployOverHttp(url, workspace, files, flags, expectRemoved) {
-  const token = tokenFor(url, flags);
+  const token = await renewedToken(url, flags);
   const endpoint = `${url.replace(/\/+$/, "")}/api/workspaces/${encodeURIComponent(workspace)}/deploy`;
 
   let res;
@@ -2542,15 +2542,48 @@ async function renewIfDue(url, flags) {
     const a = /** @type {any} */ (await meRes.json())?.actor ?? {};
     if (a.kind !== "key" || a.origin !== "cli-login") return void save({ renews: false, checkedAt: new Date(now).toISOString() });
     if (!a.expiresAt || Date.parse(a.expiresAt) - now > RENEW_DAYS * DAY_MS) return void save({ renews: true, expiresAt: a.expiresAt ?? null, checkedAt: undefined });
+    // Rotate only what can be kept: the old key ends minutes after the
+    // rotation lands, so a credentials file this CLI cannot write would lose
+    // the new key and sign the machine out. Then the old one runs to its end.
+    if (!credentialsWritable()) return;
     const res = await remoteFetch(at, `/api/keys/${enc(a.id)}/rotate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, { token: p.token });
     if (!res.ok) return;
     const r = /** @type {any} */ (await res.json());
     if (typeof r.key !== "string") return;
-    save({ token: r.key, renews: true, expiresAt: r.expiresAt ?? null, checkedAt: undefined });
+    try {
+      save({ token: r.key, renews: true, expiresAt: r.expiresAt ?? null, checkedAt: undefined });
+    } catch (err) {
+      // Not silent: the old key now ends within minutes. The next command
+      // retries with it (the platform rotates the unused new one), and
+      // `foldrun login` is the way back if that cannot be stored either.
+      console.error(`  ${c.amber("!")} renewed this machine's sign-in but could not store it (${err instanceof Error ? err.message : err}) — the next command tries again within 10 minutes; after that, \`foldrun login\``);
+      return;
+    }
     if (flags.quiet !== true) console.error(`  ${c.dim(`renewed this machine's sign-in as "${name}"${r.expiresAt ? ` — it now lasts until ${String(r.expiresAt).slice(0, 10)}` : ""}`)}`);
   } catch {
     // Offline, an old platform, a read-only home: the old key still works.
   }
+}
+
+/** Whether the credentials file can be written in place (or, not there yet,
+ *  made) — checked before a renewal, which cannot be undone. */
+function credentialsWritable() {
+  const dir = credentialsDir();
+  const file = path.join(dir, "credentials.json");
+  try {
+    fs.accessSync(fs.existsSync(file) ? file : dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** tokenFor, after the once-per-command renewal remoteCall does — for the
+ *  calls that fetch bytes, uploads or streams themselves (FOL-71). Without
+ *  it a machine that only ran those would never renew its sign-in. */
+async function renewedToken(url, flags) {
+  await renewIfDue(url, flags);
+  return tokenFor(url, flags);
 }
 
 /**
@@ -2563,8 +2596,7 @@ async function renewIfDue(url, flags) {
  * @returns {Promise<any>}
  */
 async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
-  await renewIfDue(url, flags);
-  const token = tokenFor(url, flags);
+  const token = await renewedToken(url, flags);
   const res = await remoteFetch(
     url,
     apiPath,
@@ -2686,7 +2718,7 @@ class StreamIdle extends Error {
  * first, and throws StreamIdle when nothing arrives for streamIdleSeconds.
  */
 async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
-  const token = tokenFor(url, flags);
+  const token = await renewedToken(url, flags);
   const idle = streamIdleSeconds();
   const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
   const ctrl = new AbortController();
@@ -3713,7 +3745,7 @@ async function connect(positional, flags) {
   // this machine's vault otherwise. Decided before the browser opens, so a
   // consent is never spent on a store that then refuses it.
   const url = flags.local === true ? undefined : remoteUrl(flags);
-  const token = url ? tokenFor(url, flags) : null;
+  const token = url ? await renewedToken(url, flags) : null;
   const workspaceName = flags.to ?? (flags.workspace ? path.basename(path.resolve(flags.workspace)) : undefined);
 
   // Reconnecting: the platform already holds the client this secret (or this
@@ -5261,7 +5293,7 @@ async function storageCmd(positional, flags, layout) {
       if (jobs.length !== 1) throw new Error("--as names one file; for several use --into <folder/>");
       jobs[0].rel = flags.as;
     }
-    const token = tokenFor(url, flags);
+    const token = await renewedToken(url, flags);
     const base = `/api/workspaces/${encodeURIComponent(ws)}/storage`;
     const said = async (res) => {
       const text = await res.text();
@@ -5333,7 +5365,7 @@ async function storageCmd(positional, flags, layout) {
   // streams the bytes on the fs driver, so this is a plain fetch that
   // follows redirects — not remoteCall, which parses JSON and would make a
   // markdown file look like a broken platform.
-  const token = tokenFor(url, flags);
+  const token = await renewedToken(url, flags);
   const res = await remoteFetch(url, `/api/workspaces/${ws}/storage/download?path=${encodeURIComponent(rel)}`, {}, { token });
   if (!res.ok) {
     const said = await res.text();
@@ -9457,7 +9489,7 @@ async function apiCmd(positional, flags) {
 
 /** A GET whose answer is a file, not JSON — the error body still is. */
 async function remoteBytes(url, flags, apiPath, what) {
-  const token = tokenFor(url, flags);
+  const token = await renewedToken(url, flags);
   const res = await remoteFetch(url, apiPath, {}, { token, seconds: timeoutSeconds(flags) });
   if (!res.ok) {
     const said = await res.text();
@@ -9509,7 +9541,7 @@ async function importCmd(positional, flags, layout) {
   const url = platformFor(flags, "import");
   const ws = platformWorkspace(flags, layout, "import");
   const bytes = fs.readFileSync(file);
-  const token = tokenFor(url, flags);
+  const token = await renewedToken(url, flags);
   const send = async (query) => {
     const res = await remoteFetch(
       url,
@@ -11865,7 +11897,7 @@ async function reportLiveCmd(runId, flags, layout) {
     console.log(`\n  ${c.dim(`foldrun report ${runId} live --agent <name> saves its newest frame`)}\n`);
     return 0;
   }
-  const res = await remoteFetch(url, `${base}?agent=${enc(agent)}`, {}, { token: tokenFor(url, flags), seconds: timeoutSeconds(flags) });
+  const res = await remoteFetch(url, `${base}?agent=${enc(agent)}`, {}, { token: await renewedToken(url, flags), seconds: timeoutSeconds(flags) });
   if (res.status === 204) {
     console.log(`\n  ${c.dim(`${agent} has no frame — its browser has not shown anything yet`)}\n`);
     return 0;

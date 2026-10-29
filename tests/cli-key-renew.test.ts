@@ -104,3 +104,34 @@ test("a rotation the platform refuses leaves the old key and the command alone",
   assert.match(r.out, /blog-desk/);
   assert.equal(stored(dir).token, "mda_old");
 });
+
+test("a credentials file this CLI cannot write: nothing is rotated, so the new key is never lost", { skip: process.getuid?.() === 0 ? "root writes a read-only file anyway" : false }, async () => {
+  const s = await serve({
+    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
+    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
+    "/api/workspaces": () => WORKSPACES,
+  });
+  const dir = home(s.url);
+  fs.chmodSync(path.join(dir, "credentials.json"), 0o444);
+  const r = await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } });
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.equal(calls(s, "/api/keys/k1/rotate").length, 0, "rotating would end the stored key minutes later");
+  assert.equal(stored(dir).token, "mda_old");
+});
+
+test("a command that fetches bytes itself (storage cat) renews too", async () => {
+  const s = await serve({
+    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
+    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
+    "/api/workspaces/blog-desk/storage/download": () => ({ __raw: "# notes\n", type: "text/markdown" }),
+  });
+  const dir = home(s.url);
+  const r = await cli(["storage", "cat", "notes.md", "--to", "blog-desk"], { env: { FOLDRUN_HOME: dir } });
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /# notes/);
+  assert.equal(calls(s, "/api/keys/k1/rotate").length, 1);
+  assert.equal(stored(dir).token, "mda_new");
+  assert.equal(calls(s, "/api/workspaces/blog-desk/storage/download").at(-1)!.headers.authorization, "Bearer mda_new");
+});
