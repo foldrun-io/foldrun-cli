@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [9.0.2] — 2026-10-30
+
+### chore
+
+- remove dead code, and refuse unused locals at typecheck ([174de9e](https://github.com/foldrun-io/foldrun-cli/commit/174de9e))
+
 ## [9.0.1] — 2026-10-30
 
 - fix(flags): the platform's operator changes flags, not a super admin ([9fe926f](https://github.com/foldrun-io/foldrun-cli/commit/9fe926f))
