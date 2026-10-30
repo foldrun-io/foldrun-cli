@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [10.1.0] — 2026-10-30
+
+### New in the public API
+
+- `foldrun secrets workspaces`
+- the `--none` flag
+- the `--workspaces` flag
+
+- feat(secrets): secrets workspaces / set --workspaces; masked share ids; check --online note ([2bc54f1](https://github.com/foldrun-io/foldrun-cli/commit/2bc54f1))
+
 ## [10.0.0] — 2026-10-30
 
 ### Breaking changes
