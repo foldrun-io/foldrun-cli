@@ -30,6 +30,16 @@ Both are platform settings (`FOLDRUN_STORAGE_MAX_MB`,
 `FOLDRUN_STORAGE_QUOTA_MB`). Storage is metered per GB-month where billing is
 on.
 
+Both limits hold for a direct upload too. An upload asks for its URL with the
+file's length (`POST …/storage/upload-url` with `path`, `sha`, `size`); the
+limits are checked then, and the length is signed into the URL, so the bucket
+refuses a body of any other length. Recording the file afterwards measures
+the object the bucket holds; the record, the limit and the quota use that,
+never the length the client claimed, and an object over a limit is removed.
+
+Storage belongs to a workspace that exists: a name with no workspace is a
+`404`, never a fresh, empty store.
+
 ## Under the hood
 
 Blobs are content-addressed and go to object storage (S3-compatible — R2, S3
@@ -66,6 +76,11 @@ foldrun storage unshare <token> --to <ws>
   into sharing is confined to what the workspace produced and can never hand
   out `memory/`, a prompt, or a credential.
 - Revoking is permanent; a re-share mints a new token.
+- Deleting a workspace revokes its links and deletes its stored files.
+  Renaming one moves both: its links keep working, under the new name.
+- A link answers at most 120 requests a minute to one caller (where a trusted
+  proxy names the caller) and 1,200 a minute in all, then `429` with
+  `Retry-After`. The file is streamed, never read whole into memory.
 
 Files written under **`storage/public/`** get a link automatically after the
 run — for the agent that needs a URL for what it just produced.

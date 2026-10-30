@@ -10,7 +10,7 @@ whose supervisors cannot see what the agents did is not supervised.
 | role | may |
 |---|---|
 | **viewer** | read everything — workspaces, runs and their output, files, history, usage |
-| **editor** | + edit files, upload, deploy, push; run, stop, re-run, approve and promote runs; test tools |
+| **editor** | + edit files, upload, deploy (to a workspace that exists — a deploy that makes one is an admin's), push; run, stop, re-run, approve and promote runs; test tools |
 | **admin** | + create and delete workspaces; write secrets and connect credentials; mint keys; invite, re-role and remove editors and viewers |
 | **owner** | + billing; make and unmake admins; transfer the account |
 

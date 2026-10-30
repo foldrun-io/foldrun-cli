@@ -106,6 +106,9 @@ test("storage put sends the bytes to a presigned URL, then records the file", as
   assert.equal(record.size, 9);
   assert.match(record.sha, /^[0-9a-f]{64}$/);
   assert.equal(JSON.parse(s.seen[0].body).sha, record.sha);
+  // 30 Oct 2026: the platform refuses upload-url without the length — it
+  // checks the limits on it and signs it into the bucket URL.
+  assert.equal(JSON.parse(s.seen[0].body).size, 9);
 });
 
 test("keys create --workspaces narrows the key, and 'all' asks for every workspace", async () => {

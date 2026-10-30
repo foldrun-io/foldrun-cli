@@ -24,6 +24,14 @@ notify:
 
 A bare string is whichever destination it looks like: `notify: ops@example.com`.
 
+`${NAME}` is filled from the vault, the workspace's first and then the
+account's, as for an agent. A secret [bound to sites](secrets#bound-to-sites)
+is filled only when the URL's host is one of them — bind `SLACK_WEBHOOK_URL`
+to `hooks.slack.com` and it goes there and nowhere else; named in a URL to
+any other host, nothing is sent and the delivery log says which secret
+stopped it. A URL that carries a secret follows a redirect only within its
+own origin.
+
 A webhook can also be signed, so the receiver can tell a real notification
 from anyone who learned the URL:
 

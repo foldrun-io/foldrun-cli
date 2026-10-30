@@ -5316,7 +5316,9 @@ async function storageCmd(positional, flags, layout) {
       }
       try {
         const sha = crypto.createHash("sha256").update(bytes).digest("hex");
-        const ask = await remoteFetch(url, `${base}/upload-url`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha }) }, { token });
+        // The length too: the platform checks the limits on it and signs it
+        // into the URL, so the bucket takes exactly these bytes (30 Oct 2026).
+        const ask = await remoteFetch(url, `${base}/upload-url`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha, size: bytes.length }) }, { token });
         // A platform older than presigned uploads answers 404 here: it
         // takes the bytes itself, the way one with no bucket does.
         if (!ask.ok && ask.status !== 404) throw new HttpError(await said(ask), ask.status, {});

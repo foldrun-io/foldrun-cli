@@ -169,6 +169,13 @@ Signing in, in particular:
 - signing out ends the session on the server, not just in the browser;
 - a two-step code works once; replacing a second factor means turning it
   off first, which needs the password and a code;
+- ten wrong two-step codes in a row pause codes from the app for up to a
+  day and mail the person — a backup code still signs in, and the pause
+  lifts by itself;
+- changing your login address only mails the new address a link, and the
+  move happens when that link is clicked; asking answers the same whether
+  or not the address already has a login, so it cannot be used to find out
+  who has an account;
 - the sign-in forms refuse a request from another site, and `?next=` only
   ever leads to a page on the same site;
 - `foldrun login` asks you to type the code your terminal shows — a link
@@ -176,12 +183,16 @@ Signing in, in particular:
   as you;
 - before the first sign-up, a self-hosted install's setup token guards key
   minting as it guards sign-up;
-- only the account's owner can set the account's `RESEND_API_KEY` and
-  `EMAIL_FROM`, because that sender carries everyone's reset links;
+- only the account's owner can set, rebind or remove the account's
+  `RESEND_API_KEY` and `EMAIL_FROM`, because that sender carries everyone's
+  reset links — whether through the secrets API or an OAuth connect;
+- a key rotated by a caller that is no person (a key known only by its
+  label) acts as nobody, never as the rotated key's owner;
 - a member or key limited to some workspaces cannot change what every
   workspace shares — the library, the account's AGENTS.md defaults, its
-  model provider, its OAuth apps — nor people who work outside its
-  workspaces.
+  model provider, its OAuth apps, the API version pin — nor people who work
+  outside its workspaces, and does not read the other workspaces' provider
+  blocks or charges, nor the account's billing details.
 
 Frontmatter is YAML only: a file opened with `---js` (which some parsers
 run as code) is refused.
