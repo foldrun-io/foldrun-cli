@@ -355,6 +355,7 @@ test("billing statement: the table, and --csv writes the file", async () => {
   assert.equal(table.code, 0, table.out);
   assert.match(table.out, /statement 2026-09.*spent \$4\.00 · added \$50\.00/);
   assert.match(table.out, /blog-desk\/hourly/);
+  assert.equal(csv.code, 0, csv.out);
   assert.equal(fs.readFileSync(file, "utf8"), "# foldrun statement,2026-09\n");
   assert.match(bad.out, /YYYY-MM/);
 });
@@ -372,6 +373,7 @@ test("billing wallet shows the runway, and set auto-top-up sends the settings", 
   assert.match(show.out, /about 5 days left at this burn — empty on 2026-10-05/);
   assert.match(show.out, /auto top-up\s+off/);
   assert.equal(set.code, 0, set.out);
+  assert.equal(off.code, 0, off.out);
   assert.deepEqual(posts(s, "PUT").map((p) => p.body), [{ autoTopUp: { enabled: true, thresholdUsd: 10, amountUsd: 50 } }, { autoTopUp: null }]);
   assert.equal(bad.code, 1);
   assert.match(bad.out, /between 5 and 500/);
@@ -422,6 +424,7 @@ test("workspace set timezone PATCHes it; set notify merges with the file; rename
   const clear = await at(s.url, "workspace", "clear", "budget", "--to", "blog-desk");
   s.close();
   assert.equal(tz.code, 0, tz.out);
+  assert.equal(notify.code, 0, notify.out);
   assert.deepEqual(posts(s, "PATCH").map((p) => p.body), [
     { timezone: "Australia/Sydney" },
     { notify: { url: "https://hooks.test/x", email: "ops@acme.test", events: ["failed"] } },

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage } from "./guide.mjs";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import { defaultPlatform, saveCredential, removeCredential, readCredentials, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
+import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
 // job, or a test that wants to match what a person reads. The tests had
@@ -3748,7 +3748,8 @@ async function connect(positional, flags) {
   // this machine's vault otherwise. Decided before the browser opens, so a
   // consent is never spent on a store that then refuses it.
   const url = flags.local === true ? undefined : remoteUrl(flags);
-  const token = url ? await renewedToken(url, flags) : null;
+  // Signed in (and the token renewed) before the browser opens.
+  if (url) await renewedToken(url, flags);
   const workspaceName = flags.to ?? (flags.workspace ? path.basename(path.resolve(flags.workspace)) : undefined);
 
   // Reconnecting: the platform already holds the client this secret (or this
@@ -4528,7 +4529,7 @@ const NO_ACCOUNT_FILE_API =
  * --platform --yes` is the deliberate way.
  */
 async function deployAccount(layout, flags, only) {
-  const { accountTreeFrom, LIBRARY_KINDS } = await core();
+  const { accountTreeFrom } = await core();
   // Ask from the workspace, not the account root, unless this IS an account
   // root: for a flat folder the account root is its parent, and reading the
   // tree from there would find a directory that is not a workspace at all.

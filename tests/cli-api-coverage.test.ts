@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { serve, at, cli, failing, WORKSPACES } from "./fake-platform.ts";
+import { serve, at, cli, WORKSPACES } from "./fake-platform.ts";
 
 const writes = (s: { seen: { method: string; url: string; body: string }[] }) =>
   s.seen.filter((x) => x.method !== "GET").map((x) => ({ method: x.method, url: x.url, body: x.body ? JSON.parse(x.body) : null }));

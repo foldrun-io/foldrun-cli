@@ -3,6 +3,7 @@
   // emit. The tests are .ts already and run under Node's type stripping,
   // so they are checked here too.
   "compilerOptions": {
+    "noUnusedLocals": true,
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
