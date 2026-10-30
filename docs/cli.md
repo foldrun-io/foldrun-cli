@@ -164,7 +164,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun webhooks redeliver <id>` | send one delivery again now, with the same `X-Foldrun-Delivery` id; prints the attempt and exits 1 when it was refused. `--to <workspace>` |
 | `foldrun notifications` | what mail you get, category by category: `always` for the required ones (security, invites, billing, account), `on`/`off` for the rest, and the workspaces where run alerts or approvals differ. `--json` |
 | `foldrun notifications set <category> on\|off` | turn one category off, or back on — account-wide, or for one workspace with `--to <workspace>` (`run-alerts`, `approvals`). A required category is refused with the reason |
-| `foldrun flags` | the feature flags for this account: each one `on` or `off` and why — `account` (set for this account), `global` (set for every account), `rollout` (a share of accounts, with its percentage) or `default` — and what it does. Read-only: only the platform's super admin changes a flag, in the console. `--json` for the API's answer as it came. See [Feature flags](feature-flags.md) |
+| `foldrun flags` | the feature flags for this account: each one `on` or `off` and why — `account` (set for this account), `global` (set for every account), `rollout` (a share of accounts, with its percentage) or `default` — and what it does. Read-only: only the platform's operator changes a flag (on foldrun's hosted platform; a self-hosted install runs every flag at its default). `--json` for the API's answer as it came. See [Feature flags](feature-flags.md) |
 | `foldrun history [path]` | every change to a deployed workspace, newest first: revision id, when, who, the message and the files. A path narrows it to one file; `--id <revision>` prints that revision as diffs; `--limit <n>`; `--to <workspace>` |
 | `foldrun history restore <path> --id <revision>` | the History drawer's **Restore this version**: the file is rewritten with that revision's text as a new revision, `restored <rev> from history`, so the restore is itself undone the same way. Shows the diff against the file now and asks (`--yes`, `--dry-run`); sent with `ifMatch`, so a file that changed since is refused. A version that does not pass today's checks is still restored, and the errors are printed (`--to`) |
 | `foldrun restore <workspace> --to <revision\|time\|age>` | put a workspace's source back as it was then — `--to` is a revision id (`r-…`, from `foldrun history`), the commit a deploy named, a date/time (the last revision at or before it) or an age (`90m`, `12h`, `3d`, `2w`). Always shows the change first (`--dry-run`: the full diff and nothing else); the restore asks for the workspace's name typed back (`--yes` with no terminal) and sends the removals it showed, so a file added in between refuses it. A new revision, so it prints the `foldrun restore … --to <from>` that undoes it. Runs, `state/`, storage and secrets are not touched. See [Backups and restore](backups-and-restore.md) |
@@ -459,9 +459,9 @@ write secrets however it is used. `foldrun keys ls` on their account shows
 it, and `foldrun keys revoke <id>` ends it — which is the point of doing it
 this way: they can take it back without changing a password.
 
-**You reset it, as the platform.** Only the platform's own super admin can,
-only on the hosted platform, and it ends every session that account had:
-from its console, the member → **reset password**. The new password is
+**You reset it, as the platform.** Only the platform's operator can, only
+on foldrun's hosted platform, and it ends every session that account had:
+from the operator console, the member → **reset password**. The new password is
 shown once. Sign in as them in a private window, then `foldrun login
 --profile <name>` and approve the code in that window.
 

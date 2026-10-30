@@ -10219,12 +10219,14 @@ const FLAG_SOURCES = {
  * `foldrun flags` — the feature flags as they stand for this account: on or
  * off, and what decided it (this account's override, the install-wide
  * setting, a percentage rollout, or the default). Read-only: only the
- * platform's super admin changes a flag, in the console, with a session —
- * an API key never reaches those routes, so the CLI has no verb for them.
+ * platform's operator changes a flag — on foldrun's hosted platform, from
+ * its operator console, which no account and no API key reaches; a
+ * self-hosted install runs every flag at its default. So the CLI has no
+ * verb for it.
  */
 async function flagsCmd(positional, flags) {
   const url = platformFor(flags, "flags");
-  if (positional[0]) throw new Error("`foldrun flags` lists this account's feature flags — they are changed by the platform's super admin, not from here");
+  if (positional[0]) throw new Error("`foldrun flags` lists this account's feature flags — only the platform's operator changes them, not from here");
   const r = await remoteCall(url, flags, "/api/account/flags");
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
@@ -10242,7 +10244,7 @@ async function flagsCmd(positional, flags) {
     const state = f.on ? c.green("on ") : c.dim("off");
     console.log(`  ${pad(f.name, w)}  ${state}  ${c.dim(pad(why(f), sw))}  ${f.description}`);
   }
-  console.log(`\n  ${c.dim("read-only — the platform's super admin turns flags on and off")}\n`);
+  console.log(`\n  ${c.dim("read-only — the platform's operator turns flags on and off")}\n`);
   return 0;
   function why(f) {
     const base = FLAG_SOURCES[f.source] ?? String(f.source ?? "");

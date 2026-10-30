@@ -13,8 +13,8 @@ and why.
 
 The flags themselves are code — a name, what it changes, who owns it, a
 default, and sometimes a rollout percentage. A name the code does not
-register is not a flag; asking for one is a 404. What the platform's super
-admin sets on top is checked in this order, and the first that has an
+register is not a flag; asking for one is a 404. What the platform's
+operator sets on top is checked in this order, and the first that has an
 answer wins:
 
 | | source | |
@@ -30,8 +30,8 @@ within ten seconds.
 ## The example
 
 `example-flag` is registered, off by default, and read by nothing: turning
-it on changes no behaviour. It is there to try the console, the API and the
-CLI against without risk.
+it on changes no behaviour. It is there to try the API and the CLI
+against without risk.
 
 ```sh
 foldrun flags              # every flag, on or off for this account, and why
@@ -53,6 +53,9 @@ the install-wide on/off and rollout, and an override per account. Every change i
 it and what it was before. The settings are rows in Postgres
 (`feature_flags`), or `<data>/.feature-flags.json` without a database; an
 account's overrides go when the account is deleted, and their audit stays.
+
+A self-hosted install has no operator console, so nothing changes a flag
+there: every flag runs at its registry default.
 
 A flag is added by a line in `foldrun-platform/src/flags.ts` and asked with
 `flagOn(account, "<name>")`. Retire it by deleting the line and the code

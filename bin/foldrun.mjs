@@ -209,7 +209,7 @@ const HELP = `foldrun — agents are just folders
   foldrun webhooks redeliver <id>  send one delivery again now, same X-Foldrun-Delivery id; exits 1 when refused (--to)
   foldrun notifications     what mail you get, category by category, and which are always sent (--json)
   foldrun notifications set <category> on|off  turn one off or back on — account-wide, or --to <workspace> for run-alerts and approvals
-  foldrun flags             the feature flags for this account: each on or off, and why — set for this account, for every account, a staged rollout, or the default (--json). Read-only: the platform's super admin changes them
+  foldrun flags             the feature flags for this account: each on or off, and why — set for this account, for every account, a staged rollout, or the default (--json). Read-only: the platform's operator changes them
   foldrun history [path]    every change to a deployed workspace, newest first (--id <revision> for its diff, --limit, --to)
   foldrun history restore <path> --id <revision>  put one file back as that revision left it, as a new revision — diff, asks (--yes, --dry-run, --to)
   foldrun restore <ws> --to <revision|time|age>  put a workspace's source back as it was then — shows the change, asks for the name typed back (--dry-run: the diff only, --yes)

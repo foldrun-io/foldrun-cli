@@ -114,11 +114,21 @@ test("the bundled docs are the customer's: no design records, no operator routes
   assert.ok(names.includes("coding-agents.md") && names.includes("flows.md") && names.includes("api.md"));
   for (const n of names) assert.ok(!n.endsWith("-adr.md") && n !== "environment.md" && n !== "README.md", `${n} should not ship`);
   const api = fs.readFileSync(path.join(dir, "api.md"), "utf8");
-  assert.doesNotMatch(api, /^## Super admin/m);
+  assert.doesNotMatch(api, /^## (Super admin|Operator)/m);
   assert.doesNotMatch(api, /^## Operations/m);
   const all = names.map((n) => fs.readFileSync(path.join(dir, n), "utf8")).join("\n");
   for (const word of ["dev.foldrun.io", "stage.foldrun.io", "192.168.", "/etc/foldrun", "box-tunnel"]) {
     assert.ok(!all.includes(word), `the bundled docs mention "${word}"`);
+  }
+  // The platform's operator, not a "super admin": an account has no such
+  // role, and a self-hosted install has no operator console (30 Oct 2026).
+  assert.doesNotMatch(all, /super[ -]?admin/i, "the bundled docs say super admin");
+});
+
+test("the CLI's own words name the platform's operator, never a super admin", () => {
+  const root = path.join(import.meta.dirname, "..");
+  for (const f of ["bin/foldrun.mjs", ...fs.readdirSync(path.join(root, "src")).filter((n) => n.endsWith(".mjs")).map((n) => `src/${n}`)]) {
+    assert.doesNotMatch(fs.readFileSync(path.join(root, f), "utf8"), /super[ -]?admin/i, `${f} says super admin`);
   }
 });
 

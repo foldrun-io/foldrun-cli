@@ -379,8 +379,8 @@ ends, but an invoice it left unpaid is still owed and still payable, and
 the account stays paused until it is paid or written off. Every step is once per invoice, however often
 Stripe retries or redelivers; a second invoice failing during the grace
 does not restart it. Dunning lifts only a suspension it placed: an account
-the super admin suspended for another reason stays suspended. The super
-admin sees where it stands on the customer's overview.
+the platform's operator suspended for another reason stays suspended. The
+operator sees where it stands on the customer's overview.
 
 **Your data, and leaving.** Settings → Your data gives the owner one JSON
 file with the account's workspaces, members, an index of every run and the
@@ -441,7 +441,7 @@ card network already has the money). The account is found through the
 disputed charge — its metadata, its payment's, then the saved customer. Won
 (or an inquiry closed without a chargeback): the same amount goes back on,
 once. Lost: it stays off. As with refunds, a dispute on a plan fee does not
-touch the wallet; it is logged and left to the super admin.
+touch the wallet; it is logged and left to the platform's operator.
 
 **Every line says why it exists.** Each ledger line carries a reason —
 usage, pod, fee, checkout, auto-topup, manual, operator, refund, dispute,
@@ -451,7 +451,7 @@ label lines by it. **Burn**, the 30-day spend and month-to-date count usage
 and the daily fees only — not expiries, refunds, chargebacks or an
 operator's debit.
 
-**Hand-placed plans renew.** A plan the super admin grants runs a month and
+**Hand-placed plans renew.** A plan the platform's operator grants runs a month and
 is renewed by the hourly sweep at its period's end, with the same grant and
 rollover rules. Granting a plan to an account Stripe is billing is refused
 (end it first, or change it at Stripe); ending a Stripe-billed plan cancels

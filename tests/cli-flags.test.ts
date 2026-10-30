@@ -37,7 +37,8 @@ test("there is no write verb: an argument is refused before any request", async 
   const r = await at(s.url, "flags", "set", "example-flag", "on");
   s.close();
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /super admin/);
+  assert.match(r.out, /platform's operator/);
+  assert.doesNotMatch(r.out, /super admin/i);
   assert.equal(s.seen.length, 0);
 });
 
