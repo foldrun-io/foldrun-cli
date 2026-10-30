@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [10.0.0] — 2026-10-30
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 9.0.0, a new major. (790a0cb)
+
+- fix(storage): send the file size when asking for an upload URL ([11f13c7](https://github.com/foldrun-io/foldrun-cli/commit/11f13c7))
+
+### deps
+
+- @foldrun/core ^9.0.0 ([790a0cb](https://github.com/foldrun-io/foldrun-cli/commit/790a0cb))
+
 ## [9.0.3] — 2026-10-30
 
 ### deps
