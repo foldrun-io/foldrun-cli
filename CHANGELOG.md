@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [9.0.1] — 2026-10-30
+
+- fix(flags): the platform's operator changes flags, not a super admin ([9fe926f](https://github.com/foldrun-io/foldrun-cli/commit/9fe926f))
+
 ## [9.0.0] — 2026-10-29
 
 ### Breaking changes
