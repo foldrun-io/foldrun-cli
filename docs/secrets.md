@@ -72,6 +72,57 @@ Put a credential at the account when every workspace should use the same one
 — your model provider, your email sender. Put it in a workspace when it is
 that job's — a customer's Search Console, a CRM key.
 
+### Limited to some workspaces
+
+An account secret is open to every workspace by default. To share one
+credential with a few workspaces but not the rest — the way GitHub limits an
+organisation secret to selected repositories — limit it:
+
+```sh
+foldrun secrets set STRIPE_KEY --account --workspaces sales,billing   # a new one, limited from the start
+foldrun secrets workspaces STRIPE_KEY sales billing   # only these two
+foldrun secrets workspaces STRIPE_KEY                 # which may use it
+foldrun secrets workspaces STRIPE_KEY --none          # no workspace
+foldrun secrets workspaces STRIPE_KEY --all           # every workspace again
+```
+
+In the dashboard it is **Workspaces: all / selected** on the secret's row in
+Settings → Secrets, and on the form that adds one; over the API,
+`PATCH /api/secrets { name, workspaces }` (`null` for every workspace, `[]`
+for none), or `workspaces` on the `PUT` that stores the value. Given with the
+value, the two are saved in one write: the secret is never open to every
+workspace in between. "All" includes workspaces made later. Every other workspace finds the
+secret **not set**, exactly as if it had never been stored: a run reports it
+missing, a tool test and a `notify:` or `telemetry:` header leave
+`${NAME}` unfilled, the egress proxy has nothing to fill, an MCP server does
+not get it, a notification email it sends does not go out through the
+account's `RESEND_API_KEY` or `EMAIL_FROM` (the platform's sender is used, if
+there is one), and the workspace's secret list and the editor's completions
+leave it out. A workspace's own secret of the same name still works there.
+
+A limit applies to runs that **start after it**. A run already going keeps
+what it was given when it started — values in its sandbox, and the ones the
+egress proxy fills for it — so stop a running one to cut it off at once.
+
+The names must be workspaces that exist. Renaming a workspace carries its
+place on every list; deleting one takes it off first, so a new workspace
+given the old name inherits nothing. If a secret limited to it cannot be read
+with the platform's keys, the rename or delete is refused and names it — set
+it again or delete it, then try again. Only an admin with access to every
+workspace sets the limit, and the account's `RESEND_API_KEY` and `EMAIL_FROM`
+stay the owner's. The account's own uses of a secret — its model key in
+Settings → Model, and the mail the platform sends for the account (password
+resets, invites, billing) — are not a workspace's and are not limited. A new
+value or a new site binding keeps the limit. Limiting a secret seals the list
+with the value, like `sites` (see [How they are kept](#how-they-are-kept)),
+whatever form the secret was stored in before: a list changed on disk makes
+the secret unreadable, never open to everyone.
+
+On a platform you run yourself, set limits only once every pod — web,
+worker and egress proxy — runs a version that has them: an older one cannot
+read a limited secret, and one that stores a new value over it drops the
+limit.
+
 ## How an agent gets it
 
 ```yaml

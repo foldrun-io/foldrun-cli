@@ -328,7 +328,7 @@ normal outcome, recorded as one.
 | `after` / `on` | the flow to chain on, and whether on `completed` (default), `failed`, `blocked` or `any` |
 | `path` | the `storage/` prefix to watch, for `trigger: storage` |
 | `url` / `every` | what to poll and how often (default 15m), for `trigger: watch` |
-| `signature` / `signing_secret` | `github` \| `stripe` \| `slack` \| `hmac`, and the vault entry to check it against |
+| `signature` / `signing_secret` | `github` \| `stripe` \| `slack` \| `hmac`, and the NAME of the vault entry to check it against — never the value (`foldrun check` warns: [secret/signing-secret-value](checks#secret-signing-secret-value)) |
 | `filter` | for a `webhook`, `email`, `flow` or `storage` trigger: the fields a delivery must have to start a run — see [Which deliveries start a run](#which-deliveries-start-a-run) |
 | `model` / `effort` | defaults for every step |
 | `budget` | the most one run may spend, in USD — a number, or `unlimited`; unset is no limit |

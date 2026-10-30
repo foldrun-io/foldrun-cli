@@ -72,3 +72,18 @@ test("unshare revokes by token, and says so when there was nothing to revoke", a
   assert.equal(no.code, 1);
   assert.match(no.out, /nothing revoked/);
 });
+
+test("a masked link (not yours, and you are not an admin) lists by id, and unshare <id> revokes by ?id= (30 Oct 2026)", async () => {
+  const masked = { ok: true, shares: [{ token: "tok_…", masked: true, id: "sh_abcdefghijklmnopqrstuv", url: null, path: "storage/cover.png", contentType: "image/png", createdAt: "2026-09-20T00:00:00.000Z", createdBy: "ana@example.test", expiresAt: null, revokedAt: null }] };
+  const s = await serve({
+    "/api/workspaces/rank-desk/shares": () => masked,
+    "DELETE /api/workspaces/rank-desk/shares": (_b, q) => ({ ok: true, revoked: q.get("id") === "sh_abcdefghijklmnopqrstuv" && !q.get("token") }),
+  });
+  const list = await at(s.url, "storage", "shares", "--to", "rank-desk");
+  assert.equal(list.code, 0, list.out);
+  assert.match(list.out, /sh_abcdefghijklmnopqrstuv/, "the id, which the caller can revoke by");
+  const yes = await at(s.url, "storage", "unshare", "sh_abcdefghijklmnopqrstuv", "--to", "rank-desk", "--yes");
+  s.close();
+  assert.equal(yes.code, 0, yes.out);
+  assert.match(yes.out, /revoked/);
+});

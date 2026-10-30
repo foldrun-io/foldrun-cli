@@ -304,7 +304,9 @@ run until a person decides. Three doors open it, and the trace says which:
 - **the emailed link** — the notification carries approve and reject links
   when the install has a public URL;
 - **an external event** — a `wait: event` step is released by a POST to the
-  run's event URL, and what was posted reaches the next step. A person can
+  event URL printed in its trace, and what was posted reaches the next step.
+  The URL is that step's, for that one wait: it does not release a later
+  `wait: event` of the same run, and once used it answers `409`. A person can
   release it the same way from the run page (or `approve` with a `payload`):
   the payload reaches the step just the same, and the trace names them, not
   "an external event". The approvers and self-approval rules below are for

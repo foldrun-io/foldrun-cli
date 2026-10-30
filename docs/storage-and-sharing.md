@@ -66,7 +66,7 @@ the terminal:
 ```
 foldrun storage share cover.jpg --to <ws>        # 7 days; --ttl 30, or --forever
 foldrun storage shares --to <ws>                 # live links; --all shows expired and revoked
-foldrun storage unshare <token> --to <ws>
+foldrun storage unshare <token|id> --to <ws>
 ```
 
 - Links expire in **7 days** unless you say otherwise; `null` never expires.
@@ -76,6 +76,11 @@ foldrun storage unshare <token> --to <ws>
   into sharing is confined to what the workspace produced and can never hand
   out `memory/`, a prompt, or a credential.
 - Revoking is permanent; a re-share mints a new token.
+- Revoking takes effect at once: a link is served `Cache-Control: private,
+  no-store`, so no CDN keeps answering it after a revoke or its expiry.
+- Only an admin, or the person who made a link, sees its token and can copy
+  it. Everyone else sees that the file is shared, by whom and until when;
+  an editor can still revoke it (by its id).
 - Deleting a workspace revokes its links and deletes its stored files.
   Renaming one moves both: its links keep working, under the new name.
 - A link answers at most 120 requests a minute to one caller (where a trusted

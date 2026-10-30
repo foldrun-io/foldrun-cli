@@ -318,3 +318,27 @@ test("observability.telemetry: clear sends null; set names the telemetry verb", 
   assert.equal(set.code, 1);
   assert.match(set.out, /foldrun account telemetry set <otlp-url>/);
 });
+
+// A key limited to some workspaces is told the account's notify: webhook and
+// telemetry: are set, never where they go (30 Oct 2026): the platform sends
+// `hidden: true`, and the CLI says so rather than printing an empty URL.
+test("a scoped key sees the account's webhook, telemetry and API use as set, not where they go", async () => {
+  const s = await serve({
+    "GET /api/account": () => ({ defaults: { ...defaults, notify: { email: "ops@acme.test", events: ["failed"], hidden: true }, telemetry: { endpoint: "", headers: {}, hidden: true } } }),
+    "GET /api/account/jobs": () => ({ jobs: JOBS_VIEW.jobs.map((j) => (j.name === "observability" ? { ...j, fields: [{ key: "telemetry", account: { hidden: true }, combine: "workspace replaces", writable: true }] } : j)) }),
+    "GET /api/account/pause": () => ({ account: null, workspaces: {} }),
+    "GET /api/account/api": () => ({ version: { current: "2026-10-26", pinned: null, effective: "2026-10-26", supported: ["2026-10-26"], supportMonths: 6 }, limits: {}, usage: null, usageHidden: true }),
+  });
+  const acct = await at(s.url, "account");
+  const tel = await at(s.url, "account", "telemetry");
+  const jobs = await at(s.url, "jobs");
+  const api = await at(s.url, "api", "version");
+  s.close();
+  assert.equal(acct.code, 0, acct.out);
+  assert.match(acct.out, /ops@acme\.test, a webhook/);
+  assert.match(acct.out, /every workspace/);
+  assert.equal(tel.code, 0, tel.out);
+  assert.match(tel.out, /telemetry\s+set/);
+  assert.match(jobs.out, /telemetry\s+set/);
+  assert.match(api.out, /your use\s+shown only to a member or key with every workspace/);
+});

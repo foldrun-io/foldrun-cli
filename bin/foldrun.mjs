@@ -155,7 +155,7 @@ const HELP = `foldrun — agents are just folders
   foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>
   foldrun runs views        your saved run searches (--local prints exactly what logs --local prints)
   foldrun runs doctor <run-id>  the run doctor: the assistant reads a failed run and the files it names, says why (platform, check, work or outside) and proposes the fix as diffs, saved on yes (--to, --yes, --dry-run, --json)
-  foldrun runs rm <run-id>  delete a run's record and archived outputs; a live one is stopped first — asks first, --yes means it
+  foldrun runs rm <run-id>  delete a run's record and archived outputs (an admin); a live one is stopped first — asks first, --yes means it
   foldrun report <run-id>   one run, whole: header, every step, what it wrote and what is still waiting
   foldrun report <run-id> get <agent>/<path>  download a file the run archived from that agent's outputs/ (--file <path>|-, --force)
   foldrun report <run-id> --compare [<run-id>]  beside the flow's last good run (or the one named): changed files and what differs step by step (--json)
@@ -217,6 +217,7 @@ const HELP = `foldrun — agents are just folders
   foldrun backups requests  every restore asked of the platform team, and where each stands (--json)
   foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status; --kind file|ssh|api|service-account|m2m for the other shapes; --site <domain> (repeatable) binds it as it is stored
   foldrun secrets sites NAME [site…]  bind a secret to sites: the egress proxy fills it for those alone and it never enters a sandbox; no sites lists them, --clear unbinds
+  foldrun secrets workspaces NAME [workspace…]  limit an account secret to those workspaces — every other one finds it not set; --all opens it to every workspace again, --none to no workspace, no names shows which may use it (an admin over every workspace; applies to runs that start after it)
   foldrun secrets clients   the OAuth clients saved on the platform — also add <name> (--authorize-url/--token-url, --client-id, --scopes, --authorize-param name=value), rm <name>
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret — --client <saved> runs it from a saved client through the platform
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
@@ -339,6 +340,9 @@ Options
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
   --clear                   secrets sites: unbind it; flow compute: no cap of its own
+  --all                     secrets workspaces: every workspace may use the account secret again
+  --none                    secrets workspaces, secrets set: no workspace may use the account secret
+  --workspaces <a,b>        secrets set: store an account secret limited to those workspaces, in the same write (with --account)
   --add <site>              agent network: add a site to its network: list (repeatable)
   --remove <site>           agent network: take a site off its network: list (repeatable)
   --out <file>              api spec: where to write the OpenAPI document (default: stdout); check: where to write the JSON or SARIF report
@@ -406,7 +410,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

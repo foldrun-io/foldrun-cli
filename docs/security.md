@@ -167,25 +167,41 @@ Signing in, in particular:
 - a password reset or change, two-step sign-in turned on or off, and a new
   API key each send a notice to the person's address;
 - signing out ends the session on the server, not just in the browser;
+- changing your password or login address, or turning two-step sign-in
+  on, signs out every other browser;
 - a two-step code works once; replacing a second factor means turning it
   off first, which needs the password and a code;
+- wrong passwords are counted per account and per caller: someone failing
+  as you locks out only their own address, never yours; a guesser spread
+  over many addresses meets a ceiling for the account, and you are mailed
+  when it is reached (this needs `FOLDRUN_TRUST_PROXY`, so callers can be
+  told apart — without it the count is per account, from anyone);
+- a password reset mails at most three links an hour to one address, and
+  one caller can use at most a small share of the install's hourly reset
+  mail, so nobody can spend everyone else's;
 - ten wrong two-step codes in a row pause codes from the app for up to a
   day and mail the person — a backup code still signs in, and the pause
   lifts by itself;
 - changing your login address only mails the new address a link, and the
   move happens when that link is clicked; asking answers the same whether
   or not the address already has a login, so it cannot be used to find out
-  who has an account;
+  who has an account. An install that can send no mail refuses the change
+  until mail is set up, rather than moving the login unconfirmed;
 - the sign-in forms refuse a request from another site, and `?next=` only
   ever leads to a page on the same site;
 - `foldrun login` asks you to type the code your terminal shows — a link
   with the code in it, sent by someone else, cannot sign their machine in
-  as you;
+  as you. The page shows when and from which network the terminal asked,
+  warns when that is not the network you are on, and a request more than
+  five minutes old can no longer be approved;
 - before the first sign-up, a self-hosted install's setup token guards key
   minting as it guards sign-up;
 - only the account's owner can set, rebind or remove the account's
   `RESEND_API_KEY` and `EMAIL_FROM`, because that sender carries everyone's
-  reset links — whether through the secrets API or an OAuth connect;
+  reset links — whether through the secrets API or an OAuth connect. The
+  owner means the owner in person: their signed-in session, or the key
+  their own `foldrun login` made. Any other key they minted (CI, a key
+  handed to a contractor) is refused;
 - a key rotated by a caller that is no person (a key known only by its
   label) acts as nobody, never as the rotated key's owner;
 - a member or key limited to some workspaces cannot change what every

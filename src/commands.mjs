@@ -3270,6 +3270,82 @@ async function localSetSites(name, sites, scope) {
   return k.setSecretSites("default", name, sites, scope);
 }
 
+/** The workspaces this machine's vault serves: an account folder's, or the
+ *  one folder a flat workspace is — what a local limit may name, as the
+ *  platform allows only workspaces that exist. */
+function localWorkspaceNames(layout) {
+  if (layout?.kind === "account") return layout.workspaces;
+  return [path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd())];
+}
+
+/** A core from before the limit would take the list as an argument it does
+ *  not know and store the secret open to every workspace: refused instead.
+ *  Typed loosely: the installed core's types may predate the limit, which is
+ *  exactly the case the check below refuses at run time.
+ *  @returns {Promise<any>} */
+async function limitingCore() {
+  /** @type {any} */
+  const k = await core();
+  if (typeof k.setSecretWorkspaces !== "function") throw new Error("limiting a secret to workspaces needs a newer @foldrun/core — update foldrun");
+  return k;
+}
+
+/** Limit an account secret on this machine's vault. */
+async function localSetWorkspaces(name, workspaces, layout) {
+  const known = localWorkspaceNames(layout);
+  return (await limitingCore()).setSecretWorkspaces("default", name, workspaces, { exists: (w) => known.includes(w) });
+}
+
+/** `--workspaces a,b` (or `--none`) on `secrets set`: the limit sent with
+ *  the value, so the secret is never open to every workspace in between.
+ *  Undefined when neither was given. */
+function workspacesFlag(flags) {
+  if (flags.none === true && flags.workspaces !== undefined) throw new Error("either --workspaces or --none, not both");
+  if (flags.none === true) return [];
+  if (flags.workspaces === undefined) return undefined;
+  if (typeof flags.workspaces !== "string") throw new Error("--workspaces takes the names: --workspaces sales,ops");
+  const list = flags.workspaces.split(",").map((v) => v.trim()).filter(Boolean);
+  if (!list.length) throw new Error("--workspaces takes the names: --workspaces sales,ops (--none for no workspace)");
+  return list;
+}
+
+/**
+ * `foldrun secrets workspaces NAME [workspace…] [--all | --none]` — which
+ * workspaces may use an ACCOUNT secret: every one (the default), only those
+ * named (GitHub's "selected repositories" for an organisation secret), or
+ * none. Every other workspace finds it not set. No names and no flag prints
+ * what it is now. On the platform (PATCH /api/secrets { name, workspaces },
+ * an admin over every workspace), or this machine's vault with --local —
+ * where, as on the platform, only workspaces that exist may be named.
+ */
+async function secretWorkspacesCmd(args, flags, url, layout) {
+  const [name, ...rest] = args;
+  if (!name) throw new Error("which secret? `foldrun secrets workspaces NAME [workspace …]`, `--all` for every workspace, `--none` for none");
+  const named = rest.flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
+  if ([flags.all === true, flags.none === true, named.length > 0].filter(Boolean).length > 1) {
+    throw new Error("one of: workspace names, --all, or --none");
+  }
+  const describe = (list) =>
+    list === null || list === undefined
+      ? `${c.bold(name)} may be used in every workspace`
+      : list.length
+        ? `${c.bold(name)} may be used only in ${list.join(", ")} — every other workspace finds it not set`
+        : `${c.bold(name)} may be used in no workspace`;
+  if (!named.length && flags.all !== true && flags.none !== true) {
+    const entries = url ? (await remoteCall(url, flags, "/api/secrets")).secrets : (await core()).listSecrets("default");
+    const hit = entries.find((s) => s.name === name && s.scope === "account");
+    if (!hit) throw new Error(`no secret ${name} in the account — this limits an account secret; a workspace's own is that workspace's already`);
+    console.log(`\n  ${describe(hit.workspaces)}${hit.workspaces ? "" : c.dim(` — limit it: foldrun secrets workspaces ${name} <workspace> …`)}\n`);
+    return 0;
+  }
+  const workspaces = flags.all === true ? null : flags.none === true ? [] : named;
+  const stored = url
+    ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, workspaces }) })).workspaces
+    : await localSetWorkspaces(name, workspaces, layout);
+  console.log(`\n  ${c.green("✓")} ${describe(stored)}\n`);
+  return 0;
+}
+
 /** `--site a.com --site "*.b.org"` or `--site a.com,b.org`, as one list. */
 function siteFlags(flags) {
   const raw = flags.site === undefined ? [] : Array.isArray(flags.site) ? flags.site : [flags.site];
@@ -3281,6 +3357,9 @@ async function secretsCmd(positional, flags, layout) {
   // hatch deploy and keys have. Without it, a signed-in laptop sent every
   // secret to the platform and the local store could not be reached at all.
   const url = flags.local === true ? undefined : remoteUrl(flags);
+  // An account secret's workspaces: always the account's store, so no
+  // workspace is asked for (or taken from the folder).
+  if (positional[0] === "workspaces") return secretWorkspacesCmd(positional.slice(1), flags, url, layout);
   // The scope is the workspace's own store, named the way the runner names
   // it — the folder's basename. It was the literal string "workspace", so a
   // secret set from the terminal landed under workspaces/workspace/ and every
@@ -3306,7 +3385,7 @@ async function secretsCmd(positional, flags, layout) {
     console.log();
     for (const s of entries) {
       console.log(
-        `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}${s.sites?.length ? ` · sent only to ${s.sites.join(", ")}` : ""}`)}`,
+        `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}${s.sites?.length ? ` · sent only to ${s.sites.join(", ")}` : ""}${Array.isArray(s.workspaces) ? ` · ${s.workspaces.length ? `only in ${s.workspaces.join(", ")}` : "in no workspace"}` : ""}`)}`,
       );
     }
     console.log();
@@ -3367,12 +3446,26 @@ async function secretsCmd(positional, flags, layout) {
   }
 
   if (verb === "set") {
+    // --workspaces a,b / --none: an ACCOUNT secret limited to those
+    // workspaces, sent with the value so it is never open in between.
+    const limitTo = workspacesFlag(flags);
+    if (limitTo !== undefined && scope) throw new Error("--workspaces limits an account secret — add --account (a workspace's own secret is that workspace's already)");
+    const withLimit = limitTo !== undefined ? { workspaces: limitTo } : {};
+    /** @returns {Promise<{ k: any, limit: object }>} — typed loosely, as limitingCore is. */
+    const localLimit = async () => {
+      if (limitTo === undefined) return { k: await core(), limit: {} };
+      const known = localWorkspaceNames(layout);
+      return { k: await limitingCore(), limit: { workspaces: limitTo, exists: (w) => known.includes(w) } };
+    };
     // --kind: the other shapes the Connections form stores — a file, an SSH
     // login, API headers, a service account's key, a client-credentials app.
     if (typeof flags.kind === "string") {
       const { body, local } = await secretOfKind(flags.kind, flags);
-      if (url) await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope }) });
-      else local(await core(), name, body, scope);
+      if (url) await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope, ...withLimit }) });
+      else {
+        const { k, limit } = await localLimit();
+        local(k, name, body, scope, limit);
+      }
       console.log(`\n  ${c.green("✓")} ${name} stored as ${flags.kind}${url ? "" : " on this machine"} — declare it in agent.md under \`secrets:\` to use it\n`);
       return 0;
     }
@@ -3389,10 +3482,11 @@ async function secretsCmd(positional, flags, layout) {
       if (url) {
         await remoteCall(url, flags, "/api/secrets", {
           method: "PUT",
-          body: JSON.stringify({ name, oauth2: config, workspace: scope }),
+          body: JSON.stringify({ name, oauth2: config, workspace: scope, ...withLimit }),
         });
       } else {
-        (await core()).setOAuth2Secret("default", name, config, scope);
+        const { k, limit } = await localLimit();
+        k.setOAuth2Secret("default", name, config, scope, limit);
       }
       console.log(`\n  ${c.green("✓")} ${name} stored as an auto-refreshing oauth2 credential\n`);
       return 0;
@@ -3405,14 +3499,15 @@ async function secretsCmd(positional, flags, layout) {
     if (url) {
       await remoteCall(url, flags, "/api/secrets", {
         method: "PUT",
-        body: JSON.stringify({ name, value, workspace: scope, ...(sites.length ? { sites } : {}) }),
+        body: JSON.stringify({ name, value, workspace: scope, ...(sites.length ? { sites } : {}), ...withLimit }),
       });
     } else {
-      const k = await core();
-      k.setSecret("default", name, value, scope);
+      const { k, limit } = await localLimit();
+      k.setSecret("default", name, value, scope, undefined, limit);
       if (sites.length) await localSetSites(name, sites, scope);
     }
-    console.log(`\n  ${c.green("✓")} ${name} stored${sites.length ? ` and sent only to ${sites.join(", ")}` : ""} — declare it in agent.md under \`secrets:\` to use it\n`);
+    const limited = limitTo === undefined ? "" : limitTo.length ? `, only for ${limitTo.join(", ")}` : ", for no workspace yet";
+    console.log(`\n  ${c.green("✓")} ${name} stored${sites.length ? ` and sent only to ${sites.join(", ")}` : ""}${limited} — declare it in agent.md under \`secrets:\` to use it\n`);
     return 0;
   }
 
@@ -3975,7 +4070,9 @@ async function login(flags) {
   console.log(`\n  Confirm this code in your browser:  ${c.bold(start.code)}\n`);
   console.log(`  ${c.dim(start.verifyUrl)}\n`);
   const opened = flags["no-browser"] === true ? false : await openInBrowser(start.verifyUrl);
-  console.log(`  ${c.dim(opened ? "Opening the browser… waiting for you to approve." : "Open that address on any device and enter the code. Waiting…")}`);
+  // The platform refuses to approve a request older than five minutes
+  // (RFC 8628 §5.4: a code someone else started and sent goes stale).
+  console.log(`  ${c.dim(opened ? "Opening the browser… waiting for you to approve (within five minutes)." : "Open that address on any device and enter the code within five minutes. Waiting…")}`);
 
   const interval = Math.max(1, Number(start.interval) || 3) * 1000;
   const deadline = Date.parse(start.expiresAt) || Date.now() + 10 * 60 * 1000;
@@ -5248,20 +5345,23 @@ async function storageCmd(positional, flags, layout) {
       console.log(`\n  ${c.dim(`no ${flags.all === true ? "" : "live "}links in ${ws} — \`foldrun storage share <path>\` mints one${flags.all === true ? "" : ", --all shows expired and revoked ones too"}`)}\n`);
       return 0;
     }
-    const w = { path: Math.max(...rows.map((x) => x.path.length)), token: Math.max(...rows.map((x) => x.token.length)) };
+    // Only an admin, or a link's own maker, is handed its token (30 Oct
+    // 2026); anyone else gets it masked, with an id to unshare it by.
+    const handle = (x) => (x.masked && x.id ? x.id : x.token);
+    const w = { path: Math.max(...rows.map((x) => x.path.length)), token: Math.max(...rows.map((x) => handle(x).length)) };
     console.log();
     for (const x of rows) {
       const state = x.revokedAt ? c.red(`revoked ${ago(x.revokedAt)} ago`) : !live(x) ? c.red(`expired ${ago(x.expiresAt)} ago`) : x.expiresAt ? `until ${when(x.expiresAt)}` : "never expires";
-      console.log(`  ${live(x) ? c.green("✓") : c.dim("·")} ${c.bold(pad(x.path, w.path))}  ${c.dim(pad(x.token, w.token))}  ${c.dim(`${state} · by ${x.createdBy ?? "api-key"} · ${ago(x.createdAt)} ago`)}`);
+      console.log(`  ${live(x) ? c.green("✓") : c.dim("·")} ${c.bold(pad(x.path, w.path))}  ${c.dim(pad(handle(x), w.token))}  ${c.dim(`${state} · by ${x.createdBy ?? "api-key"} · ${ago(x.createdAt)} ago`)}`);
     }
-    console.log(`\n  ${c.dim(`${rows.length} link${rows.length === 1 ? "" : "s"} · a link is <platform>/s/<token> · \`foldrun storage unshare <token> --to ${ws}\``)}\n`);
+    console.log(`\n  ${c.dim(`${rows.length} link${rows.length === 1 ? "" : "s"} · a link is <platform>/s/<token> · \`foldrun storage unshare <token|id> --to ${ws}\``)}\n`);
     return 0;
   }
   if (verb === "unshare") {
     const token = positional[1];
-    if (!token) throw new Error("`foldrun storage unshare <token>` — `foldrun storage shares` lists them");
+    if (!token) throw new Error("`foldrun storage unshare <token|id>` — `foldrun storage shares` lists them (an id, sh_…, where the token is not yours to see)");
     if (!(await sureToDelete(flags, "storage unshare", `share link ${token} (anyone holding it gets 404)`))) return 1;
-    const { revoked } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares?token=${encodeURIComponent(token)}`, { method: "DELETE" });
+    const { revoked } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares?${token.startsWith("sh_") ? "id" : "token"}=${encodeURIComponent(token)}`, { method: "DELETE" });
     if (!revoked) {
       console.log(`\n  ${c.dim(`nothing revoked — ${token} is not a live link of this account's`)}\n`);
       return 1;
@@ -5736,10 +5836,14 @@ async function billingCmd(flags) {
 /** The events a notify block may name, as the platform validates them. */
 const NOTIFY_EVENTS = ["failed", "awaiting-approval", "completed"];
 
+/** Why a caller limited to some workspaces sees "set" for the account's
+ *  notify: URL or telemetry: (GET /api/account answers `hidden: true`). */
+const HIDDEN_NOTE = "where it goes is shown only to a member or key with every workspace";
+
 /** The account's defaults, as one readable block. */
 function printDefaults(d) {
   const notify = d.notify
-    ? [d.notify.email, d.notify.url].filter(Boolean).join(", ") + c.dim(` on ${(d.notify.events ?? []).join(", ") || "nothing"}`)
+    ? [d.notify.email, d.notify.url, d.notify.hidden ? `a webhook ${c.dim(`(${HIDDEN_NOTE})`)}` : null].filter(Boolean).join(", ") + c.dim(` on ${(d.notify.events ?? []).join(", ") || "nothing"}`)
     : c.dim("nobody is told anything");
   console.log(`\n  ${c.bold("account defaults")}  ${c.dim("every workspace here inherits these")}\n`);
   console.log(`  timezone     ${d.timezone ?? c.dim("unset — schedules read UTC")}`);
@@ -5803,6 +5907,10 @@ async function telemetryCmd(url, args, flags) {
     const t = defaults?.telemetry;
     if (!t) {
       console.log(`\n  ${c.dim("runs are not sent anywhere — foldrun account telemetry set https://<collector>/v1/traces --header authorization=\${OTEL_TOKEN}")}\n`);
+      return 0;
+    }
+    if (t.hidden) {
+      console.log(`\n  ${c.bold("telemetry")}  set ${c.dim(`— ${HIDDEN_NOTE}`)}\n`);
       return 0;
     }
     console.log(`\n  ${c.bold("telemetry")}  ${t.endpoint}`);
@@ -5913,6 +6021,9 @@ async function mergedEntry(url, flags, key, args, workspace, view, how) {
 /** A setting's value as one short line. */
 function shortValue(v) {
   if (v === null || v === undefined) return null;
+  // The account's notify:/telemetry: to a key limited to some workspaces:
+  // set, and where it goes is not shown (30 Oct 2026).
+  if (v && typeof v === "object" && v.hidden === true) return `set ${c.dim(`(${HIDDEN_NOTE})`)}`;
   return typeof v === "object" ? JSON.stringify(v).replace(/"([a-z_]+)":/g, "$1: ").replace(/,/g, ", ") : String(v);
 }
 
@@ -11439,12 +11550,12 @@ async function secretOfKind(kind, flags) {
   };
   switch (kind) {
     case "file":
-      return { body: { file: read(flags.file, "--file <path> — the file the secret holds") }, local: (k, n, b, s) => k.setFileSecret("default", n, b.file, s) };
+      return { body: { file: read(flags.file, "--file <path> — the file the secret holds") }, local: (k, n, b, s, l) => k.setFileSecret("default", n, b.file, s, l) };
     case "ssh": {
       if (typeof flags.host !== "string" || typeof flags.user !== "string") throw new Error("--kind ssh needs --host <host> --user <user> (--port, and --key-file <path> or a password, prompted)");
       const port = flags.port !== undefined ? Number(flags.port) : undefined;
       const auth = typeof flags["key-file"] === "string" ? { private_key: read(flags["key-file"], "--key-file <path>") } : { password: typeof flags.value === "string" ? flags.value : await promptHidden("  password: ") };
-      return { body: { ssh: { host: flags.host, user: flags.user, ...(port ? { port } : {}), ...auth } }, local: (k, n, b, s) => k.setSshSecret("default", n, b.ssh, s) };
+      return { body: { ssh: { host: flags.host, user: flags.user, ...(port ? { port } : {}), ...auth } }, local: (k, n, b, s, l) => k.setSshSecret("default", n, b.ssh, s, l) };
     }
     case "api": {
       const lines = [].concat(flags.header ?? []);
@@ -11461,13 +11572,13 @@ async function secretOfKind(kind, flags) {
         }),
       );
       const base = typeof flags["base-url"] === "string" ? { base_url: flags["base-url"] } : {};
-      return { body: { api: { ...base, headers, ...basic } }, local: (k, n, b, s) => k.setApiSecret("default", n, b.api, s) };
+      return { body: { api: { ...base, headers, ...basic } }, local: (k, n, b, s, l) => k.setApiSecret("default", n, b.api, s, l) };
     }
     case "identity": {
       // A keyless cloud identity: only the audience; the platform signs the
       // tokens (`foldrun identity` prints what the cloud must trust).
       if (typeof flags.audience !== "string" || !flags.audience.trim()) throw new Error("--kind identity needs --audience <value your cloud's trust expects in aud>");
-      return { body: { identity: { audience: flags.audience } }, local: (k, n, b, s) => k.setIdentitySecret("default", n, b.identity, s) };
+      return { body: { identity: { audience: flags.audience } }, local: (k, n, b, s, l) => k.setIdentitySecret("default", n, b.identity, s, l) };
     }
     case "client-cert": {
       // A client certificate for mutual TLS. Bind it to the exact hosts it is
@@ -11477,7 +11588,7 @@ async function secretOfKind(kind, flags) {
       const key = read(flags["key-file"], "--key-file <key.pem> — its private key");
       const passphrase = typeof flags.passphrase === "string" ? flags.passphrase : undefined;
       const client_cert = { cert, key, ...(passphrase ? { passphrase } : {}), ...(flags.export === true ? { export: true } : {}) };
-      return { body: { client_cert }, local: (k, n, b, s) => k.setClientCertSecret("default", n, b.client_cert, s) };
+      return { body: { client_cert }, local: (k, n, b, s, l) => k.setClientCertSecret("default", n, b.client_cert, s, l) };
     }
     case "service-account": {
       let j;
@@ -11490,14 +11601,14 @@ async function secretOfKind(kind, flags) {
       // --subject: the user it acts as (domain-wide delegation, granted by the
       // provider's admin); without it the account acts as itself.
       const sa = { token_url: j.token_uri ?? "https://oauth2.googleapis.com/token", issuer: j.client_email, private_key: j.private_key, scope: flags.scopes ?? "", ...(typeof flags.subject === "string" ? { subject: flags.subject } : {}) };
-      return { body: { service_account: sa }, local: (k, n, b, s) => k.setServiceAccountSecret("default", n, b.service_account, s) };
+      return { body: { service_account: sa }, local: (k, n, b, s, l) => k.setServiceAccountSecret("default", n, b.service_account, s, l) };
     }
     case "m2m": {
       if (typeof flags["token-url"] !== "string") throw new Error("--kind m2m needs --token-url, --client-id (and the client secret, prompted or --client-secret)");
       const client_id = flags["client-id"] ?? (await promptVisible("  client_id: "));
       const client_secret = flags["client-secret"] ?? (await promptHidden("  client_secret: "));
       const oauth2 = { token_url: flags["token-url"], client_id, client_secret, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}) };
-      return { body: { oauth2 }, local: (k, n, b, s) => k.setOAuth2Secret("default", n, b.oauth2, s) };
+      return { body: { oauth2 }, local: (k, n, b, s, l) => k.setOAuth2Secret("default", n, b.oauth2, s, l) };
     }
     default:
       throw new Error(`unknown --kind "${kind}" — file, ssh, api, service-account, m2m, client-cert or identity (a plain value needs no --kind; --oauth2 a refresh token; \`foldrun connect\` a browser sign-in)`);
@@ -11605,7 +11716,8 @@ async function apiVersionCmd(positional, flags) {
   console.log(`\n  ${c.bold("API version")}  ${v.effective}  ${c.dim(v.pinned ? `pinned (current is ${v.current})` : "current — not pinned")}`);
   console.log(`  ${c.dim(`served: ${(v.supported ?? []).join(", ") || "—"} · each for ${v.supportMonths ?? "?"} months after the next · this CLI sends ${API_VERSION}`)}`);
   if (l.perCredential) console.log(`  ${c.bold("rate limits")}  ${c.dim(`${l.plan} · per key ${l.perCredential.read} reads / ${l.perCredential.write} writes, per account ${l.perAccount?.read} / ${l.perAccount?.write} — every ${l.windowSeconds}s`)}`);
-  apiUsageLines(facts.usage);
+  if (facts.usageHidden) console.log(`  ${c.bold("your use")}  ${c.dim("shown only to a member or key with every workspace")}`);
+  else apiUsageLines(facts.usage);
   console.log(`\n  ${c.dim("foldrun api version pin YYYY-MM-DD · unpin")}\n`);
   return 0;
 }

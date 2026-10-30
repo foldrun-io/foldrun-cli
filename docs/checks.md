@@ -95,7 +95,10 @@ and the tool text of MCP servers reached by URL
 ([`content/mcp-tool-text`](#contentmcp-tool-text)).
 
 - **When you ask:** Checks → **Online checks**, `foldrun check --to <ws>
-  --online`, or `GET /api/workspaces/<ws>/check?online=1`.
+  --online`, or `GET /api/workspaces/<ws>/check?online=1` — editor and
+  above, since it sends the platform out to OSV and your MCP servers. The
+  answer is kept for 10 minutes while the files are unchanged, and a
+  workspace gets six fresh online passes per 10 minutes.
 - **Every day by itself:** the platform rescans every workspace, offline and
   online. The first rescan of each source records what is there. After
   that, a security finding that was not there before goes to the
@@ -205,6 +208,20 @@ api.example.com`) so it never enters a sandbox at all. Then **rotate the
 key**: it has already been copied, into git history if nowhere else.
 References (`${NAME}`, `$NAME`, `process.env.X`), names, and obvious samples
 (`your-key-here`, `xxxx`, AWS's `…EXAMPLE`) are not findings.
+
+### secret/signing-secret-value
+
+*warn · ASI03.* A flow's `signing_secret:` or `notify: signing_secret:` holds
+something that is not a secret's name. Both name a vault entry —
+`signing_secret: GITHUB_WEBHOOK_SECRET` or `${GITHUB_WEBHOOK_SECRET}` — and
+are looked up by that name. A value written there is never found, so every
+signed delivery to the flow is refused and every notification goes out
+unsigned, and the value itself is deployed and versioned in plain text.
+
+Put it in the vault (`foldrun secrets set NAME`), write the name, and rotate
+it. The finding never repeats the value, and neither does any answer that
+shows the setting (notify's test send names the secret, or says it is not a
+name).
 
 ### content/hidden-unicode
 
@@ -360,6 +377,15 @@ Every field these four rules know is listed, with its type and values, in one
 place in `@foldrun/core` (`frontmatter-fields.ts`). The editor's completions
 come from the same list, so what the editor suggests and what `check`
 accepts cannot drift apart.
+
+### config/cron-never-fires
+
+*warn.* A `schedule:` the scheduler can read but whose day never comes:
+`0 0 30 2 *` — every field is in range, and no February has a 30th. The flow
+never runs and the schedule page lists no next run for it. Checked with the
+scheduler's own rule (`cronCanFire` in `@foldrun/core`), so `check` and the
+scheduler always agree. A day every named month has, or a weekday beside the
+day (either then matches), fixes it.
 
 ### config/conflict
 

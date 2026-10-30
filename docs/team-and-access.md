@@ -11,15 +11,36 @@ whose supervisors cannot see what the agents did is not supervised.
 |---|---|
 | **viewer** | read everything — workspaces, runs and their output, files, history, usage |
 | **editor** | + edit files, upload, deploy (to a workspace that exists — a deploy that makes one is an admin's), push; run, stop, re-run, approve and promote runs; test tools |
-| **admin** | + create and delete workspaces; write secrets and connect credentials; mint keys; invite, re-role and remove editors and viewers |
+| **admin** | + create and delete workspaces; delete a run from history; write secrets and connect credentials; mint keys; invite, re-role and remove editors and viewers |
 | **owner** | + billing; make and unmake admins; transfer the account |
 
 There is exactly one owner: the account's creator until they transfer it.
-The owner is never re-roled or removed — transfer first. Nobody changes their
+Transferring asks for the owner's password again, and a code from their app
+when two-step sign-in is on — a session left open is not enough to give the
+account away. The owner is never re-roled or removed — transfer first. Nobody changes their
 own role, and an admin cannot make or remove another admin: an admin who can
 promote peers is an owner with extra steps.
 
 A refused call answers `403` with the role that was needed.
+
+### A workspace's policy is an admin's
+
+The keys in a workspace's `AGENTS.md` that set policy for the whole
+workspace — `budget`, `compute`, `notify`, `network_enforce`, `telemetry`,
+`alerts`, `owner`, `judge` and `timezone` (also when written under a
+`governance:`, `guardrail:`, `observability:` or `evaluation:` block) — need
+the **admin** role to change, whichever way the file is written: the
+workspace's settings, a save in the editor (`PUT …/source`), `foldrun deploy`,
+an import, or a restore to an older point. An editor still edits the rest of
+`AGENTS.md` — its prose and every other key — and may deploy, import or
+restore anything that leaves those keys as they are; a change to one of them
+is refused with a `403` that names the key, and nothing is written. Removing
+the file, or saving one whose frontmatter does not parse, drops the keys, so
+it counts as a change too. A dry run (deploy, import, restore) is not
+refused.
+
+The account's own `AGENTS.md` is written only through the account's settings
+(`PATCH /api/account`), which needs an admin with access to every workspace.
 
 ## Scoped members
 

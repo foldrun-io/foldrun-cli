@@ -175,7 +175,8 @@ destination and reports what came back, including the provider's own words
 on a failure. Those words are the value: "domain not verified" and "you can
 only send to your own address" send you to two different pages, and a status
 code sends you to neither. `POST /api/workspaces/<ws>/notify/test` is the
-same thing.
+same thing. A workspace gets 10 test sends an hour; past that the button
+says to wait.
 
 ## Where it is set, and the rule that bites
 
