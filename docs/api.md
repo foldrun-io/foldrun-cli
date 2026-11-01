@@ -525,3 +525,21 @@ published, is `404` like one that does not exist.
 | `/a2a/<account>/<ws>/flows/<flow>/.well-known/agent-card.json` | GET | the flow's agent card — with an A2A key naming the flow, or with none when the flow says `a2a: { public_card: true }` (`Cache-Control: public, max-age=300` then; `private, max-age=60` otherwise; an `ETag`, so `If-None-Match` answers `304`). Without a key every other card is the same `401` |
 | `/a2a/<account>/<ws>/flows/<flow>` | POST | one JSON-RPC call: `SendMessage`, `GetTask`, `ListTasks`, `CancelTask`. Streaming, push notifications and the extended card are answered with the spec's unsupported errors ([what is served](a2a#what-is-served)) |
 | `/a2a/<account>/<ws>` | GET | `{ agents: [{ flow, name, description, card, url }] }` — the published flows this key may call here. A convenience index, not an A2A operation |
+
+## MCP — AI apps connecting with a key
+
+The platform as an [MCP server](mcp) for Claude Code, Claude Desktop,
+Cursor, Codex and any other MCP client. An **API key** opens it
+(`Authorization: Bearer mda_…`) — never a session cookie, never an A2A key —
+and every tool is a call to one of the routes above, made with that key, so
+it answers what the route would: the key's role, its workspaces and every
+refusal hold. MCP's Streamable HTTP transport, stateless: one JSON-RPC 2.0
+message per request, answered as JSON — no SSE stream, no session id, no
+batches. Errors before a message is read (no key, a refused key, a foreign
+`Origin`, an `MCP-Protocol-Version` it does not speak) are JSON-RPC error
+objects with a real status; a tool whose route refused answers `isError: true`
+with `HTTP <status>: <the route's error>`.
+
+| Route | Methods | |
+|---|---|---|
+| `/api/mcp` | POST | one JSON-RPC message: `initialize` (revisions `2025-11-25`, `2025-06-18`, `2025-03-26`; an unknown one is answered with the newest), `ping`, `tools/list`, `tools/call`; a notification is `202` with no body. `?readonly=1` offers only the tools that read and refuses the rest (`-32602`). The tools: `whoami`, `list_workspaces`, `inbox`, `list_approvals`, `list_flows`, `list_runs`, `get_run`, `read_file`, `run_flow`, `decide_approval`, `answer_question`, `message_run`, `stop_run` — see [MCP](mcp#the-tools). `foldrun mcp` serves the same over stdio |

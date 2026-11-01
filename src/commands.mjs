@@ -6621,6 +6621,122 @@ function issueDoctor(issue) {
  * `restore` take item ids. A key reads the inbox of the person who minted it.
  * The dashboard's Inbox. Exit 1 when anything assigned to you is unread.
  */
+/**
+ * `foldrun mcp` — this account as an MCP server over stdio, for an AI app
+ * (Claude Code, Claude Desktop, Cursor, Codex): `claude mcp add foldrun --
+ * foldrun mcp`. Each line on stdin is one JSON-RPC message, forwarded to the
+ * platform's POST /api/mcp with this machine's sign-in; each answer is one
+ * line on stdout. The tools live on the platform, so they are always the
+ * platform's own — this end holds no list to go stale. stdout carries
+ * nothing but protocol; every note goes to stderr.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function mcpCmd(positional, flags) {
+  if (positional.length) throw new Error("`foldrun mcp` takes no arguments — an AI app starts it: `claude mcp add foldrun -- foldrun mcp` (--read-only for the tools that read)");
+  if (process.stdin.isTTY && flags.yes !== true) {
+    console.error(`\n  ${c.bold("foldrun mcp")} is an MCP server on stdin/stdout, for an AI app to start — not to type into.\n\n    claude mcp add foldrun -- foldrun mcp${flags["read-only"] === true ? " --read-only" : ""}\n    codex mcp add foldrun -- foldrun mcp\n\n  ${c.dim("Claude Desktop, Cursor: { \"mcpServers\": { \"foldrun\": { \"command\": \"foldrun\", \"args\": [\"mcp\"] } } } — `foldrun docs mcp`")}\n`);
+    return 2;
+  }
+  // The account this server acts as is the one it started as: pinned by
+  // profile name, so `foldrun use <other>` in another terminal never moves a
+  // running session to another account, or its key to another platform.
+  const started = typeof flags.token === "string" || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
+  if (started?.name) flags = { ...flags, profile: started.name };
+  const url = platformFor(flags, "mcp");
+  await renewedToken(url, flags);
+  /** An app keeps this process for days, and another command may renew the
+   *  sign-in meanwhile (the old key ends minutes later): the key is read
+   *  again for every message, and the renewal checked again twice a day. */
+  let renewedAt = Date.now();
+  const currentToken = async () => {
+    if (Date.now() - renewedAt > 12 * 60 * 60 * 1000) {
+      renewedAt = Date.now();
+      renewChecked = false;
+      await renewIfDue(url, flags);
+    }
+    return tokenFor(url, flags);
+  };
+  const apiPath = `/api/mcp${flags["read-only"] === true ? "?readonly=1" : ""}`;
+  // Long tool calls (a run's whole record) get longer than a CLI read.
+  const seconds = explicitTimeout(flags) ?? 120;
+  /** The revision `initialize` settled on, sent on every later request. */
+  let protocol = null;
+  const send = (msg) => {
+    process.stdout.write(`${JSON.stringify(msg)}\n`);
+  };
+  const fail = (id, code, message) => send({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
+
+  /** @param {string} line */
+  const forward = async (line) => {
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return fail(null, -32700, "not JSON — one JSON-RPC message per line");
+    }
+    const id = msg && typeof msg === "object" && !Array.isArray(msg) ? msg.id : undefined;
+    const isRequest = id !== undefined && typeof msg?.method === "string";
+    let res;
+    try {
+      const token = await currentToken();
+      res = await remoteFetch(url, apiPath, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(protocol ? { "mcp-protocol-version": protocol } : {}) },
+        body: line,
+      }, { token, seconds });
+    } catch (err) {
+      console.error(`foldrun mcp: ${explain(err)}`);
+      return isRequest ? fail(id, -32603, `foldrun could not reach ${new URL(url).host}: ${explain(err)}`) : undefined;
+    }
+    if (res.status === 202) return;
+    let text;
+    try {
+      text = await res.text();
+    } catch (err) {
+      // The headers came and the body did not: a dropped connection, the clock.
+      console.error(`foldrun mcp: ${explain(err)}`);
+      return isRequest ? fail(id, -32603, `the answer from ${new URL(url).host} broke off: ${explain(err)}`) : undefined;
+    }
+    let body;
+    try {
+      body = JSON.parse(text);
+      // JSON, but not the protocol: an /api error from a platform that has no
+      // /api/mcp (`{ error: "…" }`), or a proxy's own JSON.
+      if (body?.jsonrpc !== "2.0") throw new Error("not JSON-RPC");
+    } catch {
+      console.error(`foldrun mcp: ${apiPath} → HTTP ${res.status}: ${text.slice(0, 200)}`);
+      if (!isRequest) return;
+      return fail(id, -32603, res.status === 404 ? `${new URL(url).host} has no MCP endpoint — it runs a platform from before 1 Nov 2026` : `the platform's MCP endpoint answered HTTP ${res.status}, and not in MCP — is ${new URL(url).host} the right address?`);
+    }
+    // A refusal before the message was read (no key, a refused key) carries
+    // no id; give it this request's, so the app knows which call failed.
+    if (body && typeof body === "object" && body.id === null && isRequest) body.id = id;
+    if (body?.error && (res.status === 401 || res.status === 403)) body.error.message += refusedHint(url, flags);
+    if (msg?.method === "initialize" && typeof body?.result?.protocolVersion === "string") protocol = body.result.protocolVersion;
+    if (!isRequest && !body?.error) return;
+    send(body);
+  };
+
+  const readline = await import("node:readline");
+  const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const inFlight = new Set();
+  /** An initialize still on its way: what comes after it waits for the revision it settles. */
+  let initializing = Promise.resolve();
+  for await (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Calls run side by side: a slow tools/call never holds up a ping. Each
+    // answer carries its id, so the order they come back in does not matter.
+    const before = initializing;
+    const p = before.then(() => forward(line)).catch((err) => console.error(`foldrun mcp: ${explain(err)}`));
+    if (/"method"\s*:\s*"initialize"/.test(line)) initializing = p;
+    inFlight.add(p);
+    p.finally(() => inFlight.delete(p));
+  }
+  await Promise.all(inFlight);
+  return 0;
+}
+
 async function inboxCmd(positional, flags) {
   const url = platformFor(flags, "inbox");
   const [verb, ...ids] = positional;
@@ -12727,6 +12843,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return issuesCmd(positional, flags, layout);
     case "inbox":
       return inboxCmd(positional, flags);
+    case "mcp":
+      return mcpCmd(positional, flags);
     case "insights":
       return insightsCmd(flags);
     case "approve":

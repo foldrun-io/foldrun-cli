@@ -16,6 +16,7 @@
 //   foldrun report <run-id> one run, whole: every step, what it cost, what it wrote
 //   foldrun approvals       what is waiting for a person, anywhere in the account
 //   foldrun inbox           what is waiting on YOU — assigned, started by you, the team's (read, dismiss)
+//   foldrun mcp             this account as MCP tools for an AI app (Claude, Cursor, Codex), over stdio
 //   foldrun approve <run-id>  release a waiting gate (asks first) — reject refuses it
 //   foldrun stop  <run-id>  kill a run in flight
 //   foldrun account        the account's own defaults — timezone, notify, budget, concurrency, deploy_block, network_enforce
@@ -168,6 +169,7 @@ const HELP = `foldrun — agents are just folders
   foldrun insights          recurring problems found in the runs, with what they cost and what to do (--days, --to, --json)
   foldrun inbox                         what waits on you: approvals, questions, issues, proposed fixes, your failed runs (--team, --all, --kind, --unread, --dismissed)
   foldrun inbox read|unread|dismiss|restore <id>…  mark items in your own view (dismiss sets aside; it still waits where it lives)
+  foldrun mcp                           this account as MCP tools for an AI app, over stdio, with this machine's sign-in: \`claude mcp add foldrun -- foldrun mcp\` (--read-only: only the tools that read)
   foldrun issues            what went wrong, grouped, open until resolved (--to <workspace>, --all, --status, --json)
   foldrun issues show|ack|snooze|resolve|reopen <id>  one issue — snooze --for 1d or --times 5, --note "…"
   foldrun issues doctor <id>  the run doctor on the issue's newest run, in its workspace: why, and the fix as diffs, saved on yes (--yes, --dry-run, --json)
@@ -305,6 +307,7 @@ Options
   --schedule "<cron>"       flow trigger: the cron line a schedule fires on (5 fields, or @daily); --timezone <zone> the zone it is read in
   --team, --started, --mine, --all  inbox: which bucket (default: assigned to you and started by you)
   --dismissed, --unread     inbox: what you set aside; only what you have not read
+  --read-only               mcp: offer the AI app only the tools that read — no run, approve, answer, message or stop
   --models <m[:effort],…>   eval compare: two to four tiers or model ids to compare, each with an optional :effort
   --max-usd <n>             eval compare: the spend limit — no run starts once the runs and judges have spent it (default 5)
   --payload <file|-|json>   flow filter: the delivery to test — a file, - for stdin, or JSON inline
@@ -421,7 +424,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

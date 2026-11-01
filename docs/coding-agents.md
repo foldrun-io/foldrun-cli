@@ -107,6 +107,12 @@ report <id>` to read which step failed and what it cost, fix the markdown,
 `foldrun deploy`, then `foldrun rerun <id> --from <step>`. `foldrun triggers`
 answers "why did nothing run".
 
+An app that cannot run a terminal — Claude Desktop, Cursor's chat — or one
+that would rather call tools than commands reaches the same account through
+[MCP](mcp): `claude mcp add foldrun -- foldrun mcp` gives it the inbox, the
+waiting gates and questions, runs, flows and files, and approve, answer,
+message, start and stop, each as the key could do it.
+
 ## Writing a flow
 
 A numbered list of steps. The number is the GROUP: same number means those
