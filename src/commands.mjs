@@ -3478,7 +3478,8 @@ async function secretsCmd(positional, flags, layout) {
       const client_id = await promptVisible("  client_id: ");
       const client_secret = await promptHidden("  client_secret: ");
       const refresh_token = await promptHidden("  refresh_token: ");
-      const config = { token_url, client_id, client_secret, refresh_token };
+      const token_auth = await tokenAuthFlag(flags);
+      const config = { token_url, client_id, client_secret, refresh_token, ...(token_auth ? { token_auth } : {}) };
       if (url) {
         await remoteCall(url, flags, "/api/secrets", {
           method: "PUT",
@@ -3824,9 +3825,19 @@ function warnProviderDeprecated(flags) {
   }
 }
 
+/** `--token-auth basic|post|none` (or the RFC names) — how the app proves
+ *  itself at the token URL; absent when the flag is. */
+async function tokenAuthFlag(flags) {
+  if (flags["token-auth"] === undefined) return undefined;
+  const { parseTokenAuth } = await core();
+  const auth = typeof flags["token-auth"] === "string" ? parseTokenAuth(flags["token-auth"]) : null;
+  if (!auth) throw new Error("--token-auth is basic (HTTP Basic: Notion, Spotify, Reddit, Zoom), post (the form body, the default) or none (a public app)");
+  return auth;
+}
+
 async function connect(positional, flags) {
   const name = positional[0];
-  if (!name) throw new Error("usage: foldrun connect NAME --authorize-url <url> --token-url <url> [--authorize-param name=value …] [--scopes …] [--workspace <name>] [--new-client]");
+  if (!name) throw new Error("usage: foldrun connect NAME --authorize-url <url> --token-url <url> [--authorize-param name=value …] [--scopes …] [--token-auth basic|post|none] [--workspace <name>] [--new-client]");
   if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error(`secret name "${name}" must be UPPER_SNAKE_CASE`);
   const { OAUTH_PRESETS } = await core();
 
@@ -3898,6 +3909,12 @@ async function connect(positional, flags) {
   if (!clientId) throw new Error("client_id is required");
   // No secret is a public app, which PKCE alone protects (RFC 9700 §2.1.1).
   if (!clientSecret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
+  const tokenAuth = await tokenAuthFlag(flags);
+  const { oauthTokenRequest, readTokenResponse, tokenAuthProblem } = await core();
+  // Before the browser opens: a consent is never spent on a client that
+  // cannot then authenticate (Basic with no secret, none with one).
+  const authProblem = tokenAuthProblem({ client_secret: clientSecret, token_auth: tokenAuth });
+  if (authProblem) throw new Error(authProblem);
   const scopes = flags.scopes ?? preset?.scopes_example ?? "";
 
   // One fixed loopback address, the same on every developer's machine, so an
@@ -3960,16 +3977,15 @@ async function connect(positional, flags) {
   });
   if (!code) throw new Error("the redirect carried no code");
 
-  const exchange = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: new URLSearchParams({
-      grant_type: "authorization_code", code, redirect_uri: redirectUri, client_id: clientId,
-      ...(clientSecret ? { client_secret: clientSecret } : {}),
-      ...(verifier ? { code_verifier: verifier } : {}),
-    }).toString(),
-  });
-  const payload = /** @type {any} */ (await exchange.json().catch(() => ({})));
+  // Core's one token-request builder: the secret in the body or a Basic
+  // header, as --token-auth says; the answer read however the provider
+  // wrote it (form-encoded, Slack's nested user token, a string expiry).
+  const request = oauthTokenRequest(
+    { client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), ...(tokenAuth ? { token_auth: tokenAuth } : {}) },
+    { grant_type: "authorization_code", code, redirect_uri: redirectUri, ...(verifier ? { code_verifier: verifier } : {}) },
+  );
+  const exchange = await fetch(tokenUrl, { method: "POST", headers: request.headers, body: request.body, redirect: "error" });
+  const payload = readTokenResponse(await exchange.text().catch(() => ""), exchange.headers.get("content-type") ?? "");
   if (!exchange.ok || (!payload.refresh_token && !payload.access_token)) {
     throw new Error(`token exchange failed (${exchange.status}): ${payload.error_description ?? payload.error ?? "no token in the reply"}`);
   }
@@ -3977,7 +3993,7 @@ async function connect(positional, flags) {
   // Store: the refresh recipe when there is one, the bare token otherwise.
   /** @type {any} */
   const body = payload.refresh_token
-    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), refresh_token: payload.refresh_token }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
+    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), refresh_token: payload.refresh_token, ...(tokenAuth ? { token_auth: tokenAuth } : {}), ...(Object.keys(payload.fields).length ? { fields: payload.fields } : {}) }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
     : { name, value: payload.access_token, workspace: workspaceName };
   if (url) {
     // The same PUT `secrets set` makes. A store that fails here has spent the
@@ -11662,7 +11678,7 @@ async function oauthClientsCmd(positional, flags) {
     return 0;
   }
   if (verb === "add") {
-    if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error("`foldrun secrets clients add <name> --authorize-url … --token-url … --client-id … [--authorize-param name=value …] [--scopes …]` — the name in kebab-case");
+    if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error("`foldrun secrets clients add <name> --authorize-url … --token-url … --client-id … [--authorize-param name=value …] [--scopes …] [--token-auth basic|post|none]` — the name in kebab-case");
     warnProviderDeprecated(flags);
     const { OAUTH_PRESETS } = await core();
     const preset = flags.provider ? OAUTH_PRESETS[flags.provider] : undefined;
@@ -11677,11 +11693,13 @@ async function oauthClientsCmd(positional, flags) {
     if (!client_id) throw new Error("client_id is required");
     if (!client_secret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
     if (flags.issuer !== undefined && (typeof flags.issuer !== "string" || !/^https:\/\/[^?#]+$/.test(flags.issuer))) throw new Error("--issuer is the provider's https issuer URL, no query or fragment");
+    const token_auth = await tokenAuthFlag(flags);
     const config = {
       authorize_url, token_url, client_id, client_secret: client_secret ?? "", scopes: flags.scopes ?? preset?.scopes_example ?? "",
       ...(Object.keys(authorize_extra).length ? { authorize_extra } : {}),
       ...(pkce ? {} : { pkce: false }),
       ...(typeof flags.issuer === "string" ? { issuer: flags.issuer } : {}),
+      ...(token_auth ? { token_auth } : {}),
     };
     await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
     console.log(`\n  ${c.green("✓")} saved ${name} ${c.dim(`— \`foldrun connect NAME --client ${name}\` runs a consent from it`)}\n`);
@@ -11790,7 +11808,8 @@ async function secretOfKind(kind, flags) {
       if (typeof flags["token-url"] !== "string") throw new Error("--kind m2m needs --token-url, --client-id (and the client secret, prompted or --client-secret)");
       const client_id = flags["client-id"] ?? (await promptVisible("  client_id: "));
       const client_secret = flags["client-secret"] ?? (await promptHidden("  client_secret: "));
-      const oauth2 = { token_url: flags["token-url"], client_id, client_secret, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}) };
+      const token_auth = await tokenAuthFlag(flags);
+      const oauth2 = { token_url: flags["token-url"], client_id, client_secret, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}), ...(token_auth ? { token_auth } : {}) };
       return { body: { oauth2 }, local: (k, n, b, s, l) => k.setOAuth2Secret("default", n, b.oauth2, s, l) };
     }
     default:

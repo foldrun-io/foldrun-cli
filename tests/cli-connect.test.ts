@@ -222,3 +222,62 @@ test("connect: PKCE by default — the challenge is S256 of the verifier sent wi
     platform.close();
   }
 });
+
+test("connect --token-auth basic: the code goes to the token URL with HTTP Basic, the body has no secret, the recipe keeps it", async () => {
+  const port = await freePort();
+  const exchanges: { auth?: string; body: string }[] = [];
+  const stored: { oauth2: Record<string, unknown> }[] = [];
+  // Basic-only, like Notion: a body secret is invalid_client; the answer is
+  // form-encoded with expires_in as a string, and carries a plain field.
+  const provider = await serve(async (req, res) => {
+    if (req.url === "/token") {
+      const body = await readBody(req);
+      exchanges.push({ auth: req.headers.authorization, body });
+      if (req.headers.authorization !== `Basic ${Buffer.from("cid:c%3Asec").toString("base64")}` || new URLSearchParams(body).has("client_secret")) {
+        res.statusCode = 401; res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ error: "invalid_client" })); return;
+      }
+      res.setHeader("content-type", "application/x-www-form-urlencoded");
+      res.end("access_token=acc3ss&refresh_token=r3fresh&expires_in=3600&workspace_name=Acme");
+    } else { res.statusCode = 404; res.end(); }
+  });
+  const platform = await serve(async (req, res) => {
+    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  try {
+    const r = await runConnect(
+      ["NOTION_TOKEN", "--authorize-url", `${provider.url}/authorize`, "--token-url", `${provider.url}/token`,
+       "--port", String(port), "--client-id", "cid", "--client-secret", "c:sec", "--token-auth", "basic",
+       "--url", platform.url, "--token", "ptok", "--no-browser"],
+      {},
+    );
+    assert.equal(r.status, 0, r.out);
+    const form = new URLSearchParams(exchanges[0].body);
+    assert.equal(form.has("client_secret"), false);
+    assert.equal(form.has("client_id"), false, "one authentication method per request");
+    assert.equal(stored[0].oauth2.token_auth, "client_secret_basic", "refreshes sign in the same way");
+    assert.equal(stored[0].oauth2.refresh_token, "r3fresh", "the form-encoded answer was read");
+    assert.deepEqual(stored[0].oauth2.fields, { workspace_name: "Acme" });
+    assert.doesNotMatch(r.out, /r3fresh|acc3ss|c:sec/);
+  } finally {
+    provider.close();
+    platform.close();
+  }
+});
+
+test("connect --token-auth: a bad value, or basic with no secret, is refused before any browser opens", async () => {
+  for (const [args, msg] of [
+    [["--token-auth", "jwt", "--client-secret", "s"], /--token-auth is basic/],
+    [["--token-auth", "basic", "--client-secret", ""], /needs a client_secret/],
+  ] as const) {
+    const child = spawn(process.execPath, [CLI, "connect", "X_TOKEN", "--authorize-url", "https://p.example/authorize", "--token-url", "https://p.example/token",
+      "--client-id", "cid", ...args, "--local", "--no-browser"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: fs.mkdtempSync(path.join(os.tmpdir(), "fr-ta-")), NO_COLOR: "1" } });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+    assert.notEqual(code, 0, out);
+    assert.match(out, msg);
+    assert.doesNotMatch(out, /authorize\?/, "no consent was started");
+  }
+});

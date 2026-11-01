@@ -290,6 +290,28 @@ How a connection is kept safe, whatever the provider:
 - A provider that **rotates refresh tokens** sends a new one with each
   refresh; it replaces the old one in the vault, where that secret is kept.
 
+### How the app signs in at the token URL
+
+The client secret goes to the provider's token URL every time a code is
+traded or a token refreshed. Providers take it one of two ways, and the form's
+**Client authentication at the token URL** (CLI: `--token-auth`) says which:
+
+| Setting | What is sent | Who wants it |
+|---|---|---|
+| in the form body (default) | `client_id` and `client_secret` as form fields | most providers: Google, Microsoft, GitHub, LinkedIn, Slack |
+| HTTP Basic | an `Authorization: Basic` header (RFC 6749 §2.3.1) | Notion, Spotify, Reddit, Zoom, and any provider whose docs say Basic |
+| none | `client_id` only | a public app, which has no secret (PKCE protects it) |
+
+If the provider answers `invalid_client` when you connect, try the other
+setting. The choice stays with the saved app and the secret, so refreshes
+and **Reconnect** sign in the same way. Secrets stored before 1 Nov 2026 keep
+sending the form body.
+
+Whatever the token URL sends back is read as providers actually write it: JSON
+or form-encoded, `expires_in` as a number or a string, and Slack's user token
+nested under `authed_user`. Plain fields that come back beside the token,
+such as Salesforce's `instance_url`, are kept with the secret.
+
 ## Keyless cloud identity
 
 The safest credential is none at all. A cloud that supports workload
