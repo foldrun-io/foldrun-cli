@@ -38,7 +38,7 @@ authorization server (Keycloak) and against recorded provider answers.
 | Rich authorization requests | RFC 9396 | Supported | `authorization_details` as an extra authorize parameter (a JSON value). |
 | Signed client assertion (private_key_jwt) | RFC 7523 §2.2 | Supported | `token_auth: private_key_jwt` with a key you paste or foldrun makes; a certificate adds Entra's thumbprint. `--token-auth jwt`. |
 | Device authorization | RFC 8628 | Supported | Connect with a code on any device: the Connections form, or `foldrun connect --device`. PKCE is sent with the device grant. |
-| Token exchange | RFC 8693 | Planned | Part I: a `token-exchange` secret kind. Cloud STS is covered today by the keyless identity kind. |
+| Token exchange | RFC 8693 | Supported | A `token-exchange` secret: another secret's live token traded for a narrower one, cached. Cloud STS is covered by the keyless identity kind; a workload identity as the subject is not yet. |
 | DPoP sender-constrained tokens | RFC 9449 | Supported | `dpop: true` on the app (`--dpop`): each connection's own key; the egress proxy signs a proof for every call through a site binding; nonces honoured. |
 | Mutual-TLS client auth and bound tokens | RFC 8705 | Supported | `token_auth: tls_client_auth` with the certificate and key; presented to the token URL and, through the egress proxy, on the calls the token is bound to. |
 | Client-initiated backchannel authentication | OpenID CIBA | Not needed | No provider an agent needs uses it. |

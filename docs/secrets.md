@@ -336,6 +336,19 @@ proxy then makes the proof for each call, or presents the certificate. The
 sandbox holds only the placeholder, never the key. A server that asks for a
 DPoP nonce gets its nonce in the next proof.
 
+### Token exchange
+
+A downstream service may accept only a token made for it: another audience,
+fewer scopes. A **token exchange** secret (RFC 8693) is a recipe for one. It
+names another secret, the subject, whose live token it trades at a token
+endpoint for the narrower one. Use **OAuth — token exchange** in
+Connections, or `foldrun secrets set NAME --kind token-exchange --token-url …
+--client-id … --subject-secret UPSTREAM --audience … --scopes …`. Declare the
+subject beside it in the agent's `secrets:` (otherwise it is looked up at the
+same scope). Each use makes the subject live first, then trades its token;
+the result is cached until it expires. The subject may be any token secret,
+including an `oauth2` or service-account one, but not another token exchange.
+
 ### Connect with a code
 
 Some places have no browser to send a consent through: a terminal over ssh,

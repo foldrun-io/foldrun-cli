@@ -12058,8 +12058,34 @@ async function secretOfKind(kind, flags) {
       const oauth2 = { token_url: flags["token-url"], client_id, ...(client_secret !== undefined ? { client_secret } : {}), ...(token_auth === "private_key_jwt" || certAuth ? keyFields : {}), ...dpop, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}), ...(token_auth ? { token_auth } : {}) };
       return { body: { oauth2 }, local: (k, n, b, s, l) => k.setOAuth2Secret("default", n, b.oauth2, s, l) };
     }
+    case "token-exchange": {
+      // RFC 8693: another secret's live token traded for a narrower one.
+      if (typeof flags["token-url"] !== "string" || typeof flags["subject-secret"] !== "string") throw new Error("--kind token-exchange needs --token-url, --client-id and --subject-secret <NAME> (the secret whose token is traded); --audience, --scopes and --requested-token-type narrow it");
+      const client_id = flags["client-id"] ?? (await promptVisible("  client_id: "));
+      const token_auth = await tokenAuthFlag(flags);
+      // As --kind m2m: a signed assertion's key or a client certificate instead of a secret.
+      const certAuth = token_auth === "tls_client_auth" || token_auth === "self_signed_tls_client_auth";
+      /** @type {any} */
+      let keyFields = certAuth ? certAuthFlags(flags) : assertionKeyFlags(flags);
+      if (token_auth === "private_key_jwt" && !keyFields) {
+        if (flags["generate-key"] !== true) throw new Error("--token-auth jwt needs the app's key: --key-file <pem> (and --cert-file for Entra), or --generate-key");
+        const made = (await core()).generateClientKey("ES256");
+        keyFields = { client_assertion_key: made.privateKey, client_assertion_kid: made.publicJwk.kid, client_assertion_alg: made.publicJwk.alg };
+        showPublicJwk(made.publicJwk);
+      }
+      const client_secret = token_auth === "private_key_jwt" || certAuth ? undefined : flags["client-secret"] ?? (await promptHidden("  client_secret (empty for none): "));
+      const token_exchange = {
+        token_url: flags["token-url"], client_id, ...(client_secret ? { client_secret } : {}), ...(token_auth ? { token_auth } : {}),
+        ...(token_auth === "private_key_jwt" || certAuth ? keyFields : {}),
+        subject_secret: flags["subject-secret"],
+        ...(typeof flags.audience === "string" ? { audience: flags.audience } : {}),
+        ...(typeof flags.scopes === "string" ? { scope: flags.scopes } : {}),
+        ...(typeof flags["requested-token-type"] === "string" ? { requested_token_type: flags["requested-token-type"] } : {}),
+      };
+      return { body: { token_exchange }, local: (k, n, b, s, l) => k.setTokenExchangeSecret("default", n, b.token_exchange, s, l) };
+    }
     default:
-      throw new Error(`unknown --kind "${kind}" — file, ssh, api, service-account, m2m, client-cert or identity (a plain value needs no --kind; --oauth2 a refresh token; \`foldrun connect\` a browser sign-in)`);
+      throw new Error(`unknown --kind "${kind}" — file, ssh, api, service-account, m2m, client-cert, identity or token-exchange (a plain value needs no --kind; --oauth2 a refresh token; \`foldrun connect\` a browser sign-in)`);
   }
 }
 

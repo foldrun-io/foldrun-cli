@@ -599,3 +599,21 @@ test("secrets set --kind m2m --token-auth mtls stores the certificate and key; c
     platform.close();
   }
 });
+
+test("secrets set --kind token-exchange: the recipe names the subject secret and what to narrow it to", async () => {
+  const sent: { token_exchange: Record<string, unknown> }[] = [];
+  const platform = await serve(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/api/secrets" && req.method === "PUT") { sent.push(JSON.parse(await readBody(req))); res.end(JSON.stringify({ ok: true })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  const child = spawn(process.execPath, [CLI, "secrets", "set", "BILLING", "--kind", "token-exchange", "--account", "--token-url", "https://auth.example/token", "--client-id", "tx", "--client-secret", "shh",
+    "--subject-secret", "UPSTREAM", "--audience", "billing-api", "--scopes", "invoices:read", "--url", platform.url, "--token", "ptok"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1" } });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+  platform.close();
+  assert.equal(code, 0, out);
+  assert.deepEqual(sent[0].token_exchange, { token_url: "https://auth.example/token", client_id: "tx", client_secret: "shh", subject_secret: "UPSTREAM", audience: "billing-api", scope: "invoices:read" });
+});
