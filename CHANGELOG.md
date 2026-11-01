@@ -12,6 +12,22 @@ edited by a person.
 
 <!-- releases -->
 
+## [11.0.0] — 2026-11-01
+
+### Breaking changes
+
+- @foldrun/core ^11.0.0 (d8cea08)
+
+- feat(secrets): --kind token-exchange (part I) ([01ab5d7](https://github.com/foldrun-io/foldrun-cli/commit/01ab5d7))
+- feat(connect): --dpop, and --token-auth mtls with --cert-file and --key-file (part H) ([61db081](https://github.com/foldrun-io/foldrun-cli/commit/61db081))
+- feat(mcp): foldrun mcp clients add — register a machine client (part G) ([c2c5a20](https://github.com/foldrun-io/foldrun-cli/commit/c2c5a20))
+- feat(connect): --device — connect with a code, through the platform or locally (part F) ([979c245](https://github.com/foldrun-io/foldrun-cli/commit/979c245))
+- feat(connect): --token-auth jwt with --key-file, --cert-file or --generate-key (part E) ([6c0c8c5](https://github.com/foldrun-io/foldrun-cli/commit/6c0c8c5))
+
+### deps
+
+- @foldrun/core ^11.0.0 ([d8cea08](https://github.com/foldrun-io/foldrun-cli/commit/d8cea08))
+
 ## [10.6.0] — 2026-11-01
 
 - feat(connect): --issuer discovery, --revoke-url, PAR; secrets rm revokes (parts B, C) ([c36f6fd](https://github.com/foldrun-io/foldrun-cli/commit/c36f6fd))
