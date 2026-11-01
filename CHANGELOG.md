@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [11.0.4] — 2026-11-01
+
+- ci(hooks): box checks use a short TMPDIR and install nested packages ([6d6a44d](https://github.com/foldrun-io/foldrun-cli/commit/6d6a44d))
+- ci(hooks): pre-push can run the repo checks on another machine (foldrun.checksHost) ([697c806](https://github.com/foldrun-io/foldrun-cli/commit/697c806))
+
+### docs
+
+- sync the bundled docs (mcp.md: a machine client's revoke ends that token only) ([ad66372](https://github.com/foldrun-io/foldrun-cli/commit/ad66372))
+
 ## [11.0.3] — 2026-11-01
 
 ### deps
