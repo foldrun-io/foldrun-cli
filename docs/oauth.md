@@ -55,7 +55,7 @@ authorization server (Keycloak) and against recorded provider answers.
 | Resource indicators | RFC 8707 | Supported | Tokens are bound to /api/mcp. |
 | Issuer in the authorization response | RFC 9207 | Supported | Every answer carries `iss`. |
 | Revocation endpoint | RFC 7009 | Supported | `POST /api/mcp/oauth/revoke`: an app ends its own connection. |
-| Client credentials for machine clients | RFC 6749 §4.4 | Planned | Part G: machine MCP clients an admin registers. |
+| Client credentials for machine clients | RFC 6749 §4.4 | Supported | An admin registers a machine client (Settings, or `foldrun mcp clients add`) with a role, workspaces and access; no refresh token; disconnecting it makes it `invalid_client`. |
 | Signed client assertion (private_key_jwt) | RFC 7523 §2.2 | Supported | Apps that register `jwks` or `jwks_uri` sign in with assertions; each `jti` is used once. |
 
 ## Refused on purpose

@@ -96,7 +96,20 @@ they chose then and the role they hold now, in the workspaces both allow. A
 person who leaves the account, or is made a viewer, takes their apps with
 them. The access token lasts an hour and opens `/api/mcp` only — sent to any
 other route it is refused. Refresh tokens rotate on every use, and one used
-twice disconnects the app: someone else has a copy. An app that holds a private key can authenticate with it instead of a client
+twice disconnects the app: someone else has a copy. **Machine clients.** A program with no person to approve it, such as a
+nightly job, a CI step or another service, can sign in with client
+credentials. An admin registers it in Settings → API keys → Connected AI apps
+(**Add a machine client**), or with `foldrun mcp clients add <name>`, choosing
+its role, its workspaces, and whether it may act or only read. It gets a
+client id and a secret, shown once, or it registers public keys and signs
+assertions (`private_key_jwt`). It asks the token endpoint with
+`grant_type=client_credentials` and gets an access token for an hour, with no
+refresh token: it simply asks again. It acts within the role and workspaces of
+the admin who registered it, and stops if that admin loses them. It is listed
+with the connected apps, and disconnecting it ends it at once: its next token
+request is refused with `invalid_client`.
+
+An app that holds a private key can authenticate with it instead of a client
 secret (`private_key_jwt`). It registers its public keys (`jwks` or
 `jwks_uri`) and signs a short assertion each time it uses the token
 endpoint. A copied assertion is refused when it is used a second time.

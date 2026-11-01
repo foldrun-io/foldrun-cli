@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { serve, failing, raw } from "./fake-platform.ts";
+import { serve, failing, raw, at } from "./fake-platform.ts";
 
 const CLI = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
 
@@ -133,7 +133,7 @@ test("a stray argument is refused, and nothing reaches stdout", async () => {
   try {
     const r = await mcp(s.url, [], ["extra"]);
     assert.notEqual(r.code, 0);
-    assert.match(r.stderr, /its verbs are connections and disconnect/);
+    assert.match(r.stderr, /its verbs are connections, disconnect/);
     assert.equal(r.stdout, "");
   } finally {
     s.close();
@@ -234,8 +234,21 @@ test("mcp connections lists the AI apps connected over OAuth; mcp disconnect end
 
     const wrong = await at(s.url, "mcp", "frobnicate");
     assert.notEqual(wrong.code, 0);
-    assert.match(wrong.out, /its verbs are connections and disconnect/);
+    assert.match(wrong.out, /its verbs are connections, disconnect/);
   } finally {
     s.close();
   }
+});
+
+test("mcp clients add: registers a machine client with the role, workspaces and access asked, prints the secret once", async () => {
+  const sent: unknown[] = [];
+  const s = await serve({
+    "/api/mcp/clients": (body) => { sent.push(JSON.parse(body)); return { client_id: "fmcp_c_x", client_secret: "fmcp_cs_y", grant: "g1", token_endpoint: "https://app.test/api/mcp/oauth/token", token_endpoint_auth_method: "client_secret_basic" }; },
+  });
+  const r = await at(s.url, "mcp", "clients", "add", "Nightly bot", "--role", "editor", "--workspaces", "desk,ops", "--write");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(sent[0], { name: "Nightly bot", role: "editor", workspaces: ["desk", "ops"], access: "write", token_auth: "client_secret_basic" });
+  assert.match(r.out, /client_secret\s+fmcp_cs_y/);
+  assert.match(r.out, /mcp disconnect g1/);
 });

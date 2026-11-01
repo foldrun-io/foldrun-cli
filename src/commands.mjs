@@ -6776,6 +6776,7 @@ function issueDoctor(issue) {
 async function mcpCmd(positional, flags) {
   const [verb, arg, ...extra] = positional;
   if (verb === "connections" || verb === "ls") return mcpConnectionsCmd(flags);
+  if (verb === "clients") return mcpMachineClientsCmd(arg, extra, flags);
   if (verb === "disconnect" || verb === "revoke") {
     if (!arg || extra.length) throw new Error("which connection? `foldrun mcp disconnect <id>` — ids are in `foldrun mcp connections`");
     const url = platformFor(flags, "mcp disconnect");
@@ -6784,7 +6785,7 @@ async function mcpCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} disconnected ${arg}\n`);
     return 0;
   }
-  if (positional.length) throw new Error("`foldrun mcp` serves the tools to an AI app (`claude mcp add foldrun -- foldrun mcp`); its verbs are connections and disconnect <id> — not " + verb);
+  if (positional.length) throw new Error("`foldrun mcp` serves the tools to an AI app (`claude mcp add foldrun -- foldrun mcp`); its verbs are connections, disconnect <id> and clients add <name> — not " + verb);
   if (process.stdin.isTTY && flags.yes !== true) {
     console.error(`\n  ${c.bold("foldrun mcp")} is an MCP server on stdin/stdout, for an AI app to start — not to type into.\n\n    claude mcp add foldrun -- foldrun mcp${flags["read-only"] === true ? " --read-only" : ""}\n    codex mcp add foldrun -- foldrun mcp\n\n  ${c.dim("Claude Desktop, Cursor: { \"mcpServers\": { \"foldrun\": { \"command\": \"foldrun\", \"args\": [\"mcp\"] } } } — `foldrun docs mcp`")}\n`);
     return 2;
@@ -6889,6 +6890,40 @@ async function mcpCmd(positional, flags) {
   return 0;
 }
 
+/**
+ * `foldrun mcp clients add <name>` — register a machine client for /api/mcp
+ * (client credentials, part G): no person approves its tokens. --role,
+ * --workspaces a,b, --write (else read only), --token-auth basic|post|jwt
+ * (jwt with --jwks-file: the client's public keys). The secret is printed
+ * once. It is listed and ended like any connection (`mcp connections`,
+ * `mcp disconnect <id>`).
+ */
+async function mcpMachineClientsCmd(sub, rest, flags) {
+  if (sub !== "add" || rest.length !== 1) throw new Error("`foldrun mcp clients add <name> [--role viewer|editor|admin] [--workspaces a,b] [--write] [--token-auth basic|post|jwt --jwks-file <path>]` — list and end them with `mcp connections` and `mcp disconnect <id>`");
+  const url = platformFor(flags, "mcp clients add");
+  const auth = flags["token-auth"] === undefined ? "client_secret_basic" : ((await tokenAuthFlag(flags)) ?? "client_secret_basic");
+  if (!["client_secret_basic", "client_secret_post", "private_key_jwt"].includes(auth)) throw new Error("--token-auth for a machine client is basic, post or jwt");
+  if (auth === "private_key_jwt" && typeof flags["jwks-file"] !== "string") throw new Error("--token-auth jwt needs --jwks-file <path>: the client's public keys ({ \"keys\": [...] })");
+  // Not given: left out, so the platform uses the caller's own workspaces
+  // (a scoped admin cannot give "all").
+  const workspaces = typeof flags.workspaces === "string" ? flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean) : undefined;
+  const body = {
+    name: rest[0],
+    role: typeof flags.role === "string" ? flags.role : "viewer",
+    ...(workspaces ? { workspaces } : {}),
+    access: flags.write === true ? "write" : "read",
+    token_auth: auth,
+    ...(auth === "private_key_jwt" ? { jwks: JSON.parse(fs.readFileSync(flags["jwks-file"], "utf8")) } : {}),
+  };
+  const made = await remoteCall(url, flags, "/api/mcp/clients", { method: "POST", body: JSON.stringify(body) });
+  console.log(`\n  ${c.green("✓")} registered ${c.bold(rest[0])} ${c.dim(`(${body.access === "write" ? "read and act" : "read only"} · ${body.role} · ${workspaces ? workspaces.join(", ") : "the workspaces you can open"})`)}\n`);
+  console.log(`    client_id      ${made.client_id}`);
+  if (made.client_secret) console.log(`    client_secret  ${made.client_secret}   ${c.amber("— shown once")}`);
+  console.log(`    token URL      ${made.token_endpoint}`);
+  console.log(`\n  ${c.dim("grant_type=client_credentials at the token URL, then Bearer the access token to /api/mcp. `foldrun mcp disconnect " + made.grant + "` ends it.")}\n`);
+  return 0;
+}
+
 /** `foldrun mcp connections` — the AI apps connected to the account over OAuth
  *  (claude.ai and the like): which app, whose approval, what access. Every
  *  one for an admin; your own otherwise. */
@@ -6904,7 +6939,7 @@ async function mcpConnectionsCmd(flags) {
   if (!rows.length) console.log(`\n  ${c.dim("none — claude.ai connects itself when you add this platform's /api/mcp as a custom connector")}`);
   for (const r of rows) {
     const used = r.lastUsedAt ? `last used ${String(r.lastUsedAt).slice(0, 16).replace("T", " ")}` : "not used yet";
-    console.log(`\n  ${c.bold(r.client)} ${c.dim(`· ${r.redirectHost} · ${r.access === "read" ? "read only" : "read and act"} · ${r.workspaces ? r.workspaces.join(", ") : "all workspaces"}`)}${r.revokedAt ? c.red(" · disconnected") : ""}`);
+    console.log(`\n  ${c.bold(r.client)} ${c.dim(`· ${r.machine ? "machine client" : r.redirectHost} · ${r.access === "read" ? "read only" : "read and act"} · ${r.workspaces ? r.workspaces.join(", ") : "all workspaces"}`)}${r.revokedAt ? c.red(" · disconnected") : ""}`);
     console.log(`    ${c.dim(`${r.id} · ${r.person} · connected ${String(r.createdAt).slice(0, 16).replace("T", " ")} · ${used}`)}`);
   }
   console.log("");
