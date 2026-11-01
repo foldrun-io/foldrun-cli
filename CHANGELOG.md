@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [10.4.0] — 2026-11-01
+
+### New in the public API
+
+- `foldrun mcp connections`
+- `foldrun mcp disconnect`
+
+- feat(mcp): foldrun mcp connections / disconnect — the AI apps connected over OAuth ([8dac2f8](https://github.com/foldrun-io/foldrun-cli/commit/8dac2f8))
+
 ## [10.3.1] — 2026-11-01
 
 ### deps
