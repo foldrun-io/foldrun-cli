@@ -96,7 +96,12 @@ they chose then and the role they hold now, in the workspaces both allow. A
 person who leaves the account, or is made a viewer, takes their apps with
 them. The access token lasts an hour and opens `/api/mcp` only — sent to any
 other route it is refused. Refresh tokens rotate on every use, and one used
-twice disconnects the app: someone else has a copy. An app can also end its own connection by handing a token back to
+twice disconnects the app: someone else has a copy. An app that holds a private key can authenticate with it instead of a client
+secret (`private_key_jwt`). It registers its public keys (`jwks` or
+`jwks_uri`) and signs a short assertion each time it uses the token
+endpoint. A copied assertion is refused when it is used a second time.
+
+An app can also end its own connection by handing a token back to
 `/api/mcp/oauth/revoke` (RFC 7009, advertised as `revocation_endpoint`).
 Approving, disconnecting
 and that automatic disconnect are in the audit log (`mcp.connected`,

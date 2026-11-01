@@ -267,7 +267,7 @@ test("connect --token-auth basic: the code goes to the token URL with HTTP Basic
 
 test("connect --token-auth: a bad value, or basic with no secret, is refused before any browser opens", async () => {
   for (const [args, msg] of [
-    [["--token-auth", "jwt", "--client-secret", "s"], /--token-auth is basic/],
+    [["--token-auth", "mtls-later", "--client-secret", "s"], /--token-auth is basic/],
     [["--token-auth", "basic", "--client-secret", ""], /needs a client_secret/],
   ] as const) {
     const child = spawn(process.execPath, [CLI, "connect", "X_TOKEN", "--authorize-url", "https://p.example/authorize", "--token-url", "https://p.example/token",
@@ -408,4 +408,68 @@ test("connect --issuer with a PAR endpoint: the parameters are pushed and the br
   } finally {
     p.close();
   }
+});
+
+test("connect --token-auth jwt --key-file: the exchange is a signed assertion, no secret is asked or sent, the recipe keeps the key", async () => {
+  const { generateClientKey, verifyClientAssertion } = await import("@foldrun/core");
+  const { privateKey, publicJwk } = generateClientKey("ES256");
+  const keyFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fr-key-")), "key.pem");
+  fs.writeFileSync(keyFile, privateKey);
+  const port = await freePort();
+  const forms: URLSearchParams[] = [];
+  const stored: { oauth2: Record<string, unknown> }[] = [];
+  let tokenUrl = "";
+  const provider = await serve(async (req, res) => {
+    if (req.url === "/token") {
+      const form = new URLSearchParams(await readBody(req));
+      forms.push(form);
+      res.setHeader("content-type", "application/json");
+      try {
+        verifyClientAssertion(form.get("client_assertion") ?? "", { clientId: "cid", audiences: [tokenUrl], keys: [publicJwk] });
+        res.end(JSON.stringify({ access_token: "a", refresh_token: "r", expires_in: 3600 }));
+      } catch (err) { res.statusCode = 401; res.end(JSON.stringify({ error: "invalid_client", error_description: (err as Error).message })); }
+    } else { res.statusCode = 404; res.end(); }
+  });
+  tokenUrl = `${provider.url}/token`;
+  const platform = await serve(async (req, res) => {
+    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  try {
+    const r = await runConnect(["SIGNED", "--authorize-url", `${provider.url}/authorize`, "--token-url", tokenUrl, "--port", String(port), "--client-id", "cid",
+      "--token-auth", "jwt", "--key-file", keyFile, "--url", platform.url, "--token", "ptok", "--no-browser"], {});
+    assert.equal(r.status, 0, r.out);
+    assert.doesNotMatch(r.out, /client_secret/, "no secret is asked for");
+    assert.equal(forms[0].has("client_secret"), false);
+    assert.equal(stored[0].oauth2.token_auth, "private_key_jwt");
+    assert.match(String(stored[0].oauth2.client_assertion_key), /BEGIN PRIVATE KEY/);
+    assert.doesNotMatch(r.out, /PRIVATE KEY/, "the key never reaches the terminal");
+  } finally {
+    provider.close();
+    platform.close();
+  }
+});
+
+test("secrets clients add --token-auth jwt --generate-key: the platform makes the key and the CLI prints its public JWK", async () => {
+  let sent: Record<string, unknown> = {};
+  const jwk = { kty: "EC", crv: "P-256", x: "x", y: "y", kid: "k1", alg: "ES256", use: "sig" };
+  const platform = await serve(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/api/oauth/clients" && req.method === "POST") { sent = JSON.parse(await readBody(req)); res.end(JSON.stringify({ ok: true, name: "okta", public_jwk: jwk })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  const child = spawn(process.execPath, [CLI, "secrets", "clients", "add", "okta", "--authorize-url", "https://okta.example/authorize", "--token-url", "https://okta.example/token",
+    "--client-id", "cid", "--token-auth", "jwt", "--generate-key", "--url", platform.url, "--token", "ptok"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1" } });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+  platform.close();
+  assert.equal(code, 0, out);
+  const config = (sent as { config: Record<string, unknown> }).config;
+  assert.equal(config.token_auth, "private_key_jwt");
+  assert.equal(config.generate_key, true);
+  assert.equal(config.client_secret, "");
+  assert.match(out, /Register this public key/);
+  assert.match(out, /"kid": "k1"/);
 });

@@ -3476,10 +3476,19 @@ async function secretsCmd(positional, flags, layout) {
         (await promptVisible("  token URL [https://oauth2.googleapis.com/token]: ")) ||
         "https://oauth2.googleapis.com/token";
       const client_id = await promptVisible("  client_id: ");
-      const client_secret = await promptHidden("  client_secret: ");
-      const refresh_token = await promptHidden("  refresh_token: ");
       const token_auth = await tokenAuthFlag(flags);
-      const config = { token_url, client_id, client_secret, refresh_token, ...(token_auth ? { token_auth } : {}) };
+      // private_key_jwt: the key from --key-file or made here, no secret asked.
+      /** @type {any} */
+      let keyFields = assertionKeyFlags(flags);
+      if (token_auth === "private_key_jwt" && !keyFields) {
+        if (flags["generate-key"] !== true) throw new Error("--token-auth jwt needs the app's key: --key-file <pem> (and --cert-file for Entra), or --generate-key");
+        const made = (await core()).generateClientKey("ES256");
+        keyFields = { client_assertion_key: made.privateKey, client_assertion_kid: made.publicJwk.kid, client_assertion_alg: made.publicJwk.alg };
+        showPublicJwk(made.publicJwk);
+      }
+      const client_secret = token_auth === "private_key_jwt" ? undefined : await promptHidden("  client_secret: ");
+      const refresh_token = await promptHidden("  refresh_token: ");
+      const config = { token_url, client_id, ...(client_secret !== undefined ? { client_secret } : {}), refresh_token, ...(token_auth ? { token_auth } : {}), ...(token_auth === "private_key_jwt" ? keyFields : {}) };
       if (url) {
         await remoteCall(url, flags, "/api/secrets", {
           method: "PUT",
@@ -3842,8 +3851,29 @@ async function tokenAuthFlag(flags) {
   if (flags["token-auth"] === undefined) return undefined;
   const { parseTokenAuth } = await core();
   const auth = typeof flags["token-auth"] === "string" ? parseTokenAuth(flags["token-auth"]) : null;
-  if (!auth) throw new Error("--token-auth is basic (HTTP Basic: Notion, Spotify, Reddit, Zoom), post (the form body, the default) or none (a public app)");
+  if (!auth) throw new Error("--token-auth is basic (HTTP Basic: Notion, Spotify, Reddit, Zoom), post (the form body, the default), none (a public app) or jwt (private_key_jwt: a signed assertion with --key-file or --generate-key)");
   return auth;
+}
+
+/** private_key_jwt's key: --key-file (PEM or JWK) and --cert-file, read
+ *  here; undefined when neither is given (then --generate-key, or refused). */
+function assertionKeyFlags(flags) {
+  if (flags["key-file"] === undefined) {
+    if (flags["cert-file"] !== undefined) throw new Error("--cert-file goes with --key-file");
+    return undefined;
+  }
+  if (typeof flags["key-file"] !== "string") throw new Error("--key-file <path> — the app's private key, PEM or JWK");
+  return {
+    client_assertion_key: fs.readFileSync(flags["key-file"], "utf8"),
+    ...(typeof flags["cert-file"] === "string" ? { client_assertion_cert: fs.readFileSync(flags["cert-file"], "utf8") } : {}),
+  };
+}
+
+/** Print a public JWK for the person to register with the provider. */
+function showPublicJwk(jwk) {
+  console.log(`\n  Register this public key with the provider (a JWK; it is not secret):\n`);
+  for (const line of JSON.stringify(jwk, null, 2).split("\n")) console.log(`    ${line}`);
+  console.log();
 }
 
 async function connect(positional, flags) {
@@ -3918,12 +3948,22 @@ async function connect(positional, flags) {
 
   const clientId = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
   const pkce = flags["no-pkce"] !== true;
-  const clientSecret = flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
+  let tokenAuth = await tokenAuthFlag(flags);
+  const { oauthTokenRequest, readTokenResponse, tokenAuthProblem, discoverOAuth, isSecureUrl, generateClientKey } = await core();
+  // private_key_jwt signs with a key and sends no secret: none is asked for.
+  /** @type {any} */
+  let keyFields = assertionKeyFlags(flags);
+  if (tokenAuth === "private_key_jwt" && !keyFields) {
+    if (flags["generate-key"] !== true) throw new Error("--token-auth jwt needs the app's key: --key-file <pem> (and --cert-file for Entra), or --generate-key");
+    const made = generateClientKey("ES256");
+    keyFields = { client_assertion_key: made.privateKey, client_assertion_kid: made.publicJwk.kid, client_assertion_alg: made.publicJwk.alg };
+    showPublicJwk(made.publicJwk);
+    await promptVisible("  Press Enter once the provider has it: ");
+  }
+  const clientSecret = tokenAuth === "private_key_jwt" ? "" : flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
   if (!clientId) throw new Error("client_id is required");
   // No secret is a public app, which PKCE alone protects (RFC 9700 §2.1.1).
-  if (!clientSecret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
-  let tokenAuth = await tokenAuthFlag(flags);
-  const { oauthTokenRequest, readTokenResponse, tokenAuthProblem, discoverOAuth, isSecureUrl } = await core();
+  if (!clientSecret && tokenAuth !== "private_key_jwt" && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
   /** @type {any} */
   let discovered = null;
   // Read whenever there is an issuer, URLs given or not: what it says about
@@ -3941,7 +3981,9 @@ async function connect(positional, flags) {
   const revocationUrl = flags["revoke-url"] ?? discovered?.revocation_url;
   // Before the browser opens: a consent is never spent on a client that
   // cannot then authenticate (Basic with no secret, none with one).
-  const authProblem = tokenAuthProblem({ client_secret: clientSecret, token_auth: tokenAuth });
+  // How the app signs in at the token URL, PAR and the exchange alike.
+  const signer = { client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), ...(tokenAuth ? { token_auth: tokenAuth } : {}), ...(tokenAuth === "private_key_jwt" ? keyFields : {}) };
+  const authProblem = tokenAuthProblem(signer);
   if (authProblem) throw new Error(authProblem);
   const scopes = flags.scopes ?? preset?.scopes_example ?? "";
 
@@ -3977,11 +4019,7 @@ async function connect(positional, flags) {
   // the parameters are pushed first, client-authenticated as at the token
   // URL, and the browser carries only client_id and the request_uri.
   if (discovered?.par_url) {
-    const pushed = oauthTokenRequest(
-      { client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), ...(tokenAuth ? { token_auth: tokenAuth } : {}) },
-      Object.fromEntries(authorize.searchParams),
-      { clientIdInBody: true },
-    );
+    const pushed = oauthTokenRequest(signer, Object.fromEntries(authorize.searchParams), { clientIdInBody: true, audience: issuer ?? tokenUrl });
     const res = await fetch(discovered.par_url, { method: "POST", headers: pushed.headers, body: pushed.body, redirect: "error" });
     const answer = /** @type {any} */ (await res.json().catch(() => ({})));
     if (!res.ok || typeof answer.request_uri !== "string") throw new Error(`the provider refused the pushed authorization request (${res.status}): ${answer.error_description ?? answer.error ?? "no request_uri in the reply"}`);
@@ -4044,8 +4082,9 @@ async function connect(positional, flags) {
   // header, as --token-auth says; the answer read however the provider
   // wrote it (form-encoded, Slack's nested user token, a string expiry).
   const request = oauthTokenRequest(
-    { client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), ...(tokenAuth ? { token_auth: tokenAuth } : {}) },
+    signer,
     { grant_type: "authorization_code", code, redirect_uri: redirectUri, ...(verifier ? { code_verifier: verifier } : {}) },
+    { audience: tokenUrl },
   );
   const exchange = await fetch(tokenUrl, { method: "POST", headers: request.headers, body: request.body, redirect: "error" });
   const payload = readTokenResponse(await exchange.text().catch(() => ""), exchange.headers.get("content-type") ?? "");
@@ -4056,7 +4095,7 @@ async function connect(positional, flags) {
   // Store: the refresh recipe when there is one, the bare token otherwise.
   /** @type {any} */
   const body = payload.refresh_token
-    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), refresh_token: payload.refresh_token, ...(tokenAuth ? { token_auth: tokenAuth } : {}), ...(revocationUrl ? { revocation_url: revocationUrl } : {}), ...(Object.keys(payload.fields).length ? { fields: payload.fields } : {}) }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
+    ? { name, oauth2: { ...signer, token_url: tokenUrl, refresh_token: payload.refresh_token, ...(revocationUrl ? { revocation_url: revocationUrl } : {}), ...(Object.keys(payload.fields).length ? { fields: payload.fields } : {}) }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
     : { name, value: payload.access_token, workspace: workspaceName };
   if (url) {
     // The same PUT `secrets set` makes. A store that fails here has spent the
@@ -11752,11 +11791,13 @@ async function oauthClientsCmd(positional, flags) {
     const authorize_extra = { ...(preset?.authorize_extra ?? {}), ...authorizeParams(flags) };
     const client_id = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
     const pkce = flags["no-pkce"] !== true;
-    const client_secret = flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
-    if (!client_id) throw new Error("client_id is required");
-    if (!client_secret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
-    if (flags.issuer !== undefined && (typeof flags.issuer !== "string" || !/^https:\/\/[^?#]+$/.test(flags.issuer))) throw new Error("--issuer is the provider's https issuer URL, no query or fragment");
     let token_auth = await tokenAuthFlag(flags);
+    const keyFields = assertionKeyFlags(flags);
+    if (token_auth === "private_key_jwt" && !keyFields && flags["generate-key"] !== true) throw new Error("--token-auth jwt needs the app's key: --key-file <pem> (and --cert-file for Entra), or --generate-key");
+    const client_secret = token_auth === "private_key_jwt" ? "" : flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
+    if (!client_id) throw new Error("client_id is required");
+    if (!client_secret && token_auth !== "private_key_jwt" && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
+    if (flags.issuer !== undefined && (typeof flags.issuer !== "string" || !/^https:\/\/[^?#]+$/.test(flags.issuer))) throw new Error("--issuer is the provider's https issuer URL, no query or fragment");
     /** @type {any} */
     let found = null;
     if (typeof flags.issuer === "string") {
@@ -11784,7 +11825,9 @@ async function oauthClientsCmd(positional, flags) {
       ...(found?.device_url ? { device_url: found.device_url } : {}),
       ...(found?.par_url ? { par_url: found.par_url } : {}),
     };
-    await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
+    if (token_auth === "private_key_jwt") Object.assign(config, keyFields ?? { generate_key: true });
+    const saved = await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
+    if (saved?.public_jwk && !keyFields) showPublicJwk(saved.public_jwk);
     console.log(`\n  ${c.green("✓")} saved ${name} ${c.dim(`— \`foldrun connect NAME --client ${name}\` runs a consent from it`)}\n`);
     return 0;
   }
@@ -11890,9 +11933,17 @@ async function secretOfKind(kind, flags) {
     case "m2m": {
       if (typeof flags["token-url"] !== "string") throw new Error("--kind m2m needs --token-url, --client-id (and the client secret, prompted or --client-secret)");
       const client_id = flags["client-id"] ?? (await promptVisible("  client_id: "));
-      const client_secret = flags["client-secret"] ?? (await promptHidden("  client_secret: "));
       const token_auth = await tokenAuthFlag(flags);
-      const oauth2 = { token_url: flags["token-url"], client_id, client_secret, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}), ...(token_auth ? { token_auth } : {}) };
+      /** @type {any} */
+      let keyFields = assertionKeyFlags(flags);
+      if (token_auth === "private_key_jwt" && !keyFields) {
+        if (flags["generate-key"] !== true) throw new Error("--token-auth jwt needs the app's key: --key-file <pem> (and --cert-file for Entra), or --generate-key");
+        const made = (await core()).generateClientKey("ES256");
+        keyFields = { client_assertion_key: made.privateKey, client_assertion_kid: made.publicJwk.kid, client_assertion_alg: made.publicJwk.alg };
+        showPublicJwk(made.publicJwk);
+      }
+      const client_secret = token_auth === "private_key_jwt" ? undefined : flags["client-secret"] ?? (await promptHidden("  client_secret: "));
+      const oauth2 = { token_url: flags["token-url"], client_id, ...(client_secret !== undefined ? { client_secret } : {}), ...(token_auth === "private_key_jwt" ? keyFields : {}), grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}), ...(token_auth ? { token_auth } : {}) };
       return { body: { oauth2 }, local: (k, n, b, s, l) => k.setOAuth2Secret("default", n, b.oauth2, s, l) };
     }
     default:

@@ -253,7 +253,9 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `--port <n>` | `connect`: the loopback port (default 8642) |
 | `--issuer <url>` | `connect`, `secrets clients add`: the provider's issuer. Its metadata (RFC 8414 / OpenID Connect) fills the authorize and token URLs not given, picks `--token-auth`, and keeps the revocation, device and PAR endpoints; the callback's `iss` is checked against it (RFC 9207) |
 | `--revoke-url <url>` | `connect`, `secrets clients add`: the provider's revocation endpoint (RFC 7009), when discovery does not give it. Deleting or reconnecting the secret revokes its grant there |
-| `--token-auth <how>` | `connect`, `secrets clients add`, `secrets set --kind m2m`, `secrets set --oauth2`: how the app proves itself at the token URL — `post` (the form body, the default), `basic` (HTTP Basic: Notion, Spotify, Reddit, Zoom) or `none` (a public app with no secret) |
+| `--token-auth <how>` | `connect`, `secrets clients add`, `secrets set --kind m2m`, `secrets set --oauth2`: how the app proves itself at the token URL — `post` (the form body, the default), `basic` (HTTP Basic: Notion, Spotify, Reddit, Zoom), `none` (a public app with no secret) or `jwt` (`private_key_jwt`: a JWT signed with the app's key, no secret) |
+| `--key-file <path>`, `--cert-file <path>` | with `--token-auth jwt`: the app's private key (PEM or JWK) and, for Microsoft Entra, its certificate |
+| `--generate-key` | with `--token-auth jwt`: foldrun makes the key (EC P-256) and prints the public JWK to register with the provider; `connect` waits for Enter before it opens the consent |
 | `--role <r>` | `keys create`: `viewer`, `editor` (default) or `admin` |
 | `--expires <span>` | `keys create`: when it stops working — `30d`, `90d`, `365d` or `never` (default) |
 | `--grace <span>` | `keys rotate`: keep the old key working for `1h` or `24h` (default `0`: revoked now) |

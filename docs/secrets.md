@@ -290,6 +290,9 @@ How a connection is kept safe, whatever the provider:
 - A provider that **rotates refresh tokens** sends a new one with each
   refresh; it replaces the old one in the vault, where that secret is kept.
 
+Every kind of OAuth, and what foldrun does about each, is listed in
+[OAuth support](oauth).
+
 ### Discovery from an issuer
 
 Most providers publish their own OAuth metadata. Type the provider's
@@ -345,6 +348,15 @@ traded or a token refreshed. Providers take it one of two ways, and the form's
 | in the form body (default) | `client_id` and `client_secret` as form fields | most providers: Google, Microsoft, GitHub, LinkedIn, Slack |
 | HTTP Basic | an `Authorization: Basic` header (RFC 6749 §2.3.1) | Notion, Spotify, Reddit, Zoom, and any provider whose docs say Basic |
 | none | `client_id` only | a public app, which has no secret (PKCE protects it) |
+| signed JWT (`private_key_jwt`) | a short JWT signed with the app's private key, no secret at all (RFC 7523) | Microsoft Entra certificate credentials, Okta, FAPI providers |
+
+For a signed JWT, paste the app's private key (PEM or JWK), or leave the box
+empty and foldrun makes one. If foldrun makes it, the form shows the public
+key (a JWK) to register with the provider before you connect. Microsoft Entra
+names keys by their certificate, so give the certificate too and the
+assertion carries its thumbprint. The private key is sealed like a secret and
+never shown again. CLI: `--token-auth jwt` with `--key-file` (and
+`--cert-file`) or `--generate-key`.
 
 If the provider answers `invalid_client` when you connect, try the other
 setting. The choice stays with the saved app and the secret, so refreshes
