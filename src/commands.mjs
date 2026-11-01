@@ -3876,6 +3876,12 @@ function showDeviceCode(started) {
   console.log(`  ${c.dim("Waiting for the provider to say yes…")}`);
 }
 
+/** tls_client_auth's certificate and key (RFC 8705), from --cert-file and --key-file. */
+function certAuthFlags(flags) {
+  if (typeof flags["cert-file"] !== "string" || typeof flags["key-file"] !== "string") throw new Error("--token-auth mtls needs --cert-file <pem> and --key-file <pem>: the client certificate and its key");
+  return { tls_client_cert: fs.readFileSync(flags["cert-file"], "utf8"), tls_client_key: fs.readFileSync(flags["key-file"], "utf8") };
+}
+
 /** Print a public JWK for the person to register with the provider. */
 function showPublicJwk(jwk) {
   console.log(`\n  Register this public key with the provider (a JWK; it is not secret):\n`);
@@ -3915,6 +3921,11 @@ async function connect(positional, flags) {
   // provider) was connected with, so run its consent flow — no client id, no
   // secret, nothing typed. The redirect is the platform's own callback, which
   // rewrites the same secret at the same scope; we wait for it to land.
+  // --dpop belongs to the app: a reconnect through a saved app signs as that
+  // app does, so it is refused rather than silently ignored (Codex review).
+  if (flags.dpop === true && url && !flags["client-id"] && !env("OAUTH_CLIENT_ID") && flags["new-client"] !== true) {
+    throw new Error("--dpop applies to a new app given here (--client-id …). For a saved app, turn DPoP on for the app: `foldrun secrets clients add <name> --dpop …`, then `foldrun connect NAME --client <name>`");
+  }
   if (url && !flags["client-id"] && !env("OAUTH_CLIENT_ID") && flags["new-client"] !== true && flags.device !== true) {
     /** @type {any} */
     let started = null;
@@ -3960,7 +3971,14 @@ async function connect(positional, flags) {
   const clientId = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
   const pkce = flags["no-pkce"] !== true;
   let tokenAuth = await tokenAuthFlag(flags);
-  const { oauthTokenRequest, readTokenResponse, tokenAuthProblem, discoverOAuth, isSecureUrl, generateClientKey } = await core();
+  const { oauthTokenRequest, readTokenResponse, tokenAuthProblem, discoverOAuth, isSecureUrl, generateClientKey, generateDpopKey, dpopProof } = await core();
+  // --dpop: this connection's own key (RFC 9449); the exchange and every
+  // refresh carry proofs, and the token is bound to it.
+  if (flags.dpop === true && flags.device === true) throw new Error("--dpop with --device is not supported — connect with the browser (drop --device), or without DPoP");
+  const dpopKey = flags.dpop === true ? generateDpopKey() : undefined;
+  // A client certificate is presented by the platform or by core's refresh;
+  // this machine's own exchange cannot carry one.
+  if (tokenAuth === "tls_client_auth" || tokenAuth === "self_signed_tls_client_auth") throw new Error("--token-auth mtls connects through the platform (`foldrun connect NAME --client <saved app>`, after `secrets clients add --token-auth mtls`) or as a client-credentials secret (`secrets set NAME --kind m2m --token-auth mtls`)");
   // private_key_jwt signs with a key and sends no secret: none is asked for.
   /** @type {any} */
   let keyFields = assertionKeyFlags(flags);
@@ -4109,17 +4127,28 @@ async function connect(positional, flags) {
     { grant_type: "authorization_code", code, redirect_uri: redirectUri, ...(verifier ? { code_verifier: verifier } : {}) },
     { audience: tokenUrl },
   );
-  const exchange = await fetch(tokenUrl, { method: "POST", headers: request.headers, body: request.body, redirect: "error" });
-  payload = readTokenResponse(await exchange.text().catch(() => ""), exchange.headers.get("content-type") ?? "");
+  /** @param {string | undefined} nonce */
+  const send = (nonce) => fetch(tokenUrl, { method: "POST", headers: dpopKey ? { ...request.headers, dpop: dpopProof(dpopKey, { htm: "POST", htu: tokenUrl, ...(nonce ? { nonce } : {}) }) } : request.headers, body: request.body, redirect: "error" });
+  let exchange = await send(undefined);
+  let text = await exchange.text().catch(() => "");
+  // A DPoP server may ask for its nonce in the proof (RFC 9449 §8): once more, with it.
+  if (dpopKey && exchange.status === 400 && exchange.headers.get("dpop-nonce") && readTokenResponse(text, exchange.headers.get("content-type") ?? "").error === "use_dpop_nonce") {
+    exchange = await send(exchange.headers.get("dpop-nonce") ?? undefined);
+    text = await exchange.text().catch(() => "");
+  }
+  payload = readTokenResponse(text, exchange.headers.get("content-type") ?? "");
   if (!exchange.ok || (!payload.refresh_token && !payload.access_token)) {
     throw new Error(`token exchange failed (${exchange.status}): ${payload.error_description ?? payload.error ?? "no token in the reply"}`);
   }
   }
 
+  // A DPoP-bound token without a refresh token cannot be stored with its key:
+  // refused rather than saved unusable (Codex review).
+  if (dpopKey && !payload.refresh_token) throw new Error("the provider issued no refresh token — a DPoP-bound connection needs one (ask for offline access, or drop --dpop)");
   // Store: the refresh recipe when there is one, the bare token otherwise.
   /** @type {any} */
   const body = payload.refresh_token
-    ? { name, oauth2: { ...signer, token_url: tokenUrl, refresh_token: payload.refresh_token, ...(revocationUrl ? { revocation_url: revocationUrl } : {}), ...(Object.keys(payload.fields).length ? { fields: payload.fields } : {}) }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
+    ? { name, oauth2: { ...signer, ...(dpopKey ? { dpop_key: dpopKey } : {}), token_url: tokenUrl, refresh_token: payload.refresh_token, ...(revocationUrl ? { revocation_url: revocationUrl } : {}), ...(Object.keys(payload.fields).length ? { fields: payload.fields } : {}) }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
     : { name, value: payload.access_token, workspace: workspaceName };
   if (url) {
     // The same PUT `secrets set` makes. A store that fails here has spent the
@@ -11851,11 +11880,13 @@ async function oauthClientsCmd(positional, flags) {
     const client_id = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
     const pkce = flags["no-pkce"] !== true;
     let token_auth = await tokenAuthFlag(flags);
-    const keyFields = assertionKeyFlags(flags);
+    const certAuth = token_auth === "tls_client_auth" || token_auth === "self_signed_tls_client_auth";
+    const keyFields = certAuth ? undefined : assertionKeyFlags(flags);
+    const certFields = certAuth ? certAuthFlags(flags) : undefined;
     if (token_auth === "private_key_jwt" && !keyFields && flags["generate-key"] !== true) throw new Error("--token-auth jwt needs the app's key: --key-file <pem> (and --cert-file for Entra), or --generate-key");
-    const client_secret = token_auth === "private_key_jwt" ? "" : flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
+    const client_secret = token_auth === "private_key_jwt" || certAuth ? "" : flags["client-secret"] ?? env("OAUTH_CLIENT_SECRET") ?? (await promptHidden(`  client_secret${pkce ? " (empty for a public app)" : ""}: `));
     if (!client_id) throw new Error("client_id is required");
-    if (!client_secret && token_auth !== "private_key_jwt" && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
+    if (!client_secret && token_auth !== "private_key_jwt" && !certAuth && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
     if (flags.issuer !== undefined && (typeof flags.issuer !== "string" || !/^https:\/\/[^?#]+$/.test(flags.issuer))) throw new Error("--issuer is the provider's https issuer URL, no query or fragment");
     /** @type {any} */
     let found = null;
@@ -11885,6 +11916,8 @@ async function oauthClientsCmd(positional, flags) {
       ...(found?.par_url ? { par_url: found.par_url } : {}),
     };
     if (token_auth === "private_key_jwt") Object.assign(config, keyFields ?? { generate_key: true });
+    if (certFields) Object.assign(config, certFields);
+    if (flags.dpop === true) Object.assign(config, { dpop: true });
     const saved = await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
     if (saved?.public_jwk && !keyFields) showPublicJwk(saved.public_jwk);
     console.log(`\n  ${c.green("✓")} saved ${name} ${c.dim(`— \`foldrun connect NAME --client ${name}\` runs a consent from it`)}\n`);
@@ -11899,6 +11932,7 @@ async function oauthClientsCmd(positional, flags) {
  * the platform's own callback. Waits for it to arrive.
  */
 async function connectFromClient(name, flags) {
+  if (flags.dpop === true) throw new Error("--dpop is the saved app's setting, not a connection's: `foldrun secrets clients add <name> --dpop …` makes every connection from it DPoP-bound");
   const url = platformFor(flags, "connect --client");
   const workspace = typeof flags.to === "string" ? flags.to : undefined;
   const before = (await remoteCall(url, flags, "/api/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace)?.connectedAt ?? null;
@@ -12009,16 +12043,19 @@ async function secretOfKind(kind, flags) {
       if (typeof flags["token-url"] !== "string") throw new Error("--kind m2m needs --token-url, --client-id (and the client secret, prompted or --client-secret)");
       const client_id = flags["client-id"] ?? (await promptVisible("  client_id: "));
       const token_auth = await tokenAuthFlag(flags);
+      const certAuth = token_auth === "tls_client_auth" || token_auth === "self_signed_tls_client_auth";
       /** @type {any} */
-      let keyFields = assertionKeyFlags(flags);
+      let keyFields = certAuth ? certAuthFlags(flags) : assertionKeyFlags(flags);
       if (token_auth === "private_key_jwt" && !keyFields) {
         if (flags["generate-key"] !== true) throw new Error("--token-auth jwt needs the app's key: --key-file <pem> (and --cert-file for Entra), or --generate-key");
         const made = (await core()).generateClientKey("ES256");
         keyFields = { client_assertion_key: made.privateKey, client_assertion_kid: made.publicJwk.kid, client_assertion_alg: made.publicJwk.alg };
         showPublicJwk(made.publicJwk);
       }
-      const client_secret = token_auth === "private_key_jwt" ? undefined : flags["client-secret"] ?? (await promptHidden("  client_secret: "));
-      const oauth2 = { token_url: flags["token-url"], client_id, ...(client_secret !== undefined ? { client_secret } : {}), ...(token_auth === "private_key_jwt" ? keyFields : {}), grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}), ...(token_auth ? { token_auth } : {}) };
+      const client_secret = token_auth === "private_key_jwt" || certAuth ? undefined : flags["client-secret"] ?? (await promptHidden("  client_secret: "));
+      // --dpop: the recipe's own DPoP key, made here (RFC 9449).
+      const dpop = flags.dpop === true ? { dpop_key: (await core()).generateDpopKey() } : {};
+      const oauth2 = { token_url: flags["token-url"], client_id, ...(client_secret !== undefined ? { client_secret } : {}), ...(token_auth === "private_key_jwt" || certAuth ? keyFields : {}), ...dpop, grant_type: "client_credentials", ...(flags.scopes ? { extra: { scope: flags.scopes } } : {}), ...(token_auth ? { token_auth } : {}) };
       return { body: { oauth2 }, local: (k, n, b, s, l) => k.setOAuth2Secret("default", n, b.oauth2, s, l) };
     }
     default:

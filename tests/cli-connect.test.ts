@@ -534,3 +534,68 @@ test("connect --client <saved> --device: the platform starts it and stores the g
   assert.match(out, /TV connected/);
   assert.ok(!calls.includes("POST /api/oauth/start"), "no browser consent was started");
 });
+
+test("connect --dpop: the exchange carries a DPoP proof (with the server's nonce after it asks), and the recipe keeps the connection's DPoP key", async () => {
+  const port = await freePort();
+  const proofs: string[] = [];
+  const stored: { oauth2: Record<string, unknown> }[] = [];
+  const provider = await serve(async (req, res) => {
+    if (req.url === "/token") {
+      await readBody(req);
+      const proof = req.headers.dpop as string | undefined;
+      res.setHeader("content-type", "application/json");
+      if (!proof) { res.statusCode = 400; res.end(JSON.stringify({ error: "invalid_dpop_proof" })); return; }
+      proofs.push(proof);
+      const claims = JSON.parse(Buffer.from(proof.split(".")[1], "base64url").toString("utf8"));
+      if (claims.nonce !== "n1") { res.statusCode = 400; res.setHeader("dpop-nonce", "n1"); res.end(JSON.stringify({ error: "use_dpop_nonce" })); return; }
+      res.end(JSON.stringify({ access_token: "a", refresh_token: "r", token_type: "DPoP", expires_in: 3600 }));
+    } else { res.statusCode = 404; res.end(); }
+  });
+  const platform = await serve(async (req, res) => {
+    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  try {
+    const r = await runConnect(["BSKY", "--authorize-url", `${provider.url}/authorize`, "--token-url", `${provider.url}/token`, "--port", String(port), "--client-id", "cid", "--client-secret", "", "--dpop", "--url", platform.url, "--token", "ptok", "--no-browser"], {});
+    assert.equal(r.status, 0, r.out);
+    assert.equal(proofs.length, 2, "asked for its nonce once, then accepted");
+    const h = JSON.parse(Buffer.from(proofs[1].split(".")[0], "base64url").toString("utf8"));
+    assert.equal(h.typ, "dpop+jwt");
+    assert.match(String(stored[0].oauth2.dpop_key), /BEGIN PRIVATE KEY/);
+    assert.doesNotMatch(r.out, /PRIVATE KEY/);
+  } finally {
+    provider.close();
+    platform.close();
+  }
+});
+
+test("secrets set --kind m2m --token-auth mtls stores the certificate and key; connect --token-auth mtls locally is refused with where to do it", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fr-mtls-"));
+  const { execFileSync } = await import("node:child_process");
+  execFileSync("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", path.join(dir, "k.pem"), "-out", path.join(dir, "c.pem"), "-subj", "/CN=c", "-days", "1"], { stdio: "ignore" });
+  const sent: { oauth2: Record<string, unknown> }[] = [];
+  const platform = await serve(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/api/secrets" && req.method === "PUT") { sent.push(JSON.parse(await readBody(req))); res.end(JSON.stringify({ ok: true })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  const run = (args: string[]) => new Promise<{ code: number; out: string }>((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1" } });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    child.on("exit", (c) => resolve({ code: c ?? -1, out }));
+  });
+  try {
+    const r = await run(["secrets", "set", "BANK", "--kind", "m2m", "--account", "--token-url", "https://bank.example/token", "--client-id", "cid", "--token-auth", "mtls", "--cert-file", path.join(dir, "c.pem"), "--key-file", path.join(dir, "k.pem"), "--url", platform.url, "--token", "ptok"]);
+    assert.equal(r.code, 0, r.out);
+    assert.equal(sent[0].oauth2.token_auth, "tls_client_auth");
+    assert.match(String(sent[0].oauth2.tls_client_cert), /BEGIN CERTIFICATE/);
+    assert.equal(sent[0].oauth2.client_secret, undefined, "no secret asked or sent");
+    const local = await run(["connect", "BANK2", "--authorize-url", "https://bank.example/authorize", "--token-url", "https://bank.example/token", "--client-id", "cid", "--token-auth", "mtls", "--cert-file", path.join(dir, "c.pem"), "--key-file", path.join(dir, "k.pem"), "--local", "--no-browser"]);
+    assert.notEqual(local.code, 0);
+    assert.match(local.out, /connects through the platform/);
+  } finally {
+    platform.close();
+  }
+});

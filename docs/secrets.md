@@ -316,6 +316,26 @@ signed in as at the token URL. The browser then carries only the client id and
 a one-time `request_uri`, so nothing in the browser can change or leak them.
 Providers that require PAR need this; every other provider accepts it.
 
+### Sender-constrained tokens: DPoP and client certificates
+
+Some providers bind a token to something only foldrun holds, so a copied
+token is useless:
+
+- **DPoP** (RFC 9449; Bluesky/atproto, Okta's DPoP mode). Turn on
+  **DPoP-bound tokens** for the app (CLI: `--dpop`). Each connection gets a
+  key of its own. Its refreshes carry a proof signed with that key, and so
+  does every call that uses the token.
+- **A client certificate** (mutual TLS, RFC 8705; banks, FAPI). Choose
+  **client certificate** as how the app signs in at the token URL and paste
+  the certificate and its key (CLI: `--token-auth mtls --cert-file … --key-file
+  …`). The certificate is presented to the token URL, and on the calls the
+  token is bound to.
+
+Use these connections through a [site binding](#bound-to-sites). The egress
+proxy then makes the proof for each call, or presents the certificate. The
+sandbox holds only the placeholder, never the key. A server that asks for a
+DPoP nonce gets its nonce in the next proof.
+
 ### Connect with a code
 
 Some places have no browser to send a consent through: a terminal over ssh,
