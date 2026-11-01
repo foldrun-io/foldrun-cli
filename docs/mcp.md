@@ -116,6 +116,8 @@ endpoint. A copied assertion is refused when it is used a second time.
 
 An app can also end its own connection by handing a token back to
 `/api/mcp/oauth/revoke` (RFC 7009, advertised as `revocation_endpoint`).
+A machine client that hands back an access token ends that token only: it
+stays registered and asks for the next one. Only an admin disconnects it.
 Approving, disconnecting
 and that automatic disconnect are in the audit log (`mcp.connected`,
 `mcp.revoked`).
