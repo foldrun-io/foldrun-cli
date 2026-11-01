@@ -28,7 +28,8 @@ A refused call answers `403` with the role that was needed.
 The keys in a workspace's `AGENTS.md` that set policy for the whole
 workspace — `budget`, `compute`, `notify`, `network_enforce`, `telemetry`,
 `alerts`, `owner`, `judge` and `timezone` (also when written under a
-`governance:`, `guardrail:`, `observability:` or `evaluation:` block) — need
+`governance:`, `guardrail:`, `observability:` or `evaluation:` block) — and a
+flow's `a2a:`, which decides whether outside agents may call it ([A2A](a2a)) — need
 the **admin** role to change, whichever way the file is written: the
 workspace's settings, a save in the editor (`PUT …/source`), `foldrun deploy`,
 an import, or a restore to an older point. An editor still edits the rest of
@@ -117,6 +118,14 @@ account's key can never reach another's workspaces. Someone who looks after
 several accounts — an agency, a reseller — holds one key per account and
 switches between them; the CLI stores each as a named profile. See
 [More than one account](cli#more-than-one-account).
+
+An **A2A key** is a key of its own kind, for an outside agent calling your
+published flows over [A2A](a2a): one workspace, the flows it names, and how
+many tasks it may have open (`foldrun keys create partner --a2a --to leads
+--flows lead-finder`, or Settings → API keys). It opens only `/a2a/…` — every `/api`
+route refuses it — so it can never read runs, change files, approve a step or
+answer a question. It expires, is revoked and rotated like any key, and a
+rotated one keeps the tasks its predecessor made.
 
 ### Expiry, last use and rotation
 

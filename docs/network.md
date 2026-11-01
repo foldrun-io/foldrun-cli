@@ -24,8 +24,9 @@ network: [api.hubapi.com]        # the trusted list, plus this
 
 **What the step declares** is always allowed, at every level: the hosts of
 its `apis:`, its remote MCP servers, its web providers (`web: {search: brave}`),
-and the sites its [secrets are bound to](secrets#bound-to-sites). You never list
-those twice.
+the card of each outside agent in its `remotes:` (that card's own site — never
+one the card names), and the sites its [secrets are bound to](secrets#bound-to-sites).
+You never list those twice.
 
 No level is ever a way into private space: the cluster, the LAN and the
 cloud metadata endpoint are refused whatever `network:` says.

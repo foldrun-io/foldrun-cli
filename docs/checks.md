@@ -254,11 +254,14 @@ and is not flagged.
 ### security/lethal-trifecta
 
 *warn · ASI01, ASI02, ASI03.* One agent that **reads untrusted content** (the
-`web` tool, or a browse/fetch/scrape tool), **holds something private** (a
-secret, an `apis:` entry, an MCP server) and **has a way out** (an open
-network, which is the default for an agent that reads the web, a tool marked
-`outward: true`, or an API it may POST, PUT, PATCH or DELETE to). Any page it
-reads can tell it to send what it holds anywhere it can reach.
+`web` tool, a browse/fetch/scrape tool, or the replies of outside agents it
+calls through `remotes:`), **holds something private** (a secret, an `apis:`
+entry, an MCP server) and **has a way out** (an open network, which is the
+default for an agent that reads the web, a tool marked `outward: true`, an
+API it may POST, PUT, PATCH or DELETE to, or an outside agent it may send to).
+Any page or reply it reads can tell it to send what it holds anywhere it can
+reach. A remote's own secret is not counted as private: the egress proxy
+fills it for that remote's origin alone, and the agent never holds it.
 
 Take a leg away:
 - take it off the open network: `network: { level: trusted, allow:
@@ -288,6 +291,26 @@ not. That is what `sandbox: own` is for: each job it is handed runs in a
 sandbox of its own, with its own tools, secrets and network, and only its
 reply reaches the parent. The finding says what it holds, so the choice
 stays visible ([agents](agents#isolated-sub-agents-sandbox-own)).
+
+### security/published-flow-trifecta
+
+*warn · ASI01, ASI02, ASI03.* A flow published over A2A (`a2a: {publish:
+true}`) runs a step whose agent holds something private and has a way out —
+the trifecta above, with the outside caller as the untrusted content: what a
+caller sends reaches every step. Take a leg away from that agent (the same
+three ways as above), or do not publish the flow. A warning, like every new
+rule; `deploy_block: security` makes it refuse a deploy.
+
+### security/published-flow-ungated
+
+*warn · ASI02, ASI09.* A flow published over A2A has a step that acts outside
+the workspace — an `outward: true` tool, an API it may write to, or a message
+to an outside agent (`remotes:`) — with no approval (`!`) and no `ask:` on it,
+on a step beside it in its group (a gate there holds the whole group), or on a
+step before it. Anyone holding a key for the flow can start it as
+often as the key allows, so put a person in the way: a `!` on the first such
+step, or on one before it. A `verify:` does not count here; it checks the step
+after it acted.
 
 ### flow/outward-ungated
 

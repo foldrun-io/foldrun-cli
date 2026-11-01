@@ -1,5 +1,10 @@
 # Glossary
 
+**A2A** — Agent2Agent, an open protocol for one agent to hand a task to
+another run by somebody else. A flow with `a2a: { publish: true }` is served
+to outside agents holding an **A2A key**; an agent's `remotes:` are the
+outside agents it may call. See [A2A](a2a).
+
 **account** — the top level: people, keys, the library, the wallet, and the
 workspaces under it. Has one owner.
 

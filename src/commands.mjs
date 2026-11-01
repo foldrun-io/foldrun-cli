@@ -4278,6 +4278,7 @@ async function doctor(flags) {
  *   keys create <label> --workspaces <ws>  one that opens that workspace alone
  *   keys revoke <id>
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
+ *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
  *                                      one ends now, or when the grace runs out.
  *                                      A key already rotated is refused (409):
@@ -4300,7 +4301,11 @@ async function keysCmd(positional, flags) {
     const day = (iso) => (iso ? iso.slice(0, 10) : "");
     for (const k of keys) {
       // A deploy key opened the platform's own git, gone since 17 Oct 2026.
-      const what = k.scope ? "deploy key · opens nothing since the platform's git went — revoke it" : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
+      const what = k.scope
+        ? "deploy key · opens nothing since the platform's git went — revoke it"
+        : k.purpose === "a2a"
+          ? `A2A · ${k.a2a?.workspace ?? "?"} · ${(k.a2a?.flows ?? []).join(",")}${k.a2a?.maxTasks ? ` · up to ${k.a2a.maxTasks} open` : ""}`
+          : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
       const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
       const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
       console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}`);
@@ -4314,6 +4319,7 @@ async function keysCmd(positional, flags) {
   }
   if (verb === "create" || verb === "new") {
     if (!arg) throw new Error("what is the key for? foldrun keys create <label>");
+    if (flags.a2a === true) return keysCreateA2a(url, arg, flags);
     const body = { label: arg };
     if (typeof flags.role === "string") body.role = flags.role;
     // --expires 30d|90d|365d|never; unsaid, the key never expires.
@@ -4361,6 +4367,35 @@ async function keysCmd(positional, flags) {
     return 0;
   }
   throw new Error(`keys: unknown verb "${verb}" — ls, create, rotate, revoke`);
+}
+
+/**
+ * `foldrun keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]` —
+ * a key for an OUTSIDE agent: it opens /a2a/<account>/<ws>/… for those
+ * flows (each also published with a2a:) and no /api route.
+ */
+async function keysCreateA2a(url, label, flags) {
+  if (flags.role !== undefined || flags.workspaces !== undefined) {
+    throw new Error("an A2A key takes --to <workspace> and --flows, not --role or --workspaces — it opens /a2a only, for that workspace's flows");
+  }
+  if (typeof flags.to !== "string" || !flags.to) throw new Error("which workspace? `foldrun keys create <label> --a2a --to <workspace> --flows <flow,…>`");
+  const flows = typeof flags.flows === "string" ? [...new Set(flags.flows.split(",").map((f) => f.trim()).filter(Boolean))] : [];
+  if (!flows.length) throw new Error(`which flows may it call? --flows <flow,…> — \`foldrun a2a ls --to ${flags.to}\` lists what ${flags.to} publishes`);
+  const body = { label, purpose: "a2a", workspace: flags.to, flows };
+  if (flags["max-tasks"] !== undefined) {
+    const n = Number(flags["max-tasks"]);
+    if (!Number.isInteger(n) || n < 1 || n > 100) throw new Error("--max-tasks takes a whole number from 1 to 100 — how many tasks the key may have open at once (default 10)");
+    body.maxTasks = n;
+  }
+  if (typeof flags.expires === "string") body.expires = flags.expires;
+  const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+  console.log(
+    `\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(`A2A · ${made.workspace ?? flags.to} · ${(made.flows ?? flows).join(", ")} · up to ${made.maxTasks ?? body.maxTasks ?? 10} open`)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`,
+  );
+  if (made.key == null) return lostSecret(made.id);
+  console.log(`  ${made.key}\n`);
+  console.log(`  ${c.dim(`Shown once. The outside agent sends it as its bearer token; it opens /a2a only. Try it: ${A2A_KEY_ENV}=<key> foldrun a2a call <card-url> "…" — \`foldrun a2a ls --to ${flags.to}\` has the card URLs. \`foldrun keys revoke ${made.id}\` ends it.`)}\n`);
+  return 0;
 }
 
 /** A retried mint or rotate is answered from the first call, and the server
@@ -12139,6 +12174,389 @@ function printPreview(p, rel) {
   }
 }
 
+// ------------------------------------------------------------------- a2a
+
+/**
+ * `foldrun a2a …` — A2A (Agent2Agent 1.0): outside agents calling this
+ * account's published flows, and this terminal calling any A2A agent.
+ *
+ *   a2a ls --to <ws>                            what the workspace serves: flows, cards, keys, recent tasks
+ *   a2a publish <flow> [--to <ws>] [--name --description --example … --public-card|--private-card]
+ *   a2a unpublish <flow> [--to <ws>]            publish: false, the rest of a2a: kept
+ *   a2a card <flow> --to <ws>                   the card's URL, then the card
+ *   a2a call <card-url> "<text>" [--data <json|@file>] [--context <id>] [--no-wait] [--max-wait <s>]
+ *   a2a status <task-id> --card <url>
+ *   a2a cancel <task-id> --card <url> [--yes]
+ *
+ * Publishing is an edit of the flow's `a2a:` frontmatter — here, or with
+ * --to on the platform through the flow route's PATCH { a2a } (an admin's:
+ * the platform refuses an editor). The /a2a endpoints take an A2A key and nothing else:
+ * call, status, cancel and a private card read it from $FOLDRUN_A2A_KEY
+ * (or the variable --key-env names), never from the command line, and never
+ * send this terminal's own API key to a card's address.
+ */
+const A2A_KEY_ENV = "FOLDRUN_A2A_KEY";
+// Core's A2A modules, named in variables: the installed core may predate
+// them, and a literal would fail the typecheck against it. Both are in
+// core's foldrun.publicApi (tests/cli-release.test.ts reads these strings).
+/** @type {string} */
+const A2A_CLIENT_MODULE = "@foldrun/core/a2a-client";
+/** @type {string} */
+const A2A_PUBLISH_MODULE = "@foldrun/core/a2a-publish";
+const A2A_POLL_MS = 2_000;
+const A2A_CARD_BYTES = 64 * 1024;
+
+async function a2aCmd(positional, flags, layout) {
+  const verb = positional[0];
+  switch (verb) {
+    case "ls":
+    case "list":
+    case undefined:
+      return a2aLsCmd(flags, layout);
+    case "publish":
+    case "unpublish":
+      return a2aPublishCmd(verb, positional[1], flags, layout);
+    case "card":
+      return a2aCardCmd(positional[1], flags, layout);
+    case "call":
+      return a2aCallCmd(positional[1], positional.slice(2).join(" "), flags);
+    case "status":
+    case "cancel":
+      return a2aTaskCmd(verb, positional[1], flags);
+  }
+  throw new Error(`a2a: unknown verb "${verb}" — ls, publish, unpublish, card, call, status, cancel`);
+}
+
+/** GET /api/workspaces/<ws>/a2a — what a workspace serves over A2A. */
+async function a2aView(flags, layout, what) {
+  const url = platformFor(flags, what);
+  const ws = platformWorkspace(flags, layout, what);
+  return { url, ws, view: await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/a2a`) };
+}
+
+const a2aStateWord = (s) => printable(s).replace(/^TASK_STATE_/, "").toLowerCase().replace(/_/g, "-");
+const a2aStateMark = (s) =>
+  s === "TASK_STATE_COMPLETED" ? c.green("✓") : s === "TASK_STATE_FAILED" || s === "TASK_STATE_REJECTED" ? c.red("✗") : s === "TASK_STATE_CANCELED" ? c.dim("■") : c.amber("…");
+
+async function a2aLsCmd(flags, layout) {
+  const { ws, view } = await a2aView(flags, layout, "a2a ls");
+  if (flags.json === true) {
+    console.log(JSON.stringify(view, null, 2));
+    return 0;
+  }
+  const flows = view.flows ?? [];
+  console.log(`\n  ${c.bold(ws)} ${c.dim("· over A2A")}\n`);
+  if (!flows.length) console.log(`  ${c.dim(`no flow says a2a: — \`foldrun a2a publish <flow> --to ${ws}\` publishes one`)}`);
+  for (const f of flows) {
+    const state = f.published ? c.green("published".padEnd(13)) : c.dim("not published");
+    const extra = [f.publicCard ? "public card" : "private card", f.hasInputSchema ? "input schema" : null].filter(Boolean).join(" · ");
+    console.log(`  ${state} ${c.bold(printable(f.flow))}${f.name && f.name !== f.flow ? `  ${printable(f.name)}` : ""}  ${c.dim(extra)}`);
+    if (f.published) {
+      console.log(`  ${" ".repeat(10)}${c.dim("card")}  ${printable(f.card)}`);
+      console.log(`  ${" ".repeat(10)}${c.dim("url ")}  ${printable(f.url)}`);
+    }
+  }
+  if (Array.isArray(view.keys)) {
+    console.log(`\n  ${c.bold("A2A keys")}`);
+    if (!view.keys.length) console.log(`  ${c.dim(`none — \`foldrun keys create <label> --a2a --to ${ws} --flows <flow>\` mints one`)}`);
+    for (const k of view.keys) {
+      console.log(`  ${printable(k.id)}  ${printable(k.prefix)}…  ${c.bold(printable(k.label) || "(no label)")}  ${c.dim(printable(`${(k.flows ?? []).join(", ")}${k.maxTasks ? ` · up to ${k.maxTasks} open` : ""}${k.expiresAt ? ` · expires ${String(k.expiresAt).slice(0, 10)}` : ""}`))}`);
+    }
+  }
+  const tasks = view.tasks ?? [];
+  console.log(`\n  ${c.bold("Recent tasks")}`);
+  if (!tasks.length) console.log(`  ${c.dim("none yet")}`);
+  for (const t of tasks) {
+    const who = t.key?.label || t.key?.prefix ? `A2A · ${t.key.label || `${t.key.prefix}…`}${t.key.revoked ? " (revoked)" : ""}` : "A2A · a key since removed";
+    console.log(`  ${a2aStateMark(t.state)} ${a2aStateWord(t.state).padEnd(14)} ${c.bold(printable(t.flow))}  ${c.dim(printable(`${who} · ${when(t.updatedAt)}${t.runId ? ` · run ${t.runId}` : ""}`))}`);
+  }
+  console.log("");
+  return 0;
+}
+
+/** What a publish or unpublish changes in `a2a:` — the body of the flow
+ *  route's PATCH { a2a }, merged there over the flow's block (a key given
+ *  replaces it, a key given as null removes it). */
+export function a2aPatchFor(verb, flags) {
+  if (verb !== "publish") return { publish: false };
+  const patch = { publish: true };
+  if (typeof flags.name === "string") patch.name = flags.name;
+  if (typeof flags.description === "string") patch.description = flags.description;
+  const examples = many(flags.example);
+  if (examples.length) patch.examples = examples;
+  if (flags["public-card"] === true && flags["private-card"] === true) throw new Error("--public-card or --private-card, not both");
+  if (flags["public-card"] === true) patch.public_card = true;
+  if (flags["private-card"] === true) patch.public_card = null;
+  return patch;
+}
+
+/** The `a2a:` the flow will say after `patch`, merged as the platform
+ *  merges it: its other keys kept, `publish` first. */
+export function a2aBlockFor(current, patch) {
+  const base = current && typeof current === "object" && !Array.isArray(current) ? { ...current } : {};
+  delete base.publish;
+  const block = { publish: patch.publish, ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    if (k === "publish") continue;
+    if (v === null) delete block[k];
+    else block[k] = v;
+  }
+  return block;
+}
+
+async function a2aPublishCmd(verb, flow, flags, layout) {
+  if (!flow) throw new Error(`which flow? \`foldrun a2a ${verb} <flow> --to <workspace>\``);
+  // The block's own rules are core's (a2a-publish.ts): the same sentences
+  // check and the platform say. A core without them would call a2a: an
+  // unknown field and refuse the edit for a reason that is not one.
+  const pub = /** @type {any} */ (await import(A2A_PUBLISH_MODULE).catch(() => null));
+  if (!pub || typeof pub.a2aPublishProblems !== "function") {
+    throw new Error(`\`foldrun a2a ${verb}\` needs an @foldrun/core that knows a2a: (@foldrun/core/a2a-publish) — this install's is older; update foldrun (npm i -g foldrun@latest)`);
+  }
+  const matter = (await import("gray-matter")).default;
+  const { patchFrontmatter } = await import("@foldrun/core/agents-md");
+  const patch = a2aPatchFor(verb, flags);
+  const code = await flowEditCmd(flags, layout, {
+    flow,
+    what: `a2a ${verb}`,
+    label: verb === "publish" ? "a2a: publish — outside agents with an A2A key naming it may call it" : "a2a: publish: false — no outside agent may call it",
+    compute: (raw) => {
+      let current;
+      try {
+        current = matter(raw, {}).data?.a2a;
+      } catch {
+        current = undefined;
+      }
+      // Nothing to take back from a flow that never said a2a:.
+      if (verb === "unpublish" && (current === undefined || current === null)) return { next: raw, meta: null };
+      const block = a2aBlockFor(current, patch);
+      const problems = pub.a2aPublishProblems(block);
+      if (problems.length) throw new Error(`a2a: ${problems.join("; ")}`);
+      return { next: patchFrontmatter(raw, { a2a: block }), meta: null };
+    },
+    // The flow page's Publish over A2A control sends the same PATCH { a2a }
+    // (an admin's: the platform refuses an editor with 403).
+    bodies: (raw) => [{ body: { a2a: patch }, after: raw }],
+  });
+  if (code !== 0 || flags["dry-run"] === true) return code;
+  if (!namesPlatform(flags)) {
+    if (verb === "publish") console.log(`  ${c.dim("Once deployed, an outside agent calls it with an A2A key: `foldrun keys create <label> --a2a --to <workspace> --flows " + flow + "`")}\n`);
+    return 0;
+  }
+  if (verb === "unpublish") return 0;
+  // Where it is served now, and how a caller gets in.
+  const { ws, view } = await a2aView(flags, layout, `a2a ${verb}`).catch(() => ({ ws: flags.to, view: null }));
+  const f = (view?.flows ?? []).find((x) => x.flow === flow);
+  if (f?.published) {
+    console.log(`  ${c.dim("card")}  ${printable(f.card)}`);
+    console.log(`  ${c.dim("url ")}  ${printable(f.url)}\n`);
+  }
+  console.log(`  ${c.dim(`A caller needs an A2A key that names it: \`foldrun keys create <label> --a2a --to ${ws} --flows ${flow}\``)}\n`);
+  return 0;
+}
+
+/** The A2A key this terminal sends to an /a2a address: from $FOLDRUN_A2A_KEY
+ *  or the variable --key-env names — never this CLI's own API key. */
+function a2aKey(flags) {
+  const named = typeof flags["key-env"] === "string";
+  const name = named ? flags["key-env"] : A2A_KEY_ENV;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`--key-env takes the NAME of an environment variable that holds the A2A key — got "${name}"`);
+  const token = process.env[name]?.trim() || undefined;
+  if (named && !token) throw new Error(`--key-env ${name}: $${name} is not set — export the A2A key in it (a key is never read from the command line)`);
+  return { name, token };
+}
+
+/** A card address, checked: http(s), no user:password in it. */
+function a2aCardUrl(value, what) {
+  if (typeof value !== "string" || !value) throw new Error(`which agent? \`foldrun a2a ${what}\` takes the agent card's URL (…/.well-known/agent-card.json)`);
+  let u;
+  try {
+    u = new URL(value);
+  } catch {
+    throw new Error(`"${value}" is not a URL — \`foldrun a2a ${what}\` takes the agent card's address (…/.well-known/agent-card.json)`);
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error(`${u.protocol} is not a web address — an A2A card is at https://…`);
+  if (u.username || u.password) throw new Error("the card URL holds a user name or password — the key goes in $FOLDRUN_A2A_KEY, never in a URL");
+  return u;
+}
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+/** Core's A2A client, or a clear refusal from an older core. */
+async function a2aClient(what) {
+  const m = /** @type {any} */ (await import(A2A_CLIENT_MODULE).catch(() => null));
+  if (!m || ["fetchCard", "sendMessage", "getTask", "cancelTask", "replyText"].some((f) => typeof m[f] !== "function")) {
+    throw new Error(`\`foldrun a2a ${what}\` needs an @foldrun/core with the A2A client (@foldrun/core/a2a-client) — this install's is older; update foldrun (npm i -g foldrun@latest)`);
+  }
+  return m;
+}
+
+/** The connection core's client takes, for one card. */
+function a2aConnection(u, flags) {
+  const key = a2aKey(flags);
+  if (key.token && u.protocol === "http:" && !LOOPBACK.has(u.hostname)) {
+    console.error(`  ${c.amber("!")} ${c.dim(`sending the A2A key to ${u.host} over plain http — anyone on the way can read it`)}`);
+  }
+  return { key, conn: { remote: u.host, card: u.href, origin: u.origin, ...(key.token ? { token: key.token } : {}), timeoutMs: timeoutSeconds(flags) * 1000 } };
+}
+
+/** An A2A refusal, said with what to do about it here. */
+function a2aExplain(err, key) {
+  // The remote's own words can be in the message: printed, so made safe.
+  const msg = printable(err instanceof Error ? err.message : String(err));
+  if (/refused the credential/.test(msg)) {
+    return new Error(key.token ? `${msg} — is $${key.name} an A2A key for this flow? (POST /api/keys { purpose: "a2a" } mints one; an API key never opens /a2a)` : `${msg.replace(/ — this remote has no secret: set one$/, "")} — no A2A key was sent: export it in $${key.name} (or name the variable with --key-env)`);
+  }
+  return new Error(msg);
+}
+
+/**
+ * The exit code a task means, whatever the output format: 0 for a task
+ * that completed or is still open (call, status), 1 for one that failed,
+ * was rejected or canceled — and for cancel, 0 only when the agent says
+ * the task IS canceled now.
+ */
+export function a2aExitCode(verb, task, terminal) {
+  const state = task?.status?.state;
+  if (verb === "cancel") return state === "TASK_STATE_CANCELED" ? 0 : 1;
+  return state === "TASK_STATE_COMPLETED" || !terminal?.has?.(state) ? 0 : 1;
+}
+
+/** An outside agent's text, indented, made safe to print: it cannot move the
+ *  cursor, retitle the terminal or write the clipboard (printable). */
+const a2aIndented = (text) => printable(text).split("\n").map((l) => `  ${l}`).join("\n");
+
+function a2aPrintTask(task, A, cardUrl) {
+  const state = task.status?.state;
+  const id = printable(task.id);
+  console.log(`\n  ${a2aStateMark(state)} ${c.bold(a2aStateWord(state))}  ${c.dim(`task ${id}${task.contextId ? ` · context ${printable(task.contextId)}` : ""}`)}`);
+  const text = A.replyText({ task });
+  if (text) console.log(`\n${a2aIndented(text)}`);
+  if (!A.TERMINAL_STATES?.has?.(state)) {
+    console.log(`\n  ${c.dim(`still open — \`foldrun a2a status ${id} --card ${cardUrl}\` asks again, \`foldrun a2a cancel ${id} --card ${cardUrl}\` stops it`)}`);
+  }
+  console.log("");
+  return a2aExitCode("status", task, A.TERMINAL_STATES);
+}
+
+/** --data: one JSON value, inline or @file — the request's data part. */
+function a2aData(value) {
+  if (value === undefined) return undefined;
+  if (value === true) throw new Error("--data needs a value — JSON, or @file");
+  const text = String(value).startsWith("@") ? fs.readFileSync(path.resolve(String(value).slice(1)), "utf8") : String(value);
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(`--data is not JSON (${err instanceof Error ? err.message : err}) — it is sent as the message's data part`);
+  }
+}
+
+async function a2aCallCmd(cardArg, text, flags) {
+  const u = a2aCardUrl(cardArg, "call <card-url> \"<text>\"");
+  if (!text.trim()) throw new Error("what should it do? `foldrun a2a call <card-url> \"<text>\"` — the text is the message");
+  const data = a2aData(flags.data);
+  const A = await a2aClient("call");
+  const { key, conn } = a2aConnection(u, flags);
+  const maxWait = flags["max-wait"] === undefined ? 300 : Number(flags["max-wait"]);
+  if (!Number.isFinite(maxWait) || maxWait < 0) throw new Error("--max-wait takes seconds, 0 or more");
+  const wait = flags["no-wait"] !== true && flags["return-immediately"] !== true && maxWait > 0;
+  let task;
+  try {
+    const endpoint = await A.fetchCard(conn);
+    const sent = await A.sendMessage(conn, endpoint, {
+      messageId: crypto.randomUUID(),
+      text,
+      ...(data !== undefined ? { data } : {}),
+      ...(typeof flags.context === "string" ? { contextId: flags.context } : {}),
+    });
+    if (sent.message) {
+      if (flags.json === true) console.log(JSON.stringify(sent, null, 2));
+      else console.log(`\n${a2aIndented(A.replyText(sent))}\n`);
+      return 0;
+    }
+    task = sent.task;
+    // The id is printed before any waiting, so an interrupted wait still
+    // leaves the task in hand.
+    if (wait && flags.json !== true) console.error(`  ${c.dim(`task ${printable(task.id)} — waiting up to ${maxWait}s for it to end (Ctrl-C leaves it running)`)}`);
+    const until = Date.now() + maxWait * 1000;
+    while (wait && !A.TERMINAL_STATES.has(task.status.state) && !A.INTERRUPTED_STATES?.has?.(task.status.state) && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, Math.min(A2A_POLL_MS, Math.max(0, until - Date.now()))));
+      task = await A.getTask(conn, endpoint, task.id);
+    }
+  } catch (err) {
+    throw a2aExplain(err, key);
+  }
+  if (flags.json === true) console.log(JSON.stringify(task, null, 2));
+  else a2aPrintTask(task, A, u.href);
+  return a2aExitCode("call", task, A.TERMINAL_STATES);
+}
+
+async function a2aTaskCmd(verb, taskId, flags) {
+  if (!taskId) throw new Error(`which task? \`foldrun a2a ${verb} <task-id> --card <url>\` — \`foldrun a2a call\` prints the id`);
+  const u = a2aCardUrl(flags.card, `${verb} <task-id> --card <url>`);
+  const A = await a2aClient(verb);
+  const { key, conn } = a2aConnection(u, flags);
+  if (verb === "cancel" && !(await confirmed(flags, "a2a cancel", `Cancel task ${taskId} at ${u.host} (its run is stopped)? [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing cancelled")}\n`);
+    return 1;
+  }
+  let task;
+  try {
+    const endpoint = await A.fetchCard(conn);
+    task = verb === "cancel" ? await A.cancelTask(conn, endpoint, taskId) : await A.getTask(conn, endpoint, taskId);
+  } catch (err) {
+    throw a2aExplain(err, key);
+  }
+  // JSON or words, the same exit code: a script reading --json must still
+  // see a failed task, or a cancel the agent did not carry out, as a failure.
+  if (flags.json === true) console.log(JSON.stringify(task, null, 2));
+  else a2aPrintTask(task, A, u.href);
+  return a2aExitCode(verb, task, A.TERMINAL_STATES);
+}
+
+async function a2aCardCmd(flow, flags, layout) {
+  if (!flow) throw new Error("which flow? `foldrun a2a card <flow> --to <workspace>`");
+  const { ws, view } = await a2aView(flags, layout, "a2a card");
+  const f = (view.flows ?? []).find((x) => x.flow === flow);
+  if (!f) throw new Error(`${flow} in ${ws} says no a2a: — \`foldrun a2a publish ${flow} --to ${ws}\` publishes it`);
+  if (!f.published) throw new Error(`${flow} in ${ws} is not published (a2a: publish: false) — it has no card; \`foldrun a2a publish ${flow} --to ${ws}\``);
+  console.log(`\n  ${c.dim("card")}  ${printable(f.card)}`);
+  console.log(`  ${c.dim("url ")}  ${printable(f.url)}\n`);
+  const u = new URL(f.card);
+  const key = a2aKey(flags);
+  if (!f.publicCard && !key.token) {
+    console.log(`  ${c.dim(`a private card — reading it takes an A2A key that names ${flow}: export it in $${key.name} (or --key-env NAME), or make it public with \`foldrun a2a publish ${flow} --to ${ws} --public-card\``)}\n`);
+    return 0;
+  }
+  // Only the A2A key goes to the card's address — never this terminal's API key.
+  const res = await fetch(u, {
+    headers: { accept: "application/json", "A2A-Version": "1.0", ...(key.token && !f.publicCard ? { authorization: `Bearer ${key.token}` } : {}) },
+    redirect: "manual",
+    signal: AbortSignal.timeout(timeoutSeconds(flags) * 1000),
+  });
+  const body = await res.text();
+  if (res.status !== 200) {
+    const said = (() => {
+      try {
+        return JSON.parse(body)?.error?.message;
+      } catch {
+        return null;
+      }
+    })();
+    throw new Error(`the card answered HTTP ${res.status}${said ? `: ${printable(said)}` : ""}${res.status === 401 || res.status === 403 ? ` — is $${key.name} an A2A key that names ${flow}?` : ""}`);
+  }
+  if (Buffer.byteLength(body, "utf8") > A2A_CARD_BYTES) throw new Error(`the card is over ${A2A_CARD_BYTES / 1024} KiB — not printed`);
+  let card;
+  try {
+    card = JSON.parse(body);
+  } catch {
+    throw new Error("the card's address did not answer JSON");
+  }
+  console.log(JSON.stringify(card, null, 2).split("\n").map((l) => `  ${l}`).join("\n"));
+  console.log("");
+  return 0;
+}
+
 export async function run(command, positional, flags, workspace, layout) {
   // Nothing outside the CLI's own entry point passes a layout — the tests
   // that call run() directly, an embedder. A lone workspace is the safe
@@ -12164,6 +12582,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return apiCmd(positional, flags);
     case "keys":
       return keysCmd(positional, flags);
+    case "a2a":
+      return a2aCmd(positional, flags, layout);
     case "audit":
       return auditCmd(positional, flags);
     case "accounts":

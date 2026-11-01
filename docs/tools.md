@@ -1770,6 +1770,8 @@ limits:
 |---|---|
 | `web.<action>` | one action of the `web` tool; a model provider's own search or fetch (`web: {search: zai}`) counts as `web.search` / `web.fetch` |
 | `web` | every web action together |
+| `a2a` | messages to outside agents (`remotes:`) — `a2a_send` and `a2a_reply` together |
+| `a2a.<tool>` | one of `a2a.send`, `a2a.reply`, `a2a.status`, `a2a.cancel` — `a2a.status` caps polling apart from sending |
 | an HTTP tool's name | every call to it — each operation of an `openapi:` tool, and its generic `call_`, all under the one name |
 | a script tool's name | every run of it (`desk-email` and `desk_email` are the same key) |
 | an MCP server's name | every tool the server exposes |

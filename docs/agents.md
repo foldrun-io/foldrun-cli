@@ -96,6 +96,7 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `hooks` | your own code at every tool call, step start and step end — refuse, rewrite, add context — the same on every model ([Hooks](hooks)). Also in a workspace's or the account's `AGENTS.md` for every agent under it |
 | `apis` | an HTTP API declared inline, as one tool |
 | `mcpServers` | an MCP server declared inline |
+| `remotes` | outside agents it may call over A2A — `[{name, card, secret?, description?}]`: the four `a2a_*` tools, and each card's own site added to its network ([below](#calling-an-outside-agent-remotes)) |
 | `secrets` | vault entries its tools may use — names only, never values. The names the step's own model call uses (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, the `ANTHROPIC_*_MODEL` tiers, `CLAUDE_CODE_OAUTH_TOKEN`, `FOLDRUN_MODEL_KEY`) never replace the model's own settings, and `foldrun check` warns: script and API tools and `verify:` get the declared value under that name, but the agent's own shell sees the model's — give it another name (`MY_ANTHROPIC_KEY`), or run the model on it with `provider:` |
 | `limits` | the most calls one step may make — per tool, per web action, or in all: `limits: {web.search: 40, crm: 20, calls: 300, repeat: 5}` (`repeat`: the same call with the same input). A call past a limit is refused, never run ([Tools](tools#limits--how-many-calls-a-step-may-make)) |
 | `network` | which sites its sandbox may reach: `open`, `trusted` or `none`, or a list of sites added to the trusted list — `network: [api.hubapi.com]`. Unset, an agent that may fetch or browse the web is `open` and every other `trusted`. Also in a workspace's or the account's `AGENTS.md` ([Network](network)) |
@@ -208,6 +209,82 @@ tools:
 
 `{bash: ask}` is accepted for per-call approval in Claude Code; platform runs
 disable ask-mode and log that they did.
+
+## Calling an outside agent: `remotes:`
+
+An agent can hand a request to an agent somebody else runs, over the
+Agent2Agent protocol (A2A 1.0, JSON-RPC). You name the remote; the agent
+calls it by that name and never sees a URL or a token.
+
+```yaml
+remotes:
+  - name: invoice-checker
+    card: https://agents.example.com/.well-known/agent-card.json
+    secret: INVOICE_AGENT_TOKEN     # optional: a vault NAME, sent as a bearer token
+    description: Checks an invoice against its purchase order.
+```
+
+| key | |
+|---|---|
+| `name` | kebab-case — what the agent calls it by |
+| `card` | the https URL of the remote's agent card. Plain http, to `localhost` only, is for a laptop (or an install whose operator set `FOLDRUN_EGRESS_ALLOW_PRIVATE=1`); a hosted install calls https cards only, and never a private or internal address |
+| `secret` | optional — the NAME of a vault secret, sent as `Authorization: Bearer …` to the card's origin and nowhere else |
+| `description` | your words for it, the only text about the remote in the agent's prompt (the card's own text is the remote's, and is not trusted) |
+
+It gives the agent four tools:
+
+| tool | |
+|---|---|
+| `a2a_send(remote, text, data?, wait_seconds?)` | sends one request (text, and JSON as a data part) and waits, at most `wait_seconds` (default 60, at most 300), for the answer. Returns a handle with the answer or where the remote got to |
+| `a2a_status(handle, wait_seconds?)` | where it got to, and the answer once it is done |
+| `a2a_reply(handle, text, data?)` | answers a remote that asked for more (`input-required`) |
+| `a2a_cancel(handle)` | asks the remote to stop; safe to repeat |
+
+A slow remote is never sent the request twice. The remote's task id is kept
+(in `workspace/state/a2a/<agent>/`) before any waiting starts, so a wait that
+runs out says "still running" with the handle, and `a2a_status` picks it up —
+in the same step, a retry of it, or a later step of the same run. The same
+request asked again in a step returns its handle. A request that ended without
+success may be sent again on purpose.
+
+What it may reach and send:
+
+- **Network.** Each card's own site joins the agent's [network](network), and
+  nothing the card says does: a card whose JSON-RPC interface is at another
+  origin is refused, and a redirect is never followed.
+- **The secret** is granted to the card's origin at the egress proxy, which
+  fills it on the way out; it never enters the sandbox, even for a step whose
+  scripts get their secrets as values. On a laptop (`foldrun run`) it reaches
+  the four tools alone: no script, shell or consulted colleague sees it. Name
+  it under the agent's own `secrets:` too only if a script really needs it. A secret the vault binds to other sites
+  is not sent to a remote outside them — that remote is not called.
+- **Size.** A card is read to 64 KiB and an answer to 1 MiB. Text and JSON
+  only: a file part in an answer is named, never fetched.
+- **Untrusted.** What a remote answers reaches the model fenced as data from
+  another organisation's system, with invisible characters removed. An agent
+  with `remotes:` counts as reading untrusted content in the
+  [lethal-trifecta check](checks#securitylethal-trifecta).
+- **Limits.** `limits: {a2a: 10}` caps the messages a step sends (`a2a_send`
+  and `a2a_reply`); `a2a.status`, `a2a.send`, `a2a.reply` and `a2a.cancel` cap
+  each tool alone, so polling is capped apart from sending. A step sends at
+  most 50 messages and polls at most 600 times whatever `limits:` says.
+- **Test runs** send nothing: `a2a_send`, `a2a_reply` and `a2a_cancel` say
+  what they would have sent.
+- **Retries.** An agent with `remotes:` acts outside the workspace, like one
+  holding an `outward: true` tool: a step that called a tool and then failed
+  its `verify:` or `output:` check is not run again on its own, so the work is
+  not asked for twice in other words.
+
+`permissionMode: plan` withholds the four tools.
+
+remotes: are not available to shared-sandbox sub-agents yet; give the
+sub-agent `sandbox: own` or call the remote from the parent. A sub-agent
+delegated to inside its parent's step (the default, `sandbox: parent`) never
+gets the `a2a_*` tools — they are the parent's, with the parent's remotes and
+credentials — and a call to one is refused; the step's trace and the
+sub-agent's prompt say so when it declares `remotes:`. A `sandbox: own`
+sub-agent runs each job as a step of its own and gets its own `remotes:`, from
+its own file, with its own secrets and network.
 
 ## Consulting colleagues
 

@@ -58,6 +58,7 @@
 //   foldrun doctor          what is between this terminal and the platform, checked
 //   foldrun accounts        every account signed in here; `use <name>` switches
 //   foldrun keys  <verb>    ls / create / revoke — the account's API keys
+//   foldrun a2a   <verb>    ls / publish / unpublish / card / call / status / cancel — flows served to outside agents (A2A 1.0)
 //   foldrun library <verb>  ls / cat / put / new / rm — the account's shared shelf on the platform
 //   foldrun find  <words>   search the account the way the dashboard's ⌘K does
 //   foldrun changelog       what each release of the platform changed
@@ -259,6 +260,13 @@ Signing in
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys: created, last used, expires, scope — also create <label> [--expires 90d], rotate <id> [--grace 1h], revoke <id>
+  foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no /api route (--max-tasks N open at once, default 10; --expires); shown once
+  foldrun a2a ls --to <ws>  what a workspace serves over A2A: each flow's a2a:, card and endpoint URLs, its A2A keys (admins), recent tasks and the key that asked (--json)
+  foldrun a2a publish <flow>  set a2a: publish: true in the flow (--to <ws>: the deployed copy, an admin's) — --name, --description, --example "…" (repeatable), --public-card | --private-card; diff, checked, --dry-run
+  foldrun a2a unpublish <flow>  a2a: publish: false — no outside agent may call it; the rest of a2a: is kept (--to <ws>, --dry-run)
+  foldrun a2a card <flow> --to <ws>  the flow's agent card URL and endpoint, then the card (a private card needs an A2A key in $FOLDRUN_A2A_KEY or --key-env)
+  foldrun a2a call <card-url> "<text>"  send one message to an A2A 1.0 agent — a published flow or anyone's — and wait for the task (--data <json|@file>, --context <id>, --no-wait, --max-wait <s>, --json); the A2A key comes from $FOLDRUN_A2A_KEY or --key-env NAME, never this CLI's API key
+  foldrun a2a status <task-id> --card <url>  the task as it stands now (--json) — cancel <task-id> --card <url> stops it (asks; --yes)
   foldrun audit             the account's audit log, newest first: sign-ins, keys, invites, secrets by name, deploys, support views (--since 7d, --action, --actor, --to, --all, --csv)
   foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
   foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)
@@ -370,6 +378,9 @@ Options
   --role <r>                keys create: viewer, editor (default) or admin
   --expires <span>          keys create: when it stops working — 30d, 90d, 365d or never (default never)
   --grace <span>            keys rotate: keep the old key working for 1h or 24h while you swap the new one in (default 0: revoked now)
+  --a2a                     keys create: an A2A key for an outside agent — with --to <workspace> and --flows a,b; --max-tasks <n> caps its open tasks (1–100, default 10)
+  --key-env <NAME>          a2a call, a2a status, a2a cancel, a2a card: the environment variable holding the A2A key (default FOLDRUN_A2A_KEY) — a key is never taken on the command line
+  --card <url>              a2a status, a2a cancel: the agent card of the agent that holds the task
 
 Platform options (deploy, invoke, secrets, logs, keys)
   --to <workspace>          workspace on the platform (deploy default: folder name); flow add/show, agent link: edit or show the deployed copy instead of this folder; hook test: run the deployed hook on the platform; hook ls: list the deployed workspace's hooks and what they did lately; restore <ws>: the commit, date or age to put it back to (3d, 2026-09-28T14:00)
@@ -410,9 +421,9 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none"]);
+const BOOLEAN_FLAGS = new Set(["account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
-const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param"]);
+const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes
 // a span: `--wait 30m`, `--wait event`. Only a value that reads as one is
 // taken, so `invoke x --wait` and friends are as they were.
