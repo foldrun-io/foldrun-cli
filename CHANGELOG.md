@@ -12,6 +12,34 @@ edited by a person.
 
 <!-- releases -->
 
+## [10.2.0] — 2026-11-01
+
+### New in the public API
+
+- `foldrun keys create`
+- `foldrun a2a ls`
+- `foldrun a2a publish`
+- `foldrun a2a unpublish`
+- `foldrun a2a card`
+- `foldrun a2a call`
+- `foldrun a2a status`
+- the `--a2a` flag
+- the `--flows` flag
+- the `--max-tasks` flag
+- the `--example` flag
+- the `--public-card` flag
+- the `--private-card` flag
+- the `--key-env` flag
+- the `--context` flag
+- the `--max-wait` flag
+- the `--card` flag
+
+- feat(a2a): foldrun a2a ls|publish|unpublish|card|call|status|cancel and A2A keys ([7ec0a35](https://github.com/foldrun-io/foldrun-cli/commit/7ec0a35))
+
+### deps
+
+- @foldrun/core ^9.2.0 ([fc81562](https://github.com/foldrun-io/foldrun-cli/commit/fc81562))
+
 ## [10.1.1] — 2026-10-30
 
 ### deps
