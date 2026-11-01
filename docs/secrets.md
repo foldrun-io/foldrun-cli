@@ -290,6 +290,50 @@ How a connection is kept safe, whatever the provider:
 - A provider that **rotates refresh tokens** sends a new one with each
   refresh; it replaces the old one in the vault, where that secret is kept.
 
+### Discovery from an issuer
+
+Most providers publish their own OAuth metadata. Type the provider's
+**Issuer** (`https://login.example.com`, `https://accounts.google.com`, a
+Keycloak realm URL) and press **Discover**. CLI: `--issuer`. The form then
+fills in the authorize and token URLs and how the app signs in at the token
+URL. It also keeps the revocation, device sign-in and pushed-request (PAR)
+endpoints when the provider has them. foldrun refuses what it reads when:
+
+- the document names another issuer (RFC 8414 §3.3);
+- an endpoint is not https;
+- the provider lists its PKCE methods without S256.
+
+If the provider says it sends `iss` with every answer (RFC 9207), a callback
+without it is refused. Either way, an `iss` that comes back must be the
+issuer's own.
+
+When the provider has a pushed authorization request endpoint (PAR, RFC
+9126), foldrun uses it. The consent's parameters go to the provider first,
+signed in as at the token URL. The browser then carries only the client id and
+a one-time `request_uri`, so nothing in the browser can change or leak them.
+Providers that require PAR need this; every other provider accepts it.
+
+### Revocation
+
+A provider that has a revocation endpoint (found by discovery, or given with
+`--revoke-url`) is told when a connection ends (RFC 7009):
+
+- **deleting** the secret revokes its refresh token, then its access token;
+- **reconnecting with a different app** revokes the old app's grant once the
+  new one is stored.
+
+Two cases are left alone, because some providers (Google among them) revoke
+every token a person gave one app at once:
+
+- reconnecting with the same app;
+- deleting one of several connections made with the same app.
+
+Revoking in either case would end the connection you are keeping.
+
+The secret is deleted first. A provider that is down or refuses never keeps
+it, and the dashboard and `foldrun secrets rm` say so, so you can revoke the
+app's access in the provider's own settings.
+
 ### How the app signs in at the token URL
 
 The client secret goes to the provider's token URL every time a code is

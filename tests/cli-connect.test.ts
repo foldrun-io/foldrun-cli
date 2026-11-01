@@ -281,3 +281,131 @@ test("connect --token-auth: a bad value, or basic with no secret, is refused bef
     assert.doesNotMatch(out, /authorize\?/, "no consent was started");
   }
 });
+
+/** An authorization server that publishes RFC 8414 metadata at its issuer. */
+async function discoverableProvider(opts: { issParameter?: boolean; par?: boolean } = {}) {
+  const exchanges: { auth?: string; body: string }[] = [];
+  const pushed: URLSearchParams[] = [];
+  let base = "";
+  const s = await serve(async (req, res) => {
+    if (req.url === "/.well-known/oauth-authorization-server") {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`, revocation_endpoint: `${base}/revoke`,
+        token_endpoint_auth_methods_supported: ["client_secret_basic"], code_challenge_methods_supported: ["S256"],
+        authorization_response_iss_parameter_supported: opts.issParameter === true,
+        ...(opts.par ? { pushed_authorization_request_endpoint: `${base}/par` } : {}),
+      }));
+    } else if (req.url === "/par") {
+      pushed.push(new URLSearchParams(await readBody(req)));
+      res.statusCode = 201;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ request_uri: "urn:ietf:params:oauth:request_uri:xyz", expires_in: 60 }));
+    } else if (req.url === "/token") {
+      exchanges.push({ auth: req.headers.authorization, body: await readBody(req) });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ access_token: "a", refresh_token: "r", expires_in: 3600 }));
+    } else { res.statusCode = 404; res.end(); }
+  });
+  base = s.url;
+  return { ...s, exchanges, pushed };
+}
+
+test("connect --issuer: the metadata fills the URLs, picks Basic, and the recipe keeps the revocation URL", async () => {
+  const port = await freePort();
+  const p = await discoverableProvider();
+  const stored: { oauth2: Record<string, unknown> }[] = [];
+  const platform = await serve(async (req, res) => {
+    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  try {
+    const r = await runConnect(["KC_TOKEN", "--issuer", p.url, "--port", String(port), "--client-id", "cid", "--client-secret", "shh", "--url", platform.url, "--token", "ptok", "--no-browser"], {});
+    assert.equal(r.status, 0, r.out);
+    assert.equal(r.authorize.origin + r.authorize.pathname, `${p.url}/authorize`);
+    assert.match(r.out, /read .*\.well-known\/oauth-authorization-server/);
+    assert.equal(p.exchanges[0].auth, `Basic ${Buffer.from("cid:shh").toString("base64")}`, "the server listed Basic only");
+    assert.equal(stored[0].oauth2.token_url, `${p.url}/token`);
+    assert.equal(stored[0].oauth2.token_auth, "client_secret_basic");
+    assert.equal(stored[0].oauth2.revocation_url, `${p.url}/revoke`);
+  } finally {
+    p.close();
+    platform.close();
+  }
+});
+
+test("connect --issuer: a callback whose iss is another server is refused and nothing is exchanged (RFC 9207)", async () => {
+  const port = await freePort();
+  const p = await discoverableProvider({ issParameter: true });
+  const child = spawn(process.execPath, [CLI, "connect", "KC_TOKEN", "--issuer", p.url, "--port", String(port), "--client-id", "cid", "--client-secret", "shh", "--local", "--no-browser"],
+    { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: fs.mkdtempSync(path.join(os.tmpdir(), "fr-iss-")), NO_COLOR: "1" } });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  try {
+    const authorize = await new Promise<URL>((resolve, reject) => {
+      const t = setInterval(() => { const m = out.match(/(https?:\/\/\S+authorize\S*)/); if (m) { clearInterval(t); resolve(new URL(m[1])); } }, 25);
+      child.on("exit", () => { clearInterval(t); reject(new Error(out)); });
+    });
+    const back = new URL(authorize.searchParams.get("redirect_uri")!);
+    back.searchParams.set("code", "c0de");
+    back.searchParams.set("state", authorize.searchParams.get("state")!);
+    back.searchParams.set("iss", "https://evil.example");
+    const page = await fetch(back);
+    assert.equal(page.status, 400);
+    const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+    assert.notEqual(code, 0);
+    assert.match(out, /answered as https:\/\/evil\.example — expected/);
+    assert.equal(p.exchanges.length, 0, "the code was never traded");
+  } finally {
+    p.close();
+  }
+});
+
+test("secrets rm says what revoking the grant at the provider came to, and a failure is not hidden", async () => {
+  for (const [revoked, expect] of [
+    [{ revoked: ["refresh_token"] }, /grant revoked at the provider \(refresh_token\)/],
+    [{ revoked: [], error: "the provider refused to revoke the refresh token (503)" }, /! the provider refused to revoke the refresh token \(503\) — revoke the app's access in the provider's own settings/],
+    [{ skipped: "shared-grant", revoked: [] }, /grant kept: another secret uses the same app, which the provider may revoke together/],
+  ] as const) {
+    const platform = await serve(async (req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/api/secrets" && req.method === "DELETE") { await readBody(req); res.end(JSON.stringify({ ok: true, revoked })); }
+      else { res.statusCode = 404; res.end("{}"); }
+    });
+    const child = spawn(process.execPath, [CLI, "secrets", "rm", "CRM", "--account", "--yes", "--url", platform.url, "--token", "ptok"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1" } });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+    platform.close();
+    assert.equal(code, 0, out);
+    assert.match(out, /CRM removed/);
+    assert.match(out, expect);
+  }
+});
+
+test("connect --issuer with a PAR endpoint: the parameters are pushed and the browser carries only client_id and request_uri", async () => {
+  const port = await freePort();
+  const p = await discoverableProvider({ par: true });
+  const child = spawn(process.execPath, [CLI, "connect", "PAR_TOKEN", "--issuer", p.url, "--port", String(port), "--client-id", "cid", "--client-secret", "shh", "--local", "--no-browser"],
+    { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: fs.mkdtempSync(path.join(os.tmpdir(), "fr-par-")), NO_COLOR: "1" } });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  try {
+    const authorize = await new Promise<URL>((resolve, reject) => {
+      const t = setInterval(() => { const m = out.match(/(https?:\/\/\S+authorize\S*)/); if (m) { clearInterval(t); resolve(new URL(m[1])); } }, 25);
+      child.on("exit", () => { clearInterval(t); reject(new Error(out)); });
+    });
+    assert.deepEqual([...authorize.searchParams.keys()].sort(), ["client_id", "request_uri"]);
+    assert.equal(authorize.searchParams.get("request_uri"), "urn:ietf:params:oauth:request_uri:xyz");
+    const f = p.pushed[0];
+    assert.equal(f.get("client_id"), "cid", "PAR carries client_id even with Basic (RFC 9126 §2.1)");
+    assert.equal(f.get("code_challenge_method"), "S256");
+    assert.ok(f.get("state"));
+    child.kill();
+  } finally {
+    p.close();
+  }
+});

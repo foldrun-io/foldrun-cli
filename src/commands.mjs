@@ -3514,15 +3514,26 @@ async function secretsCmd(positional, flags, layout) {
 
   if (verb === "rm") {
     if (!(await sureToDelete(flags, "secrets rm", `secret ${name}${scope ? ` (workspace ${scope})` : " (account)"}${url ? ` on ${url}` : ""}`))) return 1;
+    /** @type {any} */
+    let revoked;
     if (url) {
-      await remoteCall(url, flags, "/api/secrets", {
+      ({ revoked } = await remoteCall(url, flags, "/api/secrets", {
         method: "DELETE",
         body: JSON.stringify({ name, workspace: scope }),
-      });
+      }));
     } else {
-      (await core()).deleteSecret("default", name, scope);
+      // As the platform does it: deleted first, then its grant revoked at the
+      // provider (RFC 7009) when the recipe names a revocation endpoint.
+      const k = await core();
+      const before = k.oauth2ValueAt("default", name, scope);
+      k.deleteSecret("default", name, scope);
+      if (before) revoked = await k.revokeOAuth2Value(before, { tenant: "default", name, workspace: scope, fetcher: (u, init) => fetch(u, init) });
     }
-    console.log(`\n  ${c.green("✓")} ${name} removed\n`);
+    console.log(`\n  ${c.green("✓")} ${name} removed`);
+    if (revoked?.error) console.log(`  ${c.amber("!")} ${revoked.error} — revoke the app's access in the provider's own settings`);
+    else if (revoked?.revoked?.length) console.log(`  ${c.dim(`grant revoked at the provider (${revoked.revoked.join(", ")})`)}`);
+    else if (revoked?.skipped === "shared-grant") console.log(`  ${c.dim("grant kept: another secret uses the same app, which the provider may revoke together")}`);
+    console.log();
     return 0;
   }
 
@@ -3821,7 +3832,7 @@ function authorizeParams(flags) {
  *  on stderr, so a script reading stdout is not disturbed. */
 function warnProviderDeprecated(flags) {
   if (flags.provider !== undefined) {
-    console.error(c.dim("  --provider is deprecated — pass the provider's own --authorize-url and --token-url, and any --authorize-param it documents"));
+    console.error(c.dim("  --provider is deprecated — pass the provider's --issuer (its metadata fills the URLs), or its own --authorize-url and --token-url, and any --authorize-param it documents"));
   }
 }
 
@@ -3847,8 +3858,13 @@ async function connect(positional, flags) {
   if (providerName && !preset) {
     throw new Error(`unknown provider "${providerName}" — one of ${Object.keys(OAUTH_PRESETS).join(", ")}, or pass --authorize-url and --token-url`);
   }
-  const authorizeUrl = flags["authorize-url"] ?? preset?.authorize_url;
-  const tokenUrl = flags["token-url"] ?? preset?.token_url;
+  let authorizeUrl = flags["authorize-url"] ?? preset?.authorize_url;
+  let tokenUrl = flags["token-url"] ?? preset?.token_url;
+  // --issuer: the provider's metadata fills whichever URL was not given
+  // (RFC 8414), and the callback's `iss` is checked against it (RFC 9207).
+  if (flags.issuer !== undefined && typeof flags.issuer !== "string") throw new Error("--issuer is the provider's https issuer URL");
+  const issuer = typeof flags.issuer === "string" ? flags.issuer : undefined;
+  if (flags["revoke-url"] !== undefined && (typeof flags["revoke-url"] !== "string" || !/^https:\/\//.test(flags["revoke-url"]))) throw new Error("--revoke-url is the provider's https revocation endpoint");
 
   // Where the result goes: the platform when one is named or signed in,
   // this machine's vault otherwise. Decided before the browser opens, so a
@@ -3897,11 +3913,8 @@ async function connect(positional, flags) {
     }
   }
 
-  if (!authorizeUrl || !tokenUrl) throw new Error("--authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
+  if ((!authorizeUrl || !tokenUrl) && !issuer) throw new Error("--issuer (the provider's issuer URL, its metadata fills the rest), or --authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
   const extra = { ...(preset?.authorize_extra ?? {}), ...authorizeParams(flags) };
-  if (!/^https:\/\//.test(tokenUrl) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tokenUrl)) {
-    throw new Error("token URL must be https — a refresh token over http is a leaked one");
-  }
 
   const clientId = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
   const pkce = flags["no-pkce"] !== true;
@@ -3909,8 +3922,23 @@ async function connect(positional, flags) {
   if (!clientId) throw new Error("client_id is required");
   // No secret is a public app, which PKCE alone protects (RFC 9700 §2.1.1).
   if (!clientSecret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
-  const tokenAuth = await tokenAuthFlag(flags);
-  const { oauthTokenRequest, readTokenResponse, tokenAuthProblem } = await core();
+  let tokenAuth = await tokenAuthFlag(flags);
+  const { oauthTokenRequest, readTokenResponse, tokenAuthProblem, discoverOAuth, isSecureUrl } = await core();
+  /** @type {any} */
+  let discovered = null;
+  // Read whenever there is an issuer, URLs given or not: what it says about
+  // `iss` (RFC 9207) and revocation is needed either way; given URLs win.
+  if (issuer) {
+    discovered = await discoverOAuth(issuer, (u, init) => fetch(u, init), { hasSecret: !!clientSecret, ...(pkce ? {} : { pkce: false }), ...(tokenAuth ? { tokenAuth } : {}) });
+    authorizeUrl ??= discovered.authorize_url;
+    tokenUrl ??= discovered.token_url;
+    tokenAuth ??= discovered.token_auth;
+    console.log(`  ${c.dim(`read ${discovered.metadata_url}`)}`);
+  }
+  if (!isSecureUrl(tokenUrl)) {
+    throw new Error("token URL must be https — a refresh token over http is a leaked one");
+  }
+  const revocationUrl = flags["revoke-url"] ?? discovered?.revocation_url;
   // Before the browser opens: a consent is never spent on a client that
   // cannot then authenticate (Basic with no secret, none with one).
   const authProblem = tokenAuthProblem({ client_secret: clientSecret, token_auth: tokenAuth });
@@ -3945,6 +3973,26 @@ async function connect(positional, flags) {
     authorize.searchParams.set("code_challenge", crypto.createHash("sha256").update(verifier).digest("base64url"));
     authorize.searchParams.set("code_challenge_method", "S256");
   }
+  // PAR (RFC 9126), when the provider has the endpoint (discovery found it):
+  // the parameters are pushed first, client-authenticated as at the token
+  // URL, and the browser carries only client_id and the request_uri.
+  if (discovered?.par_url) {
+    const pushed = oauthTokenRequest(
+      { client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), ...(tokenAuth ? { token_auth: tokenAuth } : {}) },
+      Object.fromEntries(authorize.searchParams),
+      { clientIdInBody: true },
+    );
+    const res = await fetch(discovered.par_url, { method: "POST", headers: pushed.headers, body: pushed.body, redirect: "error" });
+    const answer = /** @type {any} */ (await res.json().catch(() => ({})));
+    if (!res.ok || typeof answer.request_uri !== "string") throw new Error(`the provider refused the pushed authorization request (${res.status}): ${answer.error_description ?? answer.error ?? "no request_uri in the reply"}`);
+    // The authorize URL's own query (a tenant, a policy) stays; the flow's
+    // parameters give way to client_id and the request_uri.
+    const own = new URL(authorizeUrl).searchParams;
+    const flowParams = ["client_id", "redirect_uri", "response_type", "scope", "state", "code_challenge", "code_challenge_method"];
+    for (const k of [...authorize.searchParams.keys()]) if (!own.has(k) || flowParams.includes(k)) authorize.searchParams.delete(k);
+    authorize.searchParams.set("client_id", clientId);
+    authorize.searchParams.set("request_uri", answer.request_uri);
+  }
 
   // One request, then the listener closes. The state is the whole authority:
   // a callback with any other value is answered and ignored.
@@ -3958,6 +4006,21 @@ async function connect(positional, flags) {
         res.end(`${err}: ${u.searchParams.get("error_description") ?? ""}. You can close this tab.`);
         server.close();
         reject(new Error(`${providerName ?? "provider"} refused: ${err} ${u.searchParams.get("error_description") ?? ""}`.trim()));
+        return;
+      }
+      // Mix-up defence (RFC 9207) with --issuer: a returned iss must equal
+      // it, and a missing one is refused unless discovery said the server
+      // does not send it. Without an issuer there is nothing to compare an
+      // iss with — an issuer and its authorize URL may be on different hosts.
+      const iss = u.searchParams.get("iss");
+      /** @type {string | null} */
+      let wrong = null;
+      if (issuer && (iss !== null ? iss !== issuer : discovered?.iss_parameter !== false)) wrong = `the provider answered as ${iss ?? "nobody"} — expected ${issuer}`;
+      if (wrong) {
+        res.statusCode = 400;
+        res.end(`${wrong}. Nothing was stored; you can close this tab.`);
+        server.close();
+        reject(new Error(wrong));
         return;
       }
       res.end("Connected. You can close this tab and return to the terminal.");
@@ -3993,7 +4056,7 @@ async function connect(positional, flags) {
   // Store: the refresh recipe when there is one, the bare token otherwise.
   /** @type {any} */
   const body = payload.refresh_token
-    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), refresh_token: payload.refresh_token, ...(tokenAuth ? { token_auth: tokenAuth } : {}), ...(Object.keys(payload.fields).length ? { fields: payload.fields } : {}) }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
+    ? { name, oauth2: { token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), refresh_token: payload.refresh_token, ...(tokenAuth ? { token_auth: tokenAuth } : {}), ...(revocationUrl ? { revocation_url: revocationUrl } : {}), ...(Object.keys(payload.fields).length ? { fields: payload.fields } : {}) }, workspace: workspaceName, scopes, ...(payload.refresh_token_expires_in ? { refresh_token_expires_in: payload.refresh_token_expires_in } : {}) }
     : { name, value: payload.access_token, workspace: workspaceName };
   if (url) {
     // The same PUT `secrets set` makes. A store that fails here has spent the
@@ -11683,9 +11746,9 @@ async function oauthClientsCmd(positional, flags) {
     const { OAUTH_PRESETS } = await core();
     const preset = flags.provider ? OAUTH_PRESETS[flags.provider] : undefined;
     if (flags.provider && !preset) throw new Error(`unknown provider "${flags.provider}" — one of ${Object.keys(OAUTH_PRESETS).join(", ")}, or pass --authorize-url and --token-url`);
-    const authorize_url = flags["authorize-url"] ?? preset?.authorize_url;
-    const token_url = flags["token-url"] ?? preset?.token_url;
-    if (!authorize_url || !token_url) throw new Error("--authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
+    let authorize_url = flags["authorize-url"] ?? preset?.authorize_url;
+    let token_url = flags["token-url"] ?? preset?.token_url;
+    if ((!authorize_url || !token_url) && typeof flags.issuer !== "string") throw new Error("--issuer (the provider's issuer URL, its metadata fills the rest), or --authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
     const authorize_extra = { ...(preset?.authorize_extra ?? {}), ...authorizeParams(flags) };
     const client_id = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
     const pkce = flags["no-pkce"] !== true;
@@ -11693,13 +11756,33 @@ async function oauthClientsCmd(positional, flags) {
     if (!client_id) throw new Error("client_id is required");
     if (!client_secret && !pkce) throw new Error("an app with no client_secret needs PKCE — drop --no-pkce");
     if (flags.issuer !== undefined && (typeof flags.issuer !== "string" || !/^https:\/\/[^?#]+$/.test(flags.issuer))) throw new Error("--issuer is the provider's https issuer URL, no query or fragment");
-    const token_auth = await tokenAuthFlag(flags);
+    let token_auth = await tokenAuthFlag(flags);
+    /** @type {any} */
+    let found = null;
+    if (typeof flags.issuer === "string") {
+      // The platform reads the metadata (POST /api/oauth/discover, through its
+      // SSRF guard) — the same call the Connections form's Discover makes.
+      ({ config: found } = await remoteCall(url, flags, "/api/oauth/discover", {
+        method: "POST",
+        body: JSON.stringify({ issuer: flags.issuer, has_secret: !!client_secret, ...(pkce ? {} : { pkce: false }), ...(token_auth ? { token_auth } : {}) }),
+      }));
+      authorize_url ??= found.authorize_url;
+      token_url ??= found.token_url;
+      token_auth ??= found.token_auth;
+      console.log(`  ${c.dim(`read ${found.metadata_url}${found.revocation_url ? " · revocation" : ""}${found.device_url ? " · device sign-in" : ""}${found.par_url ? " · PAR" : ""}`)}`);
+    }
+    if (flags["revoke-url"] !== undefined && (typeof flags["revoke-url"] !== "string" || !/^https:\/\//.test(flags["revoke-url"]))) throw new Error("--revoke-url is the provider's https revocation endpoint");
+    const revocation_url = flags["revoke-url"] ?? found?.revocation_url;
     const config = {
       authorize_url, token_url, client_id, client_secret: client_secret ?? "", scopes: flags.scopes ?? preset?.scopes_example ?? "",
       ...(Object.keys(authorize_extra).length ? { authorize_extra } : {}),
       ...(pkce ? {} : { pkce: false }),
       ...(typeof flags.issuer === "string" ? { issuer: flags.issuer } : {}),
       ...(token_auth ? { token_auth } : {}),
+      ...(found ? { iss_parameter: found.iss_parameter === true } : {}),
+      ...(revocation_url ? { revocation_url } : {}),
+      ...(found?.device_url ? { device_url: found.device_url } : {}),
+      ...(found?.par_url ? { par_url: found.par_url } : {}),
     };
     await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
     console.log(`\n  ${c.green("✓")} saved ${name} ${c.dim(`— \`foldrun connect NAME --client ${name}\` runs a consent from it`)}\n`);
