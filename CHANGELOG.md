@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [10.5.0] — 2026-11-01
+
+- feat(connect): --token-auth basic|post|none; core's token request builder ([4b41e9e](https://github.com/foldrun-io/foldrun-cli/commit/4b41e9e))
+
 ## [10.4.0] — 2026-11-01
 
 ### New in the public API
