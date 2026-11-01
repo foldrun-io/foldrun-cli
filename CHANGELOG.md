@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [11.0.5] — 2026-11-01
+
+### deps
+
+- @foldrun/core ^11.2.2 ([145a16d](https://github.com/foldrun-io/foldrun-cli/commit/145a16d))
+
 ## [11.0.4] — 2026-11-01
 
 - ci(hooks): box checks use a short TMPDIR and install nested packages ([6d6a44d](https://github.com/foldrun-io/foldrun-cli/commit/6d6a44d))
