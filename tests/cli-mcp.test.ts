@@ -128,12 +128,12 @@ test("a platform with no MCP endpoint, or a proxy's page, is a JSON-RPC error â€
   }
 });
 
-test("it takes no arguments", async () => {
+test("a stray argument is refused, and nothing reaches stdout", async () => {
   const s = await platform();
   try {
     const r = await mcp(s.url, [], ["extra"]);
     assert.notEqual(r.code, 0);
-    assert.match(r.stderr, /takes no arguments/);
+    assert.match(r.stderr, /its verbs are connections and disconnect/);
     assert.equal(r.stdout, "");
   } finally {
     s.close();
@@ -205,5 +205,37 @@ test("the account is pinned at start: switching profiles elsewhere does not move
     a.close();
     b.close();
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("mcp connections lists the AI apps connected over OAuth; mcp disconnect ends one, and asks first", async () => {
+  const { at } = await import("./fake-platform.ts");
+  const row = { id: "g1", client: "Claude", clientId: "fmcp_c_x", redirectHost: "claude.ai", person: "ana@acme.test", role: "admin", workspaces: null, access: "write", createdAt: "2026-11-01T04:00:00Z", lastUsedAt: null, revokedAt: null };
+  const s = await serve({
+    "GET /api/mcp/connections": () => ({ connections: [row], everyone: true }),
+    "DELETE /api/mcp/connections/g1": () => ({ ok: true, id: "g1", revoked: true }),
+  });
+  try {
+    const ls = await at(s.url, "mcp", "connections");
+    assert.equal(ls.code, 0, ls.out);
+    assert.match(ls.out, /Claude .*claude\.ai .*read and act .*all workspaces/);
+    assert.match(ls.out, /g1 Â· ana@acme\.test/);
+    const all = await at(s.url, "mcp", "connections", "--all", "--json");
+    assert.equal(JSON.parse(all.out.slice(all.out.indexOf("{"))).connections[0].id, "g1");
+    assert.equal(s.seen.at(-1)!.query.get("all"), "1");
+
+    const unasked = await at(s.url, "mcp", "disconnect", "g1");
+    assert.notEqual(unasked.code, 0, "no terminal to ask, no --yes: nothing is sent");
+    assert.ok(!s.seen.some((x) => x.method === "DELETE"));
+    const done = await at(s.url, "mcp", "disconnect", "g1", "--yes");
+    assert.equal(done.code, 0, done.out);
+    assert.match(done.out, /disconnected g1/);
+    assert.ok(s.seen.some((x) => x.method === "DELETE" && x.url === "/api/mcp/connections/g1"));
+
+    const wrong = await at(s.url, "mcp", "frobnicate");
+    assert.notEqual(wrong.code, 0);
+    assert.match(wrong.out, /its verbs are connections and disconnect/);
+  } finally {
+    s.close();
   }
 });

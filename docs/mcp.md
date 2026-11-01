@@ -9,16 +9,41 @@ the decisions — approve, answer, message, start, stop.
 Ask it "what is waiting on me in foldrun?", "why did last night's run of
 `weekly` fail?" or "approve the draft in run r-…, and say why".
 
-There are two ways in, and they serve the same tools:
+There are three ways in, and they serve the same tools:
 
 | | needs | for |
 |---|---|---|
+| OAuth | nothing: you approve the app in foldrun | claude.ai (web and phone), and any app that signs in by itself |
 | `foldrun mcp` | the CLI, signed in (`foldrun login`) | an app on the same machine — nothing to paste |
-| `POST /api/mcp` | an API key | an app that connects over HTTP, or a machine without the CLI |
+| `POST /api/mcp` with a key | an API key | an app that takes a header, or a machine without the CLI |
 
 ## Connecting
 
-With the CLI, on a machine that is signed in:
+### claude.ai, and apps that sign in
+
+In claude.ai: **Settings → Connectors → Add custom connector**, name it
+foldrun, and give it your platform's MCP address:
+
+```
+https://<your platform>/api/mcp
+```
+
+Leave the OAuth client ID and secret empty — claude.ai registers itself. When
+you click **Connect**, it sends you to foldrun: sign in if you are not, and a
+page says which app is asking, where the answer goes (`claude.ai`), and lets
+you choose:
+
+- **what it may do** — read only (inbox, runs, flows, files), or read and act
+  (also start and stop runs, approve gates, answer and message agents);
+- **which workspaces** — every one you may open, or the ones you tick.
+
+**Connect** sends you back to claude.ai, connected; **Deny** sends it a no.
+It is the same in the Claude apps on a phone, which share claude.ai's
+connectors, and in any MCP client that follows the MCP authorization spec.
+
+### With the CLI
+
+On a machine that is signed in:
 
 ```sh
 claude mcp add foldrun -- foldrun mcp           # Claude Code
@@ -34,9 +59,13 @@ Claude Desktop, Cursor and other apps that take a JSON config:
 `foldrun mcp` forwards each message to the platform the CLI is signed in to,
 as the account `foldrun whoami` names — `--profile <name>` picks another
 signed-in account, `--url` and `--token` (or `FOLDRUN_URL`, `FOLDRUN_TOKEN`)
-another platform or key. It renews this machine's sign-in once when it starts,
-the way every platform command does. Typed into a terminal it prints how to
-connect and exits: it is for an app to start.
+another platform or key. The account is pinned when it starts — `foldrun use`
+in another terminal never moves a running session — and the key is read again
+for every message, so a sign-in another command renews is picked up; the
+renewal itself is checked again twice a day. Typed into a terminal it prints
+how to connect and exits: it is for an app to start.
+
+### With a key
 
 Over HTTP, with a key from Settings → API keys:
 
@@ -46,8 +75,30 @@ claude mcp add --transport http foldrun https://<your platform>/api/mcp \
 ```
 
 Settings → API keys → **Connecting an AI app (MCP)** shows this install's
-address and the same lines. claude.ai's connectors sign in with OAuth, which
-this endpoint does not offer; connect through Claude Desktop or Claude Code.
+address and the same lines.
+
+## Connected apps
+
+Every app connected over OAuth is listed in Settings → API keys → **Connected
+AI apps**: the app, where its answers went, whose approval, what access and
+which workspaces, when it was connected and last used. **Disconnect** ends it —
+every token it holds stops at once — and the person can connect it again. You
+see your own; an admin sees everyone's and may disconnect any.
+
+```sh
+foldrun mcp connections            # yours, or everyone's for an admin (--all adds the disconnected)
+foldrun mcp disconnect <id>        # asks first; --yes on a pipe
+```
+
+What a connection may do is decided at every call, not only when it was
+approved: it acts as the person who approved it, at the lower of the role
+they chose then and the role they hold now, in the workspaces both allow. A
+person who leaves the account, or is made a viewer, takes their apps with
+them. The access token lasts an hour and opens `/api/mcp` only — sent to any
+other route it is refused. Refresh tokens rotate on every use, and one used
+twice disconnects the app: someone else has a copy. Approving, disconnecting
+and that automatic disconnect are in the audit log (`mcp.connected`,
+`mcp.revoked`).
 
 ## The tools
 
@@ -115,11 +166,22 @@ answered `202` with no body. It sits under `/api`, so the proxy holds the same
 raw-path check, body limit and rate limit as for every other route.
 
 Refused before a message is read, as a JSON-RPC error with a real status: no
-key (`401`, with `WWW-Authenticate: Bearer`) — a session cookie never opens
-it —, a refused key (`401`/`403`), an `Origin` header that is not the
-platform's own (`403`; MCP clients send none), an `MCP-Protocol-Version` it
-does not speak (`400`). The route and request shape are in [the API
-reference](api#mcp--ai-apps-connecting-with-a-key).
+credential (`401`, with `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/api/mcp"`,
+which is where an app that signs in starts) — a session cookie never opens
+it —, a refused key or an expired or revoked token (`401`, `error="invalid_token"`),
+an `Origin` header that is not the platform's own (`403`; MCP clients send
+none), an `MCP-Protocol-Version` it does not speak (`400`). The route and
+request shape are in [the API reference](api#mcp--ai-apps-connecting-with-a-key).
+
+The sign-in follows the MCP authorization spec on OAuth 2.1:
+`/.well-known/oauth-protected-resource` (RFC 9728) names this install as the
+authorization server; `/.well-known/oauth-authorization-server` (RFC 8414)
+lists the endpoints, PKCE `S256` only, and `mcp:read` / `mcp:write`; an app
+registers itself (RFC 7591) or names itself by an `https` URL to its own
+metadata document, which foldrun fetches through its SSRF guard; every token is
+bound to this `/api/mcp` (RFC 8707). Redirect URIs are `https`, or `http` to
+localhost for a desktop app — and for those the approval page warns that the
+app is on this computer.
 
 `foldrun mcp` reads one message per line on stdin and writes one per line on
 stdout, and nothing else there: every note goes to stderr. Calls run side by

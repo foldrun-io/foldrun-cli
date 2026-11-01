@@ -17,7 +17,7 @@ proof instead of a key: a token or signature (`/s/<token>`, `/api/hooks`,
 `/api/inbox`, `/api/events`, `/api/approve`, `/api/unsubscribe`, `/api/billing/stripe`,
 `/api/billing/confirm`), the sign-in and recovery steps (`/api/auth/signup`,
 `login`, `forgot`, `reset`, `verify`, `mfa/verify`, `session`, `/api/cli/login`,
-`/api/cli/login/<id>`, `/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz`, `/api/status`, `/api/status/history`, `/api/version` and `/api/openapi.json`.
+`/api/cli/login/<id>`, `/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz`, `/api/status`, `/api/status/history`, `/api/version` and `/api/openapi.json` — and an AI app's OAuth sign-in to `/api/mcp`: `/api/mcp/oauth/register` (open, as the protocol needs) and `/api/mcp/oauth/token` (its code and PKCE verifier, or its refresh token, are the proof).
 
 ```
 Authorization: Bearer <api-key>      # machines. Settings → API keys
@@ -528,12 +528,12 @@ published, is `404` like one that does not exist.
 
 ## MCP — AI apps connecting with a key
 
-The platform as an [MCP server](mcp) for Claude Code, Claude Desktop,
-Cursor, Codex and any other MCP client. An **API key** opens it
-(`Authorization: Bearer mda_…`) — never a session cookie, never an A2A key —
-and every tool is a call to one of the routes above, made with that key, so
-it answers what the route would: the key's role, its workspaces and every
-refusal hold. MCP's Streamable HTTP transport, stateless: one JSON-RPC 2.0
+The platform as an [MCP server](mcp) for claude.ai, Claude Code, Claude
+Desktop, Cursor, Codex and any other MCP client. An **API key**
+(`Authorization: Bearer mda_…`) or an AI app's **OAuth access token** (below)
+opens it — never a session cookie, never an A2A key — and every tool is a call
+to one of the routes above, made with that credential, so it answers what the
+route would: its role, its workspaces and every refusal hold. MCP's Streamable HTTP transport, stateless: one JSON-RPC 2.0
 message per request, answered as JSON — no SSE stream, no session id, no
 batches. Errors before a message is read (no key, a refused key, a foreign
 `Origin`, an `MCP-Protocol-Version` it does not speak) are JSON-RPC error
@@ -543,3 +543,22 @@ with `HTTP <status>: <the route's error>`.
 | Route | Methods | |
 |---|---|---|
 | `/api/mcp` | POST | one JSON-RPC message: `initialize` (revisions `2025-11-25`, `2025-06-18`, `2025-03-26`; an unknown one is answered with the newest), `ping`, `tools/list`, `tools/call`; a notification is `202` with no body. `?readonly=1` offers only the tools that read and refuses the rest (`-32602`). The tools: `whoami`, `list_workspaces`, `inbox`, `list_approvals`, `list_flows`, `list_runs`, `get_run`, `read_file`, `run_flow`, `decide_approval`, `answer_question`, `message_run`, `stop_run` — see [MCP](mcp#the-tools). `foldrun mcp` serves the same over stdio |
+| `/api/mcp/oauth/register` | POST | an AI app registers itself (RFC 7591), before anyone signs it in. Open, as the protocol needs — no key. `{ redirect_uris, client_name?, token_endpoint_auth_method?, grant_types?, response_types?, client_uri? }`: one to ten redirect URIs, each `https` or `http` to localhost, no fragment; `token_endpoint_auth_method` `none` (PKCE alone), `client_secret_post` or `client_secret_basic` (the default). Answers `201 { client_id, client_id_issued_at, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, client_secret?, client_secret_expires_at? }` — the secret only for the two secret methods, shown once. Errors are OAuth's `{ error, error_description }` (`invalid_redirect_uri`, `invalid_client_metadata`); `503` past 5,000 apps on the install |
+| `/api/mcp/oauth/authorize` | GET, POST | the person's half of the sign-in, for the page at `/mcp/authorize` — a signed-in person only, never a key or a support view. GET `?request=<the app's query>` checks it and answers `{ client: { name, id, kind, uri }, redirectHost, loopback, scopes, account, person: { email, role }, workspaces, allWorkspaces }`; POST `{ request, decision: approve\|deny, access?: read\|write, workspaces?: [names] \| null }` answers `{ ok, redirect }` — the app's redirect URI with a one-time `code` (ten minutes), `state` and `iss`, or with `error=access_denied`. A request that names an unknown app or a redirect URI it did not register is `400` and never redirected; the rest of its faults (no PKCE `S256` challenge, a `resource` that is not this `/api/mcp`, an unknown scope) come back as `{ redirect }` with OAuth's error. `access: write` needs the app to have asked for `mcp:write`; `workspaces` must be ones the person may open (`403` otherwise) |
+| `/api/mcp/oauth/token` | POST | OAuth 2.1's token endpoint, form-encoded (JSON is read too), no key: `grant_type=authorization_code` with `code`, `redirect_uri`, `code_verifier` (PKCE S256) and `client_id` — or the app's secret, Basic or in the form —, or `grant_type=refresh_token` with `refresh_token`. `resource`, when sent, must be this `/api/mcp`. Answers `{ access_token, token_type: "Bearer", expires_in: 3600, refresh_token, scope }` with `Cache-Control: no-store`. A code is good once, right or wrong. A refresh token is rotated on use; one used twice revokes the whole connection. Errors: `400 invalid_grant` / `invalid_target` / `unsupported_grant_type`, `401 invalid_client` |
+| `/api/mcp/connections` | GET | the AI apps connected over OAuth: `{ connections: [{ id, client, clientId, redirectHost, person, role, workspaces, access: read\|write, createdAt, lastUsedAt, revokedAt }], everyone }` — every one for `keys:manage` (`everyone: true`), else your own. `?all=1` adds the revoked |
+| `/api/mcp/connections/<id>` | DELETE | disconnect one: the grant is revoked and every token it issued stops at once. Your own, or anyone's with `keys:manage` (`403` otherwise); `404` when there is none or it is already revoked. Audited as `mcp.revoked` |
+
+**OAuth for AI apps.** claude.ai — and any MCP client that signs in rather
+than taking a pasted key — finds this from the `401` of `/api/mcp`:
+`WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/api/mcp"`
+(RFC 9728), which names this install as the authorization server, whose
+`/.well-known/oauth-authorization-server` (RFC 8414) lists the endpoints above,
+`code_challenge_methods_supported: ["S256"]` and
+`client_id_metadata_document_supported: true` (an app may name itself by an
+`https` URL to its metadata document, fetched through the SSRF guard). Scopes
+are `mcp:read` and `mcp:write`. The access token (`fmcp_at_…`, an hour) opens
+`POST /api/mcp` and nothing else — sent to any other route it is `403` — and
+acts as the person who approved it, at the lower of the role they chose then
+and the one they hold now, in the workspaces both allow; a read-only
+connection is refused every write.

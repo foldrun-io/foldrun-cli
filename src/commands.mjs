@@ -6632,7 +6632,17 @@ function issueDoctor(issue) {
  * @param {string[]} positional @param {Record<string, any>} flags
  */
 async function mcpCmd(positional, flags) {
-  if (positional.length) throw new Error("`foldrun mcp` takes no arguments — an AI app starts it: `claude mcp add foldrun -- foldrun mcp` (--read-only for the tools that read)");
+  const [verb, arg, ...extra] = positional;
+  if (verb === "connections" || verb === "ls") return mcpConnectionsCmd(flags);
+  if (verb === "disconnect" || verb === "revoke") {
+    if (!arg || extra.length) throw new Error("which connection? `foldrun mcp disconnect <id>` — ids are in `foldrun mcp connections`");
+    const url = platformFor(flags, "mcp disconnect");
+    if (!(await sureToDelete(flags, "mcp disconnect", `the AI app connection ${arg} on ${url} (every token it holds stops working)`))) return 1;
+    await remoteCall(url, flags, `/api/mcp/connections/${encodeURIComponent(arg)}`, { method: "DELETE" });
+    console.log(`\n  ${c.green("✓")} disconnected ${arg}\n`);
+    return 0;
+  }
+  if (positional.length) throw new Error("`foldrun mcp` serves the tools to an AI app (`claude mcp add foldrun -- foldrun mcp`); its verbs are connections and disconnect <id> — not " + verb);
   if (process.stdin.isTTY && flags.yes !== true) {
     console.error(`\n  ${c.bold("foldrun mcp")} is an MCP server on stdin/stdout, for an AI app to start — not to type into.\n\n    claude mcp add foldrun -- foldrun mcp${flags["read-only"] === true ? " --read-only" : ""}\n    codex mcp add foldrun -- foldrun mcp\n\n  ${c.dim("Claude Desktop, Cursor: { \"mcpServers\": { \"foldrun\": { \"command\": \"foldrun\", \"args\": [\"mcp\"] } } } — `foldrun docs mcp`")}\n`);
     return 2;
@@ -6734,6 +6744,28 @@ async function mcpCmd(positional, flags) {
     p.finally(() => inFlight.delete(p));
   }
   await Promise.all(inFlight);
+  return 0;
+}
+
+/** `foldrun mcp connections` — the AI apps connected to the account over OAuth
+ *  (claude.ai and the like): which app, whose approval, what access. Every
+ *  one for an admin; your own otherwise. */
+async function mcpConnectionsCmd(flags) {
+  const url = platformFor(flags, "mcp connections");
+  const view = await remoteCall(url, flags, `/api/mcp/connections${flags.all === true ? "?all=1" : ""}`);
+  if (flags.json) {
+    console.log(JSON.stringify(view, null, 2));
+    return 0;
+  }
+  const rows = view.connections ?? [];
+  console.log(`\n  ${c.bold("AI apps connected over OAuth")} ${c.dim(view.everyone ? "· everyone's" : "· yours")}`);
+  if (!rows.length) console.log(`\n  ${c.dim("none — claude.ai connects itself when you add this platform's /api/mcp as a custom connector")}`);
+  for (const r of rows) {
+    const used = r.lastUsedAt ? `last used ${String(r.lastUsedAt).slice(0, 16).replace("T", " ")}` : "not used yet";
+    console.log(`\n  ${c.bold(r.client)} ${c.dim(`· ${r.redirectHost} · ${r.access === "read" ? "read only" : "read and act"} · ${r.workspaces ? r.workspaces.join(", ") : "all workspaces"}`)}${r.revokedAt ? c.red(" · disconnected") : ""}`);
+    console.log(`    ${c.dim(`${r.id} · ${r.person} · connected ${String(r.createdAt).slice(0, 16).replace("T", " ")} · ${used}`)}`);
+  }
+  console.log("");
   return 0;
 }
 

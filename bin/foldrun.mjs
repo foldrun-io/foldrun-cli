@@ -170,6 +170,8 @@ const HELP = `foldrun — agents are just folders
   foldrun inbox                         what waits on you: approvals, questions, issues, proposed fixes, your failed runs (--team, --all, --kind, --unread, --dismissed)
   foldrun inbox read|unread|dismiss|restore <id>…  mark items in your own view (dismiss sets aside; it still waits where it lives)
   foldrun mcp                           this account as MCP tools for an AI app, over stdio, with this machine's sign-in: \`claude mcp add foldrun -- foldrun mcp\` (--read-only: only the tools that read)
+  foldrun mcp connections               the AI apps connected over OAuth (claude.ai and the like): which app, whose, what access, last used — everyone's for an admin, else yours (--all adds the disconnected, --json)
+  foldrun mcp disconnect <id>           end one: every token it holds stops working (asks; --yes)
   foldrun issues            what went wrong, grouped, open until resolved (--to <workspace>, --all, --status, --json)
   foldrun issues show|ack|snooze|resolve|reopen <id>  one issue — snooze --for 1d or --times 5, --note "…"
   foldrun issues doctor <id>  the run doctor on the issue's newest run, in its workspace: why, and the fix as diffs, saved on yes (--yes, --dry-run, --json)
@@ -351,7 +353,7 @@ Options
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
   --clear                   secrets sites: unbind it; flow compute: no cap of its own
-  --all                     secrets workspaces: every workspace may use the account secret again
+  --all                     secrets workspaces: every workspace may use the account secret again; mcp connections: the disconnected ones too
   --none                    secrets workspaces, secrets set: no workspace may use the account secret
   --workspaces <a,b>        secrets set: store an account secret limited to those workspaces, in the same write (with --account)
   --add <site>              agent network: add a site to its network: list (repeatable)
