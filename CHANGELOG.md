@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [10.3.0] — 2026-11-01
+
+### New in the public API
+
+- `foldrun mcp`
+- the `--read-only` flag
+
+- feat(mcp): foldrun mcp — this account as MCP tools for an AI app, over stdio ([0d5977b](https://github.com/foldrun-io/foldrun-cli/commit/0d5977b))
+
 ## [10.2.0] — 2026-11-01
 
 ### New in the public API
