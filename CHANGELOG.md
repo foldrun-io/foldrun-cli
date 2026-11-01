@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [10.6.0] — 2026-11-01
+
+- feat(connect): --issuer discovery, --revoke-url, PAR; secrets rm revokes (parts B, C) ([c36f6fd](https://github.com/foldrun-io/foldrun-cli/commit/c36f6fd))
+
+### deps
+
+- @foldrun/core ^9.5.0 ([eac447a](https://github.com/foldrun-io/foldrun-cli/commit/eac447a))
+- @foldrun/core ^9.4.0 ([0202136](https://github.com/foldrun-io/foldrun-cli/commit/0202136))
+
 ## [10.5.0] — 2026-11-01
 
 - feat(connect): --token-auth basic|post|none; core's token request builder ([4b41e9e](https://github.com/foldrun-io/foldrun-cli/commit/4b41e9e))
