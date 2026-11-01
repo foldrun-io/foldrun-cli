@@ -255,6 +255,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `--revoke-url <url>` | `connect`, `secrets clients add`: the provider's revocation endpoint (RFC 7009), when discovery does not give it. Deleting or reconnecting the secret revokes its grant there |
 | `--token-auth <how>` | `connect`, `secrets clients add`, `secrets set --kind m2m`, `secrets set --oauth2`: how the app proves itself at the token URL — `post` (the form body, the default), `basic` (HTTP Basic: Notion, Spotify, Reddit, Zoom), `none` (a public app with no secret) or `jwt` (`private_key_jwt`: a JWT signed with the app's key, no secret) |
 | `--key-file <path>`, `--cert-file <path>` | with `--token-auth jwt`: the app's private key (PEM or JWK) and, for Microsoft Entra, its certificate |
+| `--device`, `--device-url <url>` | `connect`: connect with a code you type on any device (RFC 8628) instead of a redirect — no browser and no loopback port here. With `--client <saved app>` the platform runs it; otherwise the device endpoint comes from `--issuer` or `--device-url` |
 | `--generate-key` | with `--token-auth jwt`: foldrun makes the key (EC P-256) and prints the public JWK to register with the provider; `connect` waits for Enter before it opens the consent |
 | `--role <r>` | `keys create`: `viewer`, `editor` (default) or `admin` |
 | `--expires <span>` | `keys create`: when it stops working — `30d`, `90d`, `365d` or `never` (default) |

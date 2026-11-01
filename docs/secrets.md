@@ -316,6 +316,18 @@ signed in as at the token URL. The browser then carries only the client id and
 a one-time `request_uri`, so nothing in the browser can change or leak them.
 Providers that require PAR need this; every other provider accepts it.
 
+### Connect with a code
+
+Some places have no browser to send a consent through: a terminal over ssh,
+or a provider that will not redirect to your address. If a saved app's
+provider has a device authorization endpoint (RFC 8628; Discover finds it),
+the form shows **Connect with a code**. It gives you a short code and a page:
+open that page on any device, sign in as the account that owns the resource,
+and type the code. foldrun stores the grant the moment the provider says yes,
+exactly as a browser consent would. From a terminal:
+`foldrun connect NAME --client <saved app> --device`, or `foldrun connect
+NAME --device --issuer <url>` for an app that is not saved.
+
 ### Revocation
 
 A provider that has a revocation endpoint (found by discovery, or given with

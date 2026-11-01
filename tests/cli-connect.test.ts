@@ -473,3 +473,64 @@ test("secrets clients add --token-auth jwt --generate-key: the platform makes th
   assert.match(out, /Register this public key/);
   assert.match(out, /"kid": "k1"/);
 });
+
+test("connect --device (RFC 8628): shows the code, polls through pending, stores the grant — no browser, no loopback port", async () => {
+  let polls = 0;
+  const stored: { oauth2: Record<string, unknown> }[] = [];
+  const provider = await serve(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/device") { await readBody(req); res.end(JSON.stringify({ device_code: "dc", user_code: "WXYZ-1234", verification_uri: "https://p.example/device", expires_in: 600, interval: 1 })); return; }
+    if (req.url === "/token") {
+      const form = new URLSearchParams(await readBody(req));
+      polls++;
+      if (form.get("grant_type") !== "urn:ietf:params:oauth:grant-type:device_code" || form.get("device_code") !== "dc") { res.statusCode = 400; res.end(JSON.stringify({ error: "invalid_grant" })); return; }
+      if (polls < 2) { res.statusCode = 400; res.end(JSON.stringify({ error: "authorization_pending" })); return; }
+      res.end(JSON.stringify({ access_token: "a", refresh_token: "r-device", expires_in: 3600 }));
+      return;
+    }
+    res.statusCode = 404; res.end("{}");
+  });
+  const platform = await serve(async (req, res) => {
+    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    else { res.statusCode = 404; res.end("{}"); }
+  });
+  try {
+    const child = spawn(process.execPath, [CLI, "connect", "TV_TOKEN", "--device", "--device-url", `${provider.url}/device`, "--token-url", `${provider.url}/token`,
+      "--client-id", "cid", "--client-secret", "", "--url", platform.url, "--token", "ptok"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1" } });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+    assert.equal(code, 0, out);
+    assert.match(out, /enter the code WXYZ-1234/);
+    assert.doesNotMatch(out, /Register this redirect URL/, "no loopback redirect for a device flow");
+    assert.equal(polls, 2);
+    assert.equal(stored[0].oauth2.refresh_token, "r-device");
+  } finally {
+    provider.close();
+    platform.close();
+  }
+});
+
+test("connect --client <saved> --device: the platform starts it and stores the grant; the CLI shows the code and polls", async () => {
+  const calls: string[] = [];
+  let polls = 0;
+  const platform = await serve(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    calls.push(`${req.method} ${req.url}`);
+    if (req.url === "/api/oauth/device" && req.method === "POST") { await readBody(req); res.end(JSON.stringify({ id: "a".repeat(48), user_code: "QWER-TY12", verification_uri: "https://p.example/device", expires_in: 600, interval: 5 })); return; }
+    if (req.url === `/api/oauth/device/${"a".repeat(48)}`) { polls++; res.end(JSON.stringify(polls < 2 ? { status: "pending" } : { status: "connected", name: "TV", stored: "oauth2" })); return; }
+    if (req.url === "/api/oauth/connections") { res.end(JSON.stringify({ connections: [] })); return; }
+    res.statusCode = 404; res.end("{}");
+  });
+  const child = spawn(process.execPath, [CLI, "connect", "TV", "--client", "kc", "--device", "--scopes", "openid", "--url", platform.url, "--token", "ptok"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1", FOLDRUN_DEVICE_POLL_S: "0.05" } });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? -1)));
+  platform.close();
+  assert.equal(code, 0, out);
+  assert.match(out, /QWER-TY12/);
+  assert.match(out, /TV connected/);
+  assert.ok(!calls.includes("POST /api/oauth/start"), "no browser consent was started");
+});

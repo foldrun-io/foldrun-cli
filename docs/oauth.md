@@ -37,7 +37,7 @@ authorization server (Keycloak) and against recorded provider answers.
 | JWT bearer grant (service accounts) | RFC 7523 §2.1 | Supported | The service-account connection (`--kind service-account`). |
 | Rich authorization requests | RFC 9396 | Supported | `authorization_details` as an extra authorize parameter (a JSON value). |
 | Signed client assertion (private_key_jwt) | RFC 7523 §2.2 | Supported | `token_auth: private_key_jwt` with a key you paste or foldrun makes; a certificate adds Entra's thumbprint. `--token-auth jwt`. |
-| Device authorization | RFC 8628 | Planned | Part F: `foldrun connect --device`. |
+| Device authorization | RFC 8628 | Supported | Connect with a code on any device: the Connections form, or `foldrun connect --device`. PKCE is sent with the device grant. |
 | Token exchange | RFC 8693 | Planned | Part I: a `token-exchange` secret kind. Cloud STS is covered today by the keyless identity kind. |
 | DPoP sender-constrained tokens | RFC 9449 | Planned | Part H: Bluesky/atproto, Okta DPoP. |
 | Mutual-TLS client auth and bound tokens | RFC 8705 | Planned | Part H: the client-cert secret at the token endpoint. |

@@ -3869,6 +3869,13 @@ function assertionKeyFlags(flags) {
   };
 }
 
+/** Tell the person where to type the device code (RFC 8628). */
+function showDeviceCode(started) {
+  console.log(`\n  On any device, open ${c.bold(started.verification_uri_complete ?? started.verification_uri)}`);
+  console.log(`  and enter the code ${c.bold(started.user_code)}  ${c.dim(`(it runs out in ${Math.round(started.expires_in / 60)} minutes)`)}\n`);
+  console.log(`  ${c.dim("Waiting for the provider to say yes…")}`);
+}
+
 /** Print a public JWK for the person to register with the provider. */
 function showPublicJwk(jwk) {
   console.log(`\n  Register this public key with the provider (a JWK; it is not secret):\n`);
@@ -3908,7 +3915,7 @@ async function connect(positional, flags) {
   // provider) was connected with, so run its consent flow — no client id, no
   // secret, nothing typed. The redirect is the platform's own callback, which
   // rewrites the same secret at the same scope; we wait for it to land.
-  if (url && !flags["client-id"] && !env("OAUTH_CLIENT_ID") && flags["new-client"] !== true) {
+  if (url && !flags["client-id"] && !env("OAUTH_CLIENT_ID") && flags["new-client"] !== true && flags.device !== true) {
     /** @type {any} */
     let started = null;
     try {
@@ -3943,7 +3950,11 @@ async function connect(positional, flags) {
     }
   }
 
-  if ((!authorizeUrl || !tokenUrl) && !issuer) throw new Error("--issuer (the provider's issuer URL, its metadata fills the rest), or --authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
+  // A device grant uses no authorize URL: a token URL (and a device URL) is all it needs.
+  const device = flags.device === true;
+  if ((!tokenUrl || (!device && !authorizeUrl)) && !issuer) throw new Error(device
+    ? "--device needs --issuer (its metadata gives the device and token URLs), or --device-url and --token-url"
+    : "--issuer (the provider's issuer URL, its metadata fills the rest), or --authorize-url and --token-url — the provider's own addresses, from its OAuth docs");
   const extra = { ...(preset?.authorize_extra ?? {}), ...authorizeParams(flags) };
 
   const clientId = flags["client-id"] ?? env("OAUTH_CLIENT_ID") ?? (await promptVisible("  client_id: "));
@@ -3969,7 +3980,7 @@ async function connect(positional, flags) {
   // Read whenever there is an issuer, URLs given or not: what it says about
   // `iss` (RFC 9207) and revocation is needed either way; given URLs win.
   if (issuer) {
-    discovered = await discoverOAuth(issuer, (u, init) => fetch(u, init), { hasSecret: !!clientSecret, ...(pkce ? {} : { pkce: false }), ...(tokenAuth ? { tokenAuth } : {}) });
+    discovered = await discoverOAuth(issuer, (u, init) => fetch(u, init), { hasSecret: !!clientSecret, ...(pkce ? {} : { pkce: false }), ...(tokenAuth ? { tokenAuth } : {}), needsAuthorize: !device });
     authorizeUrl ??= discovered.authorize_url;
     tokenUrl ??= discovered.token_url;
     tokenAuth ??= discovered.token_auth;
@@ -3987,6 +3998,18 @@ async function connect(positional, flags) {
   if (authProblem) throw new Error(authProblem);
   const scopes = flags.scopes ?? preset?.scopes_example ?? "";
 
+  /** @type {any} */
+  let payload;
+  if (flags.device === true) {
+    // RFC 8628: a code to type on any device, for a terminal with no browser
+    // of its own (ssh) or a provider that will not redirect to localhost.
+    const deviceUrl = flags["device-url"] ?? discovered?.device_url;
+    if (typeof deviceUrl !== "string" || !isSecureUrl(deviceUrl)) throw new Error("--device needs the provider's device authorization endpoint: --issuer (discovery finds it) or --device-url <https url>");
+    const { startDeviceAuthorization, waitForDeviceToken } = await core();
+    const started = await startDeviceAuthorization({ ...signer, device_url: deviceUrl, token_url: tokenUrl, ...(issuer ? { issuer } : {}) }, scopes, (u, i) => fetch(u, i), extra);
+    showDeviceCode(started);
+    payload = await waitForDeviceToken({ ...signer, token_url: tokenUrl }, started, (u, i) => fetch(u, i));
+  } else {
   // One fixed loopback address, the same on every developer's machine, so an
   // OAuth app is set up once — `http://localhost:8642/callback` — and never
   // per person. Fixed because most providers match the port exactly; 8642
@@ -4087,9 +4110,10 @@ async function connect(positional, flags) {
     { audience: tokenUrl },
   );
   const exchange = await fetch(tokenUrl, { method: "POST", headers: request.headers, body: request.body, redirect: "error" });
-  const payload = readTokenResponse(await exchange.text().catch(() => ""), exchange.headers.get("content-type") ?? "");
+  payload = readTokenResponse(await exchange.text().catch(() => ""), exchange.headers.get("content-type") ?? "");
   if (!exchange.ok || (!payload.refresh_token && !payload.access_token)) {
     throw new Error(`token exchange failed (${exchange.status}): ${payload.error_description ?? payload.error ?? "no token in the reply"}`);
+  }
   }
 
   // Store: the refresh recipe when there is one, the bare token otherwise.
@@ -11846,6 +11870,22 @@ async function connectFromClient(name, flags) {
   // --scopes: this connection's own, instead of the saved client's default;
   // the platform keeps them with the connection for its reconnects.
   const scopes = typeof flags.scopes === "string" && flags.scopes.trim() ? { scopes: flags.scopes } : {};
+  if (flags.device === true) {
+    // The platform asks the provider for a device code and stores the grant
+    // when a poll finds it approved (POST /api/oauth/device, …/device/<id>).
+    const d = await remoteCall(url, flags, "/api/oauth/device", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
+    showDeviceCode(d);
+    let interval = Number(env("FOLDRUN_DEVICE_POLL_S") ?? d.interval ?? 5);
+    for (;;) {
+      await new Promise((r) => setTimeout(r, interval * 1000));
+      const r = await remoteCall(url, flags, `/api/oauth/device/${d.id}`, { method: "POST" });
+      if (r.status === "slow_down") interval += 5;
+      else if (r.status === "connected") {
+        console.log(`\n  ${c.green("✓")} ${name} connected on ${url}${workspace ? ` · ${workspace}` : " · account"}\n`);
+        return 0;
+      } else if (r.status === "denied" || r.status === "expired") throw new Error(`${r.reason} — run it again`);
+    }
+  }
   const started = await remoteCall(url, flags, "/api/oauth/start", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
   const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(started.url);
   // The platform answers a hand-off page: a signed-in person accepts the
