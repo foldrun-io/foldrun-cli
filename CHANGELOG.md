@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [12.0.2] — 2026-11-02
+
+### deps
+
+- @foldrun/core ^12.0.1 ([afec2cf](https://github.com/foldrun-io/foldrun-cli/commit/afec2cf))
+
 ## [12.0.1] — 2026-11-02
 
 - chore(hooks): foldrun.checksHost github — the suites run on GitHub CI ([49f1bb3](https://github.com/foldrun-io/foldrun-cli/commit/49f1bb3))
