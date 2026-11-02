@@ -115,8 +115,9 @@ all read those variables. A browser your own script launches does not:
 Chromium ignores a password written in the proxy variable, so every page
 fails `ERR_INVALID_AUTH_CREDENTIALS`. Hand Playwright the proxy yourself —
 read `HTTPS_PROXY` with `new URL()` and pass `proxy: { server, username,
-password }` to `launch()` (the `web` tool's browsers already do). The proxy
-holds the step's list and checks every connection against it:
+password }` to `launch()`. (A step that may browse with the `web` tool gets
+no proxy at all yet — see [Browsing](#browsing) below.) The proxy holds the
+step's list and checks every connection against it:
 
 - a site **off the list** is refused — `403`, saying which site and what to
   add — and the refusal is a line in the run trace;
@@ -136,7 +137,7 @@ The trace opens with the step's network:
 ```
 network: trusted (default) — the trusted list (207 sites); added: api.hubapi.com
 egress: CONNECT pypi.org:443 × 3 (840ms total)
-network: example.com is not a site this step may reach (network: trusted). Add it to the agent's network: list — network: [example.com] — or set network: open. Refused.
+network: example.com is not a site this step may reach (network: trusted). To allow it, add just this site to the agent's network: list — network: [example.com] — which keeps network: trusted for everything else. Refused.
 ```
 
 ### Report-only, then refuse
@@ -176,3 +177,27 @@ no egress proxy (no `FOLDRUN_EGRESS_URL`) has no forward door: there,
 `not enforced here`. On the single-container tier the proxy variables are
 set and the proxy holds the list, but the container's network is not walled
 in, so a program that ignores the variables still goes direct.
+
+### Browsing
+
+A step that may **browse** with the `web` tool is not held to its list yet.
+Its browser cannot send the proxy's password the way the other programs do,
+so the step gets no proxy: the browser, and every other program in that
+step, reach sites directly. The trace says so on its network line —
+
+```
+network: trusted (agent) — the trusted list (207 sites); added: example.com — not enforced in this step: it may browse, and browsing does not go through the egress proxy yet, so the browser and every other program in this step reach sites directly. Its browser is foldrun's own browser: it comes under network: when hosted enforcement ships (FOL-110).
+```
+
+— and names which of three tiers the step's browser falls in, which is
+where it is headed:
+
+| tier | browsers | under `network:` |
+|---|---|---|
+| hosted | foldrun's own: the account's browser, Lightpanda, Obscura, a live session | yes, when hosted enforcement ships: its network will reach only the egress proxy |
+| vendor | Browserbase, Steel, Hyperbrowser, Browserless — they take a customer proxy | through the egress proxy, once each vendor passes our own tests |
+| none | Bright Data, ZenRows, any DevTools address — they browse through their own network | never; a restricted, enforced `network:` will refuse them |
+
+An agent that must stay inside its list should not browse until then: give
+it `web: {actions: [search, fetch]}`, which goes through the proxy like any
+other program.

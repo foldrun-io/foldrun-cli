@@ -118,3 +118,21 @@ test("secrets sites binds, lists, refuses a URL, and unbinds", () => {
     d.done();
   }
 });
+
+test("agent network says a browsing agent is not held to its list yet (FOL-110); search and fetch only is", () => {
+  const d = desk({ scout: "tools: [web]\nnetwork: trusted\n", reader: "tools: [web]\nweb: {actions: [search, fetch]}\nnetwork: trusted\n", writer: "tools: [write]\n", spaced: "tools: [web]\nweb: {actions: [search, \" Browse \"]}\nnetwork: trusted\n" });
+  try {
+    let r = d.foldrun("agent", "network", "scout", "--local");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /browsing: this agent may browse, and a browsing step is not held to this list yet/);
+    assert.match(r.stdout, /web: \{actions: \[search, fetch\]\}/);
+    r = d.foldrun("agent", "network", "reader", "--local");
+    assert.doesNotMatch(r.stdout, /browsing:/, "no browse among its actions");
+    r = d.foldrun("agent", "network", "writer", "--local");
+    assert.doesNotMatch(r.stdout, /browsing:/, "no web tool");
+    r = d.foldrun("agent", "network", "spaced", "--local");
+    assert.match(r.stdout, /browsing: this agent may browse/, "action names are read trimmed and lowercased, as the runner reads them");
+  } finally {
+    d.done();
+  }
+});

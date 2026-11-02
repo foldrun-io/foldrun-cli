@@ -9156,16 +9156,25 @@ async function agentNetworkCmd(positional, flags, layout) {
       const { listAgents } = await core();
       // The folded view a run reads: `network` set inside a `guardrail:` block
       // counts the same as a top-level one (effectiveFront lifts it).
-      return {
-        info: listAgents("default", "workspace").find((a) => a.name === name),
-        own: net.readNetwork((await effectiveFront(fs.readFileSync(path.join(dir, rel), "utf8"))).network).setting,
-      };
+      const front = await effectiveFront(fs.readFileSync(path.join(dir, rel), "utf8"));
+      const info = listAgents("default", "workspace").find((a) => a.name === name);
+      // May it browse? Core answers it (network.browses, with web: inherited
+      // from AGENTS.md); an older core gets the runner's own test on this
+      // file: the web tool, with browse among its actions (trimmed and
+      // lowercased as webConfig reads them) or no actions: list at all.
+      // Such a step is not held to its list yet (FOL-110).
+      const actions = front.web && typeof front.web === "object" && Array.isArray(front.web.actions) ? front.web.actions.map((a) => String(a).trim().toLowerCase()) : null;
+      const browses = typeof info?.network?.browses === "boolean"
+        ? info.network.browses
+        : (info?.tools ?? []).includes("web") && (!actions || actions.includes("browse"));
+      return { info, own: net.readNetwork(front.network).setting, browses };
     });
-  const show = (info) => {
+  const show = (info, browses) => {
     const p = info?.network;
     if (!p) return;
     console.log(`  ${net.networkLine(p, true)}`);
     if (p.level !== "open") console.log(`  ${c.dim("a run also allows its MCP servers, its web providers and the sites its secrets are bound to")}`);
+    if (browses) console.log(`  ${c.yellow("browsing: this agent may browse, and a browsing step is not held to this list yet — its browser and its other programs reach sites directly (`foldrun docs network`, Browsing). Give it web: {actions: [search, fetch]} to keep it inside the list.")}`);
   };
   const raw = desk.files.get(rel);
   const now = await resolve(desk.files);
@@ -9174,7 +9183,7 @@ async function agentNetworkCmd(positional, flags, layout) {
   const removes = list(flags.remove);
   if (word === undefined && !adds.length && !removes.length) {
     console.log(`\n  ${c.bold(name)} ${c.dim(`· ${desk.label}`)}`);
-    show(now.info);
+    show(now.info, now.browses);
     console.log();
     return 0;
   }
@@ -9205,7 +9214,7 @@ async function agentNetworkCmd(positional, flags, layout) {
   }
   const after = await resolve(new Map([...desk.files, [rel, next]]));
   console.log();
-  show(after.info);
+  show(after.info, after.browses);
   console.log(`\n  ${c.green("✓")} ${rel} ${c.dim(desk.platform ? `in ${desk.ws} — a revision on the platform` : "— `foldrun deploy` ships it")}\n`);
   return 0;
 }
