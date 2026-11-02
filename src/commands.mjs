@@ -9164,8 +9164,9 @@ async function agentNetworkCmd(positional, flags, layout) {
       // lowercased as webConfig reads them) or no actions: list at all.
       // Such a step is not held to its list yet (FOL-110).
       const actions = front.web && typeof front.web === "object" && Array.isArray(front.web.actions) ? front.web.actions.map((a) => String(a).trim().toLowerCase()) : null;
-      const browses = typeof info?.network?.browses === "boolean"
-        ? info.network.browses
+      const fromCore = /** @type {{ browses?: unknown }} */ (info?.network ?? {}).browses; // core ≥ the FOL-110 release
+      const browses = typeof fromCore === "boolean"
+        ? fromCore
         : (info?.tools ?? []).includes("web") && (!actions || actions.includes("browse"));
       return { info, own: net.readNetwork(front.network).setting, browses };
     });
