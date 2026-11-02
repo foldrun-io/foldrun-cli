@@ -2,3 +2,6 @@ node_modules/
 .foldrun/
 *.log
 .DS_Store
+
+# SBOMs the security gate writes (.githooks/security.sh); CI keeps them as artifacts
+sbom/
