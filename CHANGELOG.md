@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [12.0.0] — 2026-11-02
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 12.0.0, a new major. (2191efc)
+
+### deps
+
+- @foldrun/core ^12.0.0 ([2191efc](https://github.com/foldrun-io/foldrun-cli/commit/2191efc))
+
 ## [11.1.0] — 2026-11-02
 
 - fix(agent network): read network.browses loosely so the CLI typechecks against the published core ([b215e07](https://github.com/foldrun-io/foldrun-cli/commit/b215e07))
