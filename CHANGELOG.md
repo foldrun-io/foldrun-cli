@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [12.0.4] — 2026-11-02
+
+- chore(hooks): pre-push names where the suites run now (each repo's CI, the dev pipeline) ([34eade6](https://github.com/foldrun-io/foldrun-cli/commit/34eade6))
+
+### deps
+
+- @foldrun/core ^12.0.3 ([99dea9f](https://github.com/foldrun-io/foldrun-cli/commit/99dea9f))
+- @foldrun/core ^12.0.2 ([f0df81c](https://github.com/foldrun-io/foldrun-cli/commit/f0df81c))
+
 ## [12.0.3] — 2026-11-02
 
 ### ci
