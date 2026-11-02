@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [12.0.3] — 2026-11-02
+
+### ci
+
+- one security gate in every repo (.githooks/security.sh) ([5e0a8b1](https://github.com/foldrun-io/foldrun-cli/commit/5e0a8b1))
+
 ## [12.0.2] — 2026-11-02
 
 ### deps
