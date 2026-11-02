@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [11.1.0] — 2026-11-02
+
+- fix(agent network): read network.browses loosely so the CLI typechecks against the published core ([b215e07](https://github.com/foldrun-io/foldrun-cli/commit/b215e07))
+- feat(agent network): say when a browsing agent is not held to its list (FOL-110 phase 1) ([85bc4bb](https://github.com/foldrun-io/foldrun-cli/commit/85bc4bb))
+
 ## [11.0.5] — 2026-11-01
 
 ### deps
