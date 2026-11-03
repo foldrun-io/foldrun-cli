@@ -5927,13 +5927,18 @@ async function providersCmd(url, flags) {
 }
 
 /**
- * `foldrun account model` — the account's own model key: what every step
- * runs on unless a provider: block names another (/api/account/model).
+ * `foldrun account model` — what every step runs on unless a provider: block
+ * names another (/api/account/model): the account's own model key, or
+ * foldrun's models (the platform's keys for one provider, billed in credits
+ * at foldrun's price list — hosted only).
  *
  *   foldrun account model                                   what is set, what runs
  *   foldrun account model set <provider> --key <api key>    a preset (anthropic,
  *       openrouter, openai, groq, …) or `custom --base-url https://… --format openai`
- *   foldrun account model remove
+ *   foldrun account model remove                            the key (the choice stays)
+ *   foldrun account model use foldrun --provider <p>        run on foldrun's models
+ *   foldrun account model use own                           back to the account's own key
+ *   foldrun account model prices [--provider <p>]           foldrun's price list
  *
  * `--key -` reads the key from stdin, so it stays out of the shell's history.
  * The platform refuses a Claude login token for any account not allowed its
@@ -5941,29 +5946,108 @@ async function providersCmd(url, flags) {
  */
 async function accountModelCmd(url, positional, flags) {
   const verb = positional[0];
-  const show = (r) => {
-    const runs =
-      r.runsOn === "account"
-        ? `${c.green("✓")} your own key — ${c.bold(r.provider ?? "custom")} ${c.dim(`${r.keyHint ?? ""} · ${r.baseUrl ?? ""} · ${r.format ?? ""}`)}`
-        : r.runsOn === "platform"
-          ? `${c.yellow("·")} the platform's credential ${c.dim("(this account is allowed it)")}`
-          : `${c.red("✗")} no key — runs on this account are refused until one is set`;
-    console.log(`\n  ${runs}`);
-    console.log(`\n  ${c.dim("foldrun account model set <provider> --key <api key> · remove · a provider: block in AGENTS.md wins over it")}\n`);
+  const money = (n) => `$${n === 0 || n >= 0.01 ? n.toFixed(2) : n.toFixed(4)}`;
+  const fm = (r) => r.foldrunModels ?? null;
+  /** Whether the account's steps can run now, as the platform says. */
+  const runnable = (r) => {
+    if (r.runsOn === "none") return false;
+    if (r.runsOn !== "foldrun") return true;
+    const f = fm(r);
+    const p = f?.providers?.find((x) => x.name === r.supply);
+    return !f?.refused && p?.available !== false;
   };
+  const show = (r) => {
+    const f = fm(r);
+    let runs;
+    if (r.runsOn === "foldrun") {
+      const p = f?.providers?.find((x) => x.name === r.supply);
+      const why = f?.refused ?? (p && !p.available ? p.reason : null);
+      runs = why
+        ? `${c.red("✗")} foldrun's models — ${c.bold(p?.title ?? r.supply)}, refused: ${why}. Runs are refused until it is resolved, or \`foldrun account model use own\``
+        : `${c.green("✓")} foldrun's models — ${c.bold(p?.title ?? r.supply)} ${c.dim("· billed in credits at foldrun's price list")}`;
+    } else if (r.runsOn === "account") {
+      runs = `${c.green("✓")} your own key — ${c.bold(r.provider ?? "custom")} ${c.dim(`${r.keyHint ?? ""} · ${r.baseUrl ?? ""} · ${r.format ?? ""}`)}`;
+    } else if (r.runsOn === "platform") {
+      runs = `${c.yellow("·")} the platform's credential ${c.dim("(this account is allowed it)")}`;
+    } else {
+      runs = `${c.red("✗")} no key — runs on this account are refused until one is set`;
+    }
+    console.log(`\n  ${runs}`);
+    if (r.runsOn === "foldrun" && f) {
+      const p = f.providers?.find((x) => x.name === r.supply);
+      const tiers = Object.entries(p?.tiers ?? {});
+      if (tiers.length) console.log(`  ${c.dim(`model: ${tiers.map(([t, m]) => `${t} → ${m}`).join(" · ")}`)}`);
+      console.log(`  ${c.dim(`spent today ${money(f.spentTodayUsd ?? 0)}${f.dailyCapUsd != null ? ` of a ${money(f.dailyCapUsd)} daily cap (UTC)` : " (no daily cap)"}`)}`);
+      if (r.set) console.log(`  ${c.dim(`your own key ${r.provider ?? "custom"} ${r.keyHint ?? ""} is kept — \`foldrun account model use own\` runs on it again`)}`);
+    }
+    const hints = ["foldrun account model set <provider> --key <api key>", "remove"];
+    if (f?.offered && r.runsOn !== "foldrun") hints.push("use foldrun --provider <p> (foldrun's models, billed in credits)");
+    if (r.runsOn === "foldrun") hints.push("use own", "prices");
+    console.log(`\n  ${c.dim(`${hints.join(" · ")} · a provider: block in AGENTS.md wins over it`)}\n`);
+  };
+  const out = (r) => (flags.json === true ? console.log(JSON.stringify(r, null, 2)) : show(r));
+  const put = (body) =>
+    remoteCall(url, flags, "/api/account/model", {
+      method: "PUT",
+      body: JSON.stringify(body),
+      headers: { "idempotency-key": crypto.randomUUID() },
+    });
   if (!verb) {
     const r = await remoteCall(url, flags, "/api/account/model");
-    if (flags.json === true) console.log(JSON.stringify(r, null, 2));
-    else show(r);
-    return r.runsOn === "none" ? 1 : 0;
+    out(r);
+    return runnable(r) ? 0 : 1;
   }
   if (verb === "remove") {
-    const r = await remoteCall(url, flags, "/api/account/model", { method: "DELETE" });
-    if (flags.json === true) console.log(JSON.stringify(r, null, 2));
-    else show(r);
+    out(await remoteCall(url, flags, "/api/account/model", { method: "DELETE" }));
     return 0;
   }
-  if (verb !== "set") throw new Error("`foldrun account model`, `foldrun account model set <provider> --key <api key>`, or `foldrun account model remove`");
+  if (verb === "use") {
+    const source = positional[1];
+    if (source === "own") {
+      out(await put({ source: "own" }));
+      return 0;
+    }
+    if (source !== "foldrun") throw new Error("`foldrun account model use foldrun --provider <anthropic|openai|gemini|openrouter>` or `foldrun account model use own`");
+    const supply = typeof flags.provider === "string" ? flags.provider : positional[2];
+    if (!supply) throw new Error("which provider? `foldrun account model use foldrun --provider anthropic` (anthropic, openai, gemini or openrouter — `foldrun account model prices` lists what each costs)");
+    const r = await put({ source: "foldrun", supply });
+    out(r);
+    return runnable(r) ? 0 : 1;
+  }
+  if (verb === "prices") {
+    const r = await remoteCall(url, flags, "/api/account/model");
+    const f = fm(r);
+    const only = typeof flags.provider === "string" ? flags.provider : null;
+    const prices = (f?.prices ?? []).filter((p) => !only || p.provider === only);
+    if (flags.json === true) {
+      console.log(JSON.stringify({ offered: f?.offered ?? false, providers: f?.providers ?? [], prices }, null, 2));
+      return 0;
+    }
+    if (!f?.offered) {
+      console.log(`\n  ${c.yellow("·")} foldrun's models are not offered here${f?.refused ? ` — ${f.refused}` : ""}\n`);
+      return 1;
+    }
+    for (const p of f.providers ?? []) {
+      if (only && p.name !== only) continue;
+      console.log(`\n  ${c.bold(p.title)} ${p.available ? "" : c.dim(`— ${p.reason ?? "not available"}`)}`);
+      const tiers = Object.entries(p.tiers ?? {});
+      if (tiers.length) console.log(`  ${c.dim(`model: ${tiers.map(([t, m]) => `${t} → ${m}`).join(" · ")}`)}`);
+      const rows = prices.filter((x) => x.provider === p.name);
+      if (!rows.length) {
+        if (p.available) console.log(`  ${c.dim("no model priced yet")}`);
+        continue;
+      }
+      const w = Math.max(...rows.map((x) => x.model.length), 5);
+      console.log(`  ${c.dim(`${"model".padEnd(w)}  ${"in".padStart(8)}  ${"out".padStart(8)}  ${"cached in".padStart(9)}  ${"cache write".padStart(11)}`)}`);
+      for (const x of rows) {
+        const opt = (n) => (n == null ? "—" : money(n));
+        console.log(`  ${x.model.padEnd(w)}  ${money(x.inputPerMTok).padStart(8)}  ${money(x.outputPerMTok).padStart(8)}  ${opt(x.cacheReadPerMTok).padStart(9)}  ${opt(x.cacheWritePerMTok).padStart(11)}`);
+      }
+    }
+    console.log(`\n  ${c.dim("USD per million tokens. A model not listed is refused.")}\n`);
+    return 0;
+  }
+  if (verb !== "set") throw new Error("`foldrun account model`, `set <provider> --key <api key>`, `remove`, `use foldrun --provider <p>`, `use own`, or `prices`");
   const provider = positional[1];
   if (!provider) throw new Error("which provider? `foldrun account model set anthropic --key …` (a preset name, or `custom --base-url https://… --format openai`)");
   let apiKey = typeof flags.key === "string" ? flags.key : "";
@@ -5975,13 +6059,7 @@ async function accountModelCmd(url, positional, flags) {
     ...(typeof flags["base-url"] === "string" ? { baseUrl: flags["base-url"] } : {}),
     ...(typeof flags.format === "string" ? { format: flags.format } : {}),
   };
-  const r = await remoteCall(url, flags, "/api/account/model", {
-    method: "PUT",
-    body: JSON.stringify(body),
-    headers: { "idempotency-key": crypto.randomUUID() },
-  });
-  if (flags.json === true) console.log(JSON.stringify(r, null, 2));
-  else show(r);
+  out(await put(body));
   return 0;
 }
 
