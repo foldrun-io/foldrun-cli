@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.0.6] — 2026-11-03
+
+### deps
+
+- @foldrun/core ^14.2.1 ([4762335](https://github.com/foldrun-io/foldrun-cli/commit/4762335))
+
 ## [14.0.5] — 2026-11-03
 
 ### deps
