@@ -410,6 +410,20 @@ scheduler's own rule (`cronCanFire` in `@foldrun/core`), so `check` and the
 scheduler always agree. A day every named month has, or a weekday beside the
 day (either then matches), fixes it.
 
+### config/effort-fitted
+
+*warn, online only.* An `effort:` (an agent's, a flow's default, or one
+step's) that the model this account's steps run on does not have. Each model
+takes its own levels: Claude and OpenAI's GPT-6 take all five, Gemini stops
+at `high`, Kimi has `low`, `high` and `max`, DeepSeek runs `medium` and
+`xhigh` as `high`. The step is not refused: it runs at the nearest level the
+model has, and its log says so, so a file stays valid when the account
+changes provider. Write a level the model has, or choose a provider whose
+model has the one you want (Settings → Model provider). Checked on the
+platform (the Checks page, a save, a deploy) when the account runs on
+foldrun's models; `foldrun check` offline does not know the account's
+choice, and an agent or workspace with its own `provider:` is not checked.
+
 ### config/conflict
 
 *error.* A field written twice: at the top of the frontmatter and inside its
