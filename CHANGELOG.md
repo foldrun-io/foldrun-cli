@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.0.2] — 2026-11-03
+
+### docs
+
+- sync — GPT-6 effort levels ([12b2cb8](https://github.com/foldrun-io/foldrun-cli/commit/12b2cb8))
+
 ## [14.0.1] — 2026-11-03
 
 ### deps
