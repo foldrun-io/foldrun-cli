@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.1.0] — 2026-11-03
+
+- feat(flow): flow set takes max_output_tokens; docs synced ([a6f1ca4](https://github.com/foldrun-io/foldrun-cli/commit/a6f1ca4))
+
 ## [14.0.7] — 2026-11-03
 
 ### deps
