@@ -55,9 +55,10 @@ billed in credits at **foldrun's price list**
   API; each provider is sent what its own API documents, the rest left
   out. Anthropic gets the request as written. DeepSeek takes every level
   (`medium` and `xhigh` run as `high`). Kimi takes `low`, `high` and
-  `max`: `medium` and `xhigh` run as `high`, and it always thinks. OpenAI
-  (over its Responses API) and Gemini take `low`, `medium`, `high`;
-  `xhigh` and `max` run as `high`. No provider is sent `temperature` or
+  `max`: `medium` and `xhigh` run as `high`, and it always thinks. OpenAI's
+  GPT-6 models (over its Responses API) take all five; Gemini takes `low`,
+  `medium`, `high`, so `xhigh` and `max` run as `high`. Where a level is
+  changed the step's log says so. No provider is sent `temperature` or
   `top_p` — the reasoning models fix them.
 - **Where each provider processes the prompt** is its own: DeepSeek in
   the People's Republic of China (its privacy policy), Moonshot in
