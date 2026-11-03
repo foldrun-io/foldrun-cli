@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.0.0] — 2026-11-03
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 14.0.0, a new major. (254e925)
+
+### deps
+
+- @foldrun/core ^14.0.0 ([254e925](https://github.com/foldrun-io/foldrun-cli/commit/254e925))
+
 ## [13.2.0] — 2026-11-03
 
 - feat(account): use foldrun --provider deepseek|moonshot (OpenRouter dropped); docs synced ([ccafa59](https://github.com/foldrun-io/foldrun-cli/commit/ccafa59))
