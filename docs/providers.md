@@ -51,6 +51,14 @@ billed in credits at **foldrun's price list**
   `foldrun account model prices`. Anthropic's tiers are the usual Claude
   models. A model id written out in full runs only if the price list names
   it; anything not listed is refused before the call is made.
+- **Your `effort:` on each provider.** The agent runtime speaks Claude's
+  API; each provider is sent what its own API documents, the rest left
+  out. Anthropic gets the request as written. DeepSeek takes every level
+  (`medium` and `xhigh` run as `high`). Kimi takes `low`, `high` and
+  `max`: `medium` and `xhigh` run as `high`, and it always thinks. OpenAI
+  (over its Responses API) and Gemini take `low`, `medium`, `high`;
+  `xhigh` and `max` run as `high`. No provider is sent `temperature` or
+  `top_p` — the reasoning models fix them.
 - **Where each provider processes the prompt** is its own: DeepSeek in
   the People's Republic of China (its privacy policy), Moonshot in
   Singapore, the others as their own terms say. Choose the provider
@@ -125,7 +133,7 @@ preset, say); the file warns if you try.
 | `ollama` | Ollama (local) | anthropic | `http://localhost:11434` | x-api-key |  | v0.14+ (2026-01). Ignores `tool_choice` and `cache_control`; accepts but does not enforce thinking budgets; base64 images only. Any key value is accepted. |
 | `lmstudio` | LM Studio (local) | anthropic | `http://localhost:1234` | x-api-key |  |  |
 | `vllm` | vLLM (yours) | anthropic | `(per account — set base_url)` | bearer |  | base_url is your server (default :8000). Start it with `--enable-auto-tool-choice` and a `--tool-call-parser` or no tool loop closes. |
-| `openai` | OpenAI | openai | `https://api.openai.com/v1` | bearer | yes | Chat Completions by default, which OpenAI keeps supporting indefinitely. Add `format: responses` for the Responses API ("recommended for all new projects"): PDFs cross as input files and `reasoning.effort` is native; still every turn carries the whole conversation. |
+| `openai` | OpenAI | responses | `https://api.openai.com/v1` | bearer | yes | The Responses API by default since 3 Nov 2026: GPT-6 Astra and GPT-6.1 Sol call tools there alone, and GPT-6 Luna on Chat Completions only with reasoning off. PDFs cross as input files and `reasoning.effort` is native; every turn still carries the whole conversation (`store: false`). `format: openai` says Chat Completions, for an older model or a proxy that speaks only that. |
 | `gemini` | Google Gemini | openai | `https://generativelanguage.googleapis.com/v1beta/openai` | bearer |  | Google's OpenAI-compatible route. Unknown parameters are ignored silently; reasoning cannot be switched off on the newest models. |
 | `xai` | xAI Grok | openai | `https://api.x.ai/v1` | bearer |  | Sends `max_completion_tokens` and `reasoning_effort`. |
 | `groq` | Groq | openai | `https://api.groq.com/openai/v1` | bearer |  | Sends `max_completion_tokens` and `reasoning_effort`. |
