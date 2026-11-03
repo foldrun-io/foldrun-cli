@@ -295,6 +295,7 @@ const KEY_NOTES = {
     ["description", "one line; what this role is for"],
     ["model", "fast | default | max — tier the work, not the desk"],
     ["effort", "low | high — how hard to think about it"],
+    ["max_output_tokens", "the longest one reply may be, in tokens"],
     ["tools", "the one grant list: built-ins and your own tools/"],
   ],
   flows: [
@@ -11140,7 +11141,7 @@ function sameFlow(a, b) {
 }
 
 /** The step options the dashboard's step editor writes (core updateFlowStep). */
-const STEP_OPTION_KEYS = ["model", "effort", "retry", "timeout", "verify", "when", "case", "else", "loop", "until", "each", "max", "limits"];
+const STEP_OPTION_KEYS = ["model", "effort", "max_output_tokens", "retry", "timeout", "verify", "when", "case", "else", "loop", "until", "each", "max", "limits"];
 
 /**
  * `foldrun flow set <flow> --step <n|agent> key=value …` — the step editor on
@@ -11177,6 +11178,7 @@ async function flowSetCmd(positional, flags, layout) {
     if (key === "each" && value && value !== "lines") throw new Error(`each=${value}: flow set writes \`each: lines\` only — \`foldrun flow add <flow> fan-out --each "${value}"\` writes the rest`);
     if (key === "else" && value && !["true", "1"].includes(value)) throw new Error("else=true, or else= to clear it");
     if (key === "effort" && value && !resolveEffort(value)) throw new Error(`effort=${value} is not an effort — ${EFFORT_LEVELS.join(", ")} (or effort= to clear it)`);
+    if (key === "max_output_tokens" && value && !(/^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 1048576)) throw new Error(`max_output_tokens=${value} is not a number of tokens, 1 to 1048576 (or max_output_tokens= to clear it)`);
     if (key === "timeout" && value && !/^[1-9]\d*$/.test(value)) {
       const secs = parseDuration(value);
       throw new Error(`timeout=${value}: flow set writes a whole number of seconds — ${secs ? `timeout=${secs}` : "e.g. timeout=900 for 15 minutes"} (or timeout= to clear it)`);

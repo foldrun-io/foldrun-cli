@@ -671,3 +671,17 @@ test("identity: the issuer and subject to trust; secrets set --kind identity sto
   assert.match(bad.out, /needs --audience/);
   assert.deepEqual(writes(s).filter((w) => w.url === "/api/secrets").map((w) => w.body), [{ name: "AWS_ID", identity: { audience: "sts.amazonaws.com" }, workspace: "desk" }]);
 });
+
+test("flow set writes max_output_tokens as the step editor does, and refuses what is not a number of tokens (3 Nov 2026)", () => {
+  const { root, ws } = desk();
+  const r = run(root, ["flow", "set", "publish", "--step", "writer", "max_output_tokens=16000"]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(flowOf(ws), updateFlowStep(FLOW, 1, { max_output_tokens: "16000" }));
+  assert.match(flowOf(ws), /max_output_tokens: 16000/);
+  const bad = run(root, ["flow", "set", "publish", "--step", "writer", "max_output_tokens=lots"]);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /not a number of tokens, 1 to 1048576/);
+  const cleared = run(root, ["flow", "set", "publish", "--step", "writer", "max_output_tokens="]);
+  assert.equal(cleared.status, 0, cleared.stderr);
+  assert.doesNotMatch(flowOf(ws), /max_output_tokens/);
+});

@@ -106,6 +106,7 @@ begins.
 | `schema:` | with `output: json` — the JSON Schema the value must satisfy: one-line JSON, a YAML block under the key, or a file under the workspace |
 | `model:` | override the tier for this step |
 | `effort:` | override how hard it thinks for this step |
+| `max_output_tokens:` | the longest one model reply may be for this step, in tokens — over the flow's and the agent's |
 | `retry:` | attempts after the first, clamped to 5. Each retry waits — 15 s, 30 s, 1 m, 2 m, 4 m, jittered — holding no sandbox while it waits; a stop ends the wait. An attempt the cluster ended for want of memory or disk (OOMKilled, Evicted) is retried one `size:` class up. A step refused because the model usage cap is reached is not retried: the window resets in hours, not within the waits. An `outward` step whose check failed after its tools ran is not retried — the retry would send again; `check` and `deploy` warn on `retry:` on an outward step, because a failure mid-send is still retried |
 | `timeout:` | seconds, or `90s` / `15m` / `4h` / `3d` — **the only clock there is** |
 | `max_turns:` | the most model turns before the step is stopped (1 to 500) — the third bound beside `budget:` and `timeout:` |
@@ -331,6 +332,7 @@ normal outcome, recorded as one.
 | `signature` / `signing_secret` | `github` \| `stripe` \| `slack` \| `hmac`, and the NAME of the vault entry to check it against — never the value (`foldrun check` warns: [secret/signing-secret-value](checks#secret-signing-secret-value)) |
 | `filter` | for a `webhook`, `email`, `flow` or `storage` trigger: the fields a delivery must have to start a run — see [Which deliveries start a run](#which-deliveries-start-a-run) |
 | `model` / `effort` | defaults for every step |
+| `max_output_tokens` | every step's longest reply, in tokens, unless the step says (over the agent's) |
 | `budget` | the most one run may spend, in USD — a number, or `unlimited`; unset is no limit |
 | `compute` | what one run's steps may hold together at once — `{ vcpu: 2, memory: 4Gi, disk: 20Gi }`, any of them. Each run has its own; it only narrows the workspace's and account's. A step past it waits for one of its run's steps to finish; one bigger than it fails at once ([four levels](budgets-and-billing#compute-at-four-levels)) |
 | `overlap` | `skip` or `queue` when a run is already live |

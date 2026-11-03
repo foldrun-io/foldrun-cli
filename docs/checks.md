@@ -401,6 +401,15 @@ place in `@foldrun/core` (`frontmatter-fields.ts`). The editor's completions
 come from the same list, so what the editor suggests and what `check`
 accepts cannot drift apart.
 
+### config/output-fitted
+
+*warn, online only.* A `max_output_tokens:` (an agent's, a flow's default
+or one step's) above the price list's ceiling for the model that step runs on
+[foldrun's models](providers#foldruns-models). The step still runs, with the
+ceiling as its limit, and its log says so. Write a number at or under the
+ceiling, or run the agent on your own key. Checked the way
+[config/effort-fitted](#config-effort-fitted) is.
+
 ### config/cron-never-fires
 
 *warn.* A `schedule:` the scheduler can read but whose day never comes:

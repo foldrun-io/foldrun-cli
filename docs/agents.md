@@ -71,6 +71,7 @@ refused. See [The four jobs](four-jobs).
 |---|---|---|
 | `model` | `fast` \| `default` \| `max`, an alias (`opus`), or a full id | a **tier**, so agents don't rot when models are renamed. Synonyms land on their tier: `small`/`cheap` → fast, `large`/`best` → max |
 | `effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | how long it thinks before answering. Unset leaves the model's own default |
+| `max_output_tokens` | a whole number, 1 to 1048576 | the longest one model reply may be, in tokens — on every provider, each under its own name. Lower keeps replies short, cheap and quick; higher lets an agent that writes long documents finish one in a reply. A flow or a step may set its own. On [foldrun's models](providers#foldruns-models) the price list's ceiling for the model applies too (the lower wins; above it is a [check warning](checks#config-output-fitted)); unset there is the ceiling, and elsewhere the runtime's default |
 | `budget` | a number in USD | the most this agent may spend in **one run**, across every step it takes in it. Its step stops mid-turn at what is left; a later step of its own in the same run is refused before it starts. Unset is no limit. Per run only — a cap over a day, week or month belongs in `AGENTS.md` |
 
 The two are orthogonal — the model is which brain, effort is how long it
