@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.0.1] — 2026-11-03
+
+### deps
+
+- @foldrun/core ^14.0.1 ([ad39c5c](https://github.com/foldrun-io/foldrun-cli/commit/ad39c5c))
+
+### docs
+
+- sync — OpenAI over Responses; effort per provider ([da71fb6](https://github.com/foldrun-io/foldrun-cli/commit/da71fb6))
+
 ## [14.0.0] — 2026-11-03
 
 ### Breaking changes
