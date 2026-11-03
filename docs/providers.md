@@ -32,7 +32,7 @@ Tokens on your own key are billed by your provider, not by the platform
 ## foldrun's models
 
 On foldrun's own hosted platform an account can run on **foldrun's keys**
-instead of its own: Anthropic, OpenAI, Google Gemini or OpenRouter, one at a
+instead of its own: Anthropic, OpenAI, Google Gemini, DeepSeek or Moonshot Kimi, one at a
 time for the whole account. No provider account is needed; the tokens are
 billed in credits at **foldrun's price list**
 ([budgets and billing](budgets-and-billing.md#foldruns-models)).
@@ -51,6 +51,10 @@ billed in credits at **foldrun's price list**
   `foldrun account model prices`. Anthropic's tiers are the usual Claude
   models. A model id written out in full runs only if the price list names
   it; anything not listed is refused before the call is made.
+- **Where each provider processes the prompt** is its own: DeepSeek in
+  the People's Republic of China (its privacy policy), Moonshot in
+  Singapore, the others as their own terms say. Choose the provider
+  your data may go to.
 - **What is refused**, before anything is sent: a model not on the price
   list; the provider's own paid tools (web search, code execution run by
   the provider), priority service tiers, audio, more than one completion per

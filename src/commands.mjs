@@ -6007,9 +6007,9 @@ async function accountModelCmd(url, positional, flags) {
       out(await put({ source: "own" }));
       return 0;
     }
-    if (source !== "foldrun") throw new Error("`foldrun account model use foldrun --provider <anthropic|openai|gemini|openrouter>` or `foldrun account model use own`");
+    if (source !== "foldrun") throw new Error("`foldrun account model use foldrun --provider <anthropic|openai|gemini|deepseek|moonshot>` or `foldrun account model use own`");
     const supply = typeof flags.provider === "string" ? flags.provider : positional[2];
-    if (!supply) throw new Error("which provider? `foldrun account model use foldrun --provider anthropic` (anthropic, openai, gemini or openrouter — `foldrun account model prices` lists what each costs)");
+    if (!supply) throw new Error("which provider? `foldrun account model use foldrun --provider anthropic` (anthropic, openai, gemini, deepseek or moonshot — `foldrun account model prices` lists what each costs)");
     const r = await put({ source: "foldrun", supply });
     out(r);
     return runnable(r) ? 0 : 1;

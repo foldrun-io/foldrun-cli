@@ -18,7 +18,7 @@ Chat Completions API — once for the whole account in Settings → Model
 block — and the platform bills you nothing for those tokens. On a hosted
 platform every account brings its own API key — Claude login tokens are not
 accepted — or, on foldrun's own platform, chooses **foldrun's models**:
-Anthropic, OpenAI, Gemini or OpenRouter on foldrun's keys, billed in credits
+Anthropic, OpenAI, Gemini, DeepSeek or Moonshot Kimi on foldrun's keys, billed in credits
 at foldrun's price list. See [Providers](providers).
 
 **Can agents reach the internet?** Yes — the public internet, as themselves,
