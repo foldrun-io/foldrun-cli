@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [13.2.0] — 2026-11-03
+
+- feat(account): use foldrun --provider deepseek|moonshot (OpenRouter dropped); docs synced ([ccafa59](https://github.com/foldrun-io/foldrun-cli/commit/ccafa59))
+
 ## [13.1.1] — 2026-11-03
 
 ### deps
