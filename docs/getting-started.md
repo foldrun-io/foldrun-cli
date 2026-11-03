@@ -128,7 +128,9 @@ the account as it is (a run on record, a secret in the vault, a key minted
 for the CLI), so it ticks itself whichever way you did the thing; there is
 nothing to mark. While an account has no model key every run is refused, so
 every dashboard page also carries a banner saying so, with a link to
-Settings → Model provider (`foldrun account model set anthropic --key …`). **Dismiss** hides it for you alone; the line at the foot of
+Settings → Model provider (`foldrun account model set anthropic --key …`,
+or on foldrun's own platform `foldrun account model use foldrun --provider anthropic`
+to run on foldrun's models, billed in credits). **Dismiss** hides it for you alone; the line at the foot of
 the page brings it back, and it goes away by itself once every step is done.
 
 ```sh

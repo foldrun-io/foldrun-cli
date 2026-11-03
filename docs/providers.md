@@ -14,10 +14,10 @@ key, as `FOLDRUN_MODEL_PROVIDER`, `FOLDRUN_MODEL_API_KEY` and, for a custom
 endpoint, `FOLDRUN_MODEL_BASE_URL` and `FOLDRUN_MODEL_FORMAT`. The dashboard
 and the API show only its last four characters.
 
-**On a hosted platform every account brings its own key.** The platform's
-own model credential is for the operator's accounts
-(`FOLDRUN_PLATFORM_KEY_ACCOUNTS`); a step in any other account with no key
-of its own is refused before it starts — "no model key: …" on the run — and
+**On a hosted platform every account brings its own key — or chooses
+[foldrun's models](#foldruns-models).** The platform's own model credential
+is for the operator's accounts (`FOLDRUN_PLATFORM_KEY_ACCOUNTS`); a step in
+any other account with neither is refused before it starts — "no model key: …" on the run — and
 an eval's judge or "draft with AI" says the same. Until it has one, every
 dashboard page says so in a banner, and **Add your model key** is the first
 step of [getting started](getting-started.md#the-checklist-on-the-dashboard).
@@ -28,6 +28,48 @@ claude.ai logins. Use an API key from the provider.
 
 Tokens on your own key are billed by your provider, not by the platform
 ([budgets and billing](budgets-and-billing.md)).
+
+## foldrun's models
+
+On foldrun's own hosted platform an account can run on **foldrun's keys**
+instead of its own: Anthropic, OpenAI, Google Gemini or OpenRouter, one at a
+time for the whole account. No provider account is needed; the tokens are
+billed in credits at **foldrun's price list**
+([budgets and billing](budgets-and-billing.md#foldruns-models)).
+
+- **Choose it:** Settings → Model provider → *foldrun's models*, pick the
+  provider, *Use*. Or `foldrun account model use foldrun --provider openai`,
+  or `PUT /api/account/model` with `{ "source": "foldrun", "supply": "openai" }`.
+  An admin chooses, as for the key. `foldrun account model use own` (or the
+  same page) goes back: a key you stored is kept while you are on
+  foldrun's models, so switching back is one step.
+- **The order** a step's model is found in is unchanged but for one rung: a
+  `provider:` block in the agent, the workspace or the account's AGENTS.md
+  first; then foldrun's models, when chosen; then the account's own key.
+- **Which model a tier runs** is the platform's map for that provider
+  (`model: fast | default | max`), shown on the page and by
+  `foldrun account model prices`. Anthropic's tiers are the usual Claude
+  models. A model id written out in full runs only if the price list names
+  it; anything not listed is refused before the call is made.
+- **What is refused**, before anything is sent: a model not on the price
+  list; the provider's own paid tools (web search, code execution run by
+  the provider), priority service tiers, audio, more than one completion per
+  call; a document fetched by URL. An image by URL is held at a fixed
+  token count. What is allowed is listed per provider; nothing else passes.
+- **A daily cap** (UTC) per account, in what you pay, shown on the page with
+  today's spend. A call past it is refused until the next day; ask support
+  to raise it. Calls also stop when the credit balance reaches zero.
+- **Never a silent fallback.** If foldrun's models are switched off,
+  withdrawn for your account, or the chosen provider is not available, every
+  step is refused with the reason — it never runs on your stored key, or on
+  anything else, instead.
+- **Where it is metered:** every call on foldrun's keys goes through the
+  platform's model gateway, whoever makes it — the agent, a `curl` from its
+  sandbox, an eval's judge or grader, *draft with AI*, the dashboard
+  assistant. The key never enters the sandbox. The run page shows
+  *foldrun models · OpenAI* as the step's credential.
+
+Not on self-hosted installs: there the account brings its own key.
 
 What `provider: { name: … }` resolves to. Mirrors `foldrun-core/src/providers.ts`,
 checked against each provider's own documentation on 2026-09-02 and again on

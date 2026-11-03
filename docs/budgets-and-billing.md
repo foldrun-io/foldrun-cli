@@ -191,6 +191,10 @@ Model, or a `provider:` block); the run page says which credential each step
 used. On a hosted platform every customer account brings one
 ([providers](providers.md#your-accounts-own-model-key)).
 
+**On foldrun's models** (hosted; [providers](providers.md#foldruns-models))
+the tokens are bought from the platform instead: see
+[foldrun's models](#foldruns-models) below.
+
 **Going into minus.** Ordinarily an empty balance starts no run. The
 platform can allow an account to run below zero — to a floor, or with none —
 for a customer on invoice terms. It shows on that account's Balance page
@@ -220,7 +224,7 @@ provider's own invoice.
 
 | meter | what it counts |
 |---|---|
-| **tokens** | model usage at cost, times a margin. **Bring your own key and the margin does not apply** — a BYOK step is billed nothing for tokens |
+| **tokens** | model usage at cost, times a margin. **Bring your own key and the margin does not apply** — a BYOK step is billed nothing for tokens. On foldrun's models, each call at foldrun's price list, times the margin ([below](#foldruns-models)) |
 | **compute** | sandbox seconds: what a step reserved (cores, memory and disk, while it ran) and what it actually burned. Disk is billed by the GiB a step is allowed to write, per second, like memory (since 27 Oct 2026) |
 | **storage and network** | GB-months in the file store, accrued daily; GB the sandbox moved, both directions |
 
@@ -229,6 +233,27 @@ step fee would charge compute twice and punish a well-factored flow for
 having more, smaller steps. The Usage page shows every table in credits at
 today's rates beside the meters, so a customer can read what a run will
 cost from what the last one consumed.
+
+### foldrun's models
+
+An account on [foldrun's models](providers.md#foldruns-models) pays for each
+model call at **foldrun's price list** — per million input, output,
+cache-read and cache-write tokens, per model — times the margin in force.
+Settings → Model provider shows the list as you pay it, and so does
+`foldrun account model prices`. A model not on it is refused.
+
+- **Metered per call**, by the platform's model gateway, from the usage the
+  provider reports — not from what a step says it spent. A stream cut off
+  before the provider reported usage is charged at the call's estimate.
+  A call the provider refused costs nothing.
+- **Charged within minutes**, as its own line on the statement — "foldrun's
+  models: N calls (provider model, …)" — one per run, or per eval grade,
+  draft or assistant conversation. The run's own charge (sandbox time,
+  network, the run fee) is a separate line, as before.
+- **A daily cap** per account (UTC), in what you pay. Before each call the
+  gateway reserves its estimate against the cap, so twenty calls at once
+  cannot all pass it; one past it is refused until the next day.
+- **The balance must be above zero** for a call to start, like a run.
 
 ## Prompt caching
 
