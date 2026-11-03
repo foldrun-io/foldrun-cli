@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [13.1.0] — 2026-11-03
+
+- feat(account): `account model use foldrun --provider <p>`, `use own`, `prices` ([c570fa4](https://github.com/foldrun-io/foldrun-cli/commit/c570fa4))
+
+### docs
+
+- sync — foldrun's models in providers, billing, FAQ, getting started ([ee108ee](https://github.com/foldrun-io/foldrun-cli/commit/ee108ee))
+
 ## [13.0.1] — 2026-11-03
 
 ### deps
