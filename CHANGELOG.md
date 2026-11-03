@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [13.1.1] — 2026-11-03
+
+### deps
+
+- @foldrun/core ^13.1.1 ([eaf8c7b](https://github.com/foldrun-io/foldrun-cli/commit/eaf8c7b))
+
 ## [13.1.0] — 2026-11-03
 
 - feat(account): `account model use foldrun --provider <p>`, `use own`, `prices` ([c570fa4](https://github.com/foldrun-io/foldrun-cli/commit/c570fa4))
