@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.0.4] — 2026-11-03
+
+### docs
+
+- sync — config/effort-fitted ([f0a4ea2](https://github.com/foldrun-io/foldrun-cli/commit/f0a4ea2))
+
 ## [14.0.3] — 2026-11-03
 
 ### deps
