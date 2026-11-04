@@ -199,9 +199,9 @@ Signing in, in particular:
 - only the account's owner can set, rebind or remove the account's
   `RESEND_API_KEY` and `EMAIL_FROM`, because that sender carries everyone's
   reset links — whether through the secrets API or an OAuth connect. The
-  owner means the owner in person: their signed-in session, or the key
-  their own `foldrun login` made. Any other key they minted (CI, a key
-  handed to a contractor) is refused;
+  owner means the owner signed in, in the browser: no API key can, not even
+  the one their own `foldrun login` made (since 5 November 2026), so a
+  leaked laptop key cannot repoint the reset mail and take the account;
 - a key rotated by a caller that is no person (a key known only by its
   label) acts as nobody, never as the rotated key's owner;
 - a member or key limited to some workspaces cannot change what every

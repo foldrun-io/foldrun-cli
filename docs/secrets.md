@@ -110,7 +110,7 @@ given the old name inherits nothing. If a secret limited to it cannot be read
 with the platform's keys, the rename or delete is refused and names it — set
 it again or delete it, then try again. Only an admin with access to every
 workspace sets the limit, and the account's `RESEND_API_KEY` and `EMAIL_FROM`
-stay the owner's. The account's own uses of a secret — its model key in
+stay the owner's, signed in (no key, not even `foldrun login`). The account's own uses of a secret — its model key in
 Settings → Model, and the mail the platform sends for the account (password
 resets, invites, billing) — are not a workspace's and are not limited. A new
 value or a new site binding keeps the limit. Limiting a secret seals the list
