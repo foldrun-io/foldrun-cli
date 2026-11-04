@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.2.1] — 2026-11-04
+
+- ci(release): retry GitHub 5xx; a failed merge hint no longer turns ci red ([ba49c80](https://github.com/foldrun-io/foldrun-cli/commit/ba49c80))
+
+### chore
+
+- read job blocks through core alone, no CLI copy of the fold (FOL-93) ([892c908](https://github.com/foldrun-io/foldrun-cli/commit/892c908))
+
+### deps
+
+- @foldrun/core ^14.3.3 ([1e45b6f](https://github.com/foldrun-io/foldrun-cli/commit/1e45b6f))
+
 ## [14.2.0] — 2026-11-04
 
 - feat(billing): billing wallet shows the foldrun.ir link to pay in Toman ([9aeb515](https://github.com/foldrun-io/foldrun-cli/commit/9aeb515))
