@@ -3353,6 +3353,42 @@ function siteFlags(flags) {
   return raw.filter((v) => typeof v === "string").flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
 }
 
+/**
+ * Whether the far end still accepts a secret, as Settings → Connections says
+ * it: accepted, refused (with when it last worked), the host's own failure,
+ * or never used — which is not the same as working.
+ */
+function secretHealthLine(health) {
+  if (!health) return c.dim("not used yet — nothing has tried this credential");
+  const { last, refusals, lastAccepted } = health;
+  const on = String(last?.at ?? "").slice(0, 10);
+  const status = last?.status ? ` (${last.status})` : "";
+  if (last?.outcome === "refused") {
+    return c.red(`refused by ${last.host} on ${on}${status}${refusals > 1 ? ` · ${refusals} times running` : ""}${lastAccepted ? ` · last worked ${String(lastAccepted).slice(0, 10)}` : " · never seen working"}`);
+  }
+  if (last?.outcome === "error") return c.amber(`${last.host} failed on ${on}${status} — its end, not the key`);
+  return c.green(`accepted by ${last?.host} on ${on}`);
+}
+
+/**
+ * The OAuth app saved under a removed account secret's name, when no
+ * connection uses it any more — the one the dashboard deletes with the
+ * secret. Null when there is none, it is still used, or it cannot be told.
+ */
+async function unusedSavedClient(url, flags, name) {
+  const app = name.toLowerCase().replaceAll("_", "-");
+  try {
+    const [{ clients = [] }, { connections = [] }] = await Promise.all([
+      remoteCall(url, flags, "/api/oauth/clients"),
+      remoteCall(url, flags, "/api/oauth/connections"),
+    ]);
+    if (!clients.some((k) => k.name === app)) return null;
+    return connections.some((x) => x.client === app) ? null : app;
+  } catch {
+    return null;
+  }
+}
+
 async function secretsCmd(positional, flags, layout) {
   // --local: this machine's store even when signed in, the same escape
   // hatch deploy and keys have. Without it, a signed-in laptop sent every
@@ -3376,9 +3412,14 @@ async function secretsCmd(positional, flags, layout) {
   const [verb, name] = positional;
 
   if (verb === "ls" || verb === undefined) {
-    const entries = url
-      ? (await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
-      : (await core()).listSecrets("default", scope);
+    const body = url
+      ? await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)
+      : { secrets: (await core()).listSecrets("default", scope) };
+    const entries = body.secrets ?? [];
+    if (flags.json === true) {
+      console.log(JSON.stringify(body, null, 2));
+      return 0;
+    }
     if (!entries.length) {
       console.log(`\n  ${c.dim("no secrets yet — foldrun secrets set NAME")}\n`);
       return 0;
@@ -3388,6 +3429,9 @@ async function secretsCmd(positional, flags, layout) {
       console.log(
         `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}${s.sites?.length ? ` · sent only to ${s.sites.join(", ")}` : ""}${Array.isArray(s.workspaces) ? ` · ${s.workspaces.length ? `only in ${s.workspaces.join(", ")}` : "in no workspace"}` : ""}`)}`,
       );
+      // The platform says what the far end answered last time; this
+      // machine's vault keeps no such record, so nothing is shown there.
+      if (s.health !== undefined) console.log(`    ${secretHealthLine(s.health)}`);
     }
     console.log();
     return 0;
@@ -3548,6 +3592,18 @@ async function secretsCmd(positional, flags, layout) {
     if (revoked?.error) console.log(`  ${c.amber("!")} ${revoked.error} — revoke the app's access in the provider's own settings`);
     else if (revoked?.revoked?.length) console.log(`  ${c.dim(`grant revoked at the provider (${revoked.revoked.join(", ")})`)}`);
     else if (revoked?.skipped === "shared-grant") console.log(`  ${c.dim("grant kept: another secret uses the same app, which the provider may revoke together")}`);
+    // The dashboard also deletes the app saved under this name once nothing
+    // uses it. Here it is only said, unless --with-client asks for it too.
+    // Account secrets only, as there: a saved app is the account's.
+    const app = url && !scope ? await unusedSavedClient(url, flags, name) : null;
+    if (app && flags["with-client"] === true) {
+      if (await confirmed(flags, "secrets rm --with-client", `also delete the saved OAuth client ${app}, which no connection uses now? [y/N] `)) {
+        await remoteCall(url, flags, "/api/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: app }) });
+        console.log(`  ${c.green("✓")} saved OAuth client ${app} removed`);
+      } else console.log(`  ${c.dim(`saved OAuth client ${app} kept`)}`);
+    } else if (app) {
+      console.log(`  ${c.dim(`the saved OAuth client ${app} is no longer used — \`foldrun secrets clients rm ${app}\` removes it`)}`);
+    }
     console.log();
     return 0;
   }
@@ -4485,7 +4541,10 @@ async function keysCmd(positional, flags) {
           : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
       const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
       const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
-      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}`);
+      // A key `foldrun login` minted lasts 90 days and renews itself while
+      // that machine is in use; revoking it signs that machine out.
+      const login = k.origin === "cli-login" && !k.revokedAt ? "  [CLI sign-in · renews itself]" : "";
+      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}${login}`);
       // A rotated key in its grace: still live, but not to be rotated again.
       const next = k.replacedBy ? keys.find((n) => n.id === k.replacedBy) : null;
       if (k.replacedBy) console.log(`  ${" ".repeat(9)}${c.yellow(`rotated → ${k.replacedBy}${next ? ` (${next.prefix}…)` : ""}`)}${c.dim(" — rotate that one, not this")}`);
@@ -5492,8 +5551,65 @@ function humanBytes(n) {
  * newest file is three weeks old and whose run id nobody recognises is the
  * shape staleness actually has.
  */
+/**
+ * `foldrun storage ls --all` — every workspace's files, as the dashboard's
+ * account Storage page: a block per workspace, those with files first and
+ * the busiest first, then the names of the empty ones. The workspaces are
+ * the ones this key may open (GET /api/workspaces), each listed by its own
+ * storage route.
+ */
+async function storageLsAll(url, prefix, flags) {
+  const { workspaces = [] } = await remoteCall(url, flags, "/api/workspaces");
+  const inPrefix = (f) => (prefix ? f.path === prefix || f.path.startsWith(prefix.replace(/\/*$/, "/")) : true);
+  const desks = await Promise.all(
+    workspaces.map(async (w) => {
+      try {
+        const body = await remoteCall(url, flags, `/api/workspaces/${enc(w.name)}/storage`);
+        return { workspace: w.name, ...body, files: (body.files ?? []).filter(inPrefix) };
+      } catch (err) {
+        return { workspace: w.name, files: [], error: err instanceof Error ? err.message : String(err) };
+      }
+    }),
+  );
+  const bytes = (d) => d.files.reduce((n, f) => n + (f.size ?? 0), 0);
+  desks.sort((a, b) => (b.files.length > 0 ? 1 : 0) - (a.files.length > 0 ? 1 : 0) || bytes(b) - bytes(a));
+  if (flags.json === true) {
+    console.log(JSON.stringify({ workspaces: desks }, null, 2));
+    return desks.some((d) => d.error) ? 1 : 0;
+  }
+  const full = desks.filter((d) => d.files.length);
+  if (!full.length && !desks.some((d) => d.error)) {
+    console.log(`\n  ${c.dim(`nothing in any workspace's storage${prefix ? ` under ${prefix}` : ""}${desks.length ? "" : " — no workspaces yet"}`)}\n`);
+    return 0;
+  }
+  const all = full.flatMap((d) => d.files);
+  const w = {
+    size: Math.max(0, ...all.map((f) => humanBytes(f.size).length)),
+    path: Math.max(0, ...all.map((f) => f.path.length)),
+    when: Math.max(0, ...all.map((f) => when(f.updatedAt).length)),
+  };
+  for (const d of full) {
+    const files = [...d.files].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    console.log(`\n  ${c.bold(d.workspace)}  ${c.dim(`${files.length} file${files.length === 1 ? "" : "s"} · ${humanBytes(bytes(d))}${d.quotaMb ? ` of ${d.quotaMb}MB` : ""}`)}`);
+    for (const f of files) {
+      console.log(`    ${pad(f.path, w.path)}  ${c.dim(`${pad(humanBytes(f.size), w.size)}  ${pad(when(f.updatedAt), w.when)}  ${ago(f.updatedAt)} ago  ${String(f.by ?? "")}`)}`);
+    }
+  }
+  for (const d of desks.filter((x) => x.error)) console.log(`\n  ${c.red("✗")} ${c.bold(d.workspace)}  ${c.dim(d.error)}`);
+  const empty = desks.filter((d) => !d.files.length && !d.error).map((d) => d.workspace);
+  if (empty.length) console.log(`\n  ${c.dim(`nothing${prefix ? ` under ${prefix}` : ""} in ${empty.join(", ")}`)}`);
+  console.log(`\n  ${c.dim(`${all.length} file${all.length === 1 ? "" : "s"} in ${full.length} workspace${full.length === 1 ? "" : "s"} · ${humanBytes(all.reduce((n, f) => n + (f.size ?? 0), 0))} — \`foldrun storage cat <path> --to <workspace>\``)}\n`);
+  return desks.some((d) => d.error) ? 1 : 0;
+}
+
 async function storageCmd(positional, flags, layout) {
   const url = platformFor(flags, "storage");
+  // `ls --all`: every workspace's storage, as the account's Storage page.
+  // (On `shares`, --all keeps meaning expired and revoked links too.)
+  if ((positional[0] ?? "ls") === "ls" && flags.all === true) {
+    if (typeof flags.to === "string") throw new Error("`foldrun storage ls --all` lists every workspace — or `--to <workspace>` for one, not both");
+    return storageLsAll(url, positional[1], flags);
+  }
   // A folder that is not a workspace is not a workspace: `logs` and `source`
   // fall back to the directory's NAME, which from ~/Downloads asks the
   // platform for a workspace called "Downloads" and reports a 404 as though
@@ -5827,8 +5943,16 @@ async function triggersCmd(flags, layout) {
   const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
   const body = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/triggers?days=${days}`);
   const rows = body.flows ?? [];
+  if (flags.json === true) {
+    console.log(JSON.stringify(body, null, 2));
+    return rows.some((r) => (r.dropped ?? []).some((d) => d.outcome === "quarantined")) ? 1 : 0;
+  }
   if (!rows.length) {
-    console.log(`\n  ${c.dim(`no trigger fired in ${ws} in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"} — a flow fires when its frontmatter says trigger: schedule, webhook, watch, storage or email`)}\n`);
+    console.log(`\n  ${c.dim(`no trigger fired in ${ws} in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"} — a flow fires when its frontmatter says trigger: schedule, webhook, watch, storage or email`)}`);
+    // A refused delivery never becomes a trigger event, so it can be the
+    // whole answer to "why did nothing run".
+    printTriggerDeliveries(body.deliveries ?? [], triggerLimit(flags));
+    console.log();
     return 0;
   }
   const w = { flow: Math.max(...rows.map((r) => r.flow.length)), trigger: Math.max(...rows.map((r) => r.trigger.length)) };
@@ -5843,8 +5967,58 @@ async function triggersCmd(flags, layout) {
       console.log(`      ${quarantined && d.outcome === "quarantined" ? c.red(`${d.count}× ${d.outcome}`) : c.dim(`${d.count}× ${d.outcome}`)}  ${c.dim(firstLine(d.detail ?? "", 90))}`);
     }
   }
-  console.log(`\n  ${c.dim(`${rows.length} flow${rows.length === 1 ? "" : "s"} fired in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}${held ? ` · ${held} switched off by disable_after — one successful run clears it` : ""} · --since <days>`)}\n`);
+  printTriggerEvents(body.events ?? [], triggerLimit(flags));
+  printTriggerDeliveries(body.deliveries ?? [], triggerLimit(flags));
+  console.log(`\n  ${c.dim(`${rows.length} flow${rows.length === 1 ? "" : "s"} fired in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}${held ? ` · ${held} switched off by disable_after — one successful run clears it` : ""} · --since <days>, --limit <n>, --json`)}\n`);
   return held ? 1 : 0;
+}
+
+/** How many decisions and deliveries `triggers` prints: --limit, else 10. */
+const triggerLimit = (flags) => (Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 10);
+
+/** Each trigger outcome in the Triggers page's words, and the flow key that decided it. */
+const TRIGGER_REASON = {
+  started: ["started a run", ""],
+  duplicate: ["duplicate delivery", "idempotency:"],
+  throttled: ["inside the window", "throttle:"],
+  debounced: ["held for the burst", "debounce:"],
+  quarantined: ["flow switched off", "disable_after:"],
+  paused: ["work is done, paused", "pause_when:"],
+  halted: ["paused by a person", "account or workspace pause"],
+  "overlap-skipped": ["previous run still live", "overlap: skip"],
+  missed: ["missed while down", "catchup: none"],
+  filtered: ["did not match the filter", "filter:"],
+  failed: ["could not start", ""],
+};
+
+const triggerStamp = (iso) => String(iso ?? "").replace("T", " ").slice(0, 19) + "Z";
+
+/** The trigger log's raw decisions, newest first — the dashboard's "Every decision". */
+function printTriggerEvents(events, limit) {
+  if (!events.length) return;
+  const shown = events.slice(0, limit);
+  const w = Math.max(...shown.map((e) => String(e.flow ?? "").length));
+  console.log(`\n  ${c.bold("every decision, newest first")}${events.length > shown.length ? c.dim(` (${shown.length} of ${events.length} — --limit <n> for more)`) : ""}`);
+  for (const e of shown) {
+    const [label, key] = TRIGGER_REASON[e.outcome] ?? [String(e.outcome), ""];
+    const tone = e.outcome === "started" ? c.green : e.outcome === "quarantined" || e.outcome === "failed" || e.outcome === "halted" ? c.red : c.dim;
+    console.log(`    ${c.dim(triggerStamp(e.t))}  ${pad(String(e.flow ?? ""), w)}  ${tone(label)}${key ? c.dim(` (${key})`) : ""}  ${c.dim(firstLine(e.detail ?? "", 90))}`);
+  }
+}
+
+/** Requests at the hook and inbox URLs — whether one arrived and was
+ *  authentic, before any flow rule had a say. */
+function printTriggerDeliveries(deliveries, limit) {
+  if (!deliveries.length) return;
+  const refused = deliveries.filter((d) => d.outcome !== "accepted" && d.outcome !== "dropped").length;
+  const shown = deliveries.slice(0, limit);
+  const w = Math.max(...shown.map((d) => String(d.flow ?? "").length));
+  console.log(`\n  ${c.bold("deliveries at the hook and inbox URLs")}${refused ? c.red(` · ${refused} refused before any flow rule applied`) : ""}${deliveries.length > shown.length ? c.dim(` (${shown.length} of ${deliveries.length} — --limit <n> for more)`) : ""}`);
+  for (const d of shown) {
+    const bad = d.outcome !== "accepted" && d.outcome !== "dropped";
+    const outcome = `${d.outcome}${d.count > 1 ? ` ×${d.count}` : ""}`;
+    console.log(`    ${c.dim(triggerStamp(d.t))}  ${pad(String(d.flow ?? ""), w)}  ${bad ? c.red(outcome) : d.outcome === "accepted" ? c.green(outcome) : c.dim(outcome)}  ${c.dim(firstLine(d.detail ?? "", 90))}`);
+  }
 }
 
 // -------------------------------------------------------------- schedule
@@ -5940,7 +6114,8 @@ async function providersCmd(url, flags) {
  *
  *   foldrun account model                                   what is set, what runs
  *   foldrun account model set <provider> --key <api key>    a preset (anthropic,
- *       openrouter, openai, groq, …) or `custom --base-url https://… --format openai`
+ *       openrouter, openai, groq, …) or `custom --base-url https://… --format openai`;
+ *       --use also switches to it (use own) in the same request
  *   foldrun account model remove                            the key (the choice stays)
  *   foldrun account model use foldrun --provider <p>        run on foldrun's models
  *   foldrun account model use own                           back to the account's own key
@@ -6064,6 +6239,9 @@ async function accountModelCmd(url, positional, flags) {
     apiKey,
     ...(typeof flags["base-url"] === "string" ? { baseUrl: flags["base-url"] } : {}),
     ...(typeof flags.format === "string" ? { format: flags.format } : {}),
+    // --use: run on this key from now on, in the same request — what the
+    // dashboard's Save does. Without it the choice stays as it was.
+    ...(flags.use === true ? { source: "own" } : {}),
   };
   out(await put(body));
   return 0;
