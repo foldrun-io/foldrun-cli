@@ -423,6 +423,44 @@ surprise. With billing on, an empty balance refuses *new* runs — runs in
 flight finish. Every run is charged exactly once; the ledger is a database
 table with that as a constraint, not a promise.
 
+### Paying in Toman (foldrun.ir)
+
+People who pay with an Iranian (Shetab) card top up at
+[foldrun.ir](https://foldrun.ir) in Toman, through Zarinpal. It is the same
+wallet: the payment adds dollars of credit to the account, exactly like a
+card top-up here — it does not buy a plan. Billing → Balance (and
+`foldrun billing wallet`) links to foldrun.ir's charge page with the
+account filled in, wherever foldrun.ir is selling.
+
+1. On foldrun.ir the customer types the account's sign-in email (any
+   member's) or its account id, and an amount in dollars ($5–$500).
+   foldrun.ir shows the account masked (`o•••r@a•••e.co · ac••`) and the
+   price in Toman at today's rate.
+2. Confirming opens an order here with that Toman figure locked for 30
+   minutes, and sends the customer to Zarinpal to pay it.
+3. When Zarinpal has verified the payment, the order's dollars land as a
+   top-up (`zarinpal:<receipt> order:<id>` on the statement) — once,
+   however many times the confirmation arrives. A payment that clears after
+   the 30 minutes, or after the customer pressed back, is still credited —
+   within a day of the order; later than that the platform team credits it
+   by hand (Zarinpal returns a payment nobody verified within 72 hours).
+
+The credit is bought credit like any other: it expires 12 months after
+purchase if unused. The platform operator sets, in the console's Settings
+under Billing:
+
+| Setting | |
+|---|---|
+| `billing.ir_toman_per_usd` | Toman per dollar of credit — the market rate plus the gateway's fee and any margin. Empty: foldrun.ir does not sell |
+| `billing.ir_rate_max_age_hours` | hours before a saved rate goes stale and sales stop (default 48; 0 never) |
+| `billing.ir_daily_usd` | most foldrun.ir may open orders for in 24 hours, open, paid and failed together (default 1000; 0 no ceiling) |
+| `billing.ir_site_url` | foldrun.ir's address, for the Billing page link |
+
+foldrun.ir signs every call with `FOLDRUN_PARTNER_IR_SECRET` (32 characters
+or more, in the platform's secret store and foldrun.ir's own). It can only
+open orders and report them paid; it never names an amount to credit. The
+routes are in [api.md](api#billing).
+
 ## How the money is kept straight
 
 The bookkeeping rules behind the numbers, for whoever has to answer "why is

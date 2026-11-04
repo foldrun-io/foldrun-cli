@@ -10502,6 +10502,8 @@ async function billingVerbCmd(positional, flags) {
       const a = w.autoTopUp;
       console.log(`  auto top-up  ${a?.enabled ? `${usd(a.amountUsd)} when the balance falls below ${usd(a.thresholdUsd)}` : c.dim("off")}${w.cardSaved ? "" : c.dim(" · no card saved")}`);
       if (w.email) console.log(`  receipts     ${w.email}`);
+      // foldrun.ir (3 Nov 2026): paying with an Iranian card, in Toman.
+      if (w.tomanTopUp?.url) console.log(`  in Toman     ${w.tomanTopUp.url}`);
       if (w.dunning && w.dunning.state && w.dunning.state !== "ok") console.log(`  ${c.red("✗")} plan invoice unpaid — ${w.dunning.state}`);
       console.log(`\n  ${c.dim("foldrun billing wallet set auto-top-up --threshold 10 --amount 50 · set auto-top-up off")}\n`);
       return 0;

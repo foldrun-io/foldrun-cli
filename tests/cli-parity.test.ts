@@ -362,7 +362,7 @@ test("billing statement: the table, and --csv writes the file", async () => {
 
 test("billing wallet shows the runway, and set auto-top-up sends the settings", async () => {
   const s = await serve({
-    "GET /api/billing/wallet": () => ({ enabled: true, summary: { balanceUsd: 20, burnPerDayUsd: 4, spend7dUsd: 28, spend30dUsd: 100, daysLeft: 5, emptyOn: "2026-10-05", monthToDateUsd: 90, suggestedTopUpUsd: 120 }, cardSaved: true, autoTopUp: null }),
+    "GET /api/billing/wallet": () => ({ enabled: true, summary: { balanceUsd: 20, burnPerDayUsd: 4, spend7dUsd: 28, spend30dUsd: 100, daysLeft: 5, emptyOn: "2026-10-05", monthToDateUsd: 90, suggestedTopUpUsd: 120 }, cardSaved: true, autoTopUp: null, tomanTopUp: { url: "https://foldrun.ir/charge?account=acme" } }),
     "PUT /api/billing/wallet": () => ({ ok: true }),
   });
   const show = await at(s.url, "billing", "wallet");
@@ -372,6 +372,7 @@ test("billing wallet shows the runway, and set auto-top-up sends the settings", 
   s.close();
   assert.match(show.out, /about 5 days left at this burn — empty on 2026-10-05/);
   assert.match(show.out, /auto top-up\s+off/);
+  assert.match(show.out, /in Toman\s+https:\/\/foldrun\.ir\/charge\?account=acme/, "the foldrun.ir link when it sells");
   assert.equal(set.code, 0, set.out);
   assert.equal(off.code, 0, off.out);
   assert.deepEqual(posts(s, "PUT").map((p) => p.body), [{ autoTopUp: { enabled: true, thresholdUsd: 10, amountUsd: 50 } }, { autoTopUp: null }]);
