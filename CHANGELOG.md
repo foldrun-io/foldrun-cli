@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.2.3] — 2026-11-04
+
+### fix
+
+- four CLI parity bugs from the dashboard audit ([0369512](https://github.com/foldrun-io/foldrun-cli/commit/0369512))
+
 ## [14.2.2] — 2026-11-04
 
 ### deps
