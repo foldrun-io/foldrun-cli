@@ -136,8 +136,8 @@ const HELP = `foldrun — agents are just folders
   foldrun flow copy-step <flow> --step <n|agent>[,<n>…]  the steps' markdown on stdout, as the canvas's Copy
   foldrun flow paste <flow>  step markdown from stdin or --file in as new groups (--after <g>, default last) or beside one (--group <g>) — diff, checked, --dry-run
   foldrun flow draft "<what it should do>"  Draft with AI on the platform (--to; --flow <name> redrafts one): shows the files and the check, saves on yes (--yes, --dry-run)
-  foldrun assistant ["<message>"]  the dashboard's assistant (also: foldrun ai): answers from the foldrun docs and the deployed workspace's files, writes agents, flows, tools and skills as diffs with the check, saves on yes (--to, --yes, --dry-run, --json); every reply is kept — --conversation <id> carries one on; no message in a terminal is a conversation (/save, /files, /drop, /new, /quit)
-  foldrun assistant history  your kept conversations, newest first (--q <text> searches them, --workspace, --json); show <id> prints one, rm <id> deletes it
+  foldrun assistant ["<message>"]  the dashboard's assistant (also: foldrun ai): answers from the foldrun docs and the deployed workspace's files, writes agents, flows, tools and skills as diffs with the check, saves on yes (--to, --yes, --dry-run, --json; --page "<what you are looking at>" as the dashboard sends the page it is on); every reply is kept — --conversation <id> carries one on; no message in a terminal is a conversation (/save, /files, /drop, /new, /quit)
+  foldrun assistant history  your kept conversations, newest first (--q <text> searches them, --workspace, --limit <n>, --json); show <id> prints one, rm <id> deletes it
   foldrun tool test <name>  exercise one tool alone, no model and no run (key=value args, --to)
   foldrun hook ls           the hooks in this workspace and the account library: on, tool, description — invalid ones with the reason (--json); --to <ws>: the DEPLOYED workspace's, who turns each on, and what they denied, rewrote or failed lately (--runs <n>, --all)
   foldrun hook add <name> --on <event>  a hook folder: hook.md and a run.mjs that allows everything, the contract in its comments (--tool <pattern>, --library, --to)
@@ -155,10 +155,13 @@ const HELP = `foldrun — agents are just folders
   foldrun promote <run-id>  keep a finished run as a regression case in evals/ (--eval <name>, --expect "contains: …" repeatable, --case <name>); a run that went wrong takes --should "what it should have done"
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs in one workspace, or one run's full event trail (--local: this machine's)
-  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>
+  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --flow <name>, --q <words>, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>
   foldrun runs views        your saved run searches (--local prints exactly what logs --local prints)
+  foldrun runs views save <name> [filters]  save the runs filters given (--status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs) as a view; a name taken is replaced
+  foldrun runs views rm <name>  delete a saved view (asks; --yes)
   foldrun runs doctor <run-id>  the run doctor: the assistant reads a failed run and the files it names, says why (platform, check, work or outside) and proposes the fix as diffs, saved on yes (--to, --yes, --dry-run, --json)
   foldrun runs rm <run-id>  delete a run's record and archived outputs (an admin); a live one is stopped first — asks first, --yes means it
+  foldrun runs rm <run-id> <run-id>…  delete several: lists them, asks once, then deletes each
   foldrun report <run-id>   one run, whole: header, every step, what it wrote and what is still waiting
   foldrun report <run-id> get <agent>/<path>  download a file the run archived from that agent's outputs/ (--file <path>|-, --force)
   foldrun report <run-id> --compare [<run-id>]  beside the flow's last good run (or the one named): changed files and what differs step by step (--json)
@@ -168,22 +171,25 @@ const HELP = `foldrun — agents are just folders
   foldrun report <run-id> live  the live browser view: which agents have a frame; --agent <name> saves the newest as a JPEG (--file <path>|-)
   foldrun approvals         every gate waiting on a person, with its question (--to <workspace> for one)
   foldrun insights          recurring problems found in the runs, with what they cost and what to do (--days, --to, --json)
-  foldrun inbox                         what waits on you: approvals, questions, issues, proposed fixes, your failed runs (--team, --all, --kind, --unread, --dismissed)
+  foldrun inbox                         what waits on you: approvals, questions, issues, proposed fixes, your failed runs (--team, --started, --mine, --all, --kind, --workspace <ws>, --unread, --dismissed)
   foldrun inbox read|unread|dismiss|restore <id>…  mark items in your own view (dismiss sets aside; it still waits where it lives)
+  foldrun inbox read --all              mark all read: every unread item (--team, --started, --mine for one tab; --kind, --workspace)
   foldrun mcp                           this account as MCP tools for an AI app, over stdio, with this machine's sign-in: \`claude mcp add foldrun -- foldrun mcp\` (--read-only: only the tools that read)
   foldrun mcp connections               the AI apps connected over OAuth (claude.ai and the like): which app, whose, what access, last used — everyone's for an admin, else yours (--all adds the disconnected, --json)
   foldrun mcp disconnect <id>           end one: every token it holds stops working (asks; --yes)
   foldrun issues            what went wrong, grouped, open until resolved (--to <workspace>, --all, --status, --json)
-  foldrun issues show|ack|snooze|resolve|reopen <id>  one issue — snooze --for 1d or --times 5, --note "…"
+  foldrun issues show|ack|snooze|resolve|reopen <id>  one issue — snooze --for 1d, --until <ISO time> or --times 5, --note "…"
   foldrun issues doctor <id>  the run doctor on the issue's newest run, in its workspace: why, and the fix as diffs, saved on yes (--yes, --dry-run, --json)
   foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step; --payload releases a wait: event step
-  foldrun reject <run-id>   refuse one, with --note as the reason
+  foldrun reject <run-id>   refuse one, with --note as the reason; --event-wait rejects a step waiting on wait: event (the step fails, the run ends)
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
   foldrun stop --status running [--since 2h] [--until 1h] [--flow f]  every run a filter matches (runs/bulk): lists them, asks, stops only those (--dry-run, --to)
+  foldrun stop <run-id> <run-id>…  stop several (runs/bulk): lists them, asks once (--dry-run, --yes)
   foldrun answer <run-id> "…"  answer the question an agent is asking mid-step (--option <n> picks a choice)
   foldrun message <run-id> "…" say something to a running agent — it hears it after its next tool call
   foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --instruction "…" tells that step something else this once; --wait
   foldrun rerun --status failed [--since 24h] [--until 2h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
+  foldrun rerun <run-id> <run-id>…  rerun several (runs/bulk), from --from <n> (default 1) — lists, asks once (--dry-run, --yes)
   foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
   foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each workspace, each live run — what they hold now, and the steps waiting for room (--json)
@@ -300,7 +306,8 @@ Options
   --since <days>            observe, triggers: the window in days (observe default 30, triggers 7)
   --until <span|date>       stop, rerun (bulk): only runs started before then — 2h ago, or a date
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
-  --flow <name>             export: that flow and everything it runs; stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
+  --q <words>               runs: the runs page's text search — every word, any order, across id, flow, workspace, status, verdict, summary and failure; assistant history: search the conversations
+  --flow <name>             export: that flow and everything it runs; runs, stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
   --agent <name>            export: that agent and what it grants; flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame; source new: the agent the document belongs to
   --instruction "<text>"    flow add: what a new step (chain, parallel, router) is told to do
   --after <n>               flow add, flow move-step, flow paste: put the new group after the nth (0 = first); --before <n> before it (flow add); default last
@@ -314,7 +321,7 @@ Options
   --on-fail <agent>         flow add: who takes the step over when it fails
   --off                     flow add: take the pattern off the step instead (fan-out, loop, approval, ask, wait, rescue)
   --schedule "<cron>"       flow trigger: the cron line a schedule fires on (5 fields, or @daily); --timezone <zone> the zone it is read in
-  --team, --started, --mine, --all  inbox: which bucket (default: assigned to you and started by you)
+  --team, --started, --mine, --all  inbox: which bucket (default: assigned to you and started by you); --workspace <ws> only that workspace's items; inbox read --all marks every unread one read
   --dismissed, --unread     inbox: what you set aside; only what you have not read
   --read-only               mcp: offer the AI app only the tools that read — no run, approve, answer, message or stop
   --models <m[:effort],…>   eval compare: two to four tiers or model ids to compare, each with an optional :effort
@@ -347,6 +354,7 @@ Options
   --new-client              connect: enter a new OAuth client even when one is saved for the secret
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --payload <json|text|@f>  approve: release a step waiting on wait: event with this body, recorded as you
+  --event-wait              reject: refuse a step waiting on wait: event instead of a person's gate — it stops waiting, the step fails and the run ends
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal; billing credit: the ledger line's note
   --run <id>                eval --to: that eval run's verdict, by the id the run printed; runs nothing
   --stale [days]            agent ls: only agents not run in that many days (never run included); bare, those past alerts: stale_days
@@ -434,7 +442,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

@@ -6837,6 +6837,51 @@ async function runViewsCmd(flags) {
   return 0;
 }
 
+/** The filter flags a saved view keeps, as the runs page's query names them
+ *  (run-views-model.ts VIEW_KEYS) — the reverse of what --view reads. */
+const VIEW_FLAGS = [["status", "status"], ["flow", "flow"], ["to", "workspace"], ["since", "since"], ["q", "q"], ["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"]];
+
+/**
+ * `foldrun runs views save <name> [filters]` and `runs views rm <name>` — the
+ * runs page's "save view" (PATCH /api/me/preferences { runViews }). The route
+ * replaces the whole list, so it is read, changed and written back; a view
+ * saved under a name already taken replaces it, as the dashboard does.
+ */
+async function runViewsEditCmd([verb, ...rest], flags) {
+  const url = platformFor(flags, "runs views");
+  const name = rest.join(" ").trim();
+  if (verb !== "save" && verb !== "rm") throw new Error(`\`foldrun runs views\` lists your saved views; its verbs are save <name> and rm <name> — not ${verb}`);
+  if (!name) throw new Error(`\`foldrun runs views ${verb} <name>\`${verb === "save" ? " --status failed --since 7d … (the filters to keep)" : " — `foldrun runs views` lists them"}`);
+  const { runViews = [] } = await remoteCall(url, flags, "/api/me/preferences");
+  let list;
+  if (verb === "save") {
+    if (name.length > 40) throw new Error("a view's name is 1 to 40 characters");
+    // Said, not dropped: the route would keep only the keys it knows.
+    for (const f of ["verdict", "outcome"]) if (flags[f] !== undefined) throw new Error(`a saved view keeps --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens and --min-secs — not --${f}`);
+    const query = new URLSearchParams();
+    for (const [flag, key] of VIEW_FLAGS) if (flags[flag] !== undefined && flags[flag] !== true) query.set(key, String(flags[flag]));
+    if (flags["tool-error"] === true) query.set("tool_error", "1");
+    // The dashboard's windows are today, 7d and 30d; its Today is 24 hours.
+    if (["24h", "1d"].includes(String(query.get("since")).trim().toLowerCase())) query.set("since", "today");
+    if (!query.size) throw new Error("a view needs at least one filter — --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens or --min-secs");
+    list = [...runViews.filter((v) => v.name !== name), { name, query: query.toString() }];
+    const since = query.get("since");
+    const d = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
+    if (flags.json === true) return console.log(JSON.stringify(d.runViews ?? [], null, 2)), 0;
+    console.log(`\n  ${c.green("✓")} ${runViews.some((v) => v.name === name) ? "replaced" : "saved"} the view ${c.bold(name)}  ${c.dim(query.toString())}`);
+    if (since && !["today", "7d", "30d"].includes(since)) console.log(`  ${c.dim(`the runs page's windows are today, 7d and 30d — it shows since=${since} unfiltered; foldrun runs --view applies it`)}`);
+    console.log(`  ${c.dim(`foldrun runs --view "${name}" opens it`)}\n`);
+    return 0;
+  }
+  if (!runViews.some((v) => v.name === name)) throw new Error(`no saved view called ${name}${runViews.length ? ` — yours: ${runViews.map((v) => v.name).join(", ")}` : ""}`);
+  if (!(await sureToDelete(flags, "runs views rm", `The saved view ${name}`))) return 1;
+  list = runViews.filter((v) => v.name !== name);
+  const d = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
+  if (flags.json === true) return console.log(JSON.stringify(d.runViews ?? [], null, 2)), 0;
+  console.log(`\n  ${c.green("✓")} deleted the view ${c.bold(name)}\n`);
+  return 0;
+}
+
 // ---------------------------------------------------------------- insights
 
 /** `foldrun insights` (FOL-72 step 8): recurring problems found in the runs,
@@ -7083,6 +7128,21 @@ async function inboxCmd(positional, flags) {
   if (verb) {
     const action = ACTIONS[verb];
     if (!action) throw new Error(`\`foldrun inbox\` lists what waits on you; its verbs are read, unread, dismiss and restore — not ${verb}`);
+    // `inbox read --all`: the inbox's "Mark all read" — every unread item in
+    // the view (--team, --started, --mine narrow it to a tab; --kind,
+    // --workspace as for the list), in calls of 200, the route's most.
+    if (action === "read" && !ids.length && flags.all === true) {
+      const q = new URLSearchParams({ bucket: flags.team === true ? "team" : flags.started === true ? "started" : flags.mine === true ? "mine" : "all" });
+      if (typeof flags.kind === "string") q.set("kind", flags.kind);
+      if (typeof flags.workspace === "string") q.set("workspace", flags.workspace);
+      const view = await remoteCall(url, flags, `/api/me/inbox?${q}`);
+      const unread = (view.items ?? []).filter((i) => !i.read).map((i) => i.id);
+      for (let i = 0; i < unread.length; i += 200) {
+        await remoteCall(url, flags, "/api/me/inbox", { method: "POST", body: JSON.stringify({ ids: unread.slice(i, i + 200), action }) });
+      }
+      console.log(`\n  ${unread.length ? c.green(`marked read ${unread.length} item${unread.length === 1 ? "" : "s"}`) : c.dim("nothing unread")}\n`);
+      return 0;
+    }
     if (!ids.length) throw new Error(`\`foldrun inbox ${verb} <id>…\` — the ids are the first column of \`foldrun inbox\``);
     await remoteCall(url, flags, "/api/me/inbox", { method: "POST", body: JSON.stringify({ ids, action }) });
     console.log(`\n  ${c.green(action === "dismiss" ? "set aside" : action === "restore" ? "put back" : `marked ${action}`)} ${ids.length} item${ids.length === 1 ? "" : "s"}\n`);
@@ -7266,19 +7326,23 @@ async function decideCmd(decision, runId, flags, layout) {
   // are the steps it chooses from; every other decision is a person's gate.
   const payload = flags.payload === undefined ? undefined : eventPayload(flags.payload);
   if (payload !== undefined && decision !== "approve") throw new Error("--payload releases a `wait: event` step — it cannot go with reject");
-  const waiting = payload === undefined ? waitingSteps(run) : eventSteps(run);
+  // --event-wait: reject a step parked on `wait: event` — the event box's
+  // Reject on the run page. Stops waiting; the step fails and the run ends.
+  const onEvent = flags["event-wait"] === true;
+  if (onEvent && decision !== "reject") throw new Error("--event-wait goes with reject — `foldrun approve <run-id> --payload …` releases a `wait: event` step");
+  const waiting = payload === undefined && !onEvent ? waitingSteps(run) : eventSteps(run);
   if (!waiting.length) {
     throw new Error(
-      payload === undefined
-        ? `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person. \`foldrun approvals\` lists the ones that are`
-        : `${runId} in ${ws} is ${run.status} — no step of it is waiting on \`wait: event\`, which is what --payload releases`,
+      payload === undefined && !onEvent
+        ? `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person.${eventSteps(run).length && decision === "reject" ? " A step is waiting on `wait: event`: --event-wait rejects that one." : ""} \`foldrun approvals\` lists the ones that are`
+        : `${runId} in ${ws} is ${run.status} — no step of it is waiting on \`wait: event\`, which is what ${onEvent ? "--event-wait rejects" : "--payload releases"}`,
     );
   }
 
   const only = flags.step === undefined ? null : Number(flags.step) - 1;
   if (only !== null && !waiting.some(({ index }) => index === only)) {
     throw new Error(
-      `step ${flags.step} of ${runId} is not waiting on ${payload === undefined ? "a person" : "`wait: event`"} — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
+      `step ${flags.step} of ${runId} is not waiting on ${payload === undefined && !onEvent ? "a person" : "`wait: event`"} — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
     );
   }
   const chosen = only === null ? waiting : waiting.filter(({ index }) => index === only);
@@ -7303,17 +7367,30 @@ async function decideCmd(decision, runId, flags, layout) {
     return 1;
   }
 
-  const body = {
-    decision,
-    ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}),
-    ...(only === null ? {} : { step: only }),
-    ...(payload === undefined ? {} : { payload }),
-  };
-  const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  const count = Array.isArray(answer.steps) ? answer.steps.length : chosen.length;
+  let count = 0;
+  if (onEvent) {
+    // One call per step, each naming it: a reject with no step refuses every
+    // step that waits, a person's gate included. The dashboard's reason.
+    for (const { index } of chosen) {
+      const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ decision, step: index, reason: note ?? "rejected while waiting for its event", ...(note ? { note } : {}) }),
+      });
+      count += Array.isArray(answer.steps) ? answer.steps.length : 1;
+    }
+  } else {
+    const body = {
+      decision,
+      ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}),
+      ...(only === null ? {} : { step: only }),
+      ...(payload === undefined ? {} : { payload }),
+    };
+    const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    count = Array.isArray(answer.steps) ? answer.steps.length : chosen.length;
+  }
   console.log(
     `\n  ${decision === "approve" ? c.green("✓") : c.red("✗")} ${decision === "approve" ? "approved" : "rejected"} ${count} step${count === 1 ? "" : "s"} of ${runId}` +
       `\n  ${c.dim(`foldrun report ${runId} --to ${ws} — or logs ${runId} --to ${ws} --follow`)}\n`,
@@ -9984,6 +10061,38 @@ async function bulkCmd(action, flags, layout) {
     const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action, ...filter, dryRun: true }) });
     return { ws, ids: r.matched ?? [] };
   });
+  return bulkApply(action, plans, filter.from, flags, url);
+}
+
+/**
+ * `foldrun stop|rerun <run-id> <run-id>…` — the runs list's selection bar
+ * (POST …/runs/bulk { action, runIds }, once per workspace). Each id's
+ * workspace is found as for one run (or --to); then it lists, asks and acts.
+ */
+async function bulkIdsCmd(action, ids, flags, layout) {
+  const url = platformFor(flags, action);
+  if (hasBulkFilter(flags)) throw new Error(`name the runs or give a filter (--status, --since, --until, --flow), not both — \`foldrun ${action} <run-id>…\``);
+  let from;
+  if (action === "rerun") {
+    // The bulk route reruns from a step number; these have no bulk form.
+    for (const f of ["agent", "instruction", "wait"]) if (flags[f] !== undefined) throw new Error(`--${f} reruns one run — with several ids, --from <n> is the step they all start from`);
+    from = flags.from === undefined ? 1 : Number(flags.from);
+    if (!Number.isInteger(from) || from < 1) throw new Error("--from is a step number, 1 or more");
+  }
+  const unique = [...new Set(ids)];
+  const found = await pool(unique, 4, async (id) => ({ id, ws: await workspaceOfRun(url, flags, layout, id) }));
+  const plans = [];
+  for (const { id, ws } of found) {
+    const plan = plans.find((p) => p.ws === ws) ?? (plans.push({ ws, ids: [] }), plans[plans.length - 1]);
+    plan.ids.push(id);
+  }
+  return bulkApply(action, plans, from, flags, url);
+}
+
+/** What a bulk stop or rerun does once it knows the runs: list them, stop at
+ *  --dry-run, ask, then act in calls of at most 100 (the route's cap). */
+async function bulkApply(action, plans, from, flags, url) {
+  const filter = { from };
   const total = plans.reduce((n, x) => n + x.ids.length, 0);
   console.log();
   for (const { ws, ids } of plans.filter((x) => x.ids.length)) {
@@ -10006,14 +10115,23 @@ async function bulkCmd(action, flags, layout) {
   }
   let bad = 0;
   console.log();
-  for (const { ws, ids } of plans.filter((x) => x.ids.length)) {
-    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, {
-      method: "POST",
-      body: JSON.stringify({ action, runIds: ids, ...(action === "rerun" ? { from: filter.from } : {}) }),
-    });
-    for (const x of r.runs ?? []) {
-      if (!x.ok) bad++;
-      console.log(`  ${x.ok ? c.green("✓") : c.red("✗")} ${ws} ${x.runId}${x.newRunId ? c.dim(` → ${x.newRunId}`) : ""}${x.error ? c.dim(` — ${x.error}`) : ""}`);
+  for (const { ws, ids: all } of plans.filter((x) => x.ids.length)) {
+    for (let i = 0; i < all.length; i += 100) {
+      const ids = all.slice(i, i + 100);
+      const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, {
+        method: "POST",
+        body: JSON.stringify({ action, runIds: ids, ...(action === "rerun" ? { from: filter.from } : {}) }),
+      });
+      for (const x of r.runs ?? []) {
+        if (!x.ok) bad++;
+        console.log(`  ${x.ok ? c.green("✓") : c.red("✗")} ${ws} ${x.runId}${x.newRunId ? c.dim(` → ${x.newRunId}`) : ""}${x.error ? c.dim(` — ${x.error}`) : ""}`);
+      }
+      // Asked for but not answered: gone since it was listed.
+      const answered = new Set((r.runs ?? []).map((x) => x.runId));
+      for (const id of ids.filter((x) => !answered.has(x))) {
+        bad++;
+        console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(" — not found (deleted since it was listed?)")}`);
+      }
     }
   }
   console.log(`\n  ${c.dim(`${total - bad} of ${total} ${action === "stop" ? "stopped" : "rerun"}${bad ? ` · ${bad} refused` : ""}`)}\n`);
@@ -10032,6 +10150,38 @@ async function runRmCmd(runId, flags, layout) {
   await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`, { method: "DELETE" });
   console.log(`\n  ${c.green("✓")} ${runId} deleted from ${ws}\n`);
   return 0;
+}
+
+/** `foldrun runs rm <run-id> <run-id>…` — the selection bar's Delete: lists
+ *  them, asks once, then one DELETE per run (there is no bulk delete route),
+ *  each its own outcome so one refusal does not stop the rest. */
+async function runsRmManyCmd(ids, flags, layout) {
+  const url = platformFor(flags, "runs rm");
+  const unique = [...new Set(ids)];
+  const runs = await pool(unique, 4, async (id) => {
+    const ws = await workspaceOfRun(url, flags, layout, id);
+    const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(id)}`);
+    return { id, ws, run };
+  });
+  console.log();
+  for (const { id, ws, run } of runs) console.log(`  ${statusMark(run.status)} ${ws}  ${c.bold(run.flow)}  ${c.dim(`${run.status} · ${id}`)}`);
+  const live = runs.filter(({ run }) => run.status !== "completed" && run.status !== "failed").length;
+  console.log();
+  const what = `These ${runs.length} runs — their records and archived outputs${live ? `; ${live} still going ${live === 1 ? "is" : "are"} stopped first` : ""}. The ledger lines stay`;
+  if (!(await sureToDelete(flags, "runs rm", what))) return 1;
+  let bad = 0;
+  console.log();
+  for (const { id, ws } of runs) {
+    try {
+      await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(id)}`, { method: "DELETE" });
+      console.log(`  ${c.green("✓")} ${ws} ${id} deleted`);
+    } catch (err) {
+      bad++;
+      console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(` — ${explain(err)}`)}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`${runs.length - bad} of ${runs.length} deleted${bad ? ` · ${bad} refused` : ""}`)}\n`);
+  return bad ? 1 : 0;
 }
 
 const SAFE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -11632,7 +11782,8 @@ async function assistantCmd(positional, flags, layout) {
         url,
         flags,
         `/api/workspaces/${enc(ws)}/assistant`,
-        { method: "POST", body: JSON.stringify({ messages, files: files.map(({ path: p, content }) => ({ path: p, content })), ...(conversation ? { conversation } : {}) }) },
+        // --page: what the dashboard sends as the page you are on ("flows — daily.md").
+        { method: "POST", body: JSON.stringify({ messages, files: files.map(({ path: p, content }) => ({ path: p, content })), ...(conversation ? { conversation } : {}), ...(typeof flags.page === "string" && flags.page.trim() ? { page: flags.page.trim() } : {}) }) },
         { seconds: Math.max(timeoutSeconds(flags), 300) },
       );
     } catch (err) {
@@ -13419,7 +13570,8 @@ export async function run(command, positional, flags, workspace, layout) {
       // `runs` was a second spelling of `logs`, and --local keeps it one:
       // the local store has no table to draw across workspaces, because a
       // folder on a laptop is one workspace.
-      if (positional[0] === "rm") return runRmCmd(positional[1], flags, layout);
+      if (positional[0] === "rm") return positional.length > 2 ? runsRmManyCmd(positional.slice(1), flags, layout) : runRmCmd(positional[1], flags, layout);
+      if (positional[0] === "views" && positional[1]) return runViewsEditCmd(positional.slice(1), flags);
       if (positional[0] === "views") return runViewsCmd(flags);
       // The run doctor (FOL-22): the assistant reads the run and its files,
       // says why it failed and proposes the fix as diffs — saved on yes.
@@ -13450,6 +13602,8 @@ export async function run(command, positional, flags, workspace, layout) {
     case "stop":
       // No run id and a filter: every run the filter matches (runs/bulk).
       if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("stop", flags, layout);
+      // Several run ids: the dashboard's selection bar (runs/bulk { runIds }).
+      if (positional.length > 1) return bulkIdsCmd("stop", positional, flags, layout);
       return stopCmd(positional[0], flags, layout);
     case "answer":
       return answerCmd(positional, flags);
@@ -13457,6 +13611,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return messageCmd(positional, flags, layout);
     case "rerun":
       if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("rerun", flags, layout);
+      if (positional.length > 1) return bulkIdsCmd("rerun", positional, flags, layout);
       return rerunCmd(positional[0], flags, layout);
     case "account":
       return accountCmd(positional, flags);
