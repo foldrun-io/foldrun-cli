@@ -42,6 +42,7 @@
 //   foldrun eval compare <eval> its cases under two to four models, side by side
 //   foldrun proposals      proposed fixes for repeated failures — show, apply, dismiss
 //   foldrun eval grades <eval> what a grader found in the real runs it graded — eval grade <eval> --run <id> grades one
+//   foldrun eval trends    evals by change: each eval against its last run on a different commit
 //   foldrun agent run <name>  run one agent once on a platform, no flow
 //   foldrun tool test <name>  exercise one tool alone — no model, no run
 //   foldrun hook <verb>     ls / add / test / rm — your own code at every tool call and step
@@ -158,6 +159,7 @@ const HELP = `foldrun — agents are just folders
   foldrun proposals --to <ws>            proposed fixes (--status ready, --eval) — show|apply|dismiss <id> (apply asks; --yes)
   foldrun eval grades <eval> --to <ws>   a grader's findings (trigger: runs): pass rate over --days (30), each graded run (--status fail, --limit); exit 1 on a failure
   foldrun eval grade <eval> --run <id> --to <ws>  grade one finished run now, sampled or not; exit 1 unless it passed
+  foldrun eval trends --to <ws>          evals by change, as the Observe page: each eval now against its last run on a different commit, biggest drop first (--json); exit 1 when a change made one worse
   foldrun promote <run-id>  keep a finished run as a regression case in evals/ (--eval <name>, --expect "contains: …" repeatable, --case <name>); a run that went wrong takes --should "what it should have done"
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs in one workspace, or one run's full event trail (--local: this machine's)
@@ -197,7 +199,7 @@ const HELP = `foldrun — agents are just folders
   foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --instruction "…" tells that step something else this once; --wait
   foldrun rerun --status failed [--since 24h] [--until 2h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
   foldrun rerun <run-id> <run-id>…  rerun several (runs/bulk), from --from <n> (default 1) — lists, asks once (--dry-run, --yes)
-  foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
+  foldrun observe           where the account fails, retries and spends, per workspace, then the window against the one before, why runs went wrong, the agents and tools to watch (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
   foldrun usage --limit <n>  how many rows of by flow and by agent (the most charged; default 10, 0 hides them)
   foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each workspace, each live run — what they hold now, and the steps waiting for room (--json)
@@ -324,7 +326,7 @@ Options
   --since <span>            audit: entries from 24h, 7d, 30d ago, or a date (default 7d); --until <date> ends the window
   --action <a>              audit: one action (apikey.created) or a family (apikey, secret, member, support)
   --actor <who>             audit: one person or key — an email, key:<label>, support:<email>
-  --since <days>            observe, triggers: the window in days (observe default 30, triggers 7)
+  --since <days>            observe, triggers: the window in days (observe default 7 as the account Observe page, observe --to 30 as a workspace's; triggers 7); observe takes --days too
   --until <span|date>       stop, rerun (bulk): only runs started before then — 2h ago, or a date
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
   --q <words>               runs: the runs page's text search — every word, any order, across id, flow, workspace, status, verdict, summary and failure; assistant history: search the conversations
@@ -383,7 +385,7 @@ Options
   --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
   --clear-address / --clear-email / --clear-abn  billing details set: drop that one from the invoice details, the rest kept
   --clear-name / --clear-description / --clear-examples  a2a publish, a2a unpublish: drop that one from the card, the rest of a2a: kept
-  --days <n>                usage: the window the charges cover (default 56); status --platform --history: 1-90 (default 90)
+  --days <n>                usage: the window the charges cover (default 56); status --platform --history: 1-90 (default 90); observe: the same as --since
   --id <revision>           history: one revision in full, as diffs
   --engine <e>              login: (with a site) the browser to sign in with — chrome (default: real Google Chrome, Chromium when it is not installed), chromium, firefox or safari
   --new-client              connect: enter a new OAuth client even when one is saved for the secret

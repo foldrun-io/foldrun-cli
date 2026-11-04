@@ -200,6 +200,15 @@ credits it cost, and links the runs it was seen in:
 
 `foldrun insights` prints them; `GET /api/insights` answers them.
 
+Below them the page compares the window — 24 hours, 7 days (unasked) or 30
+days — with the one of the same length before it: the completion rate and
+what was charged, each with its change; **why runs went wrong**, the
+platform's causes first (no desk edit fixes those), then the desks' by how
+often; every desk, worst first; and the **agents** and **tools to watch**.
+`foldrun observe` prints the same analysis under its one-row-per-workspace
+table, over the same 7 days unless `--since` says otherwise; `GET
+/api/observe` answers it.
+
 ## Compare with the last good run
 
 On a finished run, **compare with the last good run** lays it beside the
