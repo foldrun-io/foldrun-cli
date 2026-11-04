@@ -131,6 +131,7 @@ const HELP = `foldrun — agents are just folders
   foldrun flow set <flow> --step <n|agent> key=value …  the step editor: model, effort, max_output_tokens, retry, timeout, verify, when, case, else, loop, until, each, max, limits, instruction (key= clears) — diff, checked, --dry-run
   foldrun flow trigger <flow> manual|webhook|schedule  the trigger picker (--schedule "<cron>", --timezone <zone>) — diff, checked, --dry-run
   foldrun flow compute <flow> vcpu <n> memory <GiB> disk <GiB>  what one run may hold at once across its steps (its compute:) — any of them, --clear for none
+  foldrun flow compute <flow> --clear disk  drop just the named figures (vcpu, memory, disk), the rest kept
   foldrun flow filter <flow> --payload <file|-|json>   would this delivery start it? its filter: and the condition that held it back (--to <ws>: the deployed flow); exit 1 when not
   foldrun flow move-step <flow> --step <n|agent>  drag a card: --group <g> runs it beside group g, --after <g> gives it its own group after g (0 = first) — diff, checked, --dry-run
   foldrun flow copy-step <flow> --step <n|agent>[,<n>…]  the steps' markdown on stdout, as the canvas's Copy
@@ -186,6 +187,7 @@ const HELP = `foldrun — agents are just folders
   foldrun rerun --status failed [--since 24h] [--until 2h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
   foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
+  foldrun usage --limit <n>  how many rows of by flow and by agent (the most charged; default 10, 0 hides them)
   foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each workspace, each live run — what they hold now, and the steps waiting for room (--json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun schedule tick     fire whatever is due now — Settings' "Run scheduler now"
@@ -197,7 +199,9 @@ const HELP = `foldrun — agents are just folders
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
   foldrun billing statement [YYYY-MM]  a month of the ledger (--csv for the file, --file <path> to save it)
   foldrun billing wallet    burn, runway, auto top-up — also set auto-top-up --threshold <usd> --amount <usd> | off, set email <address>
+  foldrun billing wallet clear email  no receipt or low-balance email (set auto-top-up off keeps the threshold and refill for next time)
   foldrun billing details   who invoices are made out to — also set --name "…" --abn … --address "line1, city, state, postcode, AU" --email …
+  foldrun billing details set --clear-address | --clear-email | --clear-abn  drop one from the invoice details, the rest kept
   foldrun billing portal    a link to Stripe's billing portal (owner only)
   foldrun billing plans     the plans, which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
   foldrun billing top-up <usd>  Stripe's checkout page for adding credit (owner only; --no-browser prints it)
@@ -206,9 +210,11 @@ const HELP = `foldrun — agents are just folders
   foldrun identity          what your cloud must trust for keyless identities: the issuer and each agent's subject (--to <workspace>, --json)
   foldrun jobs              the four jobs — governance, guardrail, observability, evaluation — and what each has set (--to <workspace>, --json)
   foldrun account           the account's defaults — also set <key> <value>, clear <key> (timezone, notify, budget, concurrency, compute vcpu <n> memory <GiB> disk <GiB>, deploy_block none|secrets|security, network_enforce on|off, owner, alerts <threshold> <value>, judge model|effort <value>; or <job>.<field>, e.g. governance.owner), pause [--reason] [--stop] / resume (the kill switch), telemetry [set <url> --header name=\${SECRET} (others kept; name= drops one) | clear | test] (runs as OpenTelemetry traces), providers (--check) (singular; accounts lists logins)
+  foldrun account clear compute <vcpu|memory|disk>…  drop just those figures of the account's pool · clear notify <email|url>: drop one channel, the other and the events kept
   foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
   foldrun account model     what steps run on — your own key: set <provider> --key <api key> (--key - reads stdin; custom --base-url --format), remove; or foldrun's models (billed in credits): use foldrun --provider <p>, use own, prices
   foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|compute|notify|network_enforce|owner|alerts|judge> <value> (compute vcpu <n> memory <GiB> disk <GiB>: this workspace's pool) (or <job>.<field>), clear <key>, pause [--reason] [--stop] / resume (the kill switch)
+  foldrun workspace clear compute <vcpu|memory|disk>…  drop just those figures of its pool · clear notify <email|url>: one channel, the rest kept (--to)
   foldrun workspace vocabulary  the names the dashboard's editor completes in a workspace: agents, flows, skills, tools, secrets, scripts, types, documents (--to, --json)
   foldrun notify test       send one test notification from a workspace and say what happened (--to <workspace>)
   foldrun webhooks deliveries  the notify: webhooks a workspace sent, newest first — status, attempts, last answer (--failed, --status <s>, --event <e>, --limit, --offset, --to)
@@ -274,6 +280,7 @@ Signing in
   foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no /api route (--max-tasks N open at once, default 10; --expires); shown once
   foldrun a2a ls --to <ws>  what a workspace serves over A2A: each flow's a2a:, card and endpoint URLs, its A2A keys (admins), recent tasks and the key that asked (--json)
   foldrun a2a publish <flow>  set a2a: publish: true in the flow (--to <ws>: the deployed copy, an admin's) — --name, --description, --example "…" (repeatable), --public-card | --private-card; diff, checked, --dry-run
+  foldrun a2a publish <flow> --clear-name | --clear-description | --clear-examples  drop the card's name, description or examples (also on unpublish)
   foldrun a2a unpublish <flow>  a2a: publish: false — no outside agent may call it; the rest of a2a: is kept (--to <ws>, --dry-run)
   foldrun a2a card <flow> --to <ws>  the flow's agent card URL and endpoint, then the card (a private card needs an A2A key in $FOLDRUN_A2A_KEY or --key-env)
   foldrun a2a call <card-url> "<text>"  send one message to an A2A 1.0 agent — a published flow or anyone's — and wait for the task (--data <json|@file>, --context <id>, --no-wait, --max-wait <s>, --json); the A2A key comes from $FOLDRUN_A2A_KEY or --key-env NAME, never this CLI's API key
@@ -341,6 +348,8 @@ Options
   --csv                     audit: the log as CSV, for an auditor (--file <path> to save it)
   --threshold / --amount    billing wallet set: auto top-up refills --amount (5-500 USD) when the balance falls below --threshold
   --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
+  --clear-address / --clear-email / --clear-abn  billing details set: drop that one from the invoice details, the rest kept
+  --clear-name / --clear-description / --clear-examples  a2a publish, a2a unpublish: drop that one from the card, the rest of a2a: kept
   --days <n>                usage: the window the charges cover (default 56); status --platform --history: 1-90 (default 90)
   --id <revision>           history: one revision in full, as diffs
   --engine <e>              login: (with a site) the browser to sign in with — chrome (default: real Google Chrome, Chromium when it is not installed), chromium, firefox or safari
@@ -357,6 +366,7 @@ Options
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history, changelog: how many rows
+  --limit <n>               usage: rows of by flow and by agent, the most charged first (default 10; 0 hides them)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
   --clear                   secrets sites: unbind it; flow compute: no cap of its own; me name: no name
@@ -434,7 +444,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "clear-name", "clear-description", "clear-examples", "clear-address", "clear-email", "clear-abn"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes
