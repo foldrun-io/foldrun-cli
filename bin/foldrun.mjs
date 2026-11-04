@@ -116,28 +116,33 @@ const HELP = `foldrun — agents are just folders
   foldrun check --rules     every rule check knows: id, level, what it guards against (--json)
   foldrun check --to <ws> --online  also the network checks, run by the platform: known vulnerabilities for exact runtime pins (OSV) and remote MCP servers' tool text — and what could not be checked
   foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test)
-  foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker>, --consult <agent> or --can-ask (--description for a worker with none)
+  foldrun agent run <name> --no-task  run it with no instruction, on its own prompt alone — the dashboard's Run (--to, --wait, --test)
+  foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker> (--isolated: sandbox: own on the worker), --consult <agent> or --can-ask (--description for a worker with none)
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
   foldrun agent network <agent>  the sites its sandbox may reach; set the level (open, trusted, none, inherit) and --add / --remove <site> (repeatable)
   foldrun agent import <workspace>/<agent>  copy an agent you already have in another workspace into this one — its agent.md, own skills and scripts, not its memory (--as <name>, --workspace <name>; --to <ws> on the platform)
   foldrun agent import --list  what could be imported into a deployed workspace: every other workspace you can read, and its agents (--to, --json)
   foldrun flow add <flow> <pattern>  one canvas block as a markdown edit: chain, parallel, router, fan-out, loop, approval, ask, wait, rescue, subflow — diff shown, checked, --dry-run
   foldrun flow rm-step <flow> --step <n|agent>  delete one step (its options too); groups renumber, agent file untouched — says what else changes, diff, checked, asks (--yes), --dry-run
+  foldrun flow rm-step <flow> --step 2,4  delete several steps in one revision (one write, or one PATCH with --to), as the canvas's multi-select delete
   foldrun flow dup-step <flow> --step <n|agent>  copy one step (marker and options) directly under it, in parallel with it — diff, checked, --dry-run
   foldrun flow show <flow>  the flow as the canvas draws it: trigger, groups, step chips, each agent's team, check problems in place
   foldrun flow run <flow>   start a flow on the platform — the same command as invoke
+  foldrun flow inputs <flow>  its saved input sets, as "Run with…" lists them (this folder, or --to; --json)
+  foldrun flow inputs save <flow> <name> --task "…"  save one into evals/<flow>-inputs.md (a set of that name is replaced; --file for the task, --to the deployed copy)
   foldrun flow hook <flow>  the flow's webhook URL as it is now, changing nothing (--json) — the URL is a credential
   foldrun flow rotate-hook <flow>  a new webhook URL for a flow; the old one stops at once — asks first, --yes means it
   foldrun flow set <flow> --step <n|agent> key=value …  the step editor: model, effort, max_output_tokens, retry, timeout, verify, when, case, else, loop, until, each, max, limits, instruction (key= clears) — diff, checked, --dry-run
   foldrun flow trigger <flow> manual|webhook|schedule  the trigger picker (--schedule "<cron>", --timezone <zone>) — diff, checked, --dry-run
   foldrun flow compute <flow> vcpu <n> memory <GiB> disk <GiB>  what one run may hold at once across its steps (its compute:) — any of them, --clear for none
+  foldrun flow compute <flow> --clear disk  drop just the named figures (vcpu, memory, disk), the rest kept
   foldrun flow filter <flow> --payload <file|-|json>   would this delivery start it? its filter: and the condition that held it back (--to <ws>: the deployed flow); exit 1 when not
   foldrun flow move-step <flow> --step <n|agent>  drag a card: --group <g> runs it beside group g, --after <g> gives it its own group after g (0 = first) — diff, checked, --dry-run
   foldrun flow copy-step <flow> --step <n|agent>[,<n>…]  the steps' markdown on stdout, as the canvas's Copy
   foldrun flow paste <flow>  step markdown from stdin or --file in as new groups (--after <g>, default last) or beside one (--group <g>) — diff, checked, --dry-run
   foldrun flow draft "<what it should do>"  Draft with AI on the platform (--to; --flow <name> redrafts one): shows the files and the check, saves on yes (--yes, --dry-run)
-  foldrun assistant ["<message>"]  the dashboard's assistant (also: foldrun ai): answers from the foldrun docs and the deployed workspace's files, writes agents, flows, tools and skills as diffs with the check, saves on yes (--to, --yes, --dry-run, --json); every reply is kept — --conversation <id> carries one on; no message in a terminal is a conversation (/save, /files, /drop, /new, /quit)
-  foldrun assistant history  your kept conversations, newest first (--q <text> searches them, --workspace, --json); show <id> prints one, rm <id> deletes it
+  foldrun assistant ["<message>"]  the dashboard's assistant (also: foldrun ai): answers from the foldrun docs and the deployed workspace's files, writes agents, flows, tools and skills as diffs with the check, saves on yes (--to, --yes, --dry-run, --json; --page "<what you are looking at>" as the dashboard sends the page it is on); every reply is kept — --conversation <id> carries one on; no message in a terminal is a conversation (/save, /files, /drop, /new, /quit)
+  foldrun assistant history  your kept conversations, newest first (--q <text> searches them, --workspace, --limit <n>, --json); show <id> prints one, rm <id> deletes it
   foldrun tool test <name>  exercise one tool alone, no model and no run (key=value args, --to)
   foldrun hook ls           the hooks in this workspace and the account library: on, tool, description — invalid ones with the reason (--json); --to <ws>: the DEPLOYED workspace's, who turns each on, and what they denied, rewrote or failed lately (--runs <n>, --all)
   foldrun hook add <name> --on <event>  a hook folder: hook.md and a run.mjs that allows everything, the contract in its comments (--tool <pattern>, --library, --to)
@@ -148,6 +153,7 @@ const HELP = `foldrun — agents are just folders
   foldrun eval [name]       run one eval, or all of them (--to <workspace>: the deployed evals, run on the platform; --last reads their latest results, --run <id> one run's verdict, running nothing)
   foldrun eval new <name>   a new eval in the deployed workspace, its agent the first one there — edit its cases, then eval <name> --to (--to)
   foldrun eval compare <eval> --models fast,default --to <ws>  the cases under 2–4 models side by side (m:effort, --agent, --repeat, --max-usd; --list, --run <id>)
+  foldrun eval compare <eval> --models fast@writer,max:high@writer  an item's own @agent compares only that agent's steps in that setting (--agent is the default for items without one)
   foldrun eval improve <eval> --to <ws>  ask the assistant for a proposed fix from the failures, wait for the draft (--no-wait)
   foldrun proposals --to <ws>            proposed fixes (--status ready, --eval) — show|apply|dismiss <id> (apply asks; --yes)
   foldrun eval grades <eval> --to <ws>   a grader's findings (trigger: runs): pass rate over --days (30), each graded run (--status fail, --limit); exit 1 on a failure
@@ -155,10 +161,13 @@ const HELP = `foldrun — agents are just folders
   foldrun promote <run-id>  keep a finished run as a regression case in evals/ (--eval <name>, --expect "contains: …" repeatable, --case <name>); a run that went wrong takes --should "what it should have done"
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs in one workspace, or one run's full event trail (--local: this machine's)
-  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>
+  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --flow <name>, --q <words>, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>
   foldrun runs views        your saved run searches (--local prints exactly what logs --local prints)
+  foldrun runs views save <name> [filters]  save the runs filters given (--status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs) as a view; a name taken is replaced
+  foldrun runs views rm <name>  delete a saved view (asks; --yes)
   foldrun runs doctor <run-id>  the run doctor: the assistant reads a failed run and the files it names, says why (platform, check, work or outside) and proposes the fix as diffs, saved on yes (--to, --yes, --dry-run, --json)
   foldrun runs rm <run-id>  delete a run's record and archived outputs (an admin); a live one is stopped first — asks first, --yes means it
+  foldrun runs rm <run-id> <run-id>…  delete several: lists them, asks once, then deletes each
   foldrun report <run-id>   one run, whole: header, every step, what it wrote and what is still waiting
   foldrun report <run-id> get <agent>/<path>  download a file the run archived from that agent's outputs/ (--file <path>|-, --force)
   foldrun report <run-id> --compare [<run-id>]  beside the flow's last good run (or the one named): changed files and what differs step by step (--json)
@@ -168,36 +177,44 @@ const HELP = `foldrun — agents are just folders
   foldrun report <run-id> live  the live browser view: which agents have a frame; --agent <name> saves the newest as a JPEG (--file <path>|-)
   foldrun approvals         every gate waiting on a person, with its question (--to <workspace> for one)
   foldrun insights          recurring problems found in the runs, with what they cost and what to do (--days, --to, --json)
-  foldrun inbox                         what waits on you: approvals, questions, issues, proposed fixes, your failed runs (--team, --all, --kind, --unread, --dismissed)
+  foldrun inbox                         what waits on you: approvals, questions, issues, proposed fixes, your failed runs (--team, --started, --mine, --all, --kind, --workspace <ws>, --unread, --dismissed)
   foldrun inbox read|unread|dismiss|restore <id>…  mark items in your own view (dismiss sets aside; it still waits where it lives)
+  foldrun inbox read --all              mark all read: every unread item (--team, --started, --mine for one tab; --kind, --workspace)
   foldrun mcp                           this account as MCP tools for an AI app, over stdio, with this machine's sign-in: \`claude mcp add foldrun -- foldrun mcp\` (--read-only: only the tools that read)
   foldrun mcp connections               the AI apps connected over OAuth (claude.ai and the like): which app, whose, what access, last used — everyone's for an admin, else yours (--all adds the disconnected, --json)
   foldrun mcp disconnect <id>           end one: every token it holds stops working (asks; --yes)
+  foldrun mcp clients add <name>        a machine client for /api/mcp, signing in with client credentials (no person approves its tokens): --role viewer|editor|admin, --workspaces a,b, --write (else read only), --token-auth basic|post|jwt (jwt with --jwks-file <path>); prints the client id and secret, the secret once
   foldrun issues            what went wrong, grouped, open until resolved (--to <workspace>, --all, --status, --json)
-  foldrun issues show|ack|snooze|resolve|reopen <id>  one issue — snooze --for 1d or --times 5, --note "…"
+  foldrun issues show|ack|snooze|resolve|reopen <id>  one issue — snooze --for 1d, --until <ISO time> or --times 5, --note "…"
   foldrun issues doctor <id>  the run doctor on the issue's newest run, in its workspace: why, and the fix as diffs, saved on yes (--yes, --dry-run, --json)
   foldrun approve <run-id>  release a waiting gate — asks first, --yes means it, --note "…" steers the step; --payload releases a wait: event step
-  foldrun reject <run-id>   refuse one, with --note as the reason
+  foldrun reject <run-id>   refuse one, with --note as the reason; --event-wait rejects a step waiting on wait: event (the step fails, the run ends)
   foldrun stop <run-id>     kill a run in flight — asks first, --yes means it
   foldrun stop --status running [--since 2h] [--until 1h] [--flow f]  every run a filter matches (runs/bulk): lists them, asks, stops only those (--dry-run, --to)
+  foldrun stop <run-id> <run-id>…  stop several (runs/bulk): lists them, asks once (--dry-run, --yes)
   foldrun answer <run-id> "…"  answer the question an agent is asking mid-step (--option <n> picks a choice)
   foldrun message <run-id> "…" say something to a running agent — it hears it after its next tool call
   foldrun rerun <run-id>    run it again from a step (--from <n>) or from an agent's step (--agent <name>); --instruction "…" tells that step something else this once; --wait
   foldrun rerun --status failed [--since 24h] [--until 2h] [--flow f]  rerun every run a filter matches, from --from <n> (default 1) — lists, asks (--dry-run, --to)
+  foldrun rerun <run-id> <run-id>…  rerun several (runs/bulk), from --from <n> (default 1) — lists, asks once (--dry-run, --yes)
   foldrun observe           where the account fails, retries and spends, per workspace (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
+  foldrun usage --limit <n>  how many rows of by flow and by agent (the most charged; default 10, 0 hides them)
   foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each workspace, each live run — what they hold now, and the steps waiting for room (--json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun schedule tick     fire whatever is due now — Settings' "Run scheduler now"
   foldrun guide             write the coding-agent rules: a block in AGENTS.md and CLAUDE.md importing it (--check, --print)
   foldrun docs [page]       foldrun's docs, from the copy this CLI ships — what a coding agent should read (--path)
-  foldrun triggers          why nothing ran: per flow, fired vs started and every reason (--since <days>, --to <workspace>)
-  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path> (--preview: a PDF, sheet, deck or zip as text), get <path>, put <file|folder>... (--into <folder/>, --as <path> for one file), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token>
+  foldrun triggers          why nothing ran: per flow, fired vs started and every reason, then the newest decisions and the deliveries at the hook and inbox URLs (--since <days>, --limit <n> of each, default 10, --to <workspace>, --json)
+  foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path> (--preview: a PDF, sheet, deck or zip as text), get <path>, put <file|folder>... (--into <folder/>, --as <path> for one file), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token|id>
+  foldrun storage ls --all  every workspace's storage, as the account's Storage page: a block per workspace, busiest first ([prefix], --json)
   foldrun runtimes          the environments a deployed workspace's agents need (python, pip and npm packages) and whether each is built — failed ones with the installer's error (--wait holds on while any is building)
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
   foldrun billing statement [YYYY-MM]  a month of the ledger (--csv for the file, --file <path> to save it)
   foldrun billing wallet    burn, runway, auto top-up — also set auto-top-up --threshold <usd> --amount <usd> | off, set email <address>
+  foldrun billing wallet clear email  no receipt or low-balance email (set auto-top-up off keeps the threshold and refill for next time)
   foldrun billing details   who invoices are made out to — also set --name "…" --abn … --address "line1, city, state, postcode, AU" --email …
+  foldrun billing details set --clear-address | --clear-email | --clear-abn  drop one from the invoice details, the rest kept
   foldrun billing portal    a link to Stripe's billing portal (owner only)
   foldrun billing plans     the plans, which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
   foldrun billing top-up <usd>  Stripe's checkout page for adding credit (owner only; --no-browser prints it)
@@ -206,9 +223,11 @@ const HELP = `foldrun — agents are just folders
   foldrun identity          what your cloud must trust for keyless identities: the issuer and each agent's subject (--to <workspace>, --json)
   foldrun jobs              the four jobs — governance, guardrail, observability, evaluation — and what each has set (--to <workspace>, --json)
   foldrun account           the account's defaults — also set <key> <value>, clear <key> (timezone, notify, budget, concurrency, compute vcpu <n> memory <GiB> disk <GiB>, deploy_block none|secrets|security, network_enforce on|off, owner, alerts <threshold> <value>, judge model|effort <value>; or <job>.<field>, e.g. governance.owner), pause [--reason] [--stop] / resume (the kill switch), telemetry [set <url> --header name=\${SECRET} (others kept; name= drops one) | clear | test] (runs as OpenTelemetry traces), providers (--check) (singular; accounts lists logins)
+  foldrun account clear compute <vcpu|memory|disk>…  drop just those figures of the account's pool · clear notify <email|url>: drop one channel, the other and the events kept
   foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
-  foldrun account model     what steps run on — your own key: set <provider> --key <api key> (--key - reads stdin; custom --base-url --format), remove; or foldrun's models (billed in credits): use foldrun --provider <p>, use own, prices
+  foldrun account model     what steps run on — your own key: set <provider> --key <api key> (--key - reads stdin; custom --base-url --format; --use runs on it at once, as use own), remove; or foldrun's models (billed in credits): use foldrun --provider <p>, use own, prices
   foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|compute|notify|network_enforce|owner|alerts|judge> <value> (compute vcpu <n> memory <GiB> disk <GiB>: this workspace's pool) (or <job>.<field>), clear <key>, pause [--reason] [--stop] / resume (the kill switch)
+  foldrun workspace clear compute <vcpu|memory|disk>…  drop just those figures of its pool · clear notify <email|url>: one channel, the rest kept (--to)
   foldrun workspace vocabulary  the names the dashboard's editor completes in a workspace: agents, flows, skills, tools, secrets, scripts, types, documents (--to, --json)
   foldrun notify test       send one test notification from a workspace and say what happened (--to <workspace>)
   foldrun webhooks deliveries  the notify: webhooks a workspace sent, newest first — status, attempts, last answer (--failed, --status <s>, --event <e>, --limit, --offset, --to)
@@ -219,11 +238,14 @@ const HELP = `foldrun — agents are just folders
   foldrun history [path]    every change to a deployed workspace, newest first (--id <revision> for its diff, --limit, --to)
   foldrun history restore <path> --id <revision>  put one file back as that revision left it, as a new revision — diff, asks (--yes, --dry-run, --to)
   foldrun restore <ws> --to <revision|time|age>  put a workspace's source back as it was then — shows the change, asks for the name typed back (--dry-run: the diff only, --yes)
-  foldrun backups           how the account is backed up (encrypted?), when it last was, the snapshots it is in — also request --what runs|state|storage|everything --at "<when>" [--to <ws>] [--note]
+  foldrun backups           how the account is backed up (encrypted?), when it last was, the snapshots it is in — also request --what runs|state|storage|everything --at "<when>" [--to <ws>] [--backup <id>] [--note]
   foldrun backups requests  every restore asked of the platform team, and where each stands (--json)
-  foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status; --kind file|ssh|api|service-account|m2m for the other shapes; --site <domain> (repeatable) binds it as it is stored
+  foldrun secrets set NAME  store a secret (prompted, never echoed) — also ls, rm, status; --kind file|ssh|api|service-account|m2m|client-cert|identity|token-exchange for the other shapes; --oauth2 for a refresh token; --site <domain> (repeatable) binds it as it is stored; --account --workspaces a,b or --none limits it as it is stored
+  foldrun secrets ls        the secrets in scope: where each is set, its sites and workspaces — and on the platform whether the far end last accepted it, refused it (since when) or nothing has used it yet (--json)
+  foldrun secrets rm NAME   delete one (asks; --yes) — an oauth2 secret's grant is revoked at the provider; an account secret's saved OAuth client left unused is named, and --with-client deletes it too (asks)
   foldrun secrets sites NAME [site…]  bind a secret to sites: the egress proxy fills it for those alone and it never enters a sandbox; no sites lists them, --clear unbinds
   foldrun secrets workspaces NAME [workspace…]  limit an account secret to those workspaces — every other one finds it not set; --all opens it to every workspace again, --none to no workspace, no names shows which may use it (an admin over every workspace; applies to runs that start after it)
+  foldrun secrets workspaces NAME … --if-workspaces <a,b|all|none>  only if the list is still the one you read — refused otherwise, as Settings does
   foldrun secrets clients   the OAuth clients saved on the platform — also add <name> (--authorize-url/--token-url, --client-id, --scopes, --authorize-param name=value), rm <name>
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret — --client <saved> runs it from a saved client through the platform
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
@@ -243,6 +265,8 @@ const HELP = `foldrun — agents are just folders
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run; --tag <t> repeatable)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun source new <kind> <name>  the dashboard's New for any document — tools, knowledge, memory, skills, scripts (agents, flows, evals too): the platform writes the template (--agent <a> inside one agent, --template, --language, --to)
+  foldrun source put <path> --check  the editor's checked save: refused with the issues (exit 1, nothing saved) when the file would not check out; --empty writes an empty file
+  foldrun source share <path>  the dashboard's Move to shared: a skill, tool, script, knowledge or memory file (a skill or folder tool whole) into the account library, then out of the workspace — asks (--yes), --dry-run, --overwrite (--to)
   foldrun open [page]       the dashboard for this workspace, in the browser
   foldrun api spec          the platform's OpenAPI 3.1 document (GET /api/openapi.json) — stdout, or --out <file>
   foldrun api version       the API version this account's requests get, the versions served, the rate limits, your last 30 days by version and any deprecated route you still call — also pin <YYYY-MM-DD>, unpin (admin; --json)
@@ -270,13 +294,14 @@ Signing in
   foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /api/healthz
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun use <name>        act as one of them from here on
-  foldrun keys ls           the account's API keys: created, last used, expires, scope — also create <label> [--expires 90d], rotate <id> [--grace 1h], revoke <id>
+  foldrun keys ls           the account's API keys: created, last used, expires, scope, and which are a machine's CLI sign-in (they renew themselves) — also create <label> [--expires 90d], rotate <id> [--grace 1h], revoke <id>
   foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no /api route (--max-tasks N open at once, default 10; --expires); shown once
   foldrun a2a ls --to <ws>  what a workspace serves over A2A: each flow's a2a:, card and endpoint URLs, its A2A keys (admins), recent tasks and the key that asked (--json)
   foldrun a2a publish <flow>  set a2a: publish: true in the flow (--to <ws>: the deployed copy, an admin's) — --name, --description, --example "…" (repeatable), --public-card | --private-card; diff, checked, --dry-run
+  foldrun a2a publish <flow> --clear-name | --clear-description | --clear-examples  drop the card's name, description or examples (also on unpublish)
   foldrun a2a unpublish <flow>  a2a: publish: false — no outside agent may call it; the rest of a2a: is kept (--to <ws>, --dry-run)
   foldrun a2a card <flow> --to <ws>  the flow's agent card URL and endpoint, then the card (a private card needs an A2A key in $FOLDRUN_A2A_KEY or --key-env)
-  foldrun a2a call <card-url> "<text>"  send one message to an A2A 1.0 agent — a published flow or anyone's — and wait for the task (--data <json|@file>, --context <id>, --no-wait, --max-wait <s>, --json); the A2A key comes from $FOLDRUN_A2A_KEY or --key-env NAME, never this CLI's API key
+  foldrun a2a call <card-url> "<text>"  send one message to an A2A 1.0 agent — a published flow or anyone's — and wait for the task (--data <json|@file>, --context <id>, --no-wait or --return-immediately, --max-wait <s>, --json); the A2A key comes from $FOLDRUN_A2A_KEY or --key-env NAME, never this CLI's API key
   foldrun a2a status <task-id> --card <url>  the task as it stands now (--json) — cancel <task-id> --card <url> stops it (asks; --yes)
   foldrun audit             the account's audit log, newest first: sign-ins, keys, invites, secrets by name, deploys, support views (--since 7d, --action, --actor, --to, --all, --csv)
   foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
@@ -290,6 +315,8 @@ Options
   --transport <k>           tool new: script (default), http or mcp
   --language <l>            tool new, source new, library new: the script's language — javascript, python, bash
   --task "<text>"           the instruction for a manual run
+  --no-task                 agent run: start it with no instruction — the agent works from its own prompt alone
+  --task "<text>"           flow inputs save: the task the saved set holds (--file <path> reads it from a file)
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
@@ -300,7 +327,8 @@ Options
   --since <days>            observe, triggers: the window in days (observe default 30, triggers 7)
   --until <span|date>       stop, rerun (bulk): only runs started before then — 2h ago, or a date
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
-  --flow <name>             export: that flow and everything it runs; stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
+  --q <words>               runs: the runs page's text search — every word, any order, across id, flow, workspace, status, verdict, summary and failure; assistant history: search the conversations
+  --flow <name>             export: that flow and everything it runs; runs, stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
   --agent <name>            export: that agent and what it grants; flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame; source new: the agent the document belongs to
   --instruction "<text>"    flow add: what a new step (chain, parallel, router) is told to do
   --after <n>               flow add, flow move-step, flow paste: put the new group after the nth (0 = first); --before <n> before it (flow add); default last
@@ -314,17 +342,26 @@ Options
   --on-fail <agent>         flow add: who takes the step over when it fails
   --off                     flow add: take the pattern off the step instead (fan-out, loop, approval, ask, wait, rescue)
   --schedule "<cron>"       flow trigger: the cron line a schedule fires on (5 fields, or @daily); --timezone <zone> the zone it is read in
-  --team, --started, --mine, --all  inbox: which bucket (default: assigned to you and started by you)
+  --team, --started, --mine, --all  inbox: which bucket (default: assigned to you and started by you); --workspace <ws> only that workspace's items; inbox read --all marks every unread one read
   --dismissed, --unread     inbox: what you set aside; only what you have not read
   --read-only               mcp: offer the AI app only the tools that read — no run, approve, answer, message or stop
   --models <m[:effort],…>   eval compare: two to four tiers or model ids to compare, each with an optional :effort
   --max-usd <n>             eval compare: the spend limit — no run starts once the runs and judges have spent it (default 5)
   --payload <file|-|json>   flow filter: the delivery to test — a file, - for stdin, or JSON inline
-  --kind <k>                secrets set: file (--file <path>), ssh (--host, --user, --port, --key-file or a prompted password), api (--base-url, --header "Name: value" repeatable, or --basic-user <u> with the password prompted or --basic-password), service-account (--file <key.json>, --scopes, --subject <user to act as>), client-cert (--cert-file, --key-file, --passphrase, --export to put it in the sandbox as files too), identity (--audience: keyless cloud access, no credential stored), m2m (--token-url, --client-id, --scopes; secret prompted)
+  --kind <k>                secrets set: file (--file <path>), ssh (--host, --user, --port, --key-file or a prompted password), api (--base-url, --header "Name: value" repeatable, or --basic-user <u> with the password prompted or --basic-password), service-account (--file <key.json>, --scopes, --subject <user to act as>), client-cert (--cert-file, --key-file, --passphrase, --export to put it in the sandbox as files too), identity (--audience: keyless cloud access, no credential stored), m2m (--token-url, --client-id, --scopes; secret prompted), token-exchange (RFC 8693: --token-url, --client-id, --subject-secret <NAME> whose token is traded, --audience, --scopes, --requested-token-type <urn> to narrow it)
+  --oauth2                  secrets set: store an auto-refreshing OAuth credential — token URL, client id, client secret and refresh token are prompted (--token-auth picks how the app proves itself)
+  --token-auth <how>        connect, secrets clients add, secrets set --kind m2m|token-exchange, secrets set --oauth2: how the app proves itself at the token URL — post (the form body, the default), basic (HTTP Basic), none (a public app), jwt (private_key_jwt: --key-file or --generate-key), mtls (a client certificate: --cert-file, --key-file); mcp clients add: basic (default), post or jwt (with --jwks-file)
+  --revoke-url <url>        connect, secrets clients add: the provider's https revocation endpoint (RFC 7009), when its metadata does not give one; deleting or reconnecting the secret revokes its grant there
+  --dpop                    connect, secrets clients add, secrets set --kind m2m: DPoP-bound tokens (RFC 9449) — the connection gets its own key and its requests carry proofs
+  --device                  connect: sign in with a code typed on any device (RFC 8628), no browser or loopback port here; --device-url <url> when --issuer does not give the endpoint
+  --with-client             secrets rm: also delete the account secret's saved OAuth client when no connection uses it any more (asks)
+  --use                     account model set: run on the key at once, as account model use own, in the same request
   --client <name>           connect: run the consent from that OAuth client saved on the platform (secrets clients lists them)
   --subagent <name>         agent link, agent unlink: a worker it delegates to (subagents:)
   --consult <name>          agent link, agent unlink: a colleague it asks (agents:)
   --can-ask                 agent link, agent unlink: ask in its tools — it may ask you mid-step
+  --isolated                agent link: with --subagent, sandbox: own on the worker — each job runs in its own sandbox with its own tools, secrets and network
+  --backup <id>             backups request: the snapshot to restore from, as foldrun backups lists it (optional — --at names the point either way)
   --description "<text>"    agent link: what a --subagent is for, when its file has no description:; agent new --platform: its one line
   --model <tier>            agent new --platform: fast, default or max
   --pattern <p>             flow new --platform: pipeline (default), review-loop, fan-out, debate or router
@@ -337,37 +374,48 @@ Options
   --tag <t>                 invoke, flow run: a label on the run — repeatable, sent as tags
   --inputs <set>            invoke, flow run: the task is a saved input set (evals/<flow>-inputs.md, or an eval case for the flow)
   --preview                 storage cat: the platform reads the file and prints what is in it
+  --ttl <days>              storage share: how long the link works (default 7); --forever: it never expires
+  --into <folder/>          storage put: upload under that folder of storage/
+  --as <path>               storage put: the path one uploaded file lands at; agent import: the name the copy gets
   --csv                     billing statement: the CSV file instead of the table
   --csv                     audit: the log as CSV, for an auditor (--file <path> to save it)
   --threshold / --amount    billing wallet set: auto top-up refills --amount (5-500 USD) when the balance falls below --threshold
   --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
+  --clear-address / --clear-email / --clear-abn  billing details set: drop that one from the invoice details, the rest kept
+  --clear-name / --clear-description / --clear-examples  a2a publish, a2a unpublish: drop that one from the card, the rest of a2a: kept
   --days <n>                usage: the window the charges cover (default 56); status --platform --history: 1-90 (default 90)
   --id <revision>           history: one revision in full, as diffs
   --engine <e>              login: (with a site) the browser to sign in with — chrome (default: real Google Chrome, Chromium when it is not installed), chromium, firefox or safari
   --new-client              connect: enter a new OAuth client even when one is saved for the secret
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
   --payload <json|text|@f>  approve: release a step waiting on wait: event with this body, recorded as you
+  --event-wait              reject: refuse a step waiting on wait: event instead of a person's gate — it stops waiting, the step fails and the run ends
   --note "<text>"           approve, reject: guidance the agent reads — or the reason for a refusal; billing credit: the ledger line's note
   --run <id>                eval --to: that eval run's verdict, by the id the run printed; runs nothing
   --stale [days]            agent ls: only agents not run in that many days (never run included); bare, those past alerts: stale_days
   --reason "<text>"         account pause, workspace pause: why — shown to everyone who opens it
   --stop                    account pause, workspace pause: also stop every run going now (asks; --yes to mean it)
   --yes                     approve, stop, rerun (bulk), pause --stop, flow rotate-hook, flow draft, assistant, history restore, restore <ws>, import, billing plan, workspace set name, team remove, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
-  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces, workspaces show, agent ls, flow ls, agent import --list, backups requests, team, hook ls: the raw document; version: {cli, core, platform}
+  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces, workspaces show, agent ls, flow ls, agent import --list, backups requests, team, hook ls, secrets ls, triggers, storage ls --all: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
-  --limit <n>               runs, billing, history, changelog: how many rows
+  --limit <n>               runs, billing, history, changelog: how many rows; triggers: how many decisions and deliveries (default 10)
+  --limit <n>               usage: rows of by flow and by agent, the most charged first (default 10; 0 hides them)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
   --clear                   secrets sites: unbind it; flow compute: no cap of its own; me name: no name
-  --all                     secrets workspaces: every workspace may use the account secret again; mcp connections: the disconnected ones too; team invite, team access: every workspace
+  --all                     secrets workspaces: every workspace may use the account secret again; storage ls: every workspace's storage; storage shares: expired and revoked links too; mcp connections: the disconnected ones too; team invite, team access: every workspace
   --none                    secrets workspaces, secrets set: no workspace may use the account secret; team access: no workspaces
+  --if-workspaces <a,b|all|none>  secrets workspaces: change it only while the list is still this one (refused, 409, when someone changed it since)
+  --if-version <n>          account model use: change it only while the choice is still that choiceVersion (account model --json; 0: never chosen)
   --workspaces <a,b>        secrets set: store an account secret limited to those workspaces, in the same write (with --account); team invite, team access: the workspaces they may open
   --add <site>              agent network: add a site to its network: list (repeatable)
   --remove <site>           agent network: take a site off its network: list (repeatable)
   --out <file>              api spec: where to write the OpenAPI document (default: stdout); check: where to write the JSON or SARIF report
   --file <path>             source put, library put, flow paste: the local file to send (default: stdin); secrets set --kind file|service-account: the file it holds; storage get, report get, report live, account export, export, billing statement: where to write it (- for stdout)
   --message "<why>"         source put: recorded on the file's revision
+  --check                   source put: refuse the save when the file would not check out (422: the issues printed, nothing written)
+  --empty                   source put: write an empty file on purpose (empty input is refused otherwise)
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke, agent run: hold on and print the result
   --path <p>                tool test: the path an http tool should probe, appended to its base:
@@ -408,6 +456,8 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --overwrite               import: replace files the workspace already has with different text (refused otherwise)
+  --overwrite               source share: replace a library file of the same path (refused otherwise)
+  --dry-run                 source share: list what would move, move nothing
   --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow compute, flow move-step, flow paste, flow draft, assistant, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; import: the preview only, write nothing; stop, rerun (bulk): list what matches, touch nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
@@ -434,7 +484,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

@@ -43,6 +43,9 @@ billed in credits at **foldrun's price list**
   An admin chooses, as for the key. `foldrun account model use own` (or the
   same page) goes back: a key you stored is kept while you are on
   foldrun's models, so switching back is one step.
+  `--if-version <n>` (the `choiceVersion` that `foldrun account model --json`
+  shows; `ifVersion` on the PUT) makes either refused (409) when someone
+  chose since you read it, as the Settings page does.
 - **The order** a step's model is found in is unchanged but for one rung: a
   `provider:` block in the agent, the workspace or the account's AGENTS.md
   first; then foldrun's models, when chosen; then the account's own key.

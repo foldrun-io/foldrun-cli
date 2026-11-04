@@ -3292,9 +3292,9 @@ async function limitingCore() {
 }
 
 /** Limit an account secret on this machine's vault. */
-async function localSetWorkspaces(name, workspaces, layout) {
+async function localSetWorkspaces(name, workspaces, layout, guard = {}) {
   const known = localWorkspaceNames(layout);
-  return (await limitingCore()).setSecretWorkspaces("default", name, workspaces, { exists: (w) => known.includes(w) });
+  return (await limitingCore()).setSecretWorkspaces("default", name, workspaces, { exists: (w) => known.includes(w), ...guard });
 }
 
 /** `--workspaces a,b` (or `--none`) on `secrets set`: the limit sent with
@@ -3340,9 +3340,18 @@ async function secretWorkspacesCmd(args, flags, url, layout) {
     return 0;
   }
   const workspaces = flags.all === true ? null : flags.none === true ? [] : named;
+  // --if-workspaces a,b (or all, or none): the list read before. Refused (409)
+  // when another admin changed it since, as Settings → Connections does.
+  /** @type {{ ifWorkspaces?: string[] | null }} */
+  const guard = {};
+  if (flags["if-workspaces"] !== undefined) {
+    const v = typeof flags["if-workspaces"] === "string" ? flags["if-workspaces"].trim() : "";
+    if (!v) throw new Error("--if-workspaces takes the list you read: names (a,b), all (every workspace) or none");
+    guard.ifWorkspaces = v === "all" ? null : v === "none" ? [] : v.split(",").map((x) => x.trim()).filter(Boolean);
+  }
   const stored = url
-    ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, workspaces }) })).workspaces
-    : await localSetWorkspaces(name, workspaces, layout);
+    ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, workspaces, ...guard }) })).workspaces
+    : await localSetWorkspaces(name, workspaces, layout, guard);
   console.log(`\n  ${c.green("✓")} ${describe(stored)}\n`);
   return 0;
 }
@@ -3351,6 +3360,42 @@ async function secretWorkspacesCmd(args, flags, url, layout) {
 function siteFlags(flags) {
   const raw = flags.site === undefined ? [] : Array.isArray(flags.site) ? flags.site : [flags.site];
   return raw.filter((v) => typeof v === "string").flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
+}
+
+/**
+ * Whether the far end still accepts a secret, as Settings → Connections says
+ * it: accepted, refused (with when it last worked), the host's own failure,
+ * or never used — which is not the same as working.
+ */
+function secretHealthLine(health) {
+  if (!health) return c.dim("not used yet — nothing has tried this credential");
+  const { last, refusals, lastAccepted } = health;
+  const on = String(last?.at ?? "").slice(0, 10);
+  const status = last?.status ? ` (${last.status})` : "";
+  if (last?.outcome === "refused") {
+    return c.red(`refused by ${last.host} on ${on}${status}${refusals > 1 ? ` · ${refusals} times running` : ""}${lastAccepted ? ` · last worked ${String(lastAccepted).slice(0, 10)}` : " · never seen working"}`);
+  }
+  if (last?.outcome === "error") return c.amber(`${last.host} failed on ${on}${status} — its end, not the key`);
+  return c.green(`accepted by ${last?.host} on ${on}`);
+}
+
+/**
+ * The OAuth app saved under a removed account secret's name, when no
+ * connection uses it any more — the one the dashboard deletes with the
+ * secret. Null when there is none, it is still used, or it cannot be told.
+ */
+async function unusedSavedClient(url, flags, name) {
+  const app = name.toLowerCase().replaceAll("_", "-");
+  try {
+    const [{ clients = [] }, { connections = [] }] = await Promise.all([
+      remoteCall(url, flags, "/api/oauth/clients"),
+      remoteCall(url, flags, "/api/oauth/connections"),
+    ]);
+    if (!clients.some((k) => k.name === app)) return null;
+    return connections.some((x) => x.client === app) ? null : app;
+  } catch {
+    return null;
+  }
 }
 
 async function secretsCmd(positional, flags, layout) {
@@ -3376,9 +3421,14 @@ async function secretsCmd(positional, flags, layout) {
   const [verb, name] = positional;
 
   if (verb === "ls" || verb === undefined) {
-    const entries = url
-      ? (await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
-      : (await core()).listSecrets("default", scope);
+    const body = url
+      ? await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)
+      : { secrets: (await core()).listSecrets("default", scope) };
+    const entries = body.secrets ?? [];
+    if (flags.json === true) {
+      console.log(JSON.stringify(body, null, 2));
+      return 0;
+    }
     if (!entries.length) {
       console.log(`\n  ${c.dim("no secrets yet — foldrun secrets set NAME")}\n`);
       return 0;
@@ -3388,6 +3438,9 @@ async function secretsCmd(positional, flags, layout) {
       console.log(
         `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}${s.sites?.length ? ` · sent only to ${s.sites.join(", ")}` : ""}${Array.isArray(s.workspaces) ? ` · ${s.workspaces.length ? `only in ${s.workspaces.join(", ")}` : "in no workspace"}` : ""}`)}`,
       );
+      // The platform says what the far end answered last time; this
+      // machine's vault keeps no such record, so nothing is shown there.
+      if (s.health !== undefined) console.log(`    ${secretHealthLine(s.health)}`);
     }
     console.log();
     return 0;
@@ -3548,6 +3601,18 @@ async function secretsCmd(positional, flags, layout) {
     if (revoked?.error) console.log(`  ${c.amber("!")} ${revoked.error} — revoke the app's access in the provider's own settings`);
     else if (revoked?.revoked?.length) console.log(`  ${c.dim(`grant revoked at the provider (${revoked.revoked.join(", ")})`)}`);
     else if (revoked?.skipped === "shared-grant") console.log(`  ${c.dim("grant kept: another secret uses the same app, which the provider may revoke together")}`);
+    // The dashboard also deletes the app saved under this name once nothing
+    // uses it. Here it is only said, unless --with-client asks for it too.
+    // Account secrets only, as there: a saved app is the account's.
+    const app = url && !scope ? await unusedSavedClient(url, flags, name) : null;
+    if (app && flags["with-client"] === true) {
+      if (await confirmed(flags, "secrets rm --with-client", `also delete the saved OAuth client ${app}, which no connection uses now? [y/N] `)) {
+        await remoteCall(url, flags, "/api/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: app }) });
+        console.log(`  ${c.green("✓")} saved OAuth client ${app} removed`);
+      } else console.log(`  ${c.dim(`saved OAuth client ${app} kept`)}`);
+    } else if (app) {
+      console.log(`  ${c.dim(`the saved OAuth client ${app} is no longer used — \`foldrun secrets clients rm ${app}\` removes it`)}`);
+    }
     console.log();
     return 0;
   }
@@ -3686,6 +3751,169 @@ async function savedInputs(url, flags, ws, flow, name) {
   }
   console.log(`\n  ${c.dim(`inputs: ${hit.name} (evals/${hit.file})`)}`);
   return hit.task;
+}
+
+// A flow's saved input sets, as "Run with…" lists and saves them. The file
+// layout is foldrun-web's components/flow-inputs-model.ts, kept byte for byte
+// the same here (the web module is not in core's public API), so a set saved
+// from the terminal and one saved from the dashboard read alike.
+const inputsFileOf = (flow) => `evals/${flow}-inputs.md`;
+
+/** Every set for one flow: its inputs file first, then eval cases; a name
+ *  the inputs file has hides an eval case of the same name. */
+function inputSetsOf(evals, flow) {
+  const own = evals.filter((e) => e.flow === flow && e.inputs === true);
+  const borrowed = evals.filter((e) => e.flow === flow && e.inputs !== true);
+  const out = [];
+  const seen = new Set();
+  for (const [list, source] of [[own, "inputs"], [borrowed, "eval"]]) {
+    for (const e of list) {
+      for (const k of e.cases ?? []) {
+        if (!String(k.task ?? "").trim() || seen.has(k.name)) continue;
+        seen.add(k.name);
+        out.push({ name: k.name, task: k.task, file: e.file, source });
+      }
+    }
+  }
+  return out;
+}
+
+/** A set's name is a `## ` heading: one line, nothing a heading cannot say. */
+const cleanSetName = (name) =>
+  String(name).replace(/\s+/g, " ").trim().replace(/^#+\s*/, "").replace(/^case:\s*/i, "").trim().slice(0, 80);
+
+/** A task as core's eval parser reads it back: one line, or a `|` block
+ *  with a leading `- ` written `* ` (it would end the block). */
+function layoutInputTask(task) {
+  const t = task.replace(/\r\n/g, "\n").trim();
+  if (!t.includes("\n") && !/^["'|>]|["']$/.test(t)) return `task: ${t}`;
+  return `task: |\n${t
+    .split("\n")
+    .map((l) => (l.trim() ? `  ${l.replace(/^(\s*)-\s/, "$1* ")}` : ""))
+    .join("\n")}`;
+}
+
+function newInputsFile(flow) {
+  return [
+    "---",
+    `name: ${flow}-inputs`,
+    `flow: ${flow}`,
+    "inputs: true",
+    "trigger: manual",
+    "---",
+    "",
+    `Saved inputs for the ${flow} flow — "Run with…" on its card, or`,
+    `\`foldrun invoke ${flow} --inputs <name>\`. Not an eval: nothing here is asserted.`,
+    "",
+  ].join("\n");
+}
+
+/** The inputs file with one set added, or replaced when its name is taken;
+ *  everything else in it kept as it was. */
+function upsertInputSet(existing, flow, name, task) {
+  const heading = cleanSetName(name);
+  if (!heading) throw new Error("an input set needs a name");
+  if (!task.trim()) throw new Error("an input set needs a task");
+  const section = `## ${heading}\n${layoutInputTask(task)}\n`;
+  const base = existing ?? newInputsFile(flow);
+  const lines = base.split("\n");
+  const start = lines.findIndex((l) => {
+    const m = /^##\s+(?:case:\s*)?(.+?)\s*$/.exec(l);
+    return m !== null && m[1] === heading;
+  });
+  if (start === -1) return `${base.replace(/\n*$/, "\n")}\n${section}`;
+  let end = start + 1;
+  while (end < lines.length && !/^##\s/.test(lines[end])) end++;
+  const before = lines.slice(0, start).join("\n");
+  const after = lines.slice(end).join("\n");
+  return `${before}${before ? "\n" : ""}${section}${after ? `\n${after}` : ""}`;
+}
+
+/**
+ * `foldrun flow inputs <flow>` — the flow's saved input sets, as the
+ * dashboard's "Run with…" menu lists them. `flow inputs save <flow> <name>
+ * --task "…"` writes one into evals/<flow>-inputs.md (replacing a set of that
+ * name), the file `invoke --inputs <name>` reads. This folder by default;
+ * --to <workspace> works on the deployed copy through the same calls the
+ * dashboard makes: GET …/evals, then GET and PUT …/source with ifMatch.
+ */
+async function flowInputsCmd(positional, flags, layout) {
+  const saving = positional[1] === "save" && positional[2] !== undefined;
+  const flow = saving ? positional[2] : positional[1];
+  if (!flow) throw new Error('`foldrun flow inputs <flow>` lists its saved inputs; `foldrun flow inputs save <flow> <name> --task "…"` saves one');
+  const file = inputsFileOf(flow);
+  const platform = namesPlatform(flags);
+  const url = platform ? platformFor(flags, "flow inputs") : null;
+  const ws = platform ? platformWorkspace(flags, layout, `flow inputs ${flow}`) : null;
+  const dir = platform ? null : localDeskDir(layout, flow);
+  const where = platform ? `${ws} on ${url}` : path.relative(process.cwd(), dir) || ".";
+
+  if (!saving) {
+    let evals;
+    if (platform) ({ evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`));
+    else {
+      const { parseEval } = await core();
+      const evalsDir = path.join(dir, "evals");
+      evals = fs.existsSync(evalsDir)
+        ? fs.readdirSync(evalsDir).filter((f) => f.endsWith(".md")).sort().map((f) => parseEval(f, fs.readFileSync(path.join(evalsDir, f), "utf8")))
+        : [];
+    }
+    const sets = inputSetsOf(evals, flow);
+    if (flags.json === true) {
+      console.log(JSON.stringify({ flow, sets }, null, 2));
+      return 0;
+    }
+    if (!sets.length) {
+      console.log(`\n  ${c.dim(`${flow} has no saved inputs in ${where} — \`foldrun flow inputs save ${flow} <name> --task "…"\` saves one`)}\n`);
+      return 0;
+    }
+    console.log(`\n  ${c.bold(flow)} ${c.dim(`· saved inputs · ${where}`)}\n`);
+    for (const s of sets) {
+      console.log(`  ${c.bold(s.name)}  ${c.dim(`evals/${s.file}${s.source === "eval" ? " · an eval case" : ""}`)}`);
+      console.log(`    ${firstLine(s.task, 100)}`);
+    }
+    const run = platform ? `foldrun invoke ${flow} --to ${ws} --inputs <name>` : `foldrun deploy, then foldrun invoke ${flow} --to <workspace> --inputs <name>`;
+    console.log(`\n  ${c.dim(run)}\n`);
+    return 0;
+  }
+
+  const name = positional[3];
+  if (typeof name !== "string" || !cleanSetName(name)) throw new Error(`which name? \`foldrun flow inputs save ${flow} <name> --task "…"\``);
+  const task = typeof flags.task === "string" ? flags.task : typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : "";
+  if (!task.trim()) throw new Error(`what is the task? \`foldrun flow inputs save ${flow} ${name} --task "…"\` (or --file <path>)`);
+  const heading = cleanSetName(name);
+  const message = `input set "${heading}" saved for ${flow}`;
+
+  if (platform) {
+    const at = `/api/workspaces/${enc(ws)}/source`;
+    /** @type {{ content?: string, sha256?: string } | null} */
+    let current = null;
+    try {
+      current = await remoteCall(url, flags, `${at}?path=${enc(file)}`);
+    } catch (err) {
+      if (!(err instanceof HttpError) || !(err.status === 404 || /not found/i.test(err.message))) throw err;
+    }
+    const next = upsertInputSet(current ? (current.content ?? "") : null, flow, heading, task);
+    try {
+      // ifMatch: the bytes just read (null: no file yet), so a set saved by
+      // someone else in between is refused rather than written over.
+      await remoteCall(url, flags, at, { method: "PUT", body: JSON.stringify({ path: file, content: next, message, ifMatch: current ? current.sha256 ?? null : null }) });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 409) throw new Error(`${file} changed while saving — nothing was written; run the command again`);
+      throw err;
+    }
+    console.log(`\n  ${c.green("✓")} saved "${heading}" to ${file} ${c.dim(`in ${ws} — \`foldrun invoke ${flow} --to ${ws} --inputs "${heading}"\` runs it`)}\n`);
+    return 0;
+  }
+  // A set for a flow this folder does not have would fail `check`; say so now.
+  await flowFileOf(await openDesk(flags, layout, `flow inputs save ${flow}`, flow), flow);
+  const abs = path.join(dir, file);
+  const before = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
+  const next = upsertInputSet(before, flow, heading, task);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, next);
+  console.log(`\n  ${c.green("✓")} saved "${heading}" to ${path.join(where, file)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  return 0;
 }
 
 /**
@@ -4485,7 +4713,10 @@ async function keysCmd(positional, flags) {
           : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
       const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
       const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
-      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}`);
+      // A key `foldrun login` minted lasts 90 days and renews itself while
+      // that machine is in use; revoking it signs that machine out.
+      const login = k.origin === "cli-login" && !k.revokedAt ? "  [CLI sign-in · renews itself]" : "";
+      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}${login}`);
       // A rotated key in its grace: still live, but not to be rotated again.
       const next = k.replacedBy ? keys.find((n) => n.id === k.replacedBy) : null;
       if (k.replacedBy) console.log(`  ${" ".repeat(9)}${c.yellow(`rotated → ${k.replacedBy}${next ? ` (${next.prefix}…)` : ""}`)}${c.dim(" — rotate that one, not this")}`);
@@ -4685,11 +4916,36 @@ async function sourceCmd(positional, flags) {
   }
   if (verb === "put" || verb === "write") {
     if (!a) throw new Error("which file? foldrun source put flows/daily.md --file ./daily.md --to <workspace>");
-    const content = typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : fs.readFileSync(0, "utf8");
-    if (!content.trim()) throw new Error("refusing to write an empty file — `foldrun source rm` is the deliberate way to remove one");
-    const body = { path: a, content, ...(typeof flags.message === "string" ? { message: flags.message } : {}) };
-    await remoteCall(url, flags, base, { method: "PUT", body: JSON.stringify(body) });
+    // --empty writes an empty file on purpose (the dashboard's "+ Add file"
+    // does). Without it an empty input is refused: that is nearly always a
+    // pipe that broke, and the blank file would be live at once.
+    if (flags.empty === true && typeof flags.file === "string") throw new Error("either --empty or --file, not both");
+    const content = flags.empty === true ? "" : typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : fs.readFileSync(0, "utf8");
+    if (!content.trim() && flags.empty !== true) throw new Error("refusing to write an empty file — `foldrun source rm` is the deliberate way to remove one; --empty writes an empty one on purpose");
+    // --check: the editor's checked save — a file a deploy would refuse is
+    // refused (422, with the issues) and nothing is written.
+    const body = { path: a, content, ...(typeof flags.message === "string" ? { message: flags.message } : {}), ...(flags.check === true ? { check: true } : {}) };
+    const printIssues = (issues) => {
+      for (const i of issues ?? []) {
+        const tag = i.level === "error" ? c.red("error") : c.amber(" warn");
+        console.log(`  ${tag}  ${c.bold(i.where ?? a)}  ${i.message}${i.rule ? `  ${c.dim(`[${i.rule}]`)}` : ""}`);
+      }
+    };
+    let saved;
+    try {
+      saved = await remoteCall(url, flags, base, { method: "PUT", body: JSON.stringify(body) });
+    } catch (err) {
+      if (flags.check !== true || !(err instanceof HttpError) || err.status !== 422) throw err;
+      console.log(`\n  ${c.red("✗")} ${ws}/${a} ${c.dim("did not check out — nothing was saved")}\n`);
+      printIssues(err.body?.issues);
+      console.log(`\n  ${c.dim("fix it, or save it anyway without --check")}\n`);
+      return 1;
+    }
     console.log(`\n  ${c.green("✓")} ${ws}/${a}  ${c.dim(`${content.length} chars · revision recorded${flags.message ? ` · "${flags.message}"` : ""}`)}\n`);
+    if (flags.check === true && saved?.issues?.length) {
+      printIssues(saved.issues);
+      console.log();
+    }
     return 0;
   }
   if (verb === "mv" || verb === "move") {
@@ -4705,6 +4961,7 @@ async function sourceCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} removed ${a}\n`);
     return 0;
   }
+  if (verb === "share" || verb === "promote") return sourceShare(url, flags, ws, base, a);
   if (verb === "new") {
     // The dashboard's New button for any document (POST …/assets): the
     // platform writes the template — a tool folder, a skill, knowledge,
@@ -4723,7 +4980,114 @@ async function sourceCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} ${ws}/${r.path ?? b}  ${c.dim(`a new ${a.replace(/s$/, "")}${flags.agent ? ` for ${flags.agent}` : ""} · revision recorded`)}\n`);
     return 0;
   }
-  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, new, mv, rm`);
+  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, new, mv, rm, share`);
+}
+
+/** The workspace folders "Move to shared" applies to — the library kinds
+ *  but hooks (`foldrun hook add --library` makes a shared one). */
+const SHAREABLE_KINDS = ["skills", "tools", "scripts", "knowledge", "memory"];
+
+/**
+ * `foldrun source share <path> --to <ws>` — the dashboard's "Move to shared":
+ * the file goes into the account library (PUT /api/library/<kind>) and,
+ * once it is safely there, out of the workspace (DELETE …/source). A skill
+ * or folder tool moves whole — every file of its folder, where the
+ * dashboard copies the one file it shows — and subfolders keep their
+ * place. A library file of the same path is refused unless --overwrite;
+ * --dry-run lists what would move. Asks first (--yes with no terminal):
+ * it leaves this workspace and every workspace in the account can use it.
+ */
+async function sourceShare(url, flags, ws, base, spec) {
+  if (!spec) throw new Error("which file? `foldrun source share skills/house-style --to <workspace>` — a skill, tool, script, knowledge or memory file");
+  const clean = spec.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  const [kind, ...rest] = clean.split("/");
+  if (kind === "hooks") throw new Error("a hook is a folder whose run.mjs goes with it — `foldrun hook add <name> --library` makes a shared one");
+  if (!SHAREABLE_KINDS.includes(kind) || !rest.length) throw new Error(`"${spec}" is not under ${SHAREABLE_KINDS.join("/, ")}/ — only those move to the shared library`);
+  // skills/x/SKILL.md or tools/x/tool.md names its folder: the folder is the thing.
+  const unit = (kind === "skills" || kind === "tools") && rest.length >= 2 ? `${kind}/${rest[0]}` : clean;
+  const { files = [] } = await remoteCall(url, flags, base);
+  const members = files.filter((f) => f === unit || f.startsWith(`${unit}/`));
+  if (!members.length) throw new Error(`no ${unit} in ${ws} — \`foldrun source ls ${kind} --to ${ws}\` lists what is there`);
+  const relOf = (f) => f.slice(kind.length + 1);
+
+  /** Which of these the library already has. */
+  const inLibrary = async (list) => {
+    const hits = [];
+    for (const f of list) {
+      try {
+        await remoteCall(url, flags, `/api/library/${kind}?path=${enc(relOf(f))}`);
+        hits.push(f);
+      } catch (err) {
+        if (!(err instanceof HttpError) || !(err.status === 404 || /not found/i.test(err.message))) throw err;
+      }
+    }
+    return hits;
+  };
+  const taken = await inLibrary(members);
+  console.log(`\n  ${c.bold(unit)} ${c.dim(`· ${ws} → the shared library`)}\n`);
+  for (const f of members) console.log(`  ${c.dim("·")} ${f} → library/${kind}/${relOf(f)}${taken.includes(f) ? c.amber("  (the library has one — replaced)") : ""}`);
+  console.log();
+  if (taken.length && flags.overwrite !== true) {
+    console.log(`  ${c.red("✗")} the library already has ${taken.map((f) => `${kind}/${relOf(f)}`).join(", ")} — nothing was moved; --overwrite replaces ${taken.length === 1 ? "it" : "them"}\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim("--dry-run: nothing moved")}\n`);
+    return 0;
+  }
+  if (!(await confirmed(flags, "source share", `Move ${unit} to shared? Every workspace in the account will be able to use it, and it leaves ${ws}. [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing moved")}\n`);
+    return 0;
+  }
+  // Asked again after the question, which may have waited a long time: a
+  // library file made meanwhile is not replaced without --overwrite. (The
+  // library PUT takes no ifMatch, so this narrows the window, no more.)
+  if (flags.overwrite !== true) {
+    const since = await inLibrary(members);
+    if (since.length) throw new Error(`the library now has ${since.map((f) => `${kind}/${relOf(f)}`).join(", ")} — made while this waited; nothing was moved (--overwrite replaces it)`);
+  }
+  const copied = new Map();
+  for (const f of members) {
+    const { content } = await remoteCall(url, flags, `${base}?path=${enc(f)}`);
+    copied.set(f, content ?? "");
+    try {
+      await remoteCall(url, flags, `/api/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: relOf(f), content: content ?? "" }) });
+    } catch (err) {
+      throw new Error(`could not copy ${f} to the library — ${explain(err)}. ${unit} is still in ${ws}${f === members[0] ? "" : "; what was copied before it is in the library too"}`);
+    }
+  }
+  // The DELETE takes no ifMatch, so read it all again first: a file edited
+  // or added while this copied would be deleted without ever reaching the
+  // library. Changed, it stays in both places and nothing is deleted.
+  const { files: now = [] } = await remoteCall(url, flags, base);
+  const nowMembers = now.filter((f) => f === unit || f.startsWith(`${unit}/`));
+  const moved = [];
+  for (const f of nowMembers) {
+    if (!copied.has(f)) moved.push(f);
+    else if ((await remoteCall(url, flags, `${base}?path=${enc(f)}`)).content !== copied.get(f)) moved.push(f);
+  }
+  if (moved.length) {
+    throw new Error(`copied to shared, but ${moved.join(", ")} changed in ${ws} while it was copied — nothing was deleted, so it is in both places; run it again with --overwrite to copy the new text`);
+  }
+  // Only once every file is in the library, and only the files that were
+  // copied, one by one — never the folder: the source API lists text files
+  // alone, so deleting a skill's folder would take an image or other asset
+  // in it that never reached the library. A failure leaves the rest in both
+  // places, never in neither, and says so.
+  for (const [i, f] of members.entries()) {
+    try {
+      await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: f }) });
+    } catch (err) {
+      const left = members.slice(i);
+      throw new Error(`copied to shared, but ${f} could not be removed from ${ws} — ${explain(err)}. ${left.length === 1 ? "It is" : `These ${left.length} are`} in both now; ${left.map((x) => `\`foldrun source rm ${x} --to ${ws}\``).join(", ")} finish${left.length === 1 ? "es" : ""} the move`);
+    }
+  }
+  console.log(`  ${c.green("✓")} ${unit} ${c.dim(`moved to library/${kind}/${relOf(unit)} — every workspace in the account can use it`)}`);
+  if (unit !== clean || members.length > 1 || members[0] !== unit) {
+    console.log(`  ${c.dim(`only its text files move: anything else in ${unit}/ (an image, a binary) stays in ${ws}`)}`);
+  }
+  console.log();
+  return 0;
 }
 
 // ------------------------------------------------- the account, as a whole
@@ -5492,8 +5856,65 @@ function humanBytes(n) {
  * newest file is three weeks old and whose run id nobody recognises is the
  * shape staleness actually has.
  */
+/**
+ * `foldrun storage ls --all` — every workspace's files, as the dashboard's
+ * account Storage page: a block per workspace, those with files first and
+ * the busiest first, then the names of the empty ones. The workspaces are
+ * the ones this key may open (GET /api/workspaces), each listed by its own
+ * storage route.
+ */
+async function storageLsAll(url, prefix, flags) {
+  const { workspaces = [] } = await remoteCall(url, flags, "/api/workspaces");
+  const inPrefix = (f) => (prefix ? f.path === prefix || f.path.startsWith(prefix.replace(/\/*$/, "/")) : true);
+  const desks = await Promise.all(
+    workspaces.map(async (w) => {
+      try {
+        const body = await remoteCall(url, flags, `/api/workspaces/${enc(w.name)}/storage`);
+        return { workspace: w.name, ...body, files: (body.files ?? []).filter(inPrefix) };
+      } catch (err) {
+        return { workspace: w.name, files: [], error: err instanceof Error ? err.message : String(err) };
+      }
+    }),
+  );
+  const bytes = (d) => d.files.reduce((n, f) => n + (f.size ?? 0), 0);
+  desks.sort((a, b) => (b.files.length > 0 ? 1 : 0) - (a.files.length > 0 ? 1 : 0) || bytes(b) - bytes(a));
+  if (flags.json === true) {
+    console.log(JSON.stringify({ workspaces: desks }, null, 2));
+    return desks.some((d) => d.error) ? 1 : 0;
+  }
+  const full = desks.filter((d) => d.files.length);
+  if (!full.length && !desks.some((d) => d.error)) {
+    console.log(`\n  ${c.dim(`nothing in any workspace's storage${prefix ? ` under ${prefix}` : ""}${desks.length ? "" : " — no workspaces yet"}`)}\n`);
+    return 0;
+  }
+  const all = full.flatMap((d) => d.files);
+  const w = {
+    size: Math.max(0, ...all.map((f) => humanBytes(f.size).length)),
+    path: Math.max(0, ...all.map((f) => f.path.length)),
+    when: Math.max(0, ...all.map((f) => when(f.updatedAt).length)),
+  };
+  for (const d of full) {
+    const files = [...d.files].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    console.log(`\n  ${c.bold(d.workspace)}  ${c.dim(`${files.length} file${files.length === 1 ? "" : "s"} · ${humanBytes(bytes(d))}${d.quotaMb ? ` of ${d.quotaMb}MB` : ""}`)}`);
+    for (const f of files) {
+      console.log(`    ${pad(f.path, w.path)}  ${c.dim(`${pad(humanBytes(f.size), w.size)}  ${pad(when(f.updatedAt), w.when)}  ${ago(f.updatedAt)} ago  ${String(f.by ?? "")}`)}`);
+    }
+  }
+  for (const d of desks.filter((x) => x.error)) console.log(`\n  ${c.red("✗")} ${c.bold(d.workspace)}  ${c.dim(d.error)}`);
+  const empty = desks.filter((d) => !d.files.length && !d.error).map((d) => d.workspace);
+  if (empty.length) console.log(`\n  ${c.dim(`nothing${prefix ? ` under ${prefix}` : ""} in ${empty.join(", ")}`)}`);
+  console.log(`\n  ${c.dim(`${all.length} file${all.length === 1 ? "" : "s"} in ${full.length} workspace${full.length === 1 ? "" : "s"} · ${humanBytes(all.reduce((n, f) => n + (f.size ?? 0), 0))} — \`foldrun storage cat <path> --to <workspace>\``)}\n`);
+  return desks.some((d) => d.error) ? 1 : 0;
+}
+
 async function storageCmd(positional, flags, layout) {
   const url = platformFor(flags, "storage");
+  // `ls --all`: every workspace's storage, as the account's Storage page.
+  // (On `shares`, --all keeps meaning expired and revoked links too.)
+  if ((positional[0] ?? "ls") === "ls" && flags.all === true) {
+    if (typeof flags.to === "string") throw new Error("`foldrun storage ls --all` lists every workspace — or `--to <workspace>` for one, not both");
+    return storageLsAll(url, positional[1], flags);
+  }
   // A folder that is not a workspace is not a workspace: `logs` and `source`
   // fall back to the directory's NAME, which from ~/Downloads asks the
   // platform for a workspace called "Downloads" and reports a 404 as though
@@ -5827,8 +6248,16 @@ async function triggersCmd(flags, layout) {
   const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
   const body = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/triggers?days=${days}`);
   const rows = body.flows ?? [];
+  if (flags.json === true) {
+    console.log(JSON.stringify(body, null, 2));
+    return rows.some((r) => (r.dropped ?? []).some((d) => d.outcome === "quarantined")) ? 1 : 0;
+  }
   if (!rows.length) {
-    console.log(`\n  ${c.dim(`no trigger fired in ${ws} in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"} — a flow fires when its frontmatter says trigger: schedule, webhook, watch, storage or email`)}\n`);
+    console.log(`\n  ${c.dim(`no trigger fired in ${ws} in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"} — a flow fires when its frontmatter says trigger: schedule, webhook, watch, storage or email`)}`);
+    // A refused delivery never becomes a trigger event, so it can be the
+    // whole answer to "why did nothing run".
+    printTriggerDeliveries(body.deliveries ?? [], triggerLimit(flags));
+    console.log();
     return 0;
   }
   const w = { flow: Math.max(...rows.map((r) => r.flow.length)), trigger: Math.max(...rows.map((r) => r.trigger.length)) };
@@ -5843,8 +6272,58 @@ async function triggersCmd(flags, layout) {
       console.log(`      ${quarantined && d.outcome === "quarantined" ? c.red(`${d.count}× ${d.outcome}`) : c.dim(`${d.count}× ${d.outcome}`)}  ${c.dim(firstLine(d.detail ?? "", 90))}`);
     }
   }
-  console.log(`\n  ${c.dim(`${rows.length} flow${rows.length === 1 ? "" : "s"} fired in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}${held ? ` · ${held} switched off by disable_after — one successful run clears it` : ""} · --since <days>`)}\n`);
+  printTriggerEvents(body.events ?? [], triggerLimit(flags));
+  printTriggerDeliveries(body.deliveries ?? [], triggerLimit(flags));
+  console.log(`\n  ${c.dim(`${rows.length} flow${rows.length === 1 ? "" : "s"} fired in the last ${body.days ?? days} day${(body.days ?? days) === 1 ? "" : "s"}${held ? ` · ${held} switched off by disable_after — one successful run clears it` : ""} · --since <days>, --limit <n>, --json`)}\n`);
   return held ? 1 : 0;
+}
+
+/** How many decisions and deliveries `triggers` prints: --limit, else 10. */
+const triggerLimit = (flags) => (Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 10);
+
+/** Each trigger outcome in the Triggers page's words, and the flow key that decided it. */
+const TRIGGER_REASON = {
+  started: ["started a run", ""],
+  duplicate: ["duplicate delivery", "idempotency:"],
+  throttled: ["inside the window", "throttle:"],
+  debounced: ["held for the burst", "debounce:"],
+  quarantined: ["flow switched off", "disable_after:"],
+  paused: ["work is done, paused", "pause_when:"],
+  halted: ["paused by a person", "account or workspace pause"],
+  "overlap-skipped": ["previous run still live", "overlap: skip"],
+  missed: ["missed while down", "catchup: none"],
+  filtered: ["did not match the filter", "filter:"],
+  failed: ["could not start", ""],
+};
+
+const triggerStamp = (iso) => String(iso ?? "").replace("T", " ").slice(0, 19) + "Z";
+
+/** The trigger log's raw decisions, newest first — the dashboard's "Every decision". */
+function printTriggerEvents(events, limit) {
+  if (!events.length) return;
+  const shown = events.slice(0, limit);
+  const w = Math.max(...shown.map((e) => String(e.flow ?? "").length));
+  console.log(`\n  ${c.bold("every decision, newest first")}${events.length > shown.length ? c.dim(` (${shown.length} of ${events.length} — --limit <n> for more)`) : ""}`);
+  for (const e of shown) {
+    const [label, key] = TRIGGER_REASON[e.outcome] ?? [String(e.outcome), ""];
+    const tone = e.outcome === "started" ? c.green : e.outcome === "quarantined" || e.outcome === "failed" || e.outcome === "halted" ? c.red : c.dim;
+    console.log(`    ${c.dim(triggerStamp(e.t))}  ${pad(String(e.flow ?? ""), w)}  ${tone(label)}${key ? c.dim(` (${key})`) : ""}  ${c.dim(firstLine(e.detail ?? "", 90))}`);
+  }
+}
+
+/** Requests at the hook and inbox URLs — whether one arrived and was
+ *  authentic, before any flow rule had a say. */
+function printTriggerDeliveries(deliveries, limit) {
+  if (!deliveries.length) return;
+  const refused = deliveries.filter((d) => d.outcome !== "accepted" && d.outcome !== "dropped").length;
+  const shown = deliveries.slice(0, limit);
+  const w = Math.max(...shown.map((d) => String(d.flow ?? "").length));
+  console.log(`\n  ${c.bold("deliveries at the hook and inbox URLs")}${refused ? c.red(` · ${refused} refused before any flow rule applied`) : ""}${deliveries.length > shown.length ? c.dim(` (${shown.length} of ${deliveries.length} — --limit <n> for more)`) : ""}`);
+  for (const d of shown) {
+    const bad = d.outcome !== "accepted" && d.outcome !== "dropped";
+    const outcome = `${d.outcome}${d.count > 1 ? ` ×${d.count}` : ""}`;
+    console.log(`    ${c.dim(triggerStamp(d.t))}  ${pad(String(d.flow ?? ""), w)}  ${bad ? c.red(outcome) : d.outcome === "accepted" ? c.green(outcome) : c.dim(outcome)}  ${c.dim(firstLine(d.detail ?? "", 90))}`);
+  }
 }
 
 // -------------------------------------------------------------- schedule
@@ -5940,7 +6419,8 @@ async function providersCmd(url, flags) {
  *
  *   foldrun account model                                   what is set, what runs
  *   foldrun account model set <provider> --key <api key>    a preset (anthropic,
- *       openrouter, openai, groq, …) or `custom --base-url https://… --format openai`
+ *       openrouter, openai, groq, …) or `custom --base-url https://… --format openai`;
+ *       --use also switches to it (use own) in the same request
  *   foldrun account model remove                            the key (the choice stays)
  *   foldrun account model use foldrun --provider <p>        run on foldrun's models
  *   foldrun account model use own                           back to the account's own key
@@ -6009,14 +6489,25 @@ async function accountModelCmd(url, positional, flags) {
   }
   if (verb === "use") {
     const source = positional[1];
+    // --if-version <n>: the choiceVersion read before (`account model --json`;
+    // 0: never chosen). The platform refuses (409) when someone has chosen
+    // since, as the Settings page does — a script will not undo a newer choice.
+    let guard = {};
+    if (flags["if-version"] !== undefined) {
+      // A bare --if-version parses as true, and Number(true) is 1: only digits count.
+      const raw = typeof flags["if-version"] === "string" ? flags["if-version"].trim() : "";
+      const v = /^\d+$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isSafeInteger(v)) throw new Error("--if-version takes the choiceVersion `foldrun account model --json` shows (0: never chosen)");
+      guard = { ifVersion: v };
+    }
     if (source === "own") {
-      out(await put({ source: "own" }));
+      out(await put({ source: "own", ...guard }));
       return 0;
     }
     if (source !== "foldrun") throw new Error("`foldrun account model use foldrun --provider <anthropic|openai|gemini|deepseek|moonshot>` or `foldrun account model use own`");
     const supply = typeof flags.provider === "string" ? flags.provider : positional[2];
     if (!supply) throw new Error("which provider? `foldrun account model use foldrun --provider anthropic` (anthropic, openai, gemini, deepseek or moonshot — `foldrun account model prices` lists what each costs)");
-    const r = await put({ source: "foldrun", supply });
+    const r = await put({ source: "foldrun", supply, ...guard });
     out(r);
     return runnable(r) ? 0 : 1;
   }
@@ -6064,6 +6555,9 @@ async function accountModelCmd(url, positional, flags) {
     apiKey,
     ...(typeof flags["base-url"] === "string" ? { baseUrl: flags["base-url"] } : {}),
     ...(typeof flags.format === "string" ? { format: flags.format } : {}),
+    // --use: run on this key from now on, in the same request — what the
+    // dashboard's Save does. Without it the choice stays as it was.
+    ...(flags.use === true ? { source: "own" } : {}),
   };
   out(await put(body));
   return 0;
@@ -6494,7 +6988,14 @@ async function accountCmd(positional, flags) {
   }
 
   let patch;
-  if (verb === "clear") {
+  if (verb === "clear" && key === "compute" && positional.length > 2) {
+    // `clear compute disk` — just the named figures, as the dashboard's
+    // emptied field does; the platform keeps the others.
+    patch = { compute: computeClears(positional.slice(2), "`foldrun account clear compute [vcpu] [memory] [disk]` — none named clears all three") };
+  } else if (verb === "clear" && key === "notify" && positional.length > 2) {
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    patch = { notify: notifyWithout(defaults?.notify, positional[2], "foldrun account clear notify") };
+  } else if (verb === "clear") {
     patch = { [key]: null };
   } else if (key === "alerts" || key === "judge") {
     patch = { [key]: await mergedEntry(url, flags, key, positional.slice(2), null, view, `foldrun account set ${key}`) };
@@ -6837,6 +7338,51 @@ async function runViewsCmd(flags) {
   return 0;
 }
 
+/** The filter flags a saved view keeps, as the runs page's query names them
+ *  (run-views-model.ts VIEW_KEYS) — the reverse of what --view reads. */
+const VIEW_FLAGS = [["status", "status"], ["flow", "flow"], ["to", "workspace"], ["since", "since"], ["q", "q"], ["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"]];
+
+/**
+ * `foldrun runs views save <name> [filters]` and `runs views rm <name>` — the
+ * runs page's "save view" (PATCH /api/me/preferences { runViews }). The route
+ * replaces the whole list, so it is read, changed and written back; a view
+ * saved under a name already taken replaces it, as the dashboard does.
+ */
+async function runViewsEditCmd([verb, ...rest], flags) {
+  const url = platformFor(flags, "runs views");
+  const name = rest.join(" ").trim();
+  if (verb !== "save" && verb !== "rm") throw new Error(`\`foldrun runs views\` lists your saved views; its verbs are save <name> and rm <name> — not ${verb}`);
+  if (!name) throw new Error(`\`foldrun runs views ${verb} <name>\`${verb === "save" ? " --status failed --since 7d … (the filters to keep)" : " — `foldrun runs views` lists them"}`);
+  const { runViews = [] } = await remoteCall(url, flags, "/api/me/preferences");
+  let list;
+  if (verb === "save") {
+    if (name.length > 40) throw new Error("a view's name is 1 to 40 characters");
+    // Said, not dropped: the route would keep only the keys it knows.
+    for (const f of ["verdict", "outcome"]) if (flags[f] !== undefined) throw new Error(`a saved view keeps --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens and --min-secs — not --${f}`);
+    const query = new URLSearchParams();
+    for (const [flag, key] of VIEW_FLAGS) if (flags[flag] !== undefined && flags[flag] !== true) query.set(key, String(flags[flag]));
+    if (flags["tool-error"] === true) query.set("tool_error", "1");
+    // The dashboard's windows are today, 7d and 30d; its Today is 24 hours.
+    if (["24h", "1d"].includes(String(query.get("since")).trim().toLowerCase())) query.set("since", "today");
+    if (!query.size) throw new Error("a view needs at least one filter — --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens or --min-secs");
+    list = [...runViews.filter((v) => v.name !== name), { name, query: query.toString() }];
+    const since = query.get("since");
+    const d = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
+    if (flags.json === true) return console.log(JSON.stringify(d.runViews ?? [], null, 2)), 0;
+    console.log(`\n  ${c.green("✓")} ${runViews.some((v) => v.name === name) ? "replaced" : "saved"} the view ${c.bold(name)}  ${c.dim(query.toString())}`);
+    if (since && !["today", "7d", "30d"].includes(since)) console.log(`  ${c.dim(`the runs page's windows are today, 7d and 30d — it shows since=${since} unfiltered; foldrun runs --view applies it`)}`);
+    console.log(`  ${c.dim(`foldrun runs --view "${name}" opens it`)}\n`);
+    return 0;
+  }
+  if (!runViews.some((v) => v.name === name)) throw new Error(`no saved view called ${name}${runViews.length ? ` — yours: ${runViews.map((v) => v.name).join(", ")}` : ""}`);
+  if (!(await sureToDelete(flags, "runs views rm", `The saved view ${name}`))) return 1;
+  list = runViews.filter((v) => v.name !== name);
+  const d = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
+  if (flags.json === true) return console.log(JSON.stringify(d.runViews ?? [], null, 2)), 0;
+  console.log(`\n  ${c.green("✓")} deleted the view ${c.bold(name)}\n`);
+  return 0;
+}
+
 // ---------------------------------------------------------------- insights
 
 /** `foldrun insights` (FOL-72 step 8): recurring problems found in the runs,
@@ -7083,6 +7629,21 @@ async function inboxCmd(positional, flags) {
   if (verb) {
     const action = ACTIONS[verb];
     if (!action) throw new Error(`\`foldrun inbox\` lists what waits on you; its verbs are read, unread, dismiss and restore — not ${verb}`);
+    // `inbox read --all`: the inbox's "Mark all read" — every unread item in
+    // the view (--team, --started, --mine narrow it to a tab; --kind,
+    // --workspace as for the list), in calls of 200, the route's most.
+    if (action === "read" && !ids.length && flags.all === true) {
+      const q = new URLSearchParams({ bucket: flags.team === true ? "team" : flags.started === true ? "started" : flags.mine === true ? "mine" : "all" });
+      if (typeof flags.kind === "string") q.set("kind", flags.kind);
+      if (typeof flags.workspace === "string") q.set("workspace", flags.workspace);
+      const view = await remoteCall(url, flags, `/api/me/inbox?${q}`);
+      const unread = (view.items ?? []).filter((i) => !i.read).map((i) => i.id);
+      for (let i = 0; i < unread.length; i += 200) {
+        await remoteCall(url, flags, "/api/me/inbox", { method: "POST", body: JSON.stringify({ ids: unread.slice(i, i + 200), action }) });
+      }
+      console.log(`\n  ${unread.length ? c.green(`marked read ${unread.length} item${unread.length === 1 ? "" : "s"}`) : c.dim("nothing unread")}\n`);
+      return 0;
+    }
     if (!ids.length) throw new Error(`\`foldrun inbox ${verb} <id>…\` — the ids are the first column of \`foldrun inbox\``);
     await remoteCall(url, flags, "/api/me/inbox", { method: "POST", body: JSON.stringify({ ids, action }) });
     console.log(`\n  ${c.green(action === "dismiss" ? "set aside" : action === "restore" ? "put back" : `marked ${action}`)} ${ids.length} item${ids.length === 1 ? "" : "s"}\n`);
@@ -7266,19 +7827,23 @@ async function decideCmd(decision, runId, flags, layout) {
   // are the steps it chooses from; every other decision is a person's gate.
   const payload = flags.payload === undefined ? undefined : eventPayload(flags.payload);
   if (payload !== undefined && decision !== "approve") throw new Error("--payload releases a `wait: event` step — it cannot go with reject");
-  const waiting = payload === undefined ? waitingSteps(run) : eventSteps(run);
+  // --event-wait: reject a step parked on `wait: event` — the event box's
+  // Reject on the run page. Stops waiting; the step fails and the run ends.
+  const onEvent = flags["event-wait"] === true;
+  if (onEvent && decision !== "reject") throw new Error("--event-wait goes with reject — `foldrun approve <run-id> --payload …` releases a `wait: event` step");
+  const waiting = payload === undefined && !onEvent ? waitingSteps(run) : eventSteps(run);
   if (!waiting.length) {
     throw new Error(
-      payload === undefined
-        ? `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person. \`foldrun approvals\` lists the ones that are`
-        : `${runId} in ${ws} is ${run.status} — no step of it is waiting on \`wait: event\`, which is what --payload releases`,
+      payload === undefined && !onEvent
+        ? `${runId} in ${ws} is ${run.status} — no step of it is waiting on a person.${eventSteps(run).length && decision === "reject" ? " A step is waiting on `wait: event`: --event-wait rejects that one." : ""} \`foldrun approvals\` lists the ones that are`
+        : `${runId} in ${ws} is ${run.status} — no step of it is waiting on \`wait: event\`, which is what ${onEvent ? "--event-wait rejects" : "--payload releases"}`,
     );
   }
 
   const only = flags.step === undefined ? null : Number(flags.step) - 1;
   if (only !== null && !waiting.some(({ index }) => index === only)) {
     throw new Error(
-      `step ${flags.step} of ${runId} is not waiting on ${payload === undefined ? "a person" : "`wait: event`"} — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
+      `step ${flags.step} of ${runId} is not waiting on ${payload === undefined && !onEvent ? "a person" : "`wait: event`"} — ${waiting.map(({ index }) => index + 1).join(", ")} ${waiting.length === 1 ? "is" : "are"}`,
     );
   }
   const chosen = only === null ? waiting : waiting.filter(({ index }) => index === only);
@@ -7303,17 +7868,30 @@ async function decideCmd(decision, runId, flags, layout) {
     return 1;
   }
 
-  const body = {
-    decision,
-    ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}),
-    ...(only === null ? {} : { step: only }),
-    ...(payload === undefined ? {} : { payload }),
-  };
-  const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  const count = Array.isArray(answer.steps) ? answer.steps.length : chosen.length;
+  let count = 0;
+  if (onEvent) {
+    // One call per step, each naming it: a reject with no step refuses every
+    // step that waits, a person's gate included. The dashboard's reason.
+    for (const { index } of chosen) {
+      const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ decision, step: index, reason: note ?? "rejected while waiting for its event", ...(note ? { note } : {}) }),
+      });
+      count += Array.isArray(answer.steps) ? answer.steps.length : 1;
+    }
+  } else {
+    const body = {
+      decision,
+      ...(note ? { note, ...(decision === "reject" ? { reason: note } : {}) } : {}),
+      ...(only === null ? {} : { step: only }),
+      ...(payload === undefined ? {} : { payload }),
+    };
+    const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    count = Array.isArray(answer.steps) ? answer.steps.length : chosen.length;
+  }
   console.log(
     `\n  ${decision === "approve" ? c.green("✓") : c.red("✗")} ${decision === "approve" ? "approved" : "rejected"} ${count} step${count === 1 ? "" : "s"} of ${runId}` +
       `\n  ${c.dim(`foldrun report ${runId} --to ${ws} — or logs ${runId} --to ${ws} --follow`)}\n`,
@@ -8019,6 +8597,7 @@ async function toolTestCmd(positional, flags, layout) {
 
 /**
  * `foldrun agent run <name> --task "…"` — one agent, once, on the platform.
+ * `--no-task` instead runs it on its own prompt alone (the dashboard's Run).
  *
  * A flow of one step, without a flow file: the way to try a desk's agent on
  * a real task before wiring it into anything, and the way to ask one a
@@ -8030,8 +8609,12 @@ async function agentRunCmd(positional, flags, layout) {
   if (!name) throw new Error('which agent? `foldrun agent run <name> --to <workspace> --task "…"`');
   const ws = platformWorkspace(flags, layout, `agent run ${name}`);
   const task = typeof flags.task === "string" ? flags.task.trim() : "";
-  if (!task) {
-    throw new Error(`what should ${name} do? pass --task "<text>" — an agent run is one instruction and nothing else`);
+  // --no-task is the dashboard's one-click Run: the agent works from its own
+  // prompt alone. Explicit, so a mistyped --task does not start a paid run.
+  const bare = flags["no-task"] === true;
+  if (task && bare) throw new Error("either --task or --no-task, not both");
+  if (!task && !bare) {
+    throw new Error(`what should ${name} do? pass --task "<text>", or --no-task to run it on its own prompt alone, as the dashboard's Run does`);
   }
 
   // --wait asks in short pieces, exactly as `invoke` does: whatever sits in
@@ -8059,7 +8642,7 @@ async function agentRunCmd(positional, flags, layout) {
       method: "POST",
       // --test: the platform marks the run a test run — sends refused or sunk
       // at the proxy, send-capable secrets withheld, state/ kept.
-      body: JSON.stringify({ task, ...(flags.test === true ? { test: true } : {}) }),
+      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}) }),
     }),
   );
   const runId = body?.runId;
@@ -8158,6 +8741,16 @@ async function checkRemote(flags, layout) {
     process.env.FOLDRUN_ACCOUNT = root;
     // The baseline belongs to the folder it was written in, not to a temp copy.
     const code = await check(dir, { ...flags, "no-baseline": true });
+    // The Checks page's "Rescanned daily, last …" (--online prints it with
+    // its own answer). Only GET …/check knows it; best-effort, so an older
+    // platform or a slow answer costs this line, never the check. The rule
+    // asked for matches nothing: only the rescan is wanted from it.
+    if (flags.online !== true && checkOptions(flags).format === "text") {
+      try {
+        const r = await remoteCall(url, { ...flags, quiet: true }, `/api/workspaces/${enc(ws)}/check?rule=rescan-only`, {}, { seconds: 15 });
+        if (r?.rescan?.checkedAt) say(`  ${c.dim(`the daily rescan last ran ${r.rescan.checkedAt} — new security findings go to notify:`)}`);
+      } catch {}
+    }
     say(`  ${c.dim(`checked what is deployed, not this folder — ${ws} · ${url}`)}\n`);
     if (flags.online === true) return Math.max(code, await checkOnline(url, flags, ws));
     return code;
@@ -8937,6 +9530,7 @@ async function flowDupStepCmd(positional, flags, layout) {
  * shows the diff, refuses one `check` would call a new error, then asks —
  * a delete, so no terminal needs --yes. --dry-run writes nothing; --to
  * <workspace> sends the canvas's PATCH { edit: { op: "remove" } }.
+ * `--step 2,4` deletes several at once: one write, one PATCH { edits }.
  */
 async function flowRmStepCmd(positional, flags, layout) {
   const flow = positional[1];
@@ -8947,15 +9541,21 @@ async function flowRmStepCmd(positional, flags, layout) {
   const { parseFlow } = await core();
   const { removeStep, removeStepImpact } = await patterns();
   const steps = parseFlow(path.basename(rel), raw).steps;
-  const i = pickStep(steps, flags.step, flow);
-  const impact = removeStepImpact(raw, i);
+  // --step 2,4 deletes several in one revision, as the canvas's multi-select
+  // does: highest index first, so each still names the step it did when the
+  // list was made (the platform applies { edits } in the order sent).
+  const specs = typeof flags.step === "string" && flags.step.includes(",") ? flags.step.split(",").map((x) => x.trim()).filter(Boolean) : [flags.step];
+  const picked = [...new Set(specs.map((spec) => pickStep(steps, spec, flow)))].sort((x, y) => y - x);
+  const i = picked[0];
+  const impacts = [...picked].reverse().map((k) => removeStepImpact(raw, k));
+  const impact = picked.length === 1 ? impacts[0] : { label: `${picked.length} steps (${impacts.map((x) => x.label).join(", ")})`, notes: impacts.flatMap((x) => x.notes) };
 
   console.log(`\n  ${c.bold(flow)} ${c.dim(`· delete ${impact.label} · ${desk.label}`)}\n`);
   for (const n of impact.notes) console.log(`  ${c.dim("·")} ${n}`);
   console.log();
   let next;
   try {
-    next = removeStep(raw, i);
+    next = picked.reduce((text, k) => removeStep(text, k), raw);
   } catch (err) {
     console.log(`  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
     return 1;
@@ -8976,7 +9576,8 @@ async function flowRmStepCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "remove", step: i }, expect: textSha(raw) }) });
+    const change = picked.length === 1 ? { edit: { op: "remove", step: i } } : { edits: picked.map((step) => ({ op: "remove", step })) };
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...change, expect: textSha(raw) }) });
     console.log(`  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     writeIfUnchanged(desk, rel, raw, next);
@@ -9685,7 +10286,8 @@ function printComparison(r) {
  * an eval's cases under two to four models, side by side (POST
  * …/evals/<e>/compare, then polled). `--models` takes model[:effort] items
  * (`fast:low,max:high`); `--effort` is the effort for the items that name
- * none; `--agent <name>` compares only that agent's steps of a flow eval;
+ * none; `--agent <name>` compares only that agent's steps of a flow eval,
+ * and an item's own `@agent` (`fast@writer`) does so for that item alone;
  * `--repeat` (1–5) runs each case more than once; `--max-usd` is the spend
  * limit (default 5). Every run is a test run. Waits for the result
  * (`--timeout <s>`, default 3600; past it, the id to read it with).
@@ -9737,11 +10339,22 @@ async function evalCompareCmd(name, flags, layout) {
   const effort = typeof flags.effort === "string" ? flags.effort : undefined;
   const agent = typeof flags.agent === "string" ? flags.agent : undefined;
   const configs = flags.models.split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
+    // `@agent` at the end compares only that agent's steps in this setting
+    // (the Compare panel's Steps, per row): fast@writer,max:high@writer. An
+    // agent name starts with a letter, so a Vertex-style model@20240620
+    // stays one model id.
+    // Either order: fast:low@writer or fast@writer:low.
     // Only a trailing known effort is an effort: llama3.2:3b stays one model id.
-    const m = /^(.*):(low|medium|high|xhigh|max)$/.exec(item);
-    const model = m ? m[1] : item;
-    const e = m ? m[2] : undefined;
-    return { model, ...((e ?? effort) ? { effort: e ?? effort } : {}), ...(agent ? { agent } : {}) };
+    const effortOf = (x) => /^(.*):(low|medium|high|xhigh|max)$/.exec(x);
+    let model = item;
+    let e;
+    let m = effortOf(model);
+    if (m) [, model, e] = m;
+    const at = /^(.*)@([a-z][a-z0-9_-]*)$/i.exec(model);
+    if (at) model = at[1];
+    if (!e && (m = effortOf(model))) [, model, e] = m;
+    const a = at ? at[2] : agent;
+    return { model, ...((e ?? effort) ? { effort: e ?? effort } : {}), ...(a ? { agent: a } : {}) };
   });
   const body = { configs, ...(flags.repeat !== undefined ? { repeat: Number(flags.repeat) } : {}), ...(flags["max-usd"] !== undefined ? { maxUsd: Number(flags["max-usd"]) } : {}) };
   const started = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify(body) });
@@ -9984,6 +10597,38 @@ async function bulkCmd(action, flags, layout) {
     const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action, ...filter, dryRun: true }) });
     return { ws, ids: r.matched ?? [] };
   });
+  return bulkApply(action, plans, filter.from, flags, url);
+}
+
+/**
+ * `foldrun stop|rerun <run-id> <run-id>…` — the runs list's selection bar
+ * (POST …/runs/bulk { action, runIds }, once per workspace). Each id's
+ * workspace is found as for one run (or --to); then it lists, asks and acts.
+ */
+async function bulkIdsCmd(action, ids, flags, layout) {
+  const url = platformFor(flags, action);
+  if (hasBulkFilter(flags)) throw new Error(`name the runs or give a filter (--status, --since, --until, --flow), not both — \`foldrun ${action} <run-id>…\``);
+  let from;
+  if (action === "rerun") {
+    // The bulk route reruns from a step number; these have no bulk form.
+    for (const f of ["agent", "instruction", "wait"]) if (flags[f] !== undefined) throw new Error(`--${f} reruns one run — with several ids, --from <n> is the step they all start from`);
+    from = flags.from === undefined ? 1 : Number(flags.from);
+    if (!Number.isInteger(from) || from < 1) throw new Error("--from is a step number, 1 or more");
+  }
+  const unique = [...new Set(ids)];
+  const found = await pool(unique, 4, async (id) => ({ id, ws: await workspaceOfRun(url, flags, layout, id) }));
+  const plans = [];
+  for (const { id, ws } of found) {
+    const plan = plans.find((p) => p.ws === ws) ?? (plans.push({ ws, ids: [] }), plans[plans.length - 1]);
+    plan.ids.push(id);
+  }
+  return bulkApply(action, plans, from, flags, url);
+}
+
+/** What a bulk stop or rerun does once it knows the runs: list them, stop at
+ *  --dry-run, ask, then act in calls of at most 100 (the route's cap). */
+async function bulkApply(action, plans, from, flags, url) {
+  const filter = { from };
   const total = plans.reduce((n, x) => n + x.ids.length, 0);
   console.log();
   for (const { ws, ids } of plans.filter((x) => x.ids.length)) {
@@ -10006,14 +10651,23 @@ async function bulkCmd(action, flags, layout) {
   }
   let bad = 0;
   console.log();
-  for (const { ws, ids } of plans.filter((x) => x.ids.length)) {
-    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, {
-      method: "POST",
-      body: JSON.stringify({ action, runIds: ids, ...(action === "rerun" ? { from: filter.from } : {}) }),
-    });
-    for (const x of r.runs ?? []) {
-      if (!x.ok) bad++;
-      console.log(`  ${x.ok ? c.green("✓") : c.red("✗")} ${ws} ${x.runId}${x.newRunId ? c.dim(` → ${x.newRunId}`) : ""}${x.error ? c.dim(` — ${x.error}`) : ""}`);
+  for (const { ws, ids: all } of plans.filter((x) => x.ids.length)) {
+    for (let i = 0; i < all.length; i += 100) {
+      const ids = all.slice(i, i + 100);
+      const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, {
+        method: "POST",
+        body: JSON.stringify({ action, runIds: ids, ...(action === "rerun" ? { from: filter.from } : {}) }),
+      });
+      for (const x of r.runs ?? []) {
+        if (!x.ok) bad++;
+        console.log(`  ${x.ok ? c.green("✓") : c.red("✗")} ${ws} ${x.runId}${x.newRunId ? c.dim(` → ${x.newRunId}`) : ""}${x.error ? c.dim(` — ${x.error}`) : ""}`);
+      }
+      // Asked for but not answered: gone since it was listed.
+      const answered = new Set((r.runs ?? []).map((x) => x.runId));
+      for (const id of ids.filter((x) => !answered.has(x))) {
+        bad++;
+        console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(" — not found (deleted since it was listed?)")}`);
+      }
     }
   }
   console.log(`\n  ${c.dim(`${total - bad} of ${total} ${action === "stop" ? "stopped" : "rerun"}${bad ? ` · ${bad} refused` : ""}`)}\n`);
@@ -10032,6 +10686,38 @@ async function runRmCmd(runId, flags, layout) {
   await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`, { method: "DELETE" });
   console.log(`\n  ${c.green("✓")} ${runId} deleted from ${ws}\n`);
   return 0;
+}
+
+/** `foldrun runs rm <run-id> <run-id>…` — the selection bar's Delete: lists
+ *  them, asks once, then one DELETE per run (there is no bulk delete route),
+ *  each its own outcome so one refusal does not stop the rest. */
+async function runsRmManyCmd(ids, flags, layout) {
+  const url = platformFor(flags, "runs rm");
+  const unique = [...new Set(ids)];
+  const runs = await pool(unique, 4, async (id) => {
+    const ws = await workspaceOfRun(url, flags, layout, id);
+    const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(id)}`);
+    return { id, ws, run };
+  });
+  console.log();
+  for (const { id, ws, run } of runs) console.log(`  ${statusMark(run.status)} ${ws}  ${c.bold(run.flow)}  ${c.dim(`${run.status} · ${id}`)}`);
+  const live = runs.filter(({ run }) => run.status !== "completed" && run.status !== "failed").length;
+  console.log();
+  const what = `These ${runs.length} runs — their records and archived outputs${live ? `; ${live} still going ${live === 1 ? "is" : "are"} stopped first` : ""}. The ledger lines stay`;
+  if (!(await sureToDelete(flags, "runs rm", what))) return 1;
+  let bad = 0;
+  console.log();
+  for (const { id, ws } of runs) {
+    try {
+      await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(id)}`, { method: "DELETE" });
+      console.log(`  ${c.green("✓")} ${ws} ${id} deleted`);
+    } catch (err) {
+      bad++;
+      console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(` — ${explain(err)}`)}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`${runs.length - bad} of ${runs.length} deleted${bad ? ` · ${bad} refused` : ""}`)}\n`);
+  return bad ? 1 : 0;
 }
 
 const SAFE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -10338,6 +11024,9 @@ async function usageCmd(flags) {
   const url = platformFor(flags, "usage");
   const days = flags.days === undefined ? 56 : Number(flags.days);
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("--days is a whole number of days, 1 to 365");
+  // How many rows of the by-flow and by-agent tables (the Usage page's).
+  const limit = flags.limit === undefined ? 10 : Number(flags.limit);
+  if (!Number.isInteger(limit) || limit < 0) throw new Error("--limit is a whole number of rows for by flow and by agent, 0 to hide them");
   const [u, h] = await Promise.all([remoteCall(url, flags, "/api/usage"), remoteCall(url, flags, `/api/usage/history?days=${days}`)]);
   if (flags.json === true) {
     console.log(JSON.stringify({ usage: u, history: h }, null, 2));
@@ -10368,7 +11057,20 @@ async function usageCmd(flags) {
       console.log(`  ${c.bold(pad(x.name, w))}  ${pad(usd(x.totalUsd), 9)}  ${pad(`${x.runs} runs`, 9)}  ${change} ${c.dim(`vs the ${h.bucket} before`)}`);
     }
   }
-  console.log(`\n  ${c.dim("--days <n> for another window · --json for both documents · foldrun billing for the balance")}\n`);
+  // By flow and by agent: the charged series the Usage page tables show,
+  // most charged first, the first --limit of each.
+  for (const [title, rows] of [["by flow", h.byFlow ?? []], ["by agent", h.byAgent ?? []]]) {
+    if (!rows.length || !limit) continue;
+    const top = rows.slice().sort((a, b) => (b.totalUsd ?? 0) - (a.totalUsd ?? 0)).slice(0, limit);
+    const w = Math.max(...top.map((x) => String(x.name).length));
+    console.log(`\n  ${c.bold(title)}  ${c.dim(`charged, ${h.from?.slice(0, 10)} → ${h.to?.slice(0, 10)}`)}`);
+    for (const x of top) {
+      const change = x.change == null ? c.dim("—") : x.change > 0 ? c.amber(`+${Math.round(x.change * 100)}%`) : c.green(`${Math.round(x.change * 100)}%`);
+      console.log(`  ${pad(printable(x.name), w)}  ${pad(usd(x.totalUsd), 9)}  ${pad(x.runs ? `${x.runs} run${x.runs === 1 ? "" : "s"}` : "—", 9)}  ${change}`);
+    }
+    if (rows.length > top.length) console.log(`  ${c.dim(`and ${rows.length - top.length} more — --limit <n> shows more`)}`);
+  }
+  console.log(`\n  ${c.dim("--days <n> for another window · --limit <n> rows by flow and by agent · --json for both documents · foldrun billing for the balance")}\n`);
   return 0;
 }
 
@@ -10395,6 +11097,39 @@ function computePairs(pairs, usage) {
     out[names[k]] = n;
   }
   return out;
+}
+
+/**
+ * `disk` / `vcpu memory` → { diskGiB: null, … }: the named figures as null,
+ * which the platform drops while keeping the rest (the dashboard's emptied
+ * field sends the same). Clearing all three is plain `clear compute`.
+ */
+function computeClears(names, usage) {
+  const fields = { vcpu: "vcpu", memory: "memGiB", disk: "diskGiB" };
+  /** @type {Record<string, null>} */
+  const out = {};
+  for (const n of names) {
+    if (!(n in fields)) throw new Error(`${usage} — not "${n}"`);
+    out[fields[n]] = null;
+  }
+  return out;
+}
+
+/**
+ * The notify block without one channel (email or url), the other and the
+ * events kept. The platform replaces the block whole and refuses one with
+ * neither channel, so the last one goes with a plain `clear notify`.
+ */
+function notifyWithout(current, channel, clearAll) {
+  if (channel !== "email" && channel !== "url") throw new Error(`\`${clearAll} email\` or \`${clearAll} url\` drops one channel — \`${clearAll}\` alone turns notify off`);
+  const n = current && typeof current === "object" ? current : {};
+  if (!n[channel]) throw new Error(`notify has no ${channel === "url" ? "webhook URL" : "email"} set here — nothing to clear`);
+  const other = channel === "email" ? "url" : "email";
+  // A key limited to some workspaces sees the account's URL only as hidden;
+  // sending the block without it would drop it.
+  if (other === "url" && !n.url && n.hidden) throw new Error("the webhook URL beside it is hidden from this key — clear the email with a key that holds every workspace");
+  if (!n[other]) throw new Error(`the ${channel === "url" ? "webhook URL" : "email"} is notify's only channel — \`${clearAll}\` turns notify off`);
+  return { [other]: n[other], events: Array.isArray(n.events) && n.events.length ? n.events : ["failed", "awaiting-approval"] };
 }
 
 /** A size as AGENTS.md writes it — 8Gi, 1536Mi, 8g — in GiB; null when none. */
@@ -10516,7 +11251,7 @@ async function billingVerbCmd(positional, flags) {
       console.log(`  ${c.dim(`burn ${usd(s.burnPerDayUsd)}/day · 7d ${usd(s.spend7dUsd)} · 30d ${usd(s.spend30dUsd)} · month to date ${usd(s.monthToDateUsd)}`)}`);
       if (s.daysLeft != null) console.log(`  ${s.daysLeft < 7 ? c.amber("!") : c.dim("·")} ${c.dim(`about ${Math.round(s.daysLeft)} days left at this burn${s.emptyOn ? ` — empty on ${s.emptyOn.slice(0, 10)}` : ""}${s.suggestedTopUpUsd ? `; ${usd(s.suggestedTopUpUsd)} covers about a month` : ""}`)}`);
       const a = w.autoTopUp;
-      console.log(`  auto top-up  ${a?.enabled ? `${usd(a.amountUsd)} when the balance falls below ${usd(a.thresholdUsd)}` : c.dim("off")}${w.cardSaved ? "" : c.dim(" · no card saved")}`);
+      console.log(`  auto top-up  ${a?.enabled ? `${usd(a.amountUsd)} when the balance falls below ${usd(a.thresholdUsd)}` : c.dim(`off${a ? ` (${usd(a.amountUsd)} below ${usd(a.thresholdUsd)} kept)` : ""}`)}${w.cardSaved ? "" : c.dim(" · no card saved")}`);
       if (w.email) console.log(`  receipts     ${w.email}`);
       // foldrun.ir (3 Nov 2026): paying with an Iranian card, in Toman.
       if (w.tomanTopUp?.url) console.log(`  in Toman     ${w.tomanTopUp.url}`);
@@ -10524,15 +11259,26 @@ async function billingVerbCmd(positional, flags) {
       console.log(`\n  ${c.dim("foldrun billing wallet set auto-top-up --threshold 10 --amount 50 · set auto-top-up off")}\n`);
       return 0;
     }
+    // `wallet clear email`: no receipt or warning address (the page's
+    // emptied field sends the same).
+    if (sub === "clear") {
+      if (rest[0] !== "email") throw new Error("`foldrun billing wallet clear email` — no address for receipts and low-balance warnings; `wallet set auto-top-up off` turns the refill off");
+      await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet", { method: "PUT", body: JSON.stringify({ email: null }) }), "changing the wallet");
+      console.log(`\n  ${c.green("✓")} no receipt email — the low-balance warning has nowhere to go until one is set\n`);
+      return 0;
+    }
     if (sub !== "set" || !["auto-top-up", "email"].includes(rest[0])) {
-      throw new Error("`foldrun billing wallet set auto-top-up --threshold <usd> --amount <usd>` (or `off`), or `wallet set email <address>`");
+      throw new Error("`foldrun billing wallet set auto-top-up --threshold <usd> --amount <usd>` (or `off`), or `wallet set email <address>` (`wallet clear email` for none)");
     }
     let body;
     if (rest[0] === "email") {
       if (!rest[1]) throw new Error("`foldrun billing wallet set email <address>` — where receipts and low-balance warnings go");
       body = { email: rest[1] };
     } else if (rest[1] === "off") {
-      body = { autoTopUp: null };
+      // Off keeps the threshold and the refill for next time, as the
+      // wallet page's switch does; null would forget them.
+      const a = (await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet"), "changing the wallet")).autoTopUp;
+      body = { autoTopUp: a && a.thresholdUsd > 0 && a.amountUsd >= 5 ? { enabled: false, thresholdUsd: a.thresholdUsd, amountUsd: a.amountUsd } : null };
     } else {
       const threshold = Number(flags.threshold);
       const amount = Number(flags.amount);
@@ -10542,7 +11288,11 @@ async function billingVerbCmd(positional, flags) {
       body = { autoTopUp: { enabled: true, thresholdUsd: threshold, amountUsd: amount } };
     }
     await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet", { method: "PUT", body: JSON.stringify(body) }), "changing the wallet");
-    const said = body.email ? `receipts go to ${body.email}` : body.autoTopUp ? `auto top-up on: ${usd(body.autoTopUp.amountUsd)} whenever the balance falls below ${usd(body.autoTopUp.thresholdUsd)}` : "auto top-up off";
+    const said = body.email
+      ? `receipts go to ${body.email}`
+      : body.autoTopUp?.enabled
+        ? `auto top-up on: ${usd(body.autoTopUp.amountUsd)} whenever the balance falls below ${usd(body.autoTopUp.thresholdUsd)}`
+        : `auto top-up off${body.autoTopUp ? c.dim(` — ${usd(body.autoTopUp.amountUsd)} below ${usd(body.autoTopUp.thresholdUsd)} kept for next time`) : ""}`;
     console.log(`\n  ${c.green("✓")} ${said}\n`);
     return 0;
   }
@@ -10562,7 +11312,12 @@ async function billingVerbCmd(positional, flags) {
       return 0;
     }
     if (sub !== "set") throw new Error("`foldrun billing details` shows them; `details set --name … --abn … --address … --email …` changes them");
-    let address = d?.address;
+    // --clear-address / --clear-email / --clear-abn: the PUT replaces the
+    // details whole, so a field left out of it is gone.
+    for (const k of ["address", "email", "abn"]) {
+      if (flags[`clear-${k}`] === true && typeof flags[k] === "string") throw new Error(`--${k} or --clear-${k}, not both`);
+    }
+    let address = flags["clear-address"] === true ? undefined : d?.address;
     if (typeof flags.address === "string") {
       // line1[, line2], city, state, postcode, country — the last part is the
       // two-letter country, the first is line 1, the rest fill in order.
@@ -10578,8 +11333,8 @@ async function billingVerbCmd(positional, flags) {
     }
     const next = {
       legalName: typeof flags.name === "string" ? flags.name : d?.legalName ?? "",
-      ...((typeof flags.email === "string" ? flags.email : d?.email) ? { email: typeof flags.email === "string" ? flags.email : d.email } : {}),
-      ...((typeof flags.abn === "string" ? flags.abn : d?.abn) ? { abn: typeof flags.abn === "string" ? flags.abn : d.abn } : {}),
+      ...(flags["clear-email"] !== true && (typeof flags.email === "string" ? flags.email : d?.email) ? { email: typeof flags.email === "string" ? flags.email : d.email } : {}),
+      ...(flags["clear-abn"] !== true && (typeof flags.abn === "string" ? flags.abn : d?.abn) ? { abn: typeof flags.abn === "string" ? flags.abn : d.abn } : {}),
       ...(address ? { address } : {}),
     };
     const r = await ownerOnly(() => remoteCall(url, flags, "/api/billing/details", { method: "PUT", body: JSON.stringify(next) }), "changing the billing details");
@@ -10669,7 +11424,11 @@ async function workspaceCmd(positional, flags, layout) {
 
   /** @type {Record<string, any>} */
   let patch;
-  if (verb === "clear") patch = { [key]: key === "description" ? "" : null };
+  if (verb === "clear" && key === "compute" && rest.length) {
+    patch = { compute: computeClears(rest, `\`foldrun workspace clear compute [vcpu] [memory] [disk] --to ${ws}\` — none named clears all three`) };
+  } else if (verb === "clear" && key === "notify" && rest.length) {
+    patch = { notify: notifyWithout(/** @type {any} */ ((await workspaceDefaults(url, flags, ws)).notify), rest[0], `foldrun workspace clear notify --to ${ws}`) };
+  } else if (verb === "clear") patch = { [key]: key === "description" ? "" : null };
   else if (key === "alerts" || key === "judge") {
     patch = { [key]: await mergedEntry(url, flags, key, rest, ws, view, `foldrun workspace set ${key}`) };
   } else if (key === "compute") {
@@ -11266,9 +12025,10 @@ async function flowTriggerCmd(positional, flags, layout) {
  */
 async function flowComputeCmd(positional, flags, layout) {
   const flow = positional[1];
-  const usage = "`foldrun flow compute <flow> vcpu <cores> memory <GiB> disk <GiB>` — any of them; `--clear` for no cap of its own";
+  const usage = "`foldrun flow compute <flow> vcpu <cores> memory <GiB> disk <GiB>` — any of them; `--clear` for no cap of its own, `--clear disk` (or vcpu, memory) for one";
   if (!flow) throw new Error(usage);
-  const asked = flags.clear === true ? null : computePairs(positional.slice(2), usage);
+  // `--clear disk`: just the named figures go, the route keeps the rest.
+  const asked = flags.clear === true ? (positional.length > 2 ? computeClears(positional.slice(2), usage) : null) : computePairs(positional.slice(2), usage);
   const dry = flags["dry-run"] === true;
   if (namesPlatform(flags)) {
     // On the platform: the route merges, so nothing needs reading first.
@@ -11299,9 +12059,12 @@ async function flowComputeCmd(positional, flags, layout) {
   let value = null;
   if (asked) {
     value = typeof current === "object" && current && !Array.isArray(current) ? { ...current } : {};
-    if (asked.vcpu !== undefined) value.vcpu = asked.vcpu;
-    if (asked.memGiB !== undefined) value.memory = `${asked.memGiB}Gi`;
-    if (asked.diskGiB !== undefined) value.disk = `${asked.diskGiB}Gi`;
+    for (const [from, to] of [["vcpu", "vcpu"], ["memGiB", "memory"], ["diskGiB", "disk"]]) {
+      if (asked[from] === undefined) continue;
+      if (asked[from] === null) delete value[to];
+      else value[to] = to === "vcpu" ? asked[from] : `${asked[from]}Gi`;
+    }
+    if (!Object.keys(value).length) value = null;
   }
   const next = patchFrontmatter(raw, { compute: value });
   if (dry) {
@@ -11632,7 +12395,8 @@ async function assistantCmd(positional, flags, layout) {
         url,
         flags,
         `/api/workspaces/${enc(ws)}/assistant`,
-        { method: "POST", body: JSON.stringify({ messages, files: files.map(({ path: p, content }) => ({ path: p, content })), ...(conversation ? { conversation } : {}) }) },
+        // --page: what the dashboard sends as the page you are on ("flows — daily.md").
+        { method: "POST", body: JSON.stringify({ messages, files: files.map(({ path: p, content }) => ({ path: p, content })), ...(conversation ? { conversation } : {}), ...(typeof flags.page === "string" && flags.page.trim() ? { page: flags.page.trim() } : {}) }) },
         { seconds: Math.max(timeoutSeconds(flags), 300) },
       );
     } catch (err) {
@@ -12985,8 +13749,19 @@ async function a2aLsCmd(flags, layout) {
  *  route's PATCH { a2a }, merged there over the flow's block (a key given
  *  replaces it, a key given as null removes it). */
 export function a2aPatchFor(verb, flags) {
-  if (verb !== "publish") return { publish: false };
-  const patch = { publish: true };
+  // --clear-name, --clear-description, --clear-examples: the card's words
+  // go (null, as the flow page's emptied field sends), on either verb.
+  /** @type {Record<string, unknown>} */
+  const clears = {};
+  for (const k of ["name", "description", "examples"]) {
+    if (flags[`clear-${k}`] !== true) continue;
+    const given = k === "examples" ? many(flags.example).length > 0 : typeof flags[k] === "string";
+    if (given) throw new Error(`--${k === "examples" ? "example" : k} or --clear-${k}, not both`);
+    clears[k] = null;
+  }
+  if (verb !== "publish") return { publish: false, ...clears };
+  /** @type {Record<string, unknown>} */
+  const patch = { publish: true, ...clears };
   if (typeof flags.name === "string") patch.name = flags.name;
   if (typeof flags.description === "string") patch.description = flags.description;
   const examples = many(flags.example);
@@ -13419,7 +14194,8 @@ export async function run(command, positional, flags, workspace, layout) {
       // `runs` was a second spelling of `logs`, and --local keeps it one:
       // the local store has no table to draw across workspaces, because a
       // folder on a laptop is one workspace.
-      if (positional[0] === "rm") return runRmCmd(positional[1], flags, layout);
+      if (positional[0] === "rm") return positional.length > 2 ? runsRmManyCmd(positional.slice(1), flags, layout) : runRmCmd(positional[1], flags, layout);
+      if (positional[0] === "views" && positional[1]) return runViewsEditCmd(positional.slice(1), flags);
       if (positional[0] === "views") return runViewsCmd(flags);
       // The run doctor (FOL-22): the assistant reads the run and its files,
       // says why it failed and proposes the fix as diffs — saved on yes.
@@ -13450,6 +14226,8 @@ export async function run(command, positional, flags, workspace, layout) {
     case "stop":
       // No run id and a filter: every run the filter matches (runs/bulk).
       if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("stop", flags, layout);
+      // Several run ids: the dashboard's selection bar (runs/bulk { runIds }).
+      if (positional.length > 1) return bulkIdsCmd("stop", positional, flags, layout);
       return stopCmd(positional[0], flags, layout);
     case "answer":
       return answerCmd(positional, flags);
@@ -13457,6 +14235,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return messageCmd(positional, flags, layout);
     case "rerun":
       if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("rerun", flags, layout);
+      if (positional.length > 1) return bulkIdsCmd("rerun", positional, flags, layout);
       return rerunCmd(positional[0], flags, layout);
     case "account":
       return accountCmd(positional, flags);
@@ -13511,6 +14290,7 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "dup-step") return flowDupStepCmd(positional, flags, layout);
       if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
       if (positional[0] === "run") return invoke(positional[1], flags);
+      if (positional[0] === "inputs") return flowInputsCmd(positional, flags, layout);
       if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);
       if (positional[0] === "hook") return flowHookCmd(positional, flags, layout);
       if (positional[0] === "set") return flowSetCmd(positional, flags, layout);
