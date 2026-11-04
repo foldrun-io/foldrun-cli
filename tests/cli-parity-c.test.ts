@@ -271,87 +271,69 @@ test("eval compare: an item's @agent is that setting's alone; --agent fills the 
 
 // ---- 26: Move to shared
 
-test("source share: every file of a skill folder into the library, then those files — never the folder — out of the workspace", async () => {
-  const files: Record<string, string> = { "skills/house-style/SKILL.md": "---\nname: house-style\n---\nWrite plainly.\n", "skills/house-style/examples.md": "# examples\n", "skills/other/SKILL.md": "x" };
+test("source share asks the platform what would move, then moves it in one call", async () => {
+  const bodies: any[] = [];
   const s = await serve({
-    "GET /api/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
-    "GET /api/library/skills": () => failing(404, { error: "not found: x" }),
-    "PUT /api/library/skills": () => ({ ok: true }),
-    "DELETE /api/workspaces/blog-desk/source": () => ({ ok: true }),
+    "POST /api/workspaces/blog-desk/source/share": (b) => {
+      const body = JSON.parse(b);
+      bodies.push(body);
+      return { ok: true, kind: "skills", unit: "skills/house-style", files: [{ from: "skills/house-style/SKILL.md", to: "house-style/SKILL.md", replaces: false }, { from: "skills/house-style/examples.md", to: "house-style/examples.md", replaces: false }], moved: !body.dryRun };
+    },
   });
   const r = await at(s.url, "source", "share", "skills/house-style/SKILL.md", "--to", "blog-desk", "--yes");
   s.close();
   assert.equal(r.code, 0, r.out);
-  const puts = s.seen.filter((x) => x.method === "PUT").map((x) => JSON.parse(x.body));
-  assert.deepEqual(puts, [
-    { path: "house-style/SKILL.md", content: files["skills/house-style/SKILL.md"] },
-    { path: "house-style/examples.md", content: "# examples\n" },
-  ]);
-  // One delete per copied file: an asset the source API does not list (an
-  // image) would go with a folder delete without ever reaching the library.
-  const del = s.seen.filter((x) => x.method === "DELETE");
-  assert.deepEqual(del.map((x) => JSON.parse(x.body).path), ["skills/house-style/SKILL.md", "skills/house-style/examples.md"]);
-  // The deletes come after every copy.
-  assert.ok(s.seen.indexOf(del[0]) > s.seen.findLastIndex((x) => x.method === "PUT"));
-  assert.match(r.out, /only its text files move/);
+  assert.deepEqual(bodies, [{ path: "skills/house-style/SKILL.md", dryRun: true }, { path: "skills/house-style/SKILL.md" }]);
+  assert.match(r.out, /skills\/house-style\/examples\.md → library\/skills\/house-style\/examples\.md/);
+  assert.match(r.out, /moved to library\/skills\/house-style/);
+  assert.equal(s.seen.filter((x) => x.method === "DELETE" || x.method === "PUT").length, 0, "the CLI copies and deletes nothing itself");
 });
 
 test("source share: a library file already there is refused without --overwrite; --dry-run moves nothing", async () => {
-  const files: Record<string, string> = { "knowledge/pricing.md": "# prices\n" };
+  const bodies: any[] = [];
   const s = await serve({
-    "GET /api/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { content: files[q.get("path")!] } : { files: Object.keys(files) }),
-    "GET /api/library/knowledge": () => ({ path: "pricing.md", content: "old" }),
-    "PUT /api/library/knowledge": () => ({ ok: true }),
-    "DELETE /api/workspaces/blog-desk/source": () => ({ ok: true }),
+    "POST /api/workspaces/blog-desk/source/share": (b) => {
+      const body = JSON.parse(b);
+      bodies.push(body);
+      return { ok: true, kind: "knowledge", unit: "knowledge/faq.md", files: [{ from: "knowledge/faq.md", to: "faq.md", replaces: true }], moved: !body.dryRun };
+    },
   });
-  const refused = await at(s.url, "source", "share", "knowledge/pricing.md", "--to", "blog-desk", "--yes");
-  const dry = await at(s.url, "source", "share", "knowledge/pricing.md", "--to", "blog-desk", "--overwrite", "--dry-run");
-  assert.equal(s.seen.filter((x) => x.method !== "GET").length, 0);
-  const ok = await at(s.url, "source", "share", "knowledge/pricing.md", "--to", "blog-desk", "--overwrite", "--yes");
-  s.close();
+  const refused = await at(s.url, "source", "share", "knowledge/faq.md", "--to", "blog-desk", "--yes");
   assert.equal(refused.code, 1);
-  assert.match(refused.out, /already has knowledge\/pricing\.md — nothing was moved; --overwrite/);
+  assert.match(refused.out, /--overwrite replaces it/);
+  assert.equal(bodies.length, 1, "only the dry run was asked");
+  const dry = await at(s.url, "source", "share", "knowledge/faq.md", "--to", "blog-desk", "--overwrite", "--dry-run");
   assert.equal(dry.code, 0, dry.out);
-  assert.match(dry.out, /--dry-run: nothing moved/);
+  assert.equal(bodies.length, 2);
+  const ok = await at(s.url, "source", "share", "knowledge/faq.md", "--to", "blog-desk", "--overwrite", "--yes");
+  s.close();
   assert.equal(ok.code, 0, ok.out);
-  assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "PUT")!.body), { path: "pricing.md", content: "# prices\n" });
+  assert.deepEqual(bodies.at(-1), { path: "knowledge/faq.md", overwrite: true });
 });
 
-test("source share: hooks are refused, no terminal needs --yes, a failed copy leaves the original", async () => {
-  const files: Record<string, string> = { "scripts/summarise.py": "print(1)\n" };
+test("source share: no terminal needs --yes; the platform's refusal is said and nothing moves", async () => {
   const s = await serve({
-    "GET /api/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { content: files[q.get("path")!] } : { files: Object.keys(files) }),
-    "GET /api/library/scripts": () => failing(404, { error: "not found" }),
-    "PUT /api/library/scripts": () => failing(400, { error: "file too large" }),
-    "DELETE /api/workspaces/blog-desk/source": () => ({ ok: true }),
+    "POST /api/workspaces/blog-desk/source/share": (b) =>
+      JSON.parse(b).path.startsWith("skills/art")
+        ? failing(409, { error: "skills/art holds files the shared library cannot hold (skills/art/logo.png) — only text files go there; nothing was moved" })
+        : { ok: true, kind: "scripts", unit: "scripts/x.py", files: [{ from: "scripts/x.py", to: "x.py", replaces: false }], moved: false },
   });
-  const hook = await at(s.url, "source", "share", "hooks/no-push", "--to", "blog-desk", "--yes");
-  const noTty = await at(s.url, "source", "share", "scripts/summarise.py", "--to", "blog-desk");
-  const failed = await at(s.url, "source", "share", "scripts/summarise.py", "--to", "blog-desk", "--yes");
+  const asked = await at(s.url, "source", "share", "scripts/x.py", "--to", "blog-desk");
+  assert.notEqual(asked.code, 0);
+  assert.match(asked.out, /--yes/);
+  const art = await at(s.url, "source", "share", "skills/art", "--to", "blog-desk", "--yes");
   s.close();
-  assert.match(hook.out, /hook add <name> --library/);
-  assert.match(noTty.out, /pass --yes/);
-  assert.equal(failed.code, 1);
-  assert.match(failed.out, /could not copy scripts\/summarise\.py to the library — file too large/);
-  assert.equal(s.seen.filter((x) => x.method === "DELETE").length, 0);
+  assert.notEqual(art.code, 0);
+  assert.match(art.out, /logo\.png/);
 });
 
-test("source share: a file edited while it was copied is not deleted", async () => {
-  let reads = 0;
-  const s = await serve({
-    "GET /api/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { content: ++reads === 1 ? "# v1\n" : "# v2, edited meanwhile\n" } : { files: ["knowledge/pricing.md"] }),
-    "GET /api/library/knowledge": () => failing(404, { error: "not found" }),
-    "PUT /api/library/knowledge": () => ({ ok: true }),
-    "DELETE /api/workspaces/blog-desk/source": () => ({ ok: true }),
-  });
-  const r = await at(s.url, "source", "share", "knowledge/pricing.md", "--to", "blog-desk", "--yes");
+test("source share on a platform from before the route says so", async () => {
+  const s = await serve({});
+  const r = await at(s.url, "source", "share", "skills/x", "--to", "blog-desk", "--yes");
   s.close();
-  assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /changed in blog-desk while it was copied — nothing was deleted/);
-  assert.equal(s.seen.filter((x) => x.method === "DELETE").length, 0);
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /no "Move to shared" route yet/);
 });
-
-// ---- 29: edit guards
 
 test("account model use --if-version sends ifVersion; a bad value is refused before anything is sent", async () => {
   const s = await serve({ "PUT /api/account/model": () => ({ set: false, runsOn: "account", source: "own" }) });
@@ -405,4 +387,20 @@ test("check --to prints when the daily rescan last ran; a platform without it co
   old.close();
   assert.equal(o.code, r.code, o.out);
   assert.doesNotMatch(o.out, /daily rescan/);
+});
+
+test("source share --json prints only JSON: the plan on --dry-run, the answer once moved", async () => {
+  const s = await serve({
+    "POST /api/workspaces/blog-desk/source/share": (b) => ({ ok: true, kind: "scripts", unit: "scripts/x.py", files: [{ from: "scripts/x.py", to: "x.py", replaces: false }], moved: !JSON.parse(b).dryRun }),
+  });
+  // stdout may open with the "acting with --token" line; the rest is one JSON value.
+  const parse = (out: string) => JSON.parse(out.slice(out.search(/[[{]/)));
+  const dry = await at(s.url, "source", "share", "scripts/x.py", "--to", "blog-desk", "--dry-run", "--json");
+  const done = await at(s.url, "source", "share", "scripts/x.py", "--to", "blog-desk", "--yes", "--json");
+  s.close();
+  assert.equal(dry.code, 0, dry.out);
+  assert.equal(parse(dry.out).moved, false);
+  assert.doesNotMatch(dry.out, /the shared library/, "no human text");
+  assert.equal(done.code, 0, done.out);
+  assert.equal(parse(done.out).moved, true);
 });

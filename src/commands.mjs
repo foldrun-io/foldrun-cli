@@ -4730,8 +4730,12 @@ async function keysCmd(positional, flags) {
     if (flags.a2a === true) return keysCreateA2a(url, arg, flags);
     const body = { label: arg };
     if (typeof flags.role === "string") body.role = flags.role;
-    // --expires 30d|90d|365d|never; unsaid, the key never expires.
-    if (typeof flags.expires === "string") body.expires = flags.expires;
+    // --expires 30d|90d|365d|never (--forever is never); unsaid, 90 days —
+    // the dashboard's default since it was built, and the CLI's since
+    // 5 Nov 2026: a key that ends is a key that cannot leak forever.
+    if (flags.forever === true && flags.expires !== undefined) throw new Error("--forever or --expires <span>, not both");
+    if (flags.expires !== undefined && typeof flags.expires !== "string") throw new Error("--expires needs a span: 30d, 90d, 365d or never");
+    body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
     // --workspaces a,b narrows the key to those; --workspaces all opens
     // every one you can. Unsaid, the key inherits your own scope.
     if (typeof flags.workspaces === "string") body.workspaces = flags.workspaces === "all" ? null : flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
@@ -4983,110 +4987,65 @@ async function sourceCmd(positional, flags) {
   throw new Error(`source: unknown verb "${verb}" — ls, cat, put, new, mv, rm, share`);
 }
 
-/** The workspace folders "Move to shared" applies to — the library kinds
- *  but hooks (`foldrun hook add --library` makes a shared one). */
-const SHAREABLE_KINDS = ["skills", "tools", "scripts", "knowledge", "memory"];
-
 /**
  * `foldrun source share <path> --to <ws>` — the dashboard's "Move to shared":
- * the file goes into the account library (PUT /api/library/<kind>) and,
- * once it is safely there, out of the workspace (DELETE …/source). A skill
- * or folder tool moves whole — every file of its folder, where the
- * dashboard copies the one file it shows — and subfolders keep their
- * place. A library file of the same path is refused unless --overwrite;
- * --dry-run lists what would move. Asks first (--yes with no terminal):
- * it leaves this workspace and every workspace in the account can use it.
+ * POST /api/workspaces/<ws>/source/share, which moves it on the server in one
+ * call. A skill or folder tool (skills/x/SKILL.md, tools/x/tool.md, or the
+ * folder) moves whole; a folder holding a file the library cannot hold (an
+ * image, a binary) is refused and nothing moves. It asks the platform what
+ * would move first (dryRun), lists it, asks (--yes with no terminal), then
+ * moves. A library file of the same path is refused unless --overwrite;
+ * --dry-run stops after the list. Done here file by file (4 Nov) it could
+ * not delete a skill's SKILL.md alone, nor reach its other files safely.
  */
 async function sourceShare(url, flags, ws, base, spec) {
   if (!spec) throw new Error("which file? `foldrun source share skills/house-style --to <workspace>` — a skill, tool, script, knowledge or memory file");
-  const clean = spec.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
-  const [kind, ...rest] = clean.split("/");
-  if (kind === "hooks") throw new Error("a hook is a folder whose run.mjs goes with it — `foldrun hook add <name> --library` makes a shared one");
-  if (!SHAREABLE_KINDS.includes(kind) || !rest.length) throw new Error(`"${spec}" is not under ${SHAREABLE_KINDS.join("/, ")}/ — only those move to the shared library`);
-  // skills/x/SKILL.md or tools/x/tool.md names its folder: the folder is the thing.
-  const unit = (kind === "skills" || kind === "tools") && rest.length >= 2 ? `${kind}/${rest[0]}` : clean;
-  const { files = [] } = await remoteCall(url, flags, base);
-  const members = files.filter((f) => f === unit || f.startsWith(`${unit}/`));
-  if (!members.length) throw new Error(`no ${unit} in ${ws} — \`foldrun source ls ${kind} --to ${ws}\` lists what is there`);
-  const relOf = (f) => f.slice(kind.length + 1);
-
-  /** Which of these the library already has. */
-  const inLibrary = async (list) => {
-    const hits = [];
-    for (const f of list) {
-      try {
-        await remoteCall(url, flags, `/api/library/${kind}?path=${enc(relOf(f))}`);
-        hits.push(f);
-      } catch (err) {
-        if (!(err instanceof HttpError) || !(err.status === 404 || /not found/i.test(err.message))) throw err;
-      }
+  const route = `/api/workspaces/${enc(ws)}/source/share`;
+  const ask = (extra) => remoteCall(url, flags, route, { method: "POST", body: JSON.stringify({ path: spec, ...(flags.overwrite === true ? { overwrite: true } : {}), ...extra }) });
+  let plan;
+  try {
+    plan = await ask({ dryRun: true });
+  } catch (err) {
+    // The route's own 404 says "no <path> in <ws>"; any other 404 is a
+    // platform from before the route.
+    if (err instanceof HttpError && err.status === 404 && !/^no /.test(err.message)) {
+      throw new Error(`${url} has no "Move to shared" route yet — it is newer than this platform; move it in Settings → the workspace's assets, or update the platform`);
     }
-    return hits;
-  };
-  const taken = await inLibrary(members);
-  console.log(`\n  ${c.bold(unit)} ${c.dim(`· ${ws} → the shared library`)}\n`);
-  for (const f of members) console.log(`  ${c.dim("·")} ${f} → library/${kind}/${relOf(f)}${taken.includes(f) ? c.amber("  (the library has one — replaced)") : ""}`);
-  console.log();
+    throw err;
+  }
+  const json = flags.json === true;
+  const taken = plan.files.filter((f) => f.replaces);
+  // --json: the platform's answer and nothing else — the plan on a dry run
+  // or a refusal, the move's answer once moved.
+  if (json && (flags["dry-run"] === true || (taken.length && flags.overwrite !== true))) {
+    console.log(JSON.stringify(plan, null, 2));
+    return taken.length && flags.overwrite !== true ? 1 : 0;
+  }
+  if (!json) {
+    console.log(`\n  ${c.bold(plan.unit)} ${c.dim(`· ${ws} → the shared library`)}\n`);
+    for (const f of plan.files) console.log(`  ${c.dim("·")} ${f.from} → library/${plan.kind}/${f.to}${f.replaces ? c.amber("  (the library has one — replaced)") : ""}`);
+    console.log();
+  }
   if (taken.length && flags.overwrite !== true) {
-    console.log(`  ${c.red("✗")} the library already has ${taken.map((f) => `${kind}/${relOf(f)}`).join(", ")} — nothing was moved; --overwrite replaces ${taken.length === 1 ? "it" : "them"}\n`);
+    console.log(`  ${c.red("✗")} the library already has ${taken.map((f) => `${plan.kind}/${f.to}`).join(", ")} — nothing was moved; --overwrite replaces ${taken.length === 1 ? "it" : "them"}\n`);
     return 1;
   }
   if (flags["dry-run"] === true) {
     console.log(`  ${c.dim("--dry-run: nothing moved")}\n`);
     return 0;
   }
-  if (!(await confirmed(flags, "source share", `Move ${unit} to shared? Every workspace in the account will be able to use it, and it leaves ${ws}. [y/N] `))) {
+  if (!(await confirmed(flags, "source share", `Move ${plan.unit} to shared? Every workspace in the account will be able to use it, and it leaves ${ws}. [y/N] `))) {
     console.log(`\n  ${c.dim("nothing moved")}\n`);
     return 0;
   }
-  // Asked again after the question, which may have waited a long time: a
-  // library file made meanwhile is not replaced without --overwrite. (The
-  // library PUT takes no ifMatch, so this narrows the window, no more.)
-  if (flags.overwrite !== true) {
-    const since = await inLibrary(members);
-    if (since.length) throw new Error(`the library now has ${since.map((f) => `${kind}/${relOf(f)}`).join(", ")} — made while this waited; nothing was moved (--overwrite replaces it)`);
+  // The platform checks it all again: a library file made while this asked
+  // is refused (409) without --overwrite, and nothing moves.
+  const done = await ask({});
+  if (flags.json === true) {
+    console.log(JSON.stringify(done, null, 2));
+    return 0;
   }
-  const copied = new Map();
-  for (const f of members) {
-    const { content } = await remoteCall(url, flags, `${base}?path=${enc(f)}`);
-    copied.set(f, content ?? "");
-    try {
-      await remoteCall(url, flags, `/api/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: relOf(f), content: content ?? "" }) });
-    } catch (err) {
-      throw new Error(`could not copy ${f} to the library — ${explain(err)}. ${unit} is still in ${ws}${f === members[0] ? "" : "; what was copied before it is in the library too"}`);
-    }
-  }
-  // The DELETE takes no ifMatch, so read it all again first: a file edited
-  // or added while this copied would be deleted without ever reaching the
-  // library. Changed, it stays in both places and nothing is deleted.
-  const { files: now = [] } = await remoteCall(url, flags, base);
-  const nowMembers = now.filter((f) => f === unit || f.startsWith(`${unit}/`));
-  const moved = [];
-  for (const f of nowMembers) {
-    if (!copied.has(f)) moved.push(f);
-    else if ((await remoteCall(url, flags, `${base}?path=${enc(f)}`)).content !== copied.get(f)) moved.push(f);
-  }
-  if (moved.length) {
-    throw new Error(`copied to shared, but ${moved.join(", ")} changed in ${ws} while it was copied — nothing was deleted, so it is in both places; run it again with --overwrite to copy the new text`);
-  }
-  // Only once every file is in the library, and only the files that were
-  // copied, one by one — never the folder: the source API lists text files
-  // alone, so deleting a skill's folder would take an image or other asset
-  // in it that never reached the library. A failure leaves the rest in both
-  // places, never in neither, and says so.
-  for (const [i, f] of members.entries()) {
-    try {
-      await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: f }) });
-    } catch (err) {
-      const left = members.slice(i);
-      throw new Error(`copied to shared, but ${f} could not be removed from ${ws} — ${explain(err)}. ${left.length === 1 ? "It is" : `These ${left.length} are`} in both now; ${left.map((x) => `\`foldrun source rm ${x} --to ${ws}\``).join(", ")} finish${left.length === 1 ? "es" : ""} the move`);
-    }
-  }
-  console.log(`  ${c.green("✓")} ${unit} ${c.dim(`moved to library/${kind}/${relOf(unit)} — every workspace in the account can use it`)}`);
-  if (unit !== clean || members.length > 1 || members[0] !== unit) {
-    console.log(`  ${c.dim(`only its text files move: anything else in ${unit}/ (an image, a binary) stays in ${ws}`)}`);
-  }
-  console.log();
+  console.log(`  ${c.green("✓")} ${done.unit} ${c.dim(`moved to library/${done.kind}/${done.unit.slice(done.kind.length + 1)} — every workspace in the account can use it`)}\n`);
   return 0;
 }
 
