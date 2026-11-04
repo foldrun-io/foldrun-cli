@@ -92,6 +92,7 @@ api workspaces/$WS/flows/publish/run -X POST   # start a flow
 | | PUT | write (`path`, `content`, optional `message` — recorded on the revision, as `foldrun source put --message` sends it) |
 | | PATCH | move (`from`, `to`) |
 | | DELETE | remove (`path`) |
+| `/api/workspaces/<ws>/source/share` | POST | **Move to shared**: a skill, tool, script, knowledge or memory file into the account library and out of the workspace, in one call — `path` (`skills/x/SKILL.md`, `tools/x/tool.md` or the folder moves the whole folder), `overwrite` (replace library files already there; `409` otherwise), `dryRun` (what would move, nothing written). Everything is checked first: a folder holding a file the library cannot hold (an image, a binary), one too large or with broken frontmatter is refused `409` and nothing changes. `{ ok, kind, unit, files: [{ from, to, replaces }], moved }`. Account-wide callers only (`workspace:write`), as for the library itself. Hooks are refused. Idempotent |
 
 Editing one file at a time. For a whole tree, deploy. The files this door
 writes are text: markdown, and a script's or a register's own formats —

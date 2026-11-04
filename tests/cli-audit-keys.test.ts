@@ -91,6 +91,18 @@ test("keys create --expires sends it and prints when it ends", async () => {
   assert.match(r.out, /mda_new/);
 });
 
+test("keys create with no --expires asks for 90 days, as the dashboard does; --forever asks for never", async () => {
+  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "mda_new", id: "k9", prefix: "mda_new", role: "editor", workspaces: null, expiresAt: null }) });
+  assert.equal((await at(s.url, "keys", "create", "ci")).code, 0);
+  assert.equal(JSON.parse(s.seen[0].body).expires, "90d");
+  assert.equal((await at(s.url, "keys", "create", "ci", "--forever")).code, 0);
+  assert.equal(JSON.parse(s.seen[1].body).expires, "never");
+  const both = await at(s.url, "keys", "create", "ci", "--forever", "--expires", "30d");
+  s.close();
+  assert.notEqual(both.code, 0);
+  assert.equal(s.seen.length, 2, "refused before anything is sent");
+});
+
 test("keys rotate --grace 1h posts to the rotate route and prints the new key once", async () => {
   const s = await serve({
     "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_fresh", id: "k2", prefix: "mda_fresh", expiresAt: null, replaced: { id: "k1", endsAt: "2026-10-01T03:00:00.000Z" } }),

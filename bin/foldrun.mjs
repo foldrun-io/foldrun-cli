@@ -374,7 +374,7 @@ Options
   --tag <t>                 invoke, flow run: a label on the run — repeatable, sent as tags
   --inputs <set>            invoke, flow run: the task is a saved input set (evals/<flow>-inputs.md, or an eval case for the flow)
   --preview                 storage cat: the platform reads the file and prints what is in it
-  --ttl <days>              storage share: how long the link works (default 7); --forever: it never expires
+  --ttl <days>              storage share: how long the link works (default 7); --forever: it never expires (keys create: the key never expires)
   --into <folder/>          storage put: upload under that folder of storage/
   --as <path>               storage put: the path one uploaded file lands at; agent import: the name the copy gets
   --csv                     billing statement: the CSV file instead of the table
@@ -437,7 +437,7 @@ Options
   --authorize-param name=value   connect, secrets clients add: an extra authorize-URL parameter the provider documents (repeatable — e.g. access_type=offline)
   --role <r>                keys create, team invite: viewer, editor (default) or admin
   --no-send                 team invite: make the link, mail nothing
-  --expires <span>          keys create: when it stops working — 30d, 90d, 365d or never (default never)
+  --expires <span>          keys create: when it stops working — 30d, 90d (default, as in the dashboard), 365d or never; --forever is never
   --grace <span>            keys rotate: keep the old key working for 1h or 24h while you swap the new one in (default 0: revoked now)
   --a2a                     keys create: an A2A key for an outside agent — with --to <workspace> and --flows a,b; --max-tasks <n> caps its open tasks (1–100, default 10)
   --key-env <NAME>          a2a call, a2a status, a2a cancel, a2a card: the environment variable holding the A2A key (default FOLDRUN_A2A_KEY) — a key is never taken on the command line
