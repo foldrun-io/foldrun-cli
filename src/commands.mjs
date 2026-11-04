@@ -11355,7 +11355,7 @@ async function billingVerbCmd(positional, flags) {
     // the platform team credits an account from its console. Nothing is sent.
     throw new Error("credit is not added by hand — `foldrun billing top-up <usd>` opens Stripe's checkout; for a credit from the platform, ask the platform team");
   }
-  throw new Error(`unknown billing verb "${verb}" — statement, wallet, details or portal (bare \`foldrun billing\` is the balance)`);
+  throw new Error(`unknown billing verb "${verb}" — statement, invoices, wallet, details or portal (bare \`foldrun billing\` is the balance)`);
 }
 
 /** The defaults a workspace's AGENTS.md sets, read from its source. */
@@ -14039,6 +14039,88 @@ async function a2aCardCmd(flow, flags, layout) {
   return 0;
 }
 
+// --------------------------------------------------- spend limits, invoices
+
+/**
+ * `foldrun usage budget [--to <ws>]` — the Spend limits page: each cap, what
+ * is spent in its window (today, this week, this month) and how far that is,
+ * from GET /api/usage/budget. A key scoped to some workspaces sees those, and
+ * not the account's figure.
+ */
+async function usageBudgetCmd(flags) {
+  const url = platformFor(flags, "usage budget");
+  const d = await remoteCall(url, flags, "/api/usage/budget");
+  const ws = typeof flags.to === "string" ? flags.to : null;
+  const rows = (Array.isArray(d.workspaces) ? d.workspaces : []).filter((w) => !ws || w.workspace === ws);
+  if (ws && !rows.length) throw new Error(`no workspace "${ws}" among the ones this credential may open`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(ws ? { workspaces: rows } : d, null, 2));
+    return 0;
+  }
+  const money = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+  const line = (s) => {
+    if (!s.budget) return `${money(s.spentUsd)} spent this month ${c.dim("· no cap")}`;
+    const pct = s.budget.usd > 0 ? Math.round((s.spentUsd / s.budget.usd) * 100) : 100;
+    const turns = s.budget.period === "day" ? "tomorrow" : s.budget.period === "week" ? "next week" : "the new month";
+    const mark = pct >= 100 ? c.red("✗") : pct >= 80 ? c.amber("!") : c.green("✓");
+    const said = pct >= 100 ? c.red(` · at the cap, new runs are refused until ${turns}`) : pct >= 80 ? c.amber(" · past the 80% warning") : "";
+    return `${mark} ${money(s.spentUsd)} of ${s.label} ${s.window} · ${pct}%${said}`;
+  };
+  console.log();
+  if (!ws) {
+    if (d.account) console.log(`  ${c.bold("account")}  ${line(d.account)}`);
+    else if (d.accountHidden) console.log(`  ${c.bold("account")}  ${c.dim("shown only to a member or key with every workspace — it is spend over all of them")}`);
+  }
+  if (rows.length) {
+    const width = Math.max(...rows.map((w) => w.workspace.length));
+    if (!ws) console.log(`\n  ${c.bold("workspaces")}  ${c.dim("most spent first")}`);
+    for (const w of rows) console.log(`  ${pad(w.workspace, width)}  ${line(w)}`);
+  } else console.log(`  ${c.dim("no workspaces yet")}`);
+  console.log(`\n  ${c.dim("set a cap: foldrun account set budget 500 · foldrun workspace set budget 60/day --to <ws>")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun billing invoices` — the Invoices tab: the plan's tax invoices from
+ * Stripe with their links, and every credit purchase with its receipt, from
+ * GET /api/billing/invoices. An install without billing has no such route.
+ */
+async function billingInvoicesCmd(flags) {
+  const url = platformFor(flags, "billing invoices");
+  let d;
+  try {
+    d = await remoteCall(url, flags, "/api/billing/invoices");
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) throw new Error(`${new URL(url).host} has no billing — invoices are the hosted platform's (or it runs a platform from before 5 Nov 2026)`);
+    if (err instanceof HttpError && err.status === 403) throw new Error(`invoices need a member or key with every workspace — ${err.message}`);
+    throw err;
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify(d, null, 2));
+    return 0;
+  }
+  const day = (iso) => (iso ? String(iso).slice(0, 10) : "—");
+  const invoices = Array.isArray(d.invoices) ? d.invoices : [];
+  const receipts = Array.isArray(d.receipts) ? d.receipts : [];
+  console.log(`\n  ${c.bold("tax invoices")}  ${c.dim("the plan's fee and card top-ups, from Stripe")}`);
+  if (!invoices.length) console.log(`  ${c.dim(d.stripe ? "no invoices yet" : "none — Stripe is not set up for this account")}`);
+  for (const inv of invoices) {
+    const amount = `${Number(inv.amount ?? 0).toFixed(2)}${inv.currency ? ` ${String(inv.currency).toUpperCase()}` : ""}`;
+    const said = inv.status ?? "—";
+    const status = (inv.status === "paid" ? c.green : c.amber)(said) + " ".repeat(Math.max(0, 13 - said.length));
+    console.log(`  ${pad(inv.number ?? inv.id, 14)} ${day(inv.createdAt)}  ${pad(amount, 12)} ${status} ${inv.description ?? ""}`);
+    if (inv.url) console.log(`  ${" ".repeat(14)} ${c.dim(inv.url)}`);
+  }
+  console.log(`\n  ${c.bold("credit purchases")}`);
+  if (!receipts.length) console.log(`  ${c.dim("no payments yet")}`);
+  for (const r of receipts) {
+    console.log(`  ${day(r.t)}  ${pad(`+$${Number(r.usd ?? 0).toFixed(2)}`, 10)} ${r.label ?? ""}`);
+    console.log(`              ${r.receiptUrl ? c.dim(r.receiptUrl) : c.dim("no receipt — not paid by card")}`);
+  }
+  console.log(`\n  ${c.dim("a month's statement: foldrun billing statement [YYYY-MM] (--csv)")}\n`);
+  return 0;
+}
+
 export async function run(command, positional, flags, workspace, layout) {
   // Nothing outside the CLI's own entry point passes a layout — the tests
   // that call run() directly, an embedder. A lone workspace is the safe
@@ -14149,6 +14231,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return observeCmd(flags, layout);
     case "usage":
       if (positional[0] === "compute") return usageComputeCmd(flags);
+      if (positional[0] === "budget") return usageBudgetCmd(flags);
       return usageCmd(flags);
     case "workspace":
       if (positional[0] === "vocabulary") return vocabularyCmd(flags, layout);
@@ -14253,6 +14336,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "docs":
       return docsCmd(positional, flags);
     case "billing":
+      if (positional[0] === "invoices") return billingInvoicesCmd(flags);
       if (["plans", "plan", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
       return positional.length ? billingVerbCmd(positional, flags) : billingCmd(flags);
     case "library":
