@@ -198,3 +198,11 @@ test("runs --all on a platform from before paging refuses, instead of a list cut
   assert.notEqual(r.code, 0);
   assert.match(r.out, /does not page runs yet/);
 });
+
+test("runs --json on an account with no workspaces is still the { runs, next } document", async () => {
+  const s = await serve({ "/api/workspaces": () => ({ workspaces: [] }) });
+  const r = await at(s.url, "runs", "--json");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(r.out.slice(r.out.search(/[[{]/))), { runs: [], next: null });
+});

@@ -7958,7 +7958,8 @@ async function runsCmd(flags, layout) {
   }
   const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
   if (!names.length) {
-    console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
+    if (flags.json === true) console.log(JSON.stringify({ runs: [], next: null }, null, 2));
+    else console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
     return 0;
   }
   const limit = Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 20;
@@ -8072,9 +8073,10 @@ async function runsCmd(flags, layout) {
     cursor = runCursor(horizon);
     // Newest first: once the horizon is older than --since, nothing older matches.
     if (cutoff !== null && Date.parse(horizon.startedAt) < cutoff) break;
-    // Without --all a sparse filter stops after 20 rounds (10,000 runs a desk)
-    // and prints where it got to, rather than reading the whole history.
-    if (collected.length >= target || (flags.all !== true && round >= 19)) {
+    // Without --all a sparse filter stops after 20 rounds past the ones the
+    // asked-for page needs (10,000 more runs a desk) and prints where it got
+    // to, rather than reading the whole history; a deep --page is reached.
+    if (collected.length >= target || (flags.all !== true && round >= 19 + Math.ceil(target / perWorkspace))) {
       more = true;
       break;
     }
