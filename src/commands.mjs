@@ -6672,7 +6672,14 @@ async function accountCmd(positional, flags) {
   }
 
   let patch;
-  if (verb === "clear") {
+  if (verb === "clear" && key === "compute" && positional.length > 2) {
+    // `clear compute disk` — just the named figures, as the dashboard's
+    // emptied field does; the platform keeps the others.
+    patch = { compute: computeClears(positional.slice(2), "`foldrun account clear compute [vcpu] [memory] [disk]` — none named clears all three") };
+  } else if (verb === "clear" && key === "notify" && positional.length > 2) {
+    const { defaults } = await remoteCall(url, flags, "/api/account");
+    patch = { notify: notifyWithout(defaults?.notify, positional[2], "foldrun account clear notify") };
+  } else if (verb === "clear") {
     patch = { [key]: null };
   } else if (key === "alerts" || key === "judge") {
     patch = { [key]: await mergedEntry(url, flags, key, positional.slice(2), null, view, `foldrun account set ${key}`) };
@@ -10666,6 +10673,9 @@ async function usageCmd(flags) {
   const url = platformFor(flags, "usage");
   const days = flags.days === undefined ? 56 : Number(flags.days);
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("--days is a whole number of days, 1 to 365");
+  // How many rows of the by-flow and by-agent tables (the Usage page's).
+  const limit = flags.limit === undefined ? 10 : Number(flags.limit);
+  if (!Number.isInteger(limit) || limit < 0) throw new Error("--limit is a whole number of rows for by flow and by agent, 0 to hide them");
   const [u, h] = await Promise.all([remoteCall(url, flags, "/api/usage"), remoteCall(url, flags, `/api/usage/history?days=${days}`)]);
   if (flags.json === true) {
     console.log(JSON.stringify({ usage: u, history: h }, null, 2));
@@ -10696,7 +10706,20 @@ async function usageCmd(flags) {
       console.log(`  ${c.bold(pad(x.name, w))}  ${pad(usd(x.totalUsd), 9)}  ${pad(`${x.runs} runs`, 9)}  ${change} ${c.dim(`vs the ${h.bucket} before`)}`);
     }
   }
-  console.log(`\n  ${c.dim("--days <n> for another window · --json for both documents · foldrun billing for the balance")}\n`);
+  // By flow and by agent: the charged series the Usage page tables show,
+  // most charged first, the first --limit of each.
+  for (const [title, rows] of [["by flow", h.byFlow ?? []], ["by agent", h.byAgent ?? []]]) {
+    if (!rows.length || !limit) continue;
+    const top = rows.slice().sort((a, b) => (b.totalUsd ?? 0) - (a.totalUsd ?? 0)).slice(0, limit);
+    const w = Math.max(...top.map((x) => String(x.name).length));
+    console.log(`\n  ${c.bold(title)}  ${c.dim(`charged, ${h.from?.slice(0, 10)} → ${h.to?.slice(0, 10)}`)}`);
+    for (const x of top) {
+      const change = x.change == null ? c.dim("—") : x.change > 0 ? c.amber(`+${Math.round(x.change * 100)}%`) : c.green(`${Math.round(x.change * 100)}%`);
+      console.log(`  ${pad(printable(x.name), w)}  ${pad(usd(x.totalUsd), 9)}  ${pad(x.runs ? `${x.runs} run${x.runs === 1 ? "" : "s"}` : "—", 9)}  ${change}`);
+    }
+    if (rows.length > top.length) console.log(`  ${c.dim(`and ${rows.length - top.length} more — --limit <n> shows more`)}`);
+  }
+  console.log(`\n  ${c.dim("--days <n> for another window · --limit <n> rows by flow and by agent · --json for both documents · foldrun billing for the balance")}\n`);
   return 0;
 }
 
@@ -10723,6 +10746,39 @@ function computePairs(pairs, usage) {
     out[names[k]] = n;
   }
   return out;
+}
+
+/**
+ * `disk` / `vcpu memory` → { diskGiB: null, … }: the named figures as null,
+ * which the platform drops while keeping the rest (the dashboard's emptied
+ * field sends the same). Clearing all three is plain `clear compute`.
+ */
+function computeClears(names, usage) {
+  const fields = { vcpu: "vcpu", memory: "memGiB", disk: "diskGiB" };
+  /** @type {Record<string, null>} */
+  const out = {};
+  for (const n of names) {
+    if (!(n in fields)) throw new Error(`${usage} — not "${n}"`);
+    out[fields[n]] = null;
+  }
+  return out;
+}
+
+/**
+ * The notify block without one channel (email or url), the other and the
+ * events kept. The platform replaces the block whole and refuses one with
+ * neither channel, so the last one goes with a plain `clear notify`.
+ */
+function notifyWithout(current, channel, clearAll) {
+  if (channel !== "email" && channel !== "url") throw new Error(`\`${clearAll} email\` or \`${clearAll} url\` drops one channel — \`${clearAll}\` alone turns notify off`);
+  const n = current && typeof current === "object" ? current : {};
+  if (!n[channel]) throw new Error(`notify has no ${channel === "url" ? "webhook URL" : "email"} set here — nothing to clear`);
+  const other = channel === "email" ? "url" : "email";
+  // A key limited to some workspaces sees the account's URL only as hidden;
+  // sending the block without it would drop it.
+  if (other === "url" && !n.url && n.hidden) throw new Error("the webhook URL beside it is hidden from this key — clear the email with a key that holds every workspace");
+  if (!n[other]) throw new Error(`the ${channel === "url" ? "webhook URL" : "email"} is notify's only channel — \`${clearAll}\` turns notify off`);
+  return { [other]: n[other], events: Array.isArray(n.events) && n.events.length ? n.events : ["failed", "awaiting-approval"] };
 }
 
 /** A size as AGENTS.md writes it — 8Gi, 1536Mi, 8g — in GiB; null when none. */
@@ -10844,7 +10900,7 @@ async function billingVerbCmd(positional, flags) {
       console.log(`  ${c.dim(`burn ${usd(s.burnPerDayUsd)}/day · 7d ${usd(s.spend7dUsd)} · 30d ${usd(s.spend30dUsd)} · month to date ${usd(s.monthToDateUsd)}`)}`);
       if (s.daysLeft != null) console.log(`  ${s.daysLeft < 7 ? c.amber("!") : c.dim("·")} ${c.dim(`about ${Math.round(s.daysLeft)} days left at this burn${s.emptyOn ? ` — empty on ${s.emptyOn.slice(0, 10)}` : ""}${s.suggestedTopUpUsd ? `; ${usd(s.suggestedTopUpUsd)} covers about a month` : ""}`)}`);
       const a = w.autoTopUp;
-      console.log(`  auto top-up  ${a?.enabled ? `${usd(a.amountUsd)} when the balance falls below ${usd(a.thresholdUsd)}` : c.dim("off")}${w.cardSaved ? "" : c.dim(" · no card saved")}`);
+      console.log(`  auto top-up  ${a?.enabled ? `${usd(a.amountUsd)} when the balance falls below ${usd(a.thresholdUsd)}` : c.dim(`off${a ? ` (${usd(a.amountUsd)} below ${usd(a.thresholdUsd)} kept)` : ""}`)}${w.cardSaved ? "" : c.dim(" · no card saved")}`);
       if (w.email) console.log(`  receipts     ${w.email}`);
       // foldrun.ir (3 Nov 2026): paying with an Iranian card, in Toman.
       if (w.tomanTopUp?.url) console.log(`  in Toman     ${w.tomanTopUp.url}`);
@@ -10852,15 +10908,26 @@ async function billingVerbCmd(positional, flags) {
       console.log(`\n  ${c.dim("foldrun billing wallet set auto-top-up --threshold 10 --amount 50 · set auto-top-up off")}\n`);
       return 0;
     }
+    // `wallet clear email`: no receipt or warning address (the page's
+    // emptied field sends the same).
+    if (sub === "clear") {
+      if (rest[0] !== "email") throw new Error("`foldrun billing wallet clear email` — no address for receipts and low-balance warnings; `wallet set auto-top-up off` turns the refill off");
+      await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet", { method: "PUT", body: JSON.stringify({ email: null }) }), "changing the wallet");
+      console.log(`\n  ${c.green("✓")} no receipt email — the low-balance warning has nowhere to go until one is set\n`);
+      return 0;
+    }
     if (sub !== "set" || !["auto-top-up", "email"].includes(rest[0])) {
-      throw new Error("`foldrun billing wallet set auto-top-up --threshold <usd> --amount <usd>` (or `off`), or `wallet set email <address>`");
+      throw new Error("`foldrun billing wallet set auto-top-up --threshold <usd> --amount <usd>` (or `off`), or `wallet set email <address>` (`wallet clear email` for none)");
     }
     let body;
     if (rest[0] === "email") {
       if (!rest[1]) throw new Error("`foldrun billing wallet set email <address>` — where receipts and low-balance warnings go");
       body = { email: rest[1] };
     } else if (rest[1] === "off") {
-      body = { autoTopUp: null };
+      // Off keeps the threshold and the refill for next time, as the
+      // wallet page's switch does; null would forget them.
+      const a = (await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet"), "changing the wallet")).autoTopUp;
+      body = { autoTopUp: a && a.thresholdUsd > 0 && a.amountUsd >= 5 ? { enabled: false, thresholdUsd: a.thresholdUsd, amountUsd: a.amountUsd } : null };
     } else {
       const threshold = Number(flags.threshold);
       const amount = Number(flags.amount);
@@ -10870,7 +10937,11 @@ async function billingVerbCmd(positional, flags) {
       body = { autoTopUp: { enabled: true, thresholdUsd: threshold, amountUsd: amount } };
     }
     await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet", { method: "PUT", body: JSON.stringify(body) }), "changing the wallet");
-    const said = body.email ? `receipts go to ${body.email}` : body.autoTopUp ? `auto top-up on: ${usd(body.autoTopUp.amountUsd)} whenever the balance falls below ${usd(body.autoTopUp.thresholdUsd)}` : "auto top-up off";
+    const said = body.email
+      ? `receipts go to ${body.email}`
+      : body.autoTopUp?.enabled
+        ? `auto top-up on: ${usd(body.autoTopUp.amountUsd)} whenever the balance falls below ${usd(body.autoTopUp.thresholdUsd)}`
+        : `auto top-up off${body.autoTopUp ? c.dim(` — ${usd(body.autoTopUp.amountUsd)} below ${usd(body.autoTopUp.thresholdUsd)} kept for next time`) : ""}`;
     console.log(`\n  ${c.green("✓")} ${said}\n`);
     return 0;
   }
@@ -10890,7 +10961,12 @@ async function billingVerbCmd(positional, flags) {
       return 0;
     }
     if (sub !== "set") throw new Error("`foldrun billing details` shows them; `details set --name … --abn … --address … --email …` changes them");
-    let address = d?.address;
+    // --clear-address / --clear-email / --clear-abn: the PUT replaces the
+    // details whole, so a field left out of it is gone.
+    for (const k of ["address", "email", "abn"]) {
+      if (flags[`clear-${k}`] === true && typeof flags[k] === "string") throw new Error(`--${k} or --clear-${k}, not both`);
+    }
+    let address = flags["clear-address"] === true ? undefined : d?.address;
     if (typeof flags.address === "string") {
       // line1[, line2], city, state, postcode, country — the last part is the
       // two-letter country, the first is line 1, the rest fill in order.
@@ -10906,8 +10982,8 @@ async function billingVerbCmd(positional, flags) {
     }
     const next = {
       legalName: typeof flags.name === "string" ? flags.name : d?.legalName ?? "",
-      ...((typeof flags.email === "string" ? flags.email : d?.email) ? { email: typeof flags.email === "string" ? flags.email : d.email } : {}),
-      ...((typeof flags.abn === "string" ? flags.abn : d?.abn) ? { abn: typeof flags.abn === "string" ? flags.abn : d.abn } : {}),
+      ...(flags["clear-email"] !== true && (typeof flags.email === "string" ? flags.email : d?.email) ? { email: typeof flags.email === "string" ? flags.email : d.email } : {}),
+      ...(flags["clear-abn"] !== true && (typeof flags.abn === "string" ? flags.abn : d?.abn) ? { abn: typeof flags.abn === "string" ? flags.abn : d.abn } : {}),
       ...(address ? { address } : {}),
     };
     const r = await ownerOnly(() => remoteCall(url, flags, "/api/billing/details", { method: "PUT", body: JSON.stringify(next) }), "changing the billing details");
@@ -10997,7 +11073,11 @@ async function workspaceCmd(positional, flags, layout) {
 
   /** @type {Record<string, any>} */
   let patch;
-  if (verb === "clear") patch = { [key]: key === "description" ? "" : null };
+  if (verb === "clear" && key === "compute" && rest.length) {
+    patch = { compute: computeClears(rest, `\`foldrun workspace clear compute [vcpu] [memory] [disk] --to ${ws}\` — none named clears all three`) };
+  } else if (verb === "clear" && key === "notify" && rest.length) {
+    patch = { notify: notifyWithout(/** @type {any} */ ((await workspaceDefaults(url, flags, ws)).notify), rest[0], `foldrun workspace clear notify --to ${ws}`) };
+  } else if (verb === "clear") patch = { [key]: key === "description" ? "" : null };
   else if (key === "alerts" || key === "judge") {
     patch = { [key]: await mergedEntry(url, flags, key, rest, ws, view, `foldrun workspace set ${key}`) };
   } else if (key === "compute") {
@@ -11594,9 +11674,10 @@ async function flowTriggerCmd(positional, flags, layout) {
  */
 async function flowComputeCmd(positional, flags, layout) {
   const flow = positional[1];
-  const usage = "`foldrun flow compute <flow> vcpu <cores> memory <GiB> disk <GiB>` — any of them; `--clear` for no cap of its own";
+  const usage = "`foldrun flow compute <flow> vcpu <cores> memory <GiB> disk <GiB>` — any of them; `--clear` for no cap of its own, `--clear disk` (or vcpu, memory) for one";
   if (!flow) throw new Error(usage);
-  const asked = flags.clear === true ? null : computePairs(positional.slice(2), usage);
+  // `--clear disk`: just the named figures go, the route keeps the rest.
+  const asked = flags.clear === true ? (positional.length > 2 ? computeClears(positional.slice(2), usage) : null) : computePairs(positional.slice(2), usage);
   const dry = flags["dry-run"] === true;
   if (namesPlatform(flags)) {
     // On the platform: the route merges, so nothing needs reading first.
@@ -11627,9 +11708,12 @@ async function flowComputeCmd(positional, flags, layout) {
   let value = null;
   if (asked) {
     value = typeof current === "object" && current && !Array.isArray(current) ? { ...current } : {};
-    if (asked.vcpu !== undefined) value.vcpu = asked.vcpu;
-    if (asked.memGiB !== undefined) value.memory = `${asked.memGiB}Gi`;
-    if (asked.diskGiB !== undefined) value.disk = `${asked.diskGiB}Gi`;
+    for (const [from, to] of [["vcpu", "vcpu"], ["memGiB", "memory"], ["diskGiB", "disk"]]) {
+      if (asked[from] === undefined) continue;
+      if (asked[from] === null) delete value[to];
+      else value[to] = to === "vcpu" ? asked[from] : `${asked[from]}Gi`;
+    }
+    if (!Object.keys(value).length) value = null;
   }
   const next = patchFrontmatter(raw, { compute: value });
   if (dry) {
@@ -13314,8 +13398,19 @@ async function a2aLsCmd(flags, layout) {
  *  route's PATCH { a2a }, merged there over the flow's block (a key given
  *  replaces it, a key given as null removes it). */
 export function a2aPatchFor(verb, flags) {
-  if (verb !== "publish") return { publish: false };
-  const patch = { publish: true };
+  // --clear-name, --clear-description, --clear-examples: the card's words
+  // go (null, as the flow page's emptied field sends), on either verb.
+  /** @type {Record<string, unknown>} */
+  const clears = {};
+  for (const k of ["name", "description", "examples"]) {
+    if (flags[`clear-${k}`] !== true) continue;
+    const given = k === "examples" ? many(flags.example).length > 0 : typeof flags[k] === "string";
+    if (given) throw new Error(`--${k === "examples" ? "example" : k} or --clear-${k}, not both`);
+    clears[k] = null;
+  }
+  if (verb !== "publish") return { publish: false, ...clears };
+  /** @type {Record<string, unknown>} */
+  const patch = { publish: true, ...clears };
   if (typeof flags.name === "string") patch.name = flags.name;
   if (typeof flags.description === "string") patch.description = flags.description;
   const examples = many(flags.example);
