@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.1.2] — 2026-11-04
+
+- chore(deps-dev): bump @types/node (#59) ([66995c1](https://github.com/foldrun-io/foldrun-cli/commit/66995c1))
+
 ## [14.1.1] — 2026-11-03
 
 - ci(release): publish with npm provenance ([bcf5cbb](https://github.com/foldrun-io/foldrun-cli/commit/bcf5cbb))
