@@ -724,6 +724,9 @@ validates the flow it names, but no deploy, Run button or `foldrun eval` runs
 it, because there is nothing to assert. A Test run is the default; a Live run
 asks first. From a terminal, `foldrun invoke <flow> --inputs <name>` sends
 the same set.
+`foldrun flow inputs <flow>` lists the sets as the menu does, and
+`foldrun flow inputs save <flow> <name> --task "…"` saves one into the
+inputs file — in this folder, or the deployed copy with `--to <workspace>`.
 
 ### Draft with AI
 

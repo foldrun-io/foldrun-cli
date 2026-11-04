@@ -116,6 +116,7 @@ const HELP = `foldrun — agents are just folders
   foldrun check --rules     every rule check knows: id, level, what it guards against (--json)
   foldrun check --to <ws> --online  also the network checks, run by the platform: known vulnerabilities for exact runtime pins (OSV) and remote MCP servers' tool text — and what could not be checked
   foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test)
+  foldrun agent run <name> --no-task  run it with no instruction, on its own prompt alone — the dashboard's Run (--to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker> (--isolated: sandbox: own on the worker), --consult <agent> or --can-ask (--description for a worker with none)
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
   foldrun agent network <agent>  the sites its sandbox may reach; set the level (open, trusted, none, inherit) and --add / --remove <site> (repeatable)
@@ -123,9 +124,12 @@ const HELP = `foldrun — agents are just folders
   foldrun agent import --list  what could be imported into a deployed workspace: every other workspace you can read, and its agents (--to, --json)
   foldrun flow add <flow> <pattern>  one canvas block as a markdown edit: chain, parallel, router, fan-out, loop, approval, ask, wait, rescue, subflow — diff shown, checked, --dry-run
   foldrun flow rm-step <flow> --step <n|agent>  delete one step (its options too); groups renumber, agent file untouched — says what else changes, diff, checked, asks (--yes), --dry-run
+  foldrun flow rm-step <flow> --step 2,4  delete several steps in one revision (one write, or one PATCH with --to), as the canvas's multi-select delete
   foldrun flow dup-step <flow> --step <n|agent>  copy one step (marker and options) directly under it, in parallel with it — diff, checked, --dry-run
   foldrun flow show <flow>  the flow as the canvas draws it: trigger, groups, step chips, each agent's team, check problems in place
   foldrun flow run <flow>   start a flow on the platform — the same command as invoke
+  foldrun flow inputs <flow>  its saved input sets, as "Run with…" lists them (this folder, or --to; --json)
+  foldrun flow inputs save <flow> <name> --task "…"  save one into evals/<flow>-inputs.md (a set of that name is replaced; --file for the task, --to the deployed copy)
   foldrun flow hook <flow>  the flow's webhook URL as it is now, changing nothing (--json) — the URL is a credential
   foldrun flow rotate-hook <flow>  a new webhook URL for a flow; the old one stops at once — asks first, --yes means it
   foldrun flow set <flow> --step <n|agent> key=value …  the step editor: model, effort, max_output_tokens, retry, timeout, verify, when, case, else, loop, until, each, max, limits, instruction (key= clears) — diff, checked, --dry-run
@@ -149,6 +153,7 @@ const HELP = `foldrun — agents are just folders
   foldrun eval [name]       run one eval, or all of them (--to <workspace>: the deployed evals, run on the platform; --last reads their latest results, --run <id> one run's verdict, running nothing)
   foldrun eval new <name>   a new eval in the deployed workspace, its agent the first one there — edit its cases, then eval <name> --to (--to)
   foldrun eval compare <eval> --models fast,default --to <ws>  the cases under 2–4 models side by side (m:effort, --agent, --repeat, --max-usd; --list, --run <id>)
+  foldrun eval compare <eval> --models fast@writer,max:high@writer  an item's own @agent compares only that agent's steps in that setting (--agent is the default for items without one)
   foldrun eval improve <eval> --to <ws>  ask the assistant for a proposed fix from the failures, wait for the draft (--no-wait)
   foldrun proposals --to <ws>            proposed fixes (--status ready, --eval) — show|apply|dismiss <id> (apply asks; --yes)
   foldrun eval grades <eval> --to <ws>   a grader's findings (trigger: runs): pass rate over --days (30), each graded run (--status fail, --limit); exit 1 on a failure
@@ -240,6 +245,7 @@ const HELP = `foldrun — agents are just folders
   foldrun secrets rm NAME   delete one (asks; --yes) — an oauth2 secret's grant is revoked at the provider; an account secret's saved OAuth client left unused is named, and --with-client deletes it too (asks)
   foldrun secrets sites NAME [site…]  bind a secret to sites: the egress proxy fills it for those alone and it never enters a sandbox; no sites lists them, --clear unbinds
   foldrun secrets workspaces NAME [workspace…]  limit an account secret to those workspaces — every other one finds it not set; --all opens it to every workspace again, --none to no workspace, no names shows which may use it (an admin over every workspace; applies to runs that start after it)
+  foldrun secrets workspaces NAME … --if-workspaces <a,b|all|none>  only if the list is still the one you read — refused otherwise, as Settings does
   foldrun secrets clients   the OAuth clients saved on the platform — also add <name> (--authorize-url/--token-url, --client-id, --scopes, --authorize-param name=value), rm <name>
   foldrun connect NAME      OAuth sign-in from the terminal, stored as an auto-refreshing secret — --client <saved> runs it from a saved client through the platform
   foldrun deploy [dir]      push the whole account, or deploy <workspace> for one of them
@@ -259,6 +265,8 @@ const HELP = `foldrun — agents are just folders
   foldrun invoke <flow>     start a flow on a running platform (--to <workspace>; --once <key> so a retry never starts a second run; --tag <t> repeatable)
   foldrun source <verb>     the files on a platform, one at a time: ls, cat <path>, put <path>, mv, rm (--to <workspace>)
   foldrun source new <kind> <name>  the dashboard's New for any document — tools, knowledge, memory, skills, scripts (agents, flows, evals too): the platform writes the template (--agent <a> inside one agent, --template, --language, --to)
+  foldrun source put <path> --check  the editor's checked save: refused with the issues (exit 1, nothing saved) when the file would not check out; --empty writes an empty file
+  foldrun source share <path>  the dashboard's Move to shared: a skill, tool, script, knowledge or memory file (a skill or folder tool whole) into the account library, then out of the workspace — asks (--yes), --dry-run, --overwrite (--to)
   foldrun open [page]       the dashboard for this workspace, in the browser
   foldrun api spec          the platform's OpenAPI 3.1 document (GET /api/openapi.json) — stdout, or --out <file>
   foldrun api version       the API version this account's requests get, the versions served, the rate limits, your last 30 days by version and any deprecated route you still call — also pin <YYYY-MM-DD>, unpin (admin; --json)
@@ -307,6 +315,8 @@ Options
   --transport <k>           tool new: script (default), http or mcp
   --language <l>            tool new, source new, library new: the script's language — javascript, python, bash
   --task "<text>"           the instruction for a manual run
+  --no-task                 agent run: start it with no instruction — the agent works from its own prompt alone
+  --task "<text>"           flow inputs save: the task the saved set holds (--file <path> reads it from a file)
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
@@ -396,12 +406,16 @@ Options
   --clear                   secrets sites: unbind it; flow compute: no cap of its own; me name: no name
   --all                     secrets workspaces: every workspace may use the account secret again; storage ls: every workspace's storage; storage shares: expired and revoked links too; mcp connections: the disconnected ones too; team invite, team access: every workspace
   --none                    secrets workspaces, secrets set: no workspace may use the account secret; team access: no workspaces
+  --if-workspaces <a,b|all|none>  secrets workspaces: change it only while the list is still this one (refused, 409, when someone changed it since)
+  --if-version <n>          account model use: change it only while the choice is still that choiceVersion (account model --json; 0: never chosen)
   --workspaces <a,b>        secrets set: store an account secret limited to those workspaces, in the same write (with --account); team invite, team access: the workspaces they may open
   --add <site>              agent network: add a site to its network: list (repeatable)
   --remove <site>           agent network: take a site off its network: list (repeatable)
   --out <file>              api spec: where to write the OpenAPI document (default: stdout); check: where to write the JSON or SARIF report
   --file <path>             source put, library put, flow paste: the local file to send (default: stdin); secrets set --kind file|service-account: the file it holds; storage get, report get, report live, account export, export, billing statement: where to write it (- for stdout)
   --message "<why>"         source put: recorded on the file's revision
+  --check                   source put: refuse the save when the file would not check out (422: the issues printed, nothing written)
+  --empty                   source put: write an empty file on purpose (empty input is refused otherwise)
   --account                 secrets: account scope instead of the workspace's
   --wait                    invoke, agent run: hold on and print the result
   --path <p>                tool test: the path an http tool should probe, appended to its base:
@@ -442,6 +456,8 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --local                   deploy: into the installation on this machine, even when signed in
   --commit <sha>            deploy: record which commit this is
   --overwrite               import: replace files the workspace already has with different text (refused otherwise)
+  --overwrite               source share: replace a library file of the same path (refused otherwise)
+  --dry-run                 source share: list what would move, move nothing
   --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow compute, flow move-step, flow paste, flow draft, assistant, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; import: the preview only, write nothing; stop, rerun (bulk): list what matches, touch nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
   --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
@@ -468,7 +484,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-address", "clear-email", "clear-abn"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

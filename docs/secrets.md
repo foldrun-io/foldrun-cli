@@ -86,6 +86,11 @@ foldrun secrets workspaces STRIPE_KEY --none          # no workspace
 foldrun secrets workspaces STRIPE_KEY --all           # every workspace again
 ```
 
+A script that read the list first can say so: `--if-workspaces sales,billing`
+(or `all`, or `none`) changes it only while it is still that list, and is
+refused (409) when another admin changed it since — what Settings sends as
+`ifWorkspaces`.
+
 In the dashboard it is **Workspaces: all / selected** on the secret's row in
 Settings → Secrets, and on the form that adds one; over the API,
 `PATCH /api/secrets { name, workspaces }` (`null` for every workspace, `[]`
