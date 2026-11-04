@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.2.0] — 2026-11-04
+
+- feat(billing): billing wallet shows the foldrun.ir link to pay in Toman ([9aeb515](https://github.com/foldrun-io/foldrun-cli/commit/9aeb515))
+
 ## [14.1.3] — 2026-11-04
 
 ### deps
