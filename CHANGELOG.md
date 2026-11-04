@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.2.2] — 2026-11-04
+
+### deps
+
+- @foldrun/core ^14.3.4 ([b77bb81](https://github.com/foldrun-io/foldrun-cli/commit/b77bb81))
+
 ## [14.2.1] — 2026-11-04
 
 - ci(release): retry GitHub 5xx; a failed merge hint no longer turns ci red ([ba49c80](https://github.com/foldrun-io/foldrun-cli/commit/ba49c80))
