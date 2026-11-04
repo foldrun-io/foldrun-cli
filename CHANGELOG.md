@@ -12,6 +12,20 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.3.0] — 2026-11-04
+
+### New in the public API
+
+- `foldrun me`
+- `foldrun me name`
+- `foldrun team invite`
+- `foldrun team role`
+- `foldrun team access`
+- `foldrun team remove`
+- the `--no-send` flag
+
+- feat(team): foldrun team invite|role|access|remove and foldrun me (name, timezone) ([cb76400](https://github.com/foldrun-io/foldrun-cli/commit/cb76400))
+
 ## [14.2.3] — 2026-11-04
 
 ### fix
