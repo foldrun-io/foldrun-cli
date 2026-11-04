@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.3.1] — 2026-11-04
+
+### docs
+
+- the mail sender is set signed in, never by a key (synced) ([59cfc11](https://github.com/foldrun-io/foldrun-cli/commit/59cfc11))
+
 ## [14.3.0] — 2026-11-04
 
 ### New in the public API
