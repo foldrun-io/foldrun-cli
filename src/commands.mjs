@@ -8037,52 +8037,103 @@ async function runsCmd(flags, layout) {
   // A view's flow or text filters here, after the fetch: ask for the ceiling
   // as for a status, or matches past the newest few go missing (Codex review).
   const localText = typeof flags.flow === "string" || typeof flags.q === "string";
-  const perWorkspace = wanted || verdicts || outcomes || cutoff !== null || searching || localText ? 500 : limit;
+  // Paging (5 Nov 2026): --limit is one page; --page <n> the nth, --before
+  // <cursor> the one after a cursor the last page printed, --all every match.
+  // Each workspace is asked for the runs older than one cursor (a position,
+  // <startedAt>~<runId>, the API's `next`), so one cursor pages them all.
+  if (flags.all === true && flags.page !== undefined) throw new Error("--all reads every page; leave --page out");
+  const pageNo = flags.page === undefined ? 1 : Number(flags.page);
+  if (!Number.isInteger(pageNo) || pageNo < 1) throw new Error(`--page is a page number from 1 — not "${flags.page}"`);
+  const target = flags.all === true ? Infinity : limit * pageNo;
+  const filtering = Boolean(wanted || verdicts || outcomes || cutoff !== null || searching || localText);
+  const perWorkspace = filtering || flags.all === true ? 500 : Math.min(500, target);
+  if (flags.before !== undefined && typeof flags.before !== "string") throw new Error("--before takes the cursor the last page printed (or a time, or a run id)");
+  let cursor = typeof flags.before === "string" ? await runsCursorOf(url, flags, layout, flags.before) : null;
   const unreachable = [];
-  const lists = await pool(names, 8, async (ws) => {
-    try {
-      const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs"].includes(k)));
-      const { runs = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=${perWorkspace}${forApi.size ? `&${forApi}` : ""}`);
-      return runs.map((r) => ({ ...r, workspace: ws }));
-    } catch (err) {
-      unreachable.push([ws, explain(err)]);
-      return [];
-    }
-  });
-
-  const rows = lists
-    .flat()
+  /** Whether a run passes the filters the platform does not apply. */
+  const keep = (r) => {
     // The status the dashboard shows: a stopped run is "stopped", not the
     // "failed" its record says (Codex review — a saved status=stopped view).
-    .filter((r) => (wanted ? wanted.has(r.outcome === "stopped" ? "stopped" : r.status) : true))
-    .filter((r) => (verdicts ? r.status === "completed" && verdicts.has(verdictOf(r)) : true))
-    .filter((r) => (outcomes ? typeof r.outcome === "string" && outcomes.has(r.outcome) : true))
+    if (wanted && !wanted.has(r.outcome === "stopped" ? "stopped" : r.status)) return false;
+    if (verdicts && !(r.status === "completed" && verdicts.has(verdictOf(r)))) return false;
+    if (outcomes && !(typeof r.outcome === "string" && outcomes.has(r.outcome))) return false;
     // A view's flow and free text (the runs page's): "agent: x" is a direct run.
     // The dashboard names a run by what ran (whatRan): a direct agent run's
     // or an eval's own name, without adhoc:/eval: (Codex review).
-    .filter((r) => (typeof flags.flow === "string" ? r.flow === flags.flow || r.flow.replace(/^(adhoc|eval):/, "") === flags.flow : true))
+    if (typeof flags.flow === "string" && !(r.flow === flags.flow || r.flow.replace(/^(adhoc|eval):/, "") === flags.flow)) return false;
     // The runs page's text search, field for field (its runSearchText): every
     // word, any order, across id, what ran, workspace, the status it shows,
     // verdict, summary and the failure (Codex review).
-    .filter((r) => {
-      if (typeof flags.q !== "string") return true;
+    if (typeof flags.q === "string") {
       const words = flags.q.toLowerCase().replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
       const shown = r.outcome === "stopped" ? "stopped" : r.status;
       const hay = [r.id, r.flow.replace(/^(adhoc|eval):/, ""), r.workspace, shown, verdictOf(r) ?? "", r.summary ?? "", r.failure ? `${r.failure.agent} ${r.failure.reason}` : ""]
         .join(" ")
         .toLowerCase()
         .replace(/\s+/g, " ");
-      return words.every((w) => hay.includes(w));
-    })
-    .filter((r) => (cutoff === null ? true : Date.parse(r.startedAt) >= cutoff))
-    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
-    .slice(0, limit);
+      if (!words.every((w) => hay.includes(w))) return false;
+    }
+    return cutoff === null || Date.parse(r.startedAt) >= cutoff;
+  };
+  const collected = [];
+  let more = false;
+  for (let round = 0; ; round++) {
+    const answers = await pool(names, 8, async (ws) => {
+      try {
+        const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs"].includes(k)));
+        forApi.set("limit", String(perWorkspace));
+        if (cursor) forApi.set("before", cursor);
+        const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?${forApi}`);
+        // A platform from before paging answers no `next` and ignores before=.
+        return { ws, runs: (answer.runs ?? []).map((r) => ({ ...r, workspace: ws })), next: answer.next ?? null, unpaged: !("next" in answer) };
+      } catch (err) {
+        // A cursor the platform refuses is the caller's mistake, not a desk
+        // that is down: say so once, not as every workspace unreachable.
+        if (err instanceof HttpError && err.status === 400 && cursor) throw err;
+        unreachable.push([ws, explain(err)]);
+        return { ws, runs: [], next: null, unpaged: false };
+      }
+    });
+    if (cursor && answers.some((a) => a.unpaged)) {
+      throw new Error(`${url} does not page runs yet (no before=) — update it, or leave out --before and --page`);
+    }
+    // A desk that has more than it sent is complete only down to its last
+    // row; the merge is complete down to the newest such row (the horizon).
+    // Rows older than it wait for the next round, so no desk's are skipped.
+    const tails = answers.filter((a) => a.next !== null && a.runs.length).map((a) => a.runs.at(-1));
+    const horizon = tails.length ? tails.sort(byRunPosition)[0] : null;
+    const merged = answers
+      .flatMap((a) => a.runs)
+      .filter((r) => !horizon || byRunPosition(r, horizon) <= 0)
+      .sort(byRunPosition);
+    collected.push(...merged.filter(keep));
+    if (!horizon) break;
+    cursor = runCursor(horizon);
+    // Newest first: once the horizon is older than --since, nothing older matches.
+    if (cutoff !== null && Date.parse(horizon.startedAt) < cutoff) break;
+    // Without --all a sparse filter stops after 20 rounds (10,000 runs a desk)
+    // and prints where it got to, rather than reading the whole history.
+    if (collected.length >= target || (flags.all !== true && round >= 19)) {
+      more = true;
+      break;
+    }
+  }
+  const from = flags.all === true ? 0 : limit * (pageNo - 1);
+  const rows = flags.all === true ? collected : collected.slice(from, from + limit);
+  const next =
+    flags.all === true ? null : collected.length > from + limit ? runCursor(rows.at(-1)) : more ? cursor : null;
+
+  if (flags.json === true) {
+    console.log(JSON.stringify({ runs: rows, next }, null, 2));
+    for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
+    return 0;
+  }
 
   if (!rows.length) {
     const how = [wanted ? `status ${[...wanted].join(", ")}` : null, verdicts ? `verdict ${[...verdicts].join(", ")}` : null, outcomes ? `outcome ${[...outcomes].join(", ")}` : null, flags.since ? (String(flags.since).trim().toLowerCase() === "today" ? "today" : `the last ${flags.since}`) : null]
       .filter(Boolean)
       .join(" in ");
-    console.log(`\n  ${c.dim(`no runs${how ? ` matching ${how}` : ""}${flags.to ? ` in ${flags.to}` : ""}`)}\n`);
+    console.log(`\n  ${c.dim(`no runs${how ? ` matching ${how}` : ""}${flags.to ? ` in ${flags.to}` : ""}${next ? ` on this page — older: the same with --before ${next}` : ""}`)}\n`);
     for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
     return 0;
   }
@@ -8126,8 +8177,33 @@ async function runsCmd(flags, layout) {
     if (x.summary) console.log(`      ${c.dim(x.summary)}`);
   }
   for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
+  if (next) console.log(`\n  ${c.dim(`more: the same with --before ${next}${pageNo > 1 ? "" : ` (or --page ${pageNo + 1})`}`)}`);
   console.log(`\n  ${c.dim("foldrun report <run-id> for the whole story; --status failed, --verdict blocked, --since 24h narrow this")}\n`);
   return 0;
+}
+
+/** The runs list's order: newest first, a tie on startedAt broken by id —
+ *  the order GET …/runs answers in, so a cursor means the same here. */
+export function byRunPosition(a, b) {
+  if (a.startedAt !== b.startedAt) return a.startedAt < b.startedAt ? 1 : -1;
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+/** A run's position as the API's `next` writes it: <startedAt>~<runId>. */
+export function runCursor(r) {
+  return `${r.startedAt}~${r.id}`;
+}
+
+/** What --before names, as a cursor every workspace reads alike: a cursor or
+ *  a time as given; a run id becomes that run's position (only its own
+ *  workspace could look the id up). */
+async function runsCursorOf(url, flags, layout, before) {
+  const v = before.trim();
+  if (v.includes("~") || /^\d{4}-\d{2}-\d{2}/.test(v)) return v;
+  const ws = await workspaceOfRun(url, flags, layout, v);
+  const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(v)}`);
+  if (typeof run.startedAt !== "string") throw new Error(`run ${v} has no start time to page from`);
+  return runCursor({ startedAt: run.startedAt, id: v });
 }
 
 // ---------------------------------------------------------------- report
@@ -10915,6 +10991,43 @@ async function reportGetCmd(runId, spec, flags, layout) {
   const ws = await workspaceOfRun(url, flags, layout, runId);
   const { bytes } = await remoteBytes(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/archive?agent=${enc(agent)}&path=${enc(rel)}`, `${spec} in ${runId}`);
   return writeDownload(bytes, path.basename(rel), flags, `${runId} · ${spec}`);
+}
+
+/**
+ * `foldrun runs outputs <run-id>` — which files a run archived: the run
+ * page's Out column, each agent's files with their sizes, and the command
+ * that downloads one (`report <run-id> get <agent>/<path>`).
+ */
+async function runsOutputsCmd(args, flags, layout) {
+  const runId = args[0];
+  if (args.length !== 1 || !/^[A-Za-z0-9_.-]{1,80}$/.test(runId ?? "")) {
+    throw new Error("`foldrun runs outputs <run-id>` — the files that run archived from its agents' outputs/ (--to <workspace>, --json)");
+  }
+  const url = platformFor(flags, "runs outputs");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const answer = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/files`);
+  if (flags.json === true) {
+    console.log(JSON.stringify(answer, null, 2));
+    return 0;
+  }
+  const files = answer.files ?? [];
+  if (!files.length) {
+    console.log(`\n  ${c.dim(`${runId} archived no files — its agents left nothing in outputs/`)}\n`);
+    return 0;
+  }
+  const total = answer.totalBytes ?? files.reduce((t, f) => t + (f.bytes ?? 0), 0);
+  console.log(`\n  ${c.bold(runId)}  ${c.dim(`in ${ws} · ${files.length} file${files.length === 1 ? "" : "s"} · ${humanBytes(total)}`)}`);
+  const wide = Math.max(...files.map((f) => humanBytes(f.bytes).length));
+  let agent = null;
+  for (const f of files) {
+    if (f.agent !== agent) {
+      agent = f.agent;
+      console.log(`\n  ${c.bold(agent)}`);
+    }
+    console.log(`    ${c.dim(pad(humanBytes(f.bytes), wide))}  ${f.path}`);
+  }
+  console.log(`\n  ${c.dim(`foldrun report ${runId} get <agent>/<path> downloads one (--file <path>|-)`)}\n`);
+  return 0;
 }
 
 /** Days, for a window: `30`, or `30d`. */
@@ -14195,6 +14308,7 @@ export async function run(command, positional, flags, workspace, layout) {
       // the local store has no table to draw across workspaces, because a
       // folder on a laptop is one workspace.
       if (positional[0] === "rm") return positional.length > 2 ? runsRmManyCmd(positional.slice(1), flags, layout) : runRmCmd(positional[1], flags, layout);
+      if (positional[0] === "outputs") return runsOutputsCmd(positional.slice(1), flags, layout);
       if (positional[0] === "views" && positional[1]) return runViewsEditCmd(positional.slice(1), flags);
       if (positional[0] === "views") return runViewsCmd(flags);
       // The run doctor (FOL-22): the assistant reads the run and its files,

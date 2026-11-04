@@ -63,6 +63,14 @@ Click a step to pin it open or shut, or use **expand all** / **collapse
 all** above the column. A **json** link opens the run record exactly as the
 runner wrote it.
 
+When a run finishes, whatever its agents left in `outputs/` is archived with
+it, under `runs/<id>/outputs/<agent>/`, so the next run's reset does not erase
+it. A step's **Out** column lists that agent's files, each opening inline (a
+recording plays, a picture shows). `foldrun runs outputs <run-id>` lists the
+same files with their sizes (`--json`), `foldrun report <run-id> get
+<agent>/<path>` downloads one, and `GET …/runs/<id>/files` answers the list
+with the link that serves each.
+
 A step's trace marks each line for what it is — the agent's words, a tool
 call (its name, then what it was called with, a click from whole), a verify
 result as **verified** or **verify failed**, an error, or the runner's own
@@ -440,6 +448,14 @@ is written with the record and repaired from the directory by any reader
 that finds a row missing, stale, or orphaned, so it is never trusted over
 the files. The runs pages and the account-wide list read it; a run still
 live is read whole; a finished run's reply and trace are opened by id.
+
+The list pages by position, not by number: `GET …/runs` answers `next`, a
+cursor for the runs older than the last one it sent, and `before=<next>`
+asks for that page, so runs that start meanwhile shift nothing. One cursor
+pages every workspace, which is how `foldrun runs` pages the account:
+`--limit` sets the page, `--page 3` or `--before <cursor>` picks one (the
+command prints the next one's cursor), and `--all` reads every run that
+matches.
 
 ## What survives the platform
 
