@@ -10,7 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { serve, at } from "./fake-platform.ts";
+import { serve, at, failing } from "./fake-platform.ts";
 
 const entries = [
   { t: "2026-09-16T03:01:45.732Z", kind: "run", usd: 0, workspace: "intake-desk", flow: "hourly", runId: "run-aaa", waived: ["models", "compute"] },
@@ -77,4 +77,18 @@ test("--limit caps the ledger, and the total is still named", async () => {
   s.close();
   assert.match(r.out, /3 entries on the ledger/);
   assert.doesNotMatch(r.out, /manual top-up/);
+});
+
+
+test("every billing verb on a platform without billing says so, not a bare 404", async () => {
+  const s = await serve({
+    "GET /api/billing": () => failing(404, { error: "not found" }),
+    "GET /api/billing/statement": () => failing(404, { error: "not found" }),
+  });
+  const plain = await at(s.url, "billing");
+  const statement = await at(s.url, "billing", "statement");
+  s.close();
+  assert.notEqual(plain.code, 0);
+  assert.match(plain.out, /has no billing/);
+  assert.match(statement.out, /has no billing/);
 });

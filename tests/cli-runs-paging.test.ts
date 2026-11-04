@@ -186,3 +186,15 @@ test("runs outputs says so when nothing was archived, and needs one run id", asy
   assert.notEqual(bare.code, 0);
   assert.match(bare.out, /runs outputs <run-id>/);
 });
+
+test("runs --all on a platform from before paging refuses, instead of a list cut at 500", async () => {
+  const s = await serve({
+    "/api/workspaces": () => WORKSPACES,
+    "/api/workspaces/blog-desk/runs": () => ({ runs: [] }),
+    "/api/workspaces/rank-desk/runs": () => ({ runs: [] }),
+  });
+  const r = await at(s.url, "runs", "--all", "--json");
+  s.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /does not page runs yet/);
+});

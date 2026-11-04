@@ -8053,8 +8053,10 @@ async function runsCmd(flags, layout) {
         return { ws, runs: [], next: null, unpaged: false };
       }
     });
-    if (cursor && answers.some((a) => a.unpaged)) {
-      throw new Error(`${url} does not page runs yet (no before=) — update it, or leave out --before and --page`);
+    // --all promises every run: an unpaged answer would end the loop after
+    // the newest 500 per workspace and call that complete.
+    if ((cursor || flags.all === true) && answers.some((a) => a.unpaged)) {
+      throw new Error(`${url} does not page runs yet (no before=) — update it, or leave out --all, --before and --page`);
     }
     // A desk that has more than it sent is complete only down to its last
     // row; the merge is complete down to the newest such row (the horizon).
@@ -14132,10 +14134,14 @@ async function usageBudgetCmd(flags) {
   const money = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const line = (s) => {
     if (!s.budget) return `${money(s.spentUsd)} spent this month ${c.dim("· no cap")}`;
-    const pct = s.budget.usd > 0 ? Math.round((s.spentUsd / s.budget.usd) * 100) : 100;
+    // Decided on the money, shown as a rounded percent: $995 of $1,000 rounds
+    // to 100% but is not at the cap.
+    const ratio = s.budget.usd > 0 ? s.spentUsd / s.budget.usd : 1;
+    const pct = Math.round(ratio * 100);
+    const atCap = ratio >= 1;
     const turns = s.budget.period === "day" ? "tomorrow" : s.budget.period === "week" ? "next week" : "the new month";
-    const mark = pct >= 100 ? c.red("✗") : pct >= 80 ? c.amber("!") : c.green("✓");
-    const said = pct >= 100 ? c.red(` · at the cap, new runs are refused until ${turns}`) : pct >= 80 ? c.amber(" · past the 80% warning") : "";
+    const mark = atCap ? c.red("✗") : ratio >= 0.8 ? c.amber("!") : c.green("✓");
+    const said = atCap ? c.red(` · at the cap, new runs are refused until ${turns}`) : ratio >= 0.8 ? c.amber(" · past the 80% warning") : "";
     return `${mark} ${money(s.spentUsd)} of ${s.label} ${s.window} · ${pct}%${said}`;
   };
   console.log();
@@ -14157,6 +14163,29 @@ async function usageBudgetCmd(flags) {
  * Stripe with their links, and every credit purchase with its receipt, from
  * GET /api/billing/invoices. An install without billing has no such route.
  */
+/**
+ * Every `foldrun billing …` verb: a platform without billing (self-hosted,
+ * or the public build) answers its routes with a bare 404 "not found" —
+ * say that, rather than print the 404.
+ */
+async function noBillingSaid(flags, run) {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404 && /^(not found|404|this page could not be found\.?)$/i.test(String(err.message).trim())) {
+      const host = (() => {
+        try {
+          return new URL(remoteUrl(flags) ?? "").host;
+        } catch {
+          return "this platform";
+        }
+      })();
+      throw new Error(`${host} has no billing — it is the hosted platform's (a self-hosted install has none)`);
+    }
+    throw err;
+  }
+}
+
 async function billingInvoicesCmd(flags) {
   const url = platformFor(flags, "billing invoices");
   let d;
@@ -14409,9 +14438,11 @@ export async function run(command, positional, flags, workspace, layout) {
     case "docs":
       return docsCmd(positional, flags);
     case "billing":
-      if (positional[0] === "invoices") return billingInvoicesCmd(flags);
-      if (["plans", "plan", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
-      return positional.length ? billingVerbCmd(positional, flags) : billingCmd(flags);
+      return noBillingSaid(flags, () => {
+        if (positional[0] === "invoices") return billingInvoicesCmd(flags);
+        if (["plans", "plan", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
+        return positional.length ? billingVerbCmd(positional, flags) : billingCmd(flags);
+      });
     case "library":
       return libraryCmd(positional, flags);
     case "preferences":

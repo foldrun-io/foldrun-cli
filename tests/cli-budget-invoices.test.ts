@@ -109,3 +109,12 @@ test("billing invoices with a scoped key (403): needs every workspace", async ()
   assert.notEqual(r.code, 0);
   assert.match(r.out, /invoices need a member or key with every workspace — invoices and receipts are the whole account's/);
 });
+
+test("usage budget: $995 of $1,000 shows 100% but is not at the cap", async () => {
+  const s = await serve({ "/api/usage/budget": () => ({ account: { budget: { usd: 1000, period: "month" }, label: "$1000/month", window: "this month", spentUsd: 995 }, workspaces: [] }) });
+  const r = await at(s.url, "usage", "budget");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /100% · past the 80% warning/);
+  assert.doesNotMatch(r.out, /at the cap/);
+});
