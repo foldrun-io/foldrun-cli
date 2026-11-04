@@ -26,7 +26,7 @@
 //   foldrun notifications  what mail you get, per category — set <category> on|off
 //   foldrun flags          the feature flags for this account — on or off, and why (read-only)
 //   foldrun backups        how the account is backed up, its snapshots — request a restore from one, requests lists them
-//   foldrun team           who is in the account, their roles and workspaces (read-only)
+//   foldrun team           who is in the account, their roles and workspaces; invite, role, access, remove
 //   foldrun team invites   the invites still out; `revoke <id>` takes one back
 //   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
 //   foldrun onboarding     the account's getting-started steps, the next one first
@@ -56,6 +56,7 @@
 //   foldrun login <site>    a browser window to sign in to a site by hand; the session
 //                           (cookies, storage, identity) is stored for an agent to wear
 //   foldrun whoami          who the platform thinks this terminal is
+//   foldrun me              the person this machine is signed in as; their name and timezone
 //   foldrun doctor          what is between this terminal and the platform, checked
 //   foldrun accounts        every account signed in here; `use <name>` switches
 //   foldrun keys  <verb>    ls / create / revoke — the account's API keys
@@ -255,7 +256,13 @@ Signing in
                             session: cookies, storage and the browser identity it needs
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
-  foldrun team              who is in the account: role, the workspaces each may open, when they joined (--json). Read-only: invites, roles, removal and transfer are a signed-in person's, in Settings → Team
+  foldrun me                the person this machine is signed in as: name, address, timezone (--json)
+  foldrun me name <first> [last]   set your name (--clear for none) · foldrun me timezone <zone|auto>   the zone you read times in
+  foldrun team              who is in the account: role, the workspaces each may open, when they joined (--json)
+  foldrun team invite [email]  invite someone (--role viewer|editor|admin, default editor; --workspaces a,b or --all; --no-send): prints the link, once. Your own foldrun login, never a key made by hand; an owner's sign-in here acts as admin, so an admin invite is the browser's
+  foldrun team role <email|id> <role>   change a member's role (viewer, editor, admin); their keys above it stop
+  foldrun team access <email|id>   which workspaces they may open: --workspaces a,b, --all or --none; never wider than yours
+  foldrun team remove <email|id>   remove a member — asks first (--yes with no terminal); their keys and pending invites stop. Transfer stays in Settings → Team
   foldrun team invites      the account's pending invites — address or "anyone with the link", role, workspaces, who made it, when it expires, its id (--all for accepted, revoked and expired too; --json). Never the link: each works once, shown only to its maker
   foldrun team invites revoke <id>   take an invite back: its link stops working at once (an admin's; a key may)
   foldrun onboarding        the account's getting-started steps, done or not, the next one first (--json)
@@ -345,17 +352,17 @@ Options
   --stale [days]            agent ls: only agents not run in that many days (never run included); bare, those past alerts: stale_days
   --reason "<text>"         account pause, workspace pause: why — shown to everyone who opens it
   --stop                    account pause, workspace pause: also stop every run going now (asks; --yes to mean it)
-  --yes                     approve, stop, rerun (bulk), pause --stop, flow rotate-hook, flow draft, assistant, history restore, restore <ws>, import, billing plan, workspace set name, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
+  --yes                     approve, stop, rerun (bulk), pause --stop, flow rotate-hook, flow draft, assistant, history restore, restore <ws>, import, billing plan, workspace set name, team remove, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
   --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces, workspaces show, agent ls, flow ls, agent import --list, backups requests, team, hook ls: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history, changelog: how many rows
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
-  --clear                   secrets sites: unbind it; flow compute: no cap of its own
-  --all                     secrets workspaces: every workspace may use the account secret again; mcp connections: the disconnected ones too
-  --none                    secrets workspaces, secrets set: no workspace may use the account secret
-  --workspaces <a,b>        secrets set: store an account secret limited to those workspaces, in the same write (with --account)
+  --clear                   secrets sites: unbind it; flow compute: no cap of its own; me name: no name
+  --all                     secrets workspaces: every workspace may use the account secret again; mcp connections: the disconnected ones too; team invite, team access: every workspace
+  --none                    secrets workspaces, secrets set: no workspace may use the account secret; team access: no workspaces
+  --workspaces <a,b>        secrets set: store an account secret limited to those workspaces, in the same write (with --account); team invite, team access: the workspaces they may open
   --add <site>              agent network: add a site to its network: list (repeatable)
   --remove <site>           agent network: take a site off its network: list (repeatable)
   --out <file>              api spec: where to write the OpenAPI document (default: stdout); check: where to write the JSON or SARIF report
@@ -380,7 +387,8 @@ Options
   --port <n>                connect: loopback port for the redirect (default 8642 — register http://localhost:8642/callback on the app)
   --authorize-url / --token-url  connect, secrets clients add: the provider's own OAuth addresses
   --authorize-param name=value   connect, secrets clients add: an extra authorize-URL parameter the provider documents (repeatable — e.g. access_type=offline)
-  --role <r>                keys create: viewer, editor (default) or admin
+  --role <r>                keys create, team invite: viewer, editor (default) or admin
+  --no-send                 team invite: make the link, mail nothing
   --expires <span>          keys create: when it stops working — 30d, 90d, 365d or never (default never)
   --grace <span>            keys rotate: keep the old key working for 1h or 24h while you swap the new one in (default 0: revoked now)
   --a2a                     keys create: an A2A key for an outside agent — with --to <workspace> and --flows a,b; --max-tasks <n> caps its open tasks (1–100, default 10)
@@ -426,7 +434,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

@@ -12491,17 +12491,25 @@ async function evalNewCmd(name, flags, layout) {
 
 /**
  * `foldrun team` — who is in the account, their role and which workspaces
- * they may open (GET /api/team). Inviting, changing a role or workspace
- * access, removing someone and transferring the account are a person's acts,
- * and the platform refuses them from a key (requirePerson, server/api.ts) —
- * so there is nothing for a key-holding CLI to send. The one write a key may
- * make is taking an invite back: `foldrun team invites` lists the links
- * still out, `foldrun team invites revoke <id>` ends one.
+ * they may open (GET /api/team). The writes are a person's: `invite`,
+ * `role`, `access` and `remove` are taken from this machine's own `foldrun
+ * login` key (owner decision, 4 Nov 2026), which acts at the lower of its
+ * role and the person's — an owner's key is an admin, so making, changing or
+ * removing an admin stays in Settings → Team. A key made by hand is refused
+ * by the platform. Transferring the account is the browser's alone.
+ * `foldrun team invites` lists the links still out, `revoke <id>` ends one.
  */
 async function teamCmd(positional, flags) {
   if (positional[0] === "invites") return teamInvitesCmd(positional.slice(1), flags);
+  if (positional[0] === "invite") return teamInviteCmd(positional.slice(1), flags);
+  if (positional[0] === "role") return teamRoleCmd(positional.slice(1), flags);
+  if (positional[0] === "access") return teamAccessCmd(positional.slice(1), flags);
+  if (positional[0] === "remove" || positional[0] === "rm") return teamRemoveCmd(positional.slice(1), flags);
+  if (positional[0] === "transfer") {
+    throw new Error("transferring the account is the owner's, signed in, with their password: Settings → Team in the browser");
+  }
   if (positional[0]) {
-    throw new Error("`foldrun team` lists the members — inviting, changing a role or workspace access, removing a member and transferring the account are a signed-in person's acts, done in Settings → Team; the platform refuses them from a key");
+    throw new Error(`\`foldrun team\` lists the members; \`team invite\`, \`team role\`, \`team access\`, \`team remove\` and \`team invites\` change them — not "${positional[0]}"`);
   }
   const url = platformFor(flags, "team");
   const { members = [] } = await remoteCall(url, flags, "/api/team");
@@ -12519,7 +12527,159 @@ async function teamCmd(positional, flags) {
     const scope = m.workspaces === null || m.workspaces === undefined ? "every workspace" : m.workspaces.length ? m.workspaces.join(", ") : "no workspaces";
     console.log(`  ${c.bold(pad(m.email, w))}  ${pad(m.owner ? "owner" : m.role, 7)} ${c.dim(scope)}  ${c.dim(m.createdAt ? `joined ${String(m.createdAt).slice(0, 10)}` : "")}`);
   }
-  console.log(`\n  ${c.dim(`${members.length} member${members.length === 1 ? "" : "s"} · invites, roles and removals: Settings → Team in the dashboard (a person's, never a key's)`)}\n`);
+  console.log(`\n  ${c.dim(`${members.length} member${members.length === 1 ? "" : "s"} · foldrun team invite | role | access | remove (your own \`foldrun login\`, never a key made by hand)`)}\n`);
+  return 0;
+}
+
+/** `--workspaces a,b` → the names, `--all` → null (every one), `--none` →
+ *  [] (none); undefined when neither was given. */
+function memberScopeFlag(flags) {
+  const given = [flags.workspaces !== undefined, flags.all === true, flags.none === true].filter(Boolean).length;
+  if (given > 1) throw new Error("one of --workspaces <names>, --all or --none");
+  if (flags.all === true) return null;
+  if (flags.none === true) return [];
+  if (flags.workspaces === undefined) return undefined;
+  if (typeof flags.workspaces !== "string") throw new Error("--workspaces takes the names: --workspaces sales,ops");
+  return flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
+}
+
+/** One member, by address (any case) or id, from GET /api/team. */
+async function memberNamed(url, flags, who, verb) {
+  if (!who) throw new Error(`whom? \`foldrun team ${verb} <email|id>\` — \`foldrun team\` lists them`);
+  const { members = [] } = await remoteCall(url, flags, "/api/team");
+  const m = members.find((x) => x.id === who || String(x.email).toLowerCase() === String(who).toLowerCase());
+  if (!m) throw new Error(`no member "${who}" — \`foldrun team\` lists them`);
+  return m;
+}
+
+const SCOPE_TEXT = (w) => (w === null || w === undefined ? "every workspace" : w.length ? w.join(", ") : "no workspaces");
+
+/**
+ * `foldrun team invite [email] [--role viewer|editor|admin] [--workspaces
+ * a,b | --all] [--no-send]` — POST /api/team. With an address only that
+ * person can accept it, and it is mailed unless --no-send; without one the
+ * link works for whoever has it. Either way the link is printed here, once:
+ * it is shown to its maker alone and works one time, for seven days.
+ */
+async function teamInviteCmd(positional, flags) {
+  const url = platformFor(flags, "team invite");
+  const email = positional[0];
+  const role = typeof flags.role === "string" ? flags.role : "editor";
+  if (!["viewer", "editor", "admin"].includes(role)) throw new Error("--role is viewer, editor or admin (owner is transferred, in the browser)");
+  if (flags.none === true) throw new Error("an invite opens some workspaces: --workspaces <names>, or --all for every one");
+  const workspaces = memberScopeFlag(flags);
+  const body = { role, ...(workspaces !== undefined ? { workspaces } : {}), ...(email ? { email } : {}), ...(flags["no-send"] === true ? { send: false } : {}) };
+  const r = await remoteCall(url, flags, "/api/team", { method: "POST", body: JSON.stringify(body) });
+  if (flags.json === true) {
+    console.log(JSON.stringify({ ...r, link: r.path ? new URL(r.path, url).toString() : null }, null, 2));
+    return 0;
+  }
+  const link = new URL(r.path, url).toString();
+  console.log(`\n  ${c.green("invited")} ${c.bold(r.email ?? "anyone with the link")} as ${r.role} · ${SCOPE_TEXT(r.workspaces)} ${c.dim(`(${r.id}, until ${String(r.expires).slice(0, 10)})`)}`);
+  if (r.sent === true) console.log(`  ${c.dim("mailed to")} ${r.email}`);
+  else if (r.sent === false) console.log(`  ${c.yellow("not mailed")} ${c.dim(r.sendError ?? "")}`);
+  console.log(`\n  ${link}`);
+  console.log(`  ${c.dim("works once, for seven days, and is shown only now · foldrun team invites revoke " + r.id + " takes it back")}\n`);
+  return 0;
+}
+
+/** `foldrun team role <email|id> <viewer|editor|admin>` — PATCH
+ *  /api/team/members/<id> { role }. Their keys above the new role stop. */
+async function teamRoleCmd(positional, flags) {
+  const url = platformFor(flags, "team role");
+  const [who, role] = positional;
+  if (!role) throw new Error("`foldrun team role <email|id> <viewer|editor|admin>`");
+  if (role === "owner") throw new Error("owner is not a role you set — the owner transfers the account, in Settings → Team");
+  if (!["viewer", "editor", "admin"].includes(role)) throw new Error(`not a role: "${role}" — viewer, editor or admin`);
+  const m = await memberNamed(url, flags, who, "role");
+  const r = await remoteCall(url, flags, `/api/team/members/${enc(m.id)}`, { method: "PATCH", body: JSON.stringify({ role }) });
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.green("changed")} ${c.bold(m.email)} ${c.dim(m.owner ? "owner" : m.role)} → ${r.role ?? role} ${c.dim("· any key of theirs above it has stopped")}\n`);
+  return 0;
+}
+
+/** `foldrun team access <email|id> --workspaces a,b | --all | --none` —
+ *  PATCH /api/team/members/<id> { workspaces }. Never wider than yours. */
+async function teamAccessCmd(positional, flags) {
+  const url = platformFor(flags, "team access");
+  const workspaces = memberScopeFlag(flags);
+  if (workspaces === undefined) throw new Error("which workspaces? `foldrun team access <email|id> --workspaces a,b` (or --all, or --none)");
+  const m = await memberNamed(url, flags, positional[0], "access");
+  const r = await remoteCall(url, flags, `/api/team/members/${enc(m.id)}`, { method: "PATCH", body: JSON.stringify({ workspaces }) });
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.green("changed")} ${c.bold(m.email)}: ${SCOPE_TEXT(m.workspaces)} → ${SCOPE_TEXT(r.workspaces)} ${c.dim("· any key of theirs beyond it has stopped")}\n`);
+  return 0;
+}
+
+/** `foldrun team remove <email|id> [--yes]` — DELETE
+ *  /api/team/members/<id>. Asks first; with no terminal it needs --yes.
+ *  Their keys and the invites they made stop with them. */
+async function teamRemoveCmd(positional, flags) {
+  const url = platformFor(flags, "team remove");
+  const m = await memberNamed(url, flags, positional[0], "remove");
+  if (!(await confirmed(flags, "team remove", `remove ${m.email} (${m.owner ? "owner" : m.role}) from the account — their keys and pending invites stop too. Remove? [y/N] `))) {
+    console.log(`\n  ${c.dim("nobody removed")}\n`);
+    return 0;
+  }
+  const r = await remoteCall(url, flags, `/api/team/members/${enc(m.id)}`, { method: "DELETE" });
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.green("removed")} ${c.bold(m.email)} ${c.dim("· their keys and pending invites have stopped")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun me` — the person this machine is signed in as (GET /api/me's
+ * `person`): address, name, timezone. `foldrun me name <first> [last]`
+ * (`--clear`) sets the name (POST /api/auth/name), `foldrun me timezone
+ * <zone|auto>` the zone timestamps and crons are read in (POST
+ * /api/auth/timezone). Only a `foldrun login` key is a person; a key made by
+ * hand is refused. Password, email, two-step sign-in and sessions stay in
+ * Settings → Profile.
+ */
+async function meCmd(positional, flags) {
+  const url = remoteUrl(flags);
+  if (!url) throw new Error(NOT_SIGNED_IN);
+  const [sub, ...rest] = positional;
+  if (sub === "name") {
+    if (flags.clear !== true && !rest.length) throw new Error("`foldrun me name <first> [last]`, or `foldrun me name --clear`");
+    const body = flags.clear === true ? { firstName: null, lastName: null } : { firstName: rest[0], lastName: rest.slice(1).join(" ") || null };
+    await remoteCall(url, flags, "/api/auth/name", { method: "POST", body: JSON.stringify(body) });
+    console.log(`\n  ${c.green("saved")} ${flags.clear === true ? "no name — you are shown by your address" : `name ${c.bold([body.firstName, body.lastName].filter(Boolean).join(" "))}`}\n`);
+    return 0;
+  }
+  if (sub === "timezone") {
+    const zone = rest[0];
+    if (!zone) throw new Error("`foldrun me timezone <zone>` (e.g. Australia/Sydney), or `foldrun me timezone auto` for the browser's");
+    const r = await remoteCall(url, flags, "/api/auth/timezone", { method: "POST", body: JSON.stringify({ timezone: zone === "auto" ? null : zone }) });
+    console.log(`\n  ${c.green("saved")} timezone ${c.bold(r.timezone ?? "automatic (the browser's)")}\n`);
+    return 0;
+  }
+  if (sub) throw new Error(`\`foldrun me\` shows you; \`foldrun me name\` and \`foldrun me timezone\` change you — not "${sub}"`);
+  const me = await remoteCall(url, flags, "/api/me");
+  if (flags.json === true) {
+    console.log(JSON.stringify(me.person ?? null, null, 2));
+    return 0;
+  }
+  if (!me.person) {
+    console.log(`\n  ${c.dim("this credential is a key made by hand — it is nobody. `foldrun login` signs this machine in as you")}\n`);
+    return 1;
+  }
+  const p = me.person;
+  const name = [p.firstName, p.lastName].filter(Boolean).join(" ");
+  console.log(`\n  ${c.bold(name || p.email)}${name ? `  ${c.dim(p.email)}` : ""}`);
+  console.log(`  account     ${me.account}`);
+  console.log(`  role        ${me.role}${me.actor?.kind === "key" ? c.dim(" (this machine's sign-in)") : ""}`);
+  console.log(`  timezone    ${p.timezone ?? c.dim("automatic (the browser's)")}`);
+  console.log(`\n  ${c.dim("foldrun me name <first> [last] · foldrun me timezone <zone|auto> · password, email, two-step sign-in: Settings → Profile")}\n`);
   return 0;
 }
 
@@ -13238,6 +13398,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return backupsCmd(positional, flags);
     case "team":
       return teamCmd(positional, flags);
+    case "me":
+      return meCmd(positional, flags);
     case "onboarding":
       return onboardingCmd(flags);
     case "probe":

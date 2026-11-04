@@ -266,7 +266,7 @@ test("status --platform --history reads the open GET /api/status/history?days=n,
   assert.equal(s.seen.length, 1, "a bad --days asks nothing");
 });
 
-test("team lists members, roles and scopes from GET /api/team — and refuses every write verb", async () => {
+test("team lists members, roles and scopes from GET /api/team — and refuses a verb it does not have", async () => {
   const members = [
     { id: "u1", email: "owner@x.com", createdAt: "2026-01-02T00:00:00Z", owner: true, role: "owner", workspaces: null },
     { id: "u2", email: "ed@x.com", createdAt: "2026-03-04T00:00:00Z", owner: false, role: "editor", workspaces: ["blog-desk"] },
@@ -274,15 +274,15 @@ test("team lists members, roles and scopes from GET /api/team — and refuses ev
   const s = await serve({ "/api/team": () => ({ members }) });
   const r = await at(s.url, "team");
   const j = await at(s.url, "team", "--json");
-  const invite = await at(s.url, "team", "invite", "a@b.com");
+  const invite = await at(s.url, "team", "promote", "a@b.com");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /owner@x\.com\s+owner\s+every workspace\s+joined 2026-01-02/);
   assert.match(r.out, /ed@x\.com\s+editor\s+blog-desk/);
-  assert.match(r.out, /Settings → Team/);
+  assert.match(r.out, /foldrun team invite \| role \| access \| remove/);
   assert.deepEqual(json(j.out), members);
   assert.equal(invite.code, 1);
-  assert.match(invite.out, /refuses them from a key/);
+  assert.match(invite.out, /not "promote"/);
   assert.equal(s.seen.length, 2, "the refused verb sent nothing");
 });
 

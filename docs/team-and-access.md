@@ -96,8 +96,19 @@ A key is minted with a role (`editor` unless you say otherwise) and acts as
 the account with that role. It can never be wider than the person who made
 it: not a higher role, and not a workspace they cannot open — a key minted
 by someone scoped to two workspaces is scoped to those two. Two things a key cannot do: act against a named
-member — inviting, re-roling, removing, transferring need a signed-in person,
+member — inviting, re-roling, removing, transferring need a person,
 because a key names an account and never a who — and exceed its role.
+
+One key is a person: the one your own `foldrun login` minted on your
+machine. From it you can manage the team — `foldrun team invite`, `team
+role`, `team access`, `team remove` — and set your own name and timezone
+(`foldrun me name`, `foldrun me timezone`). It acts at the lower of its role
+and yours now, in the workspaces both allow; a key is never an owner, so an
+owner's sign-in here is an admin, and inviting, changing or removing an admin
+stays in Settings → Team. The audit log marks each such act `via: foldrun
+login`. Transferring the account, your password, email, two-step sign-in and
+sessions stay in the browser. Any other key — one made in Settings → API
+keys, a CI key — is refused all of these.
 A scoped admin sees and revokes only keys inside its own scope; a key wider
 than that, the owner's included, is not in its list.
 
