@@ -5074,11 +5074,12 @@ async function sourceShare(url, flags, ws, base, spec) {
   // alone, so deleting a skill's folder would take an image or other asset
   // in it that never reached the library. A failure leaves the rest in both
   // places, never in neither, and says so.
-  for (const f of members) {
+  for (const [i, f] of members.entries()) {
     try {
       await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: f }) });
     } catch (err) {
-      throw new Error(`copied to shared, but ${f} could not be removed from ${ws} — ${explain(err)}. It is in both now; \`foldrun source rm ${f} --to ${ws}\` finishes the move`);
+      const left = members.slice(i);
+      throw new Error(`copied to shared, but ${f} could not be removed from ${ws} — ${explain(err)}. ${left.length === 1 ? "It is" : `These ${left.length} are`} in both now; ${left.map((x) => `\`foldrun source rm ${x} --to ${ws}\``).join(", ")} finish${left.length === 1 ? "es" : ""} the move`);
     }
   }
   console.log(`  ${c.green("✓")} ${unit} ${c.dim(`moved to library/${kind}/${relOf(unit)} — every workspace in the account can use it`)}`);
