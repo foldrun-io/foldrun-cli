@@ -10244,6 +10244,50 @@ function printGrade(g) {
 }
 
 /**
+ * `foldrun eval trends --to <workspace>` — evals by change, the workspace
+ * Observe page's table (GET …/evals/trends): per eval, where it stands now and
+ * against the most recent run on a DIFFERENT commit, biggest drop first. Two
+ * runs on one commit differ only by the model, so that is the comparison
+ * that names a change. Exit 1 when a change made an eval worse.
+ */
+async function evalTrendsCmd(flags, layout) {
+  const url = platformFor(flags, "eval trends");
+  const ws = platformWorkspace(flags, layout, "eval trends");
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/trends`);
+  const trends = r.trends ?? [];
+  const worse = trends.some((t) => t.delta != null && t.delta < 0);
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return worse ? 1 : 0;
+  }
+  if (!trends.length) {
+    console.log(`\n  ${c.dim(`no eval has run in ${ws} yet — \`foldrun eval <name> --to ${ws}\` runs one, and a deploy runs every trigger: deploy eval`)}\n`);
+    return 0;
+  }
+  // A git sha when the workspace deploys from git; a revision id (r-…) when it was edited on the platform.
+  const commit = (x) => (!x ? "—" : x.startsWith("r-") ? x.slice(0, 12) : x.slice(0, 7));
+  const score = (e) => `${e.passed}/${e.passed + e.failed}`;
+  const rows = trends.map((t) => [
+    t.eval,
+    score(t.latest),
+    t.latest.commit ? commit(t.latest.commit) : "no change on record",
+    t.previous ? `${score(t.previous)} ${commit(t.previous.commit)}` : "first commit with a run",
+    t.delta == null ? "—" : t.delta < 0 ? `${t.delta} — this change made it worse` : t.delta > 0 ? `+${t.delta}` : "unchanged",
+  ]);
+  const head = ["eval", "now", "at", "before", "change"];
+  const w = head.map((_, i) => Math.max(...[head, ...rows].map((x) => String(x[i]).length)));
+  console.log(`\n  ${c.bold(ws)}  ${c.dim("evals by change")}`);
+  console.log(`\n  ${c.dim(head.map((x, i) => pad(x, w[i])).join("  "))}`);
+  trends.forEach((t, n) => {
+    const cells = rows[n].map((x, i) => pad(x, w[i]));
+    const tone = t.delta == null || t.delta === 0 ? (x) => x : t.delta < 0 ? c.red : c.green;
+    console.log(`  ${c.bold(cells[0])}  ${cells[1]}  ${c.dim(cells[2])}  ${cells[3]}  ${tone(cells[4])}`);
+  });
+  console.log(`\n  ${c.dim("compared with the last run on a different commit · --json for the document")}\n`);
+  return worse ? 1 : 0;
+}
+
+/**
  * `foldrun eval grades <eval> --to <workspace>` — what a grader (an eval with
  * `trigger: runs`) found in the real runs it graded: the pass rate over
  * `--days` (default 30), then each graded run, newest first (`--status
@@ -11038,31 +11082,95 @@ function printObservation(o) {
 }
 
 /**
+ * The account Observe page's analysis (GET /api/observe), printed under the
+ * per-workspace table: the window against the one before it, why runs went
+ * wrong, the agents and tools to watch.
+ */
+function printAccountAnalysis(a) {
+  const k = a.kpis ?? {};
+  const before = a.days === 1 ? "the day before" : `the ${a.days} days before`;
+  const pts = (now, then) => {
+    if (now == null || then == null) return c.dim("no earlier window to compare");
+    const d = Math.round((now - then) * 100);
+    if (d === 0) return c.dim(`same as ${before}`);
+    return `${d > 0 ? c.green(`▲ ${d} pts`) : c.red(`▼ ${-d} pts`)} ${c.dim(`vs ${before}`)}`;
+  };
+  const spend = (now, then) => {
+    if (!a.previous?.runs) return "";
+    const d = now - then;
+    if (Math.abs(d) < 0.005) return c.dim(` (same as ${before})`);
+    return ` ${d > 0 ? c.red(`▲ $${d.toFixed(2)}`) : c.green(`▼ $${(-d).toFixed(2)}`)}`;
+  };
+  const wrong = (k.deskFailures ?? 0) + (k.platformFailures ?? 0);
+  console.log(`\n  ${c.bold(k.rate == null ? "—" : `${Math.round(k.rate * 100)}%`)} completed  ${pts(k.rate, k.prevRate)}`);
+  console.log(`  ${k.runs ?? 0} runs (${a.previous?.runs ?? 0} ${before}) · ${wrong ? c.red(`${wrong} went wrong`) : "0 went wrong"} ${c.dim(`(${k.deskFailures ?? 0} desk · ${k.platformFailures ?? 0} platform)`)} · charged $${Number(k.spendUsd ?? 0).toFixed(2)}${spend(Number(k.spendUsd ?? 0), Number(k.prevSpendUsd ?? 0))} · median run ${secs(k.medianSecs)}`);
+  const why = a.causes ?? [];
+  if (why.length) {
+    console.log(`\n  ${c.dim("why runs went wrong")}`);
+    for (const x of why) {
+      const who = pad(x.platform ? "platform" : x.kind === "stopped" ? "person" : "desk", 8);
+      console.log(`  ${x.platform ? c.red(who) : x.kind === "stopped" ? c.dim(who) : who}  ${c.bold(x.label)} ×${x.count}  ${c.dim(x.desks.join(", "))}`);
+      if (x.sample) console.log(`      ${c.dim(`${firstLine(x.sample, 100)} — ${x.newest.workspace} ${x.newest.id}`)}`);
+    }
+    if (why.some((x) => x.platform)) console.log(`  ${c.dim("no desk edit fixes a platform cause; once the platform is right, rerun them")}`);
+  }
+  const agents = (a.agents ?? []).filter((x) => x.failed || x.retried);
+  if (agents.length) {
+    const rows = agents.map((x) => [x.agent, x.workspace, `${x.failed}/${x.steps}`, x.retried, secs(x.seconds?.p50), `$${Number(x.chargedUsd ?? x.costUsd ?? 0).toFixed(2)}`]);
+    const head = ["agents to watch", "workspace", "failed", "retried", "p50", "charged"];
+    const w = head.map((_, i) => Math.max(...[head, ...rows].map((r) => String(r[i]).length)));
+    console.log(`\n  ${c.dim(head.map((x, i) => pad(x, w[i])).join("  "))}`);
+    for (const r of rows) console.log(`  ${r.map((x, i) => (i === 0 ? c.bold(pad(x, w[i])) : pad(x, w[i]))).join("  ")}`);
+  }
+  const tools = (a.tools ?? []).filter((t) => t.errors);
+  if (tools.length) {
+    const ms = (v) => (v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`);
+    const rows = tools.map((t) => [t.name, t.calls, `${t.errors} ${pct(t.errors, t.calls)}`, ms(t.p95ms), t.workspaces.length === 1 ? t.workspaces[0] : `${t.workspaces.length} workspaces`]);
+    const head = ["tools to watch", "calls", "errors", "slowest p95", "used by"];
+    const w = head.map((_, i) => Math.max(...[head, ...rows].map((r) => String(r[i]).length)));
+    console.log(`\n  ${c.dim(head.map((x, i) => pad(x, w[i])).join("  "))}`);
+    for (const r of rows) console.log(`  ${r.map((x, i) => (i === 0 ? c.bold(pad(x, w[i])) : pad(x, w[i]))).join("  ")}`);
+  }
+}
+
+/**
  * `foldrun observe` — where the account fails, retries and spends, per
- * workspace. `--to <workspace>` for one in full: flows, agents, tools, and
- * the recent failures in their own words.
+ * workspace, then the account Observe page's analysis (GET /api/observe):
+ * the window against the one before, why runs went wrong, the agents and
+ * tools to watch. 7 days unasked, as the page. `--to <workspace>` for one in
+ * full — flows, agents, tools, the recent failures in their own words — 30
+ * days unasked, as that workspace's Observe page. `--since`/`--days` pick
+ * any window.
  */
 async function observeCmd(flags, layout) {
   const url = platformFor(flags, "observe");
-  const since = sinceDays(flags, 30);
-  const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
+  const one = typeof flags.to === "string";
+  const since = sinceDays(flags.since === undefined && flags.days !== undefined ? { since: flags.days } : flags, one ? 30 : 7);
+  const names = one ? [flags.to] : await remoteWorkspaceNames(url, flags);
   const unreachable = [];
-  const obs = (
-    await pool(names, 8, async (ws) => {
+  const [obs, account] = await Promise.all([
+    pool(names, 8, async (ws) => {
       try {
         return await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/observe?days=${since}`);
       } catch (err) {
-        if (typeof flags.to === "string") throw err;
+        if (one) throw err;
         unreachable.push([ws, explain(err)]);
         return null;
       }
-    })
-  ).filter(Boolean);
+    }).then((all) => all.filter(Boolean)),
+    // A platform from before 5 Nov 2026 has no account analysis: the table alone.
+    one
+      ? null
+      : remoteCall(url, flags, `/api/observe?days=${since}`).catch((err) => {
+          if (err instanceof HttpError && err.status === 404) return null;
+          throw err;
+        }),
+  ]);
   if (flags.json === true) {
-    console.log(JSON.stringify(typeof flags.to === "string" ? obs[0] : obs, null, 2));
+    console.log(JSON.stringify(one ? obs[0] : { days: since, account, workspaces: obs }, null, 2));
     return 0;
   }
-  if (typeof flags.to === "string") {
+  if (one) {
     printObservation(obs[0]);
     console.log(`\n  ${c.dim("--since <days> widens it · --json for the whole document")}\n`);
     return 0;
@@ -11071,22 +11179,31 @@ async function observeCmd(flags, layout) {
     console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
     return 0;
   }
+  // Each workspace's completion rate against the window before, from the analysis.
+  const trendOf = new Map((account?.desks ?? []).map((d) => [d.workspace, d.rate != null && d.prevRate != null ? d.rate - d.prevRate : null]));
+  const trend = (ws) => {
+    const t = trendOf.get(ws);
+    if (t == null) return c.dim("—");
+    const d = Math.round(t * 100);
+    return d === 0 ? c.dim("steady") : d > 0 ? c.green(`▲ ${d} pts`) : c.red(`▼ ${-d} pts`);
+  };
   const rows = obs.sort((a, b) => b.failedRuns - a.failedRuns || b.runs - a.runs);
   const w = Math.max(9, ...rows.map((o) => o.workspace.length));
-  console.log(`\n    ${c.dim(`${pad("workspace", w)}  ${pad("runs", 5)}  ${pad("failed", 9)}  ${pad("steps", 6)}  cost   last ${since} days`)}`);
+  console.log(`\n    ${c.dim(`${pad("workspace", w)}  ${pad("runs", 5)}  ${pad("failed", 9)}  ${pad("steps", 6)}  ${pad("cost", 6)}  ${account ? "vs before  " : ""}last ${since} days`)}`);
   for (const o of rows) {
     const failed = pad(`${o.failedRuns} ${pct(o.failedRuns, o.runs)}`, 9);
-    console.log(`  ${o.failedRuns ? c.red("✗") : c.green("✓")} ${c.bold(pad(o.workspace, w))}  ${pad(o.runs, 5)}  ${o.failedRuns ? c.red(failed) : failed}  ${pad(o.steps, 6)}  $${o.costUsd.toFixed(2)}`);
+    console.log(`  ${o.failedRuns ? c.red("✗") : c.green("✓")} ${c.bold(pad(o.workspace, w))}  ${pad(o.runs, 5)}  ${o.failedRuns ? c.red(failed) : failed}  ${pad(o.steps, 6)}  ${pad(`$${o.costUsd.toFixed(2)}`, 6)}${account ? `  ${trend(o.workspace)}` : ""}`);
   }
   const total = rows.reduce((t, o) => ({ runs: t.runs + o.runs, failed: t.failed + o.failedRuns, cost: t.cost + o.costUsd }), { runs: 0, failed: 0, cost: 0 });
   console.log(`\n  ${c.dim(`${total.runs} runs · ${total.failed} failed · $${total.cost.toFixed(2)} across ${rows.length} workspace${rows.length === 1 ? "" : "s"}`)}`);
+  if (account) printAccountAnalysis(account);
   const fails = rows.flatMap((o) => (o.failures ?? []).map((f) => ({ ...f, ws: o.workspace }))).sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 8);
   if (fails.length) {
     console.log(`\n  ${c.dim("recent failures")}`);
     for (const f of fails) console.log(`  ${c.red("✗")} ${c.dim(when(f.at))}  ${f.ws}/${f.flow} · ${c.bold(f.agent)}  ${c.dim(f.runId)}\n      ${c.dim(firstLine(f.text, 100))}`);
   }
   for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
-  console.log(`\n  ${c.dim("foldrun observe --to <workspace> for its flows, agents and tools")}\n`);
+  console.log(`\n  ${c.dim("foldrun observe --to <workspace> for its flows, agents and tools · --since <days> for another window")}\n`);
   return 0;
 }
 
@@ -14316,6 +14433,11 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "grade" && positional[1]) return evalGradeCmd(positional[1], flags, layout);
       if (positional[0] === "compare" && positional[1]) return evalCompareCmd(positional[1], flags, layout);
       if (positional[0] === "improve" && positional[1]) return evalImproveCmd(positional[1], flags, layout);
+      // `eval trends`: evals by change on the deployed workspace. Nothing
+      // follows it, so it takes the name: an eval called "trends" is still
+      // read with `--last` / `--run <id>`, and runs with the rest in
+      // `foldrun eval --to <ws>`.
+      if (positional[0] === "trends" && !positional[1] && flags.last !== true && flags.run === undefined) return evalTrendsCmd(flags, layout);
       // --to names a deployed workspace: its evals run there.
       if (typeof flags.to === "string") return remoteEvalsCmd(positional[0], flags, layout);
       // --last reads the platform's results; a local eval has none to read,

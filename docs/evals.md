@@ -64,6 +64,15 @@ workspace, which is what makes it a regression test rather than a thing someone
 remembers to click. Results land in `evals/.results/`, and a dated line goes to
 `history.jsonl` so movement is visible across weeks.
 
+Each line is stamped with the commit the workspace was running (a git sha, or
+a revision id `r-…` when it was edited on the platform), and the workspace's
+**Observe** page reads them as **Evals by change**: each eval's latest score
+against its most recent run on a *different* commit, the biggest drop first.
+Not the run before — two runs on one commit differ only by the model, and a
+"regression" that is really variance teaches people to ignore the real ones.
+`foldrun eval trends --to <workspace>` prints the same table and exits 1 when a
+change made an eval worse; `GET /api/workspaces/<ws>/evals/trends` answers it.
+
 On a platform an eval's run goes through the same queue as every other run,
 so it counts against the account's `concurrency:` and waits its turn.
 
