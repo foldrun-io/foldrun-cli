@@ -12,6 +12,59 @@ edited by a person.
 
 <!-- releases -->
 
+## [14.4.0] — 2026-11-04
+
+### New in the public API
+
+- `foldrun flow inputs`
+- `foldrun flow inputs save`
+- `foldrun runs views save`
+- `foldrun runs views rm`
+- `foldrun mcp clients add`
+- `foldrun storage ls`
+- `foldrun billing wallet clear email`
+- `foldrun billing details set`
+- `foldrun account clear compute`
+- `foldrun workspace clear compute`
+- `foldrun secrets ls`
+- `foldrun secrets rm`
+- `foldrun source put`
+- `foldrun source share`
+- the `--no-task` flag
+- the `--isolated` flag
+- the `--page` flag
+- the `--write` flag
+- the `--token-auth` flag
+- the `--jwks-file` flag
+- the `--event-wait` flag
+- the `--clear-address` flag
+- the `--clear-email` flag
+- the `--clear-abn` flag
+- the `--use` flag
+- the `--backup` flag
+- the `--oauth2` flag
+- the `--with-client` flag
+- the `--if-workspaces` flag
+- the `--empty` flag
+- the `--clear-name` flag
+- the `--clear-description` flag
+- the `--clear-examples` flag
+- the `--return-immediately` flag
+- the `--subject-secret` flag
+- the `--requested-token-type` flag
+- the `--generate-key` flag
+- the `--revoke-url` flag
+- the `--dpop` flag
+- the `--device` flag
+- …and 2 more
+
+- fix(cli): a source share that stops mid-delete names every file still to remove ([016d735](https://github.com/foldrun-io/foldrun-cli/commit/016d735))
+- fix(cli): source share deletes only the files it copied, never their folder ([20f536e](https://github.com/foldrun-io/foldrun-cli/commit/20f536e))
+- feat(cli): dashboard parity C — what the dashboard did that the CLI could not ([bb496b8](https://github.com/foldrun-io/foldrun-cli/commit/bb496b8))
+- feat(cli): clear what the dashboard clears one at a time; usage prints by flow and by agent ([5ae3267](https://github.com/foldrun-io/foldrun-cli/commit/5ae3267))
+- feat(cli): dashboard parity — secret health, trigger log, storage ls --all, model set --use ([3c6a38d](https://github.com/foldrun-io/foldrun-cli/commit/3c6a38d))
+- feat(cli): saved run views, run selections, reject a wait: event step, mark all read, assistant --page ([1bbcef5](https://github.com/foldrun-io/foldrun-cli/commit/1bbcef5))
+
 ## [14.3.1] — 2026-11-04
 
 ### docs
