@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [15.0.0] — 2026-11-04
+
+### Breaking changes
+
+- `foldrun keys create <label>` with no --expires made a key (a260a09)
+
+- feat(cli)!: keys create defaults to 90 days, as the dashboard does ([a260a09](https://github.com/foldrun-io/foldrun-cli/commit/a260a09))
+- fix(cli): source share asks the platform to move it, in one call ([b2053ba](https://github.com/foldrun-io/foldrun-cli/commit/b2053ba))
+
 ## [14.4.1] — 2026-11-04
 
 ### deps
