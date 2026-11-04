@@ -3292,9 +3292,9 @@ async function limitingCore() {
 }
 
 /** Limit an account secret on this machine's vault. */
-async function localSetWorkspaces(name, workspaces, layout) {
+async function localSetWorkspaces(name, workspaces, layout, guard = {}) {
   const known = localWorkspaceNames(layout);
-  return (await limitingCore()).setSecretWorkspaces("default", name, workspaces, { exists: (w) => known.includes(w) });
+  return (await limitingCore()).setSecretWorkspaces("default", name, workspaces, { exists: (w) => known.includes(w), ...guard });
 }
 
 /** `--workspaces a,b` (or `--none`) on `secrets set`: the limit sent with
@@ -3340,9 +3340,18 @@ async function secretWorkspacesCmd(args, flags, url, layout) {
     return 0;
   }
   const workspaces = flags.all === true ? null : flags.none === true ? [] : named;
+  // --if-workspaces a,b (or all, or none): the list read before. Refused (409)
+  // when another admin changed it since, as Settings → Connections does.
+  /** @type {{ ifWorkspaces?: string[] | null }} */
+  const guard = {};
+  if (flags["if-workspaces"] !== undefined) {
+    const v = typeof flags["if-workspaces"] === "string" ? flags["if-workspaces"].trim() : "";
+    if (!v) throw new Error("--if-workspaces takes the list you read: names (a,b), all (every workspace) or none");
+    guard.ifWorkspaces = v === "all" ? null : v === "none" ? [] : v.split(",").map((x) => x.trim()).filter(Boolean);
+  }
   const stored = url
-    ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, workspaces }) })).workspaces
-    : await localSetWorkspaces(name, workspaces, layout);
+    ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, workspaces, ...guard }) })).workspaces
+    : await localSetWorkspaces(name, workspaces, layout, guard);
   console.log(`\n  ${c.green("✓")} ${describe(stored)}\n`);
   return 0;
 }
@@ -3686,6 +3695,169 @@ async function savedInputs(url, flags, ws, flow, name) {
   }
   console.log(`\n  ${c.dim(`inputs: ${hit.name} (evals/${hit.file})`)}`);
   return hit.task;
+}
+
+// A flow's saved input sets, as "Run with…" lists and saves them. The file
+// layout is foldrun-web's components/flow-inputs-model.ts, kept byte for byte
+// the same here (the web module is not in core's public API), so a set saved
+// from the terminal and one saved from the dashboard read alike.
+const inputsFileOf = (flow) => `evals/${flow}-inputs.md`;
+
+/** Every set for one flow: its inputs file first, then eval cases; a name
+ *  the inputs file has hides an eval case of the same name. */
+function inputSetsOf(evals, flow) {
+  const own = evals.filter((e) => e.flow === flow && e.inputs === true);
+  const borrowed = evals.filter((e) => e.flow === flow && e.inputs !== true);
+  const out = [];
+  const seen = new Set();
+  for (const [list, source] of [[own, "inputs"], [borrowed, "eval"]]) {
+    for (const e of list) {
+      for (const k of e.cases ?? []) {
+        if (!String(k.task ?? "").trim() || seen.has(k.name)) continue;
+        seen.add(k.name);
+        out.push({ name: k.name, task: k.task, file: e.file, source });
+      }
+    }
+  }
+  return out;
+}
+
+/** A set's name is a `## ` heading: one line, nothing a heading cannot say. */
+const cleanSetName = (name) =>
+  String(name).replace(/\s+/g, " ").trim().replace(/^#+\s*/, "").replace(/^case:\s*/i, "").trim().slice(0, 80);
+
+/** A task as core's eval parser reads it back: one line, or a `|` block
+ *  with a leading `- ` written `* ` (it would end the block). */
+function layoutInputTask(task) {
+  const t = task.replace(/\r\n/g, "\n").trim();
+  if (!t.includes("\n") && !/^["'|>]|["']$/.test(t)) return `task: ${t}`;
+  return `task: |\n${t
+    .split("\n")
+    .map((l) => (l.trim() ? `  ${l.replace(/^(\s*)-\s/, "$1* ")}` : ""))
+    .join("\n")}`;
+}
+
+function newInputsFile(flow) {
+  return [
+    "---",
+    `name: ${flow}-inputs`,
+    `flow: ${flow}`,
+    "inputs: true",
+    "trigger: manual",
+    "---",
+    "",
+    `Saved inputs for the ${flow} flow — "Run with…" on its card, or`,
+    `\`foldrun invoke ${flow} --inputs <name>\`. Not an eval: nothing here is asserted.`,
+    "",
+  ].join("\n");
+}
+
+/** The inputs file with one set added, or replaced when its name is taken;
+ *  everything else in it kept as it was. */
+function upsertInputSet(existing, flow, name, task) {
+  const heading = cleanSetName(name);
+  if (!heading) throw new Error("an input set needs a name");
+  if (!task.trim()) throw new Error("an input set needs a task");
+  const section = `## ${heading}\n${layoutInputTask(task)}\n`;
+  const base = existing ?? newInputsFile(flow);
+  const lines = base.split("\n");
+  const start = lines.findIndex((l) => {
+    const m = /^##\s+(?:case:\s*)?(.+?)\s*$/.exec(l);
+    return m !== null && m[1] === heading;
+  });
+  if (start === -1) return `${base.replace(/\n*$/, "\n")}\n${section}`;
+  let end = start + 1;
+  while (end < lines.length && !/^##\s/.test(lines[end])) end++;
+  const before = lines.slice(0, start).join("\n");
+  const after = lines.slice(end).join("\n");
+  return `${before}${before ? "\n" : ""}${section}${after ? `\n${after}` : ""}`;
+}
+
+/**
+ * `foldrun flow inputs <flow>` — the flow's saved input sets, as the
+ * dashboard's "Run with…" menu lists them. `flow inputs save <flow> <name>
+ * --task "…"` writes one into evals/<flow>-inputs.md (replacing a set of that
+ * name), the file `invoke --inputs <name>` reads. This folder by default;
+ * --to <workspace> works on the deployed copy through the same calls the
+ * dashboard makes: GET …/evals, then GET and PUT …/source with ifMatch.
+ */
+async function flowInputsCmd(positional, flags, layout) {
+  const saving = positional[1] === "save" && positional[2] !== undefined;
+  const flow = saving ? positional[2] : positional[1];
+  if (!flow) throw new Error('`foldrun flow inputs <flow>` lists its saved inputs; `foldrun flow inputs save <flow> <name> --task "…"` saves one');
+  const file = inputsFileOf(flow);
+  const platform = namesPlatform(flags);
+  const url = platform ? platformFor(flags, "flow inputs") : null;
+  const ws = platform ? platformWorkspace(flags, layout, `flow inputs ${flow}`) : null;
+  const dir = platform ? null : localDeskDir(layout, flow);
+  const where = platform ? `${ws} on ${url}` : path.relative(process.cwd(), dir) || ".";
+
+  if (!saving) {
+    let evals;
+    if (platform) ({ evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`));
+    else {
+      const { parseEval } = await core();
+      const evalsDir = path.join(dir, "evals");
+      evals = fs.existsSync(evalsDir)
+        ? fs.readdirSync(evalsDir).filter((f) => f.endsWith(".md")).sort().map((f) => parseEval(f, fs.readFileSync(path.join(evalsDir, f), "utf8")))
+        : [];
+    }
+    const sets = inputSetsOf(evals, flow);
+    if (flags.json === true) {
+      console.log(JSON.stringify({ flow, sets }, null, 2));
+      return 0;
+    }
+    if (!sets.length) {
+      console.log(`\n  ${c.dim(`${flow} has no saved inputs in ${where} — \`foldrun flow inputs save ${flow} <name> --task "…"\` saves one`)}\n`);
+      return 0;
+    }
+    console.log(`\n  ${c.bold(flow)} ${c.dim(`· saved inputs · ${where}`)}\n`);
+    for (const s of sets) {
+      console.log(`  ${c.bold(s.name)}  ${c.dim(`evals/${s.file}${s.source === "eval" ? " · an eval case" : ""}`)}`);
+      console.log(`    ${firstLine(s.task, 100)}`);
+    }
+    const run = platform ? `foldrun invoke ${flow} --to ${ws} --inputs <name>` : `foldrun deploy, then foldrun invoke ${flow} --to <workspace> --inputs <name>`;
+    console.log(`\n  ${c.dim(run)}\n`);
+    return 0;
+  }
+
+  const name = positional[3];
+  if (typeof name !== "string" || !cleanSetName(name)) throw new Error(`which name? \`foldrun flow inputs save ${flow} <name> --task "…"\``);
+  const task = typeof flags.task === "string" ? flags.task : typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : "";
+  if (!task.trim()) throw new Error(`what is the task? \`foldrun flow inputs save ${flow} ${name} --task "…"\` (or --file <path>)`);
+  const heading = cleanSetName(name);
+  const message = `input set "${heading}" saved for ${flow}`;
+
+  if (platform) {
+    const at = `/api/workspaces/${enc(ws)}/source`;
+    /** @type {{ content?: string, sha256?: string } | null} */
+    let current = null;
+    try {
+      current = await remoteCall(url, flags, `${at}?path=${enc(file)}`);
+    } catch (err) {
+      if (!(err instanceof HttpError) || !(err.status === 404 || /not found/i.test(err.message))) throw err;
+    }
+    const next = upsertInputSet(current ? (current.content ?? "") : null, flow, heading, task);
+    try {
+      // ifMatch: the bytes just read (null: no file yet), so a set saved by
+      // someone else in between is refused rather than written over.
+      await remoteCall(url, flags, at, { method: "PUT", body: JSON.stringify({ path: file, content: next, message, ifMatch: current ? current.sha256 ?? null : null }) });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 409) throw new Error(`${file} changed while saving — nothing was written; run the command again`);
+      throw err;
+    }
+    console.log(`\n  ${c.green("✓")} saved "${heading}" to ${file} ${c.dim(`in ${ws} — \`foldrun invoke ${flow} --to ${ws} --inputs "${heading}"\` runs it`)}\n`);
+    return 0;
+  }
+  // A set for a flow this folder does not have would fail `check`; say so now.
+  await flowFileOf(await openDesk(flags, layout, `flow inputs save ${flow}`, flow), flow);
+  const abs = path.join(dir, file);
+  const before = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
+  const next = upsertInputSet(before, flow, heading, task);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, next);
+  console.log(`\n  ${c.green("✓")} saved "${heading}" to ${path.join(where, file)} ${c.dim("— `foldrun deploy` ships it")}\n`);
+  return 0;
 }
 
 /**
@@ -4685,11 +4857,36 @@ async function sourceCmd(positional, flags) {
   }
   if (verb === "put" || verb === "write") {
     if (!a) throw new Error("which file? foldrun source put flows/daily.md --file ./daily.md --to <workspace>");
-    const content = typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : fs.readFileSync(0, "utf8");
-    if (!content.trim()) throw new Error("refusing to write an empty file — `foldrun source rm` is the deliberate way to remove one");
-    const body = { path: a, content, ...(typeof flags.message === "string" ? { message: flags.message } : {}) };
-    await remoteCall(url, flags, base, { method: "PUT", body: JSON.stringify(body) });
+    // --empty writes an empty file on purpose (the dashboard's "+ Add file"
+    // does). Without it an empty input is refused: that is nearly always a
+    // pipe that broke, and the blank file would be live at once.
+    if (flags.empty === true && typeof flags.file === "string") throw new Error("either --empty or --file, not both");
+    const content = flags.empty === true ? "" : typeof flags.file === "string" ? fs.readFileSync(flags.file, "utf8") : fs.readFileSync(0, "utf8");
+    if (!content.trim() && flags.empty !== true) throw new Error("refusing to write an empty file — `foldrun source rm` is the deliberate way to remove one; --empty writes an empty one on purpose");
+    // --check: the editor's checked save — a file a deploy would refuse is
+    // refused (422, with the issues) and nothing is written.
+    const body = { path: a, content, ...(typeof flags.message === "string" ? { message: flags.message } : {}), ...(flags.check === true ? { check: true } : {}) };
+    const printIssues = (issues) => {
+      for (const i of issues ?? []) {
+        const tag = i.level === "error" ? c.red("error") : c.amber(" warn");
+        console.log(`  ${tag}  ${c.bold(i.where ?? a)}  ${i.message}${i.rule ? `  ${c.dim(`[${i.rule}]`)}` : ""}`);
+      }
+    };
+    let saved;
+    try {
+      saved = await remoteCall(url, flags, base, { method: "PUT", body: JSON.stringify(body) });
+    } catch (err) {
+      if (flags.check !== true || !(err instanceof HttpError) || err.status !== 422) throw err;
+      console.log(`\n  ${c.red("✗")} ${ws}/${a} ${c.dim("did not check out — nothing was saved")}\n`);
+      printIssues(err.body?.issues);
+      console.log(`\n  ${c.dim("fix it, or save it anyway without --check")}\n`);
+      return 1;
+    }
     console.log(`\n  ${c.green("✓")} ${ws}/${a}  ${c.dim(`${content.length} chars · revision recorded${flags.message ? ` · "${flags.message}"` : ""}`)}\n`);
+    if (flags.check === true && saved?.issues?.length) {
+      printIssues(saved.issues);
+      console.log();
+    }
     return 0;
   }
   if (verb === "mv" || verb === "move") {
@@ -4705,6 +4902,7 @@ async function sourceCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} removed ${a}\n`);
     return 0;
   }
+  if (verb === "share" || verb === "promote") return sourceShare(url, flags, ws, base, a);
   if (verb === "new") {
     // The dashboard's New button for any document (POST …/assets): the
     // platform writes the template — a tool folder, a skill, knowledge,
@@ -4723,7 +4921,104 @@ async function sourceCmd(positional, flags) {
     console.log(`\n  ${c.green("✓")} ${ws}/${r.path ?? b}  ${c.dim(`a new ${a.replace(/s$/, "")}${flags.agent ? ` for ${flags.agent}` : ""} · revision recorded`)}\n`);
     return 0;
   }
-  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, new, mv, rm`);
+  throw new Error(`source: unknown verb "${verb}" — ls, cat, put, new, mv, rm, share`);
+}
+
+/** The workspace folders "Move to shared" applies to — the library kinds
+ *  but hooks (`foldrun hook add --library` makes a shared one). */
+const SHAREABLE_KINDS = ["skills", "tools", "scripts", "knowledge", "memory"];
+
+/**
+ * `foldrun source share <path> --to <ws>` — the dashboard's "Move to shared":
+ * the file goes into the account library (PUT /api/library/<kind>) and,
+ * once it is safely there, out of the workspace (DELETE …/source). A skill
+ * or folder tool moves whole — every file of its folder, where the
+ * dashboard copies the one file it shows — and subfolders keep their
+ * place. A library file of the same path is refused unless --overwrite;
+ * --dry-run lists what would move. Asks first (--yes with no terminal):
+ * it leaves this workspace and every workspace in the account can use it.
+ */
+async function sourceShare(url, flags, ws, base, spec) {
+  if (!spec) throw new Error("which file? `foldrun source share skills/house-style --to <workspace>` — a skill, tool, script, knowledge or memory file");
+  const clean = spec.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  const [kind, ...rest] = clean.split("/");
+  if (kind === "hooks") throw new Error("a hook is a folder whose run.mjs goes with it — `foldrun hook add <name> --library` makes a shared one");
+  if (!SHAREABLE_KINDS.includes(kind) || !rest.length) throw new Error(`"${spec}" is not under ${SHAREABLE_KINDS.join("/, ")}/ — only those move to the shared library`);
+  // skills/x/SKILL.md or tools/x/tool.md names its folder: the folder is the thing.
+  const unit = (kind === "skills" || kind === "tools") && rest.length >= 2 ? `${kind}/${rest[0]}` : clean;
+  const { files = [] } = await remoteCall(url, flags, base);
+  const members = files.filter((f) => f === unit || f.startsWith(`${unit}/`));
+  if (!members.length) throw new Error(`no ${unit} in ${ws} — \`foldrun source ls ${kind} --to ${ws}\` lists what is there`);
+  const relOf = (f) => f.slice(kind.length + 1);
+
+  /** Which of these the library already has. */
+  const inLibrary = async (list) => {
+    const hits = [];
+    for (const f of list) {
+      try {
+        await remoteCall(url, flags, `/api/library/${kind}?path=${enc(relOf(f))}`);
+        hits.push(f);
+      } catch (err) {
+        if (!(err instanceof HttpError) || !(err.status === 404 || /not found/i.test(err.message))) throw err;
+      }
+    }
+    return hits;
+  };
+  const taken = await inLibrary(members);
+  console.log(`\n  ${c.bold(unit)} ${c.dim(`· ${ws} → the shared library`)}\n`);
+  for (const f of members) console.log(`  ${c.dim("·")} ${f} → library/${kind}/${relOf(f)}${taken.includes(f) ? c.amber("  (the library has one — replaced)") : ""}`);
+  console.log();
+  if (taken.length && flags.overwrite !== true) {
+    console.log(`  ${c.red("✗")} the library already has ${taken.map((f) => `${kind}/${relOf(f)}`).join(", ")} — nothing was moved; --overwrite replaces ${taken.length === 1 ? "it" : "them"}\n`);
+    return 1;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`  ${c.dim("--dry-run: nothing moved")}\n`);
+    return 0;
+  }
+  if (!(await confirmed(flags, "source share", `Move ${unit} to shared? Every workspace in the account will be able to use it, and it leaves ${ws}. [y/N] `))) {
+    console.log(`\n  ${c.dim("nothing moved")}\n`);
+    return 0;
+  }
+  // Asked again after the question, which may have waited a long time: a
+  // library file made meanwhile is not replaced without --overwrite. (The
+  // library PUT takes no ifMatch, so this narrows the window, no more.)
+  if (flags.overwrite !== true) {
+    const since = await inLibrary(members);
+    if (since.length) throw new Error(`the library now has ${since.map((f) => `${kind}/${relOf(f)}`).join(", ")} — made while this waited; nothing was moved (--overwrite replaces it)`);
+  }
+  const copied = new Map();
+  for (const f of members) {
+    const { content } = await remoteCall(url, flags, `${base}?path=${enc(f)}`);
+    copied.set(f, content ?? "");
+    try {
+      await remoteCall(url, flags, `/api/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: relOf(f), content: content ?? "" }) });
+    } catch (err) {
+      throw new Error(`could not copy ${f} to the library — ${explain(err)}. ${unit} is still in ${ws}${f === members[0] ? "" : "; what was copied before it is in the library too"}`);
+    }
+  }
+  // The DELETE takes no ifMatch, so read it all again first: a file edited
+  // or added while this copied would be deleted without ever reaching the
+  // library. Changed, it stays in both places and nothing is deleted.
+  const { files: now = [] } = await remoteCall(url, flags, base);
+  const nowMembers = now.filter((f) => f === unit || f.startsWith(`${unit}/`));
+  const moved = [];
+  for (const f of nowMembers) {
+    if (!copied.has(f)) moved.push(f);
+    else if ((await remoteCall(url, flags, `${base}?path=${enc(f)}`)).content !== copied.get(f)) moved.push(f);
+  }
+  if (moved.length) {
+    throw new Error(`copied to shared, but ${moved.join(", ")} changed in ${ws} while it was copied — nothing was deleted, so it is in both places; run it again with --overwrite to copy the new text`);
+  }
+  // Only once every file is in the library: a failure here leaves it in
+  // both places, never in neither — and says so.
+  try {
+    await remoteCall(url, flags, base, { method: "DELETE", body: JSON.stringify({ path: unit }) });
+  } catch (err) {
+    throw new Error(`copied to shared, but ${unit} could not be removed from ${ws} — ${explain(err)}. It is in both now; \`foldrun source rm ${unit} --to ${ws}\` finishes the move`);
+  }
+  console.log(`  ${c.green("✓")} ${unit} ${c.dim(`moved to library/${kind}/${relOf(unit)} — every workspace in the account can use it`)}\n`);
+  return 0;
 }
 
 // ------------------------------------------------- the account, as a whole
@@ -6009,14 +6304,25 @@ async function accountModelCmd(url, positional, flags) {
   }
   if (verb === "use") {
     const source = positional[1];
+    // --if-version <n>: the choiceVersion read before (`account model --json`;
+    // 0: never chosen). The platform refuses (409) when someone has chosen
+    // since, as the Settings page does — a script will not undo a newer choice.
+    let guard = {};
+    if (flags["if-version"] !== undefined) {
+      // A bare --if-version parses as true, and Number(true) is 1: only digits count.
+      const raw = typeof flags["if-version"] === "string" ? flags["if-version"].trim() : "";
+      const v = /^\d+$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isSafeInteger(v)) throw new Error("--if-version takes the choiceVersion `foldrun account model --json` shows (0: never chosen)");
+      guard = { ifVersion: v };
+    }
     if (source === "own") {
-      out(await put({ source: "own" }));
+      out(await put({ source: "own", ...guard }));
       return 0;
     }
     if (source !== "foldrun") throw new Error("`foldrun account model use foldrun --provider <anthropic|openai|gemini|deepseek|moonshot>` or `foldrun account model use own`");
     const supply = typeof flags.provider === "string" ? flags.provider : positional[2];
     if (!supply) throw new Error("which provider? `foldrun account model use foldrun --provider anthropic` (anthropic, openai, gemini, deepseek or moonshot — `foldrun account model prices` lists what each costs)");
-    const r = await put({ source: "foldrun", supply });
+    const r = await put({ source: "foldrun", supply, ...guard });
     out(r);
     return runnable(r) ? 0 : 1;
   }
@@ -8019,6 +8325,7 @@ async function toolTestCmd(positional, flags, layout) {
 
 /**
  * `foldrun agent run <name> --task "…"` — one agent, once, on the platform.
+ * `--no-task` instead runs it on its own prompt alone (the dashboard's Run).
  *
  * A flow of one step, without a flow file: the way to try a desk's agent on
  * a real task before wiring it into anything, and the way to ask one a
@@ -8030,8 +8337,12 @@ async function agentRunCmd(positional, flags, layout) {
   if (!name) throw new Error('which agent? `foldrun agent run <name> --to <workspace> --task "…"`');
   const ws = platformWorkspace(flags, layout, `agent run ${name}`);
   const task = typeof flags.task === "string" ? flags.task.trim() : "";
-  if (!task) {
-    throw new Error(`what should ${name} do? pass --task "<text>" — an agent run is one instruction and nothing else`);
+  // --no-task is the dashboard's one-click Run: the agent works from its own
+  // prompt alone. Explicit, so a mistyped --task does not start a paid run.
+  const bare = flags["no-task"] === true;
+  if (task && bare) throw new Error("either --task or --no-task, not both");
+  if (!task && !bare) {
+    throw new Error(`what should ${name} do? pass --task "<text>", or --no-task to run it on its own prompt alone, as the dashboard's Run does`);
   }
 
   // --wait asks in short pieces, exactly as `invoke` does: whatever sits in
@@ -8059,7 +8370,7 @@ async function agentRunCmd(positional, flags, layout) {
       method: "POST",
       // --test: the platform marks the run a test run — sends refused or sunk
       // at the proxy, send-capable secrets withheld, state/ kept.
-      body: JSON.stringify({ task, ...(flags.test === true ? { test: true } : {}) }),
+      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}) }),
     }),
   );
   const runId = body?.runId;
@@ -8158,6 +8469,16 @@ async function checkRemote(flags, layout) {
     process.env.FOLDRUN_ACCOUNT = root;
     // The baseline belongs to the folder it was written in, not to a temp copy.
     const code = await check(dir, { ...flags, "no-baseline": true });
+    // The Checks page's "Rescanned daily, last …" (--online prints it with
+    // its own answer). Only GET …/check knows it; best-effort, so an older
+    // platform or a slow answer costs this line, never the check. The rule
+    // asked for matches nothing: only the rescan is wanted from it.
+    if (flags.online !== true && checkOptions(flags).format === "text") {
+      try {
+        const r = await remoteCall(url, { ...flags, quiet: true }, `/api/workspaces/${enc(ws)}/check?rule=rescan-only`, {}, { seconds: 15 });
+        if (r?.rescan?.checkedAt) say(`  ${c.dim(`the daily rescan last ran ${r.rescan.checkedAt} — new security findings go to notify:`)}`);
+      } catch {}
+    }
     say(`  ${c.dim(`checked what is deployed, not this folder — ${ws} · ${url}`)}\n`);
     if (flags.online === true) return Math.max(code, await checkOnline(url, flags, ws));
     return code;
@@ -8937,6 +9258,7 @@ async function flowDupStepCmd(positional, flags, layout) {
  * shows the diff, refuses one `check` would call a new error, then asks —
  * a delete, so no terminal needs --yes. --dry-run writes nothing; --to
  * <workspace> sends the canvas's PATCH { edit: { op: "remove" } }.
+ * `--step 2,4` deletes several at once: one write, one PATCH { edits }.
  */
 async function flowRmStepCmd(positional, flags, layout) {
   const flow = positional[1];
@@ -8947,15 +9269,21 @@ async function flowRmStepCmd(positional, flags, layout) {
   const { parseFlow } = await core();
   const { removeStep, removeStepImpact } = await patterns();
   const steps = parseFlow(path.basename(rel), raw).steps;
-  const i = pickStep(steps, flags.step, flow);
-  const impact = removeStepImpact(raw, i);
+  // --step 2,4 deletes several in one revision, as the canvas's multi-select
+  // does: highest index first, so each still names the step it did when the
+  // list was made (the platform applies { edits } in the order sent).
+  const specs = typeof flags.step === "string" && flags.step.includes(",") ? flags.step.split(",").map((x) => x.trim()).filter(Boolean) : [flags.step];
+  const picked = [...new Set(specs.map((spec) => pickStep(steps, spec, flow)))].sort((x, y) => y - x);
+  const i = picked[0];
+  const impacts = [...picked].reverse().map((k) => removeStepImpact(raw, k));
+  const impact = picked.length === 1 ? impacts[0] : { label: `${picked.length} steps (${impacts.map((x) => x.label).join(", ")})`, notes: impacts.flatMap((x) => x.notes) };
 
   console.log(`\n  ${c.bold(flow)} ${c.dim(`· delete ${impact.label} · ${desk.label}`)}\n`);
   for (const n of impact.notes) console.log(`  ${c.dim("·")} ${n}`);
   console.log();
   let next;
   try {
-    next = removeStep(raw, i);
+    next = picked.reduce((text, k) => removeStep(text, k), raw);
   } catch (err) {
     console.log(`  ${c.red("✗")} refused — ${err instanceof Error ? err.message : err}; nothing was written\n`);
     return 1;
@@ -8976,7 +9304,8 @@ async function flowRmStepCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "remove", step: i }, expect: textSha(raw) }) });
+    const change = picked.length === 1 ? { edit: { op: "remove", step: i } } : { edits: picked.map((step) => ({ op: "remove", step })) };
+    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...change, expect: textSha(raw) }) });
     console.log(`  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     writeIfUnchanged(desk, rel, raw, next);
@@ -9685,7 +10014,8 @@ function printComparison(r) {
  * an eval's cases under two to four models, side by side (POST
  * …/evals/<e>/compare, then polled). `--models` takes model[:effort] items
  * (`fast:low,max:high`); `--effort` is the effort for the items that name
- * none; `--agent <name>` compares only that agent's steps of a flow eval;
+ * none; `--agent <name>` compares only that agent's steps of a flow eval,
+ * and an item's own `@agent` (`fast@writer`) does so for that item alone;
  * `--repeat` (1–5) runs each case more than once; `--max-usd` is the spend
  * limit (default 5). Every run is a test run. Waits for the result
  * (`--timeout <s>`, default 3600; past it, the id to read it with).
@@ -9737,11 +10067,22 @@ async function evalCompareCmd(name, flags, layout) {
   const effort = typeof flags.effort === "string" ? flags.effort : undefined;
   const agent = typeof flags.agent === "string" ? flags.agent : undefined;
   const configs = flags.models.split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
+    // `@agent` at the end compares only that agent's steps in this setting
+    // (the Compare panel's Steps, per row): fast@writer,max:high@writer. An
+    // agent name starts with a letter, so a Vertex-style model@20240620
+    // stays one model id.
+    // Either order: fast:low@writer or fast@writer:low.
     // Only a trailing known effort is an effort: llama3.2:3b stays one model id.
-    const m = /^(.*):(low|medium|high|xhigh|max)$/.exec(item);
-    const model = m ? m[1] : item;
-    const e = m ? m[2] : undefined;
-    return { model, ...((e ?? effort) ? { effort: e ?? effort } : {}), ...(agent ? { agent } : {}) };
+    const effortOf = (x) => /^(.*):(low|medium|high|xhigh|max)$/.exec(x);
+    let model = item;
+    let e;
+    let m = effortOf(model);
+    if (m) [, model, e] = m;
+    const at = /^(.*)@([a-z][a-z0-9_-]*)$/i.exec(model);
+    if (at) model = at[1];
+    if (!e && (m = effortOf(model))) [, model, e] = m;
+    const a = at ? at[2] : agent;
+    return { model, ...((e ?? effort) ? { effort: e ?? effort } : {}), ...(a ? { agent: a } : {}) };
   });
   const body = { configs, ...(flags.repeat !== undefined ? { repeat: Number(flags.repeat) } : {}), ...(flags["max-usd"] !== undefined ? { maxUsd: Number(flags["max-usd"]) } : {}) };
   const started = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify(body) });
@@ -13511,6 +13852,7 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "dup-step") return flowDupStepCmd(positional, flags, layout);
       if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
       if (positional[0] === "run") return invoke(positional[1], flags);
+      if (positional[0] === "inputs") return flowInputsCmd(positional, flags, layout);
       if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);
       if (positional[0] === "hook") return flowHookCmd(positional, flags, layout);
       if (positional[0] === "set") return flowSetCmd(positional, flags, layout);
