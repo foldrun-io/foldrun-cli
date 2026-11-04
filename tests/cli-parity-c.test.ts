@@ -271,7 +271,7 @@ test("eval compare: an item's @agent is that setting's alone; --agent fills the 
 
 // ---- 26: Move to shared
 
-test("source share: every file of a skill folder into the library, then the folder out of the workspace", async () => {
+test("source share: every file of a skill folder into the library, then those files — never the folder — out of the workspace", async () => {
   const files: Record<string, string> = { "skills/house-style/SKILL.md": "---\nname: house-style\n---\nWrite plainly.\n", "skills/house-style/examples.md": "# examples\n", "skills/other/SKILL.md": "x" };
   const s = await serve({
     "GET /api/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
@@ -287,11 +287,13 @@ test("source share: every file of a skill folder into the library, then the fold
     { path: "house-style/SKILL.md", content: files["skills/house-style/SKILL.md"] },
     { path: "house-style/examples.md", content: "# examples\n" },
   ]);
+  // One delete per copied file: an asset the source API does not list (an
+  // image) would go with a folder delete without ever reaching the library.
   const del = s.seen.filter((x) => x.method === "DELETE");
-  assert.equal(del.length, 1);
-  assert.deepEqual(JSON.parse(del[0].body), { path: "skills/house-style" });
-  // The delete comes after every copy.
+  assert.deepEqual(del.map((x) => JSON.parse(x.body).path), ["skills/house-style/SKILL.md", "skills/house-style/examples.md"]);
+  // The deletes come after every copy.
   assert.ok(s.seen.indexOf(del[0]) > s.seen.findLastIndex((x) => x.method === "PUT"));
+  assert.match(r.out, /only its text files move/);
 });
 
 test("source share: a library file already there is refused without --overwrite; --dry-run moves nothing", async () => {
