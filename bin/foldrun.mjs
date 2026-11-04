@@ -202,6 +202,7 @@ const HELP = `foldrun — agents are just folders
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
   foldrun usage --limit <n>  how many rows of by flow and by agent (the most charged; default 10, 0 hides them)
   foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each workspace, each live run — what they hold now, and the steps waiting for room (--json)
+  foldrun usage budget      spend against each cap — the account's and each workspace's budget:, what is spent in its window (today, this week, this month) and how close it is (--to <workspace> for one, --json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun schedule tick     fire whatever is due now — Settings' "Run scheduler now"
   foldrun guide             write the coding-agent rules: a block in AGENTS.md and CLAUDE.md importing it (--check, --print)
@@ -212,6 +213,7 @@ const HELP = `foldrun — agents are just folders
   foldrun runtimes          the environments a deployed workspace's agents need (python, pip and npm packages) and whether each is built — failed ones with the installer's error (--wait holds on while any is building)
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
   foldrun billing statement [YYYY-MM]  a month of the ledger (--csv for the file, --file <path> to save it)
+  foldrun billing invoices  the plan's tax invoices from Stripe (number, date, amount, status, link) and every credit purchase with its receipt (--json)
   foldrun billing wallet    burn, runway, auto top-up — also set auto-top-up --threshold <usd> --amount <usd> | off, set email <address>
   foldrun billing wallet clear email  no receipt or low-balance email (set auto-top-up off keeps the threshold and refill for next time)
   foldrun billing details   who invoices are made out to — also set --name "…" --abn … --address "line1, city, state, postcode, AU" --email …

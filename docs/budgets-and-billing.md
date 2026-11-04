@@ -357,10 +357,10 @@ avatar, with eight tabs:
 | **Plan** | the plan you are on, this cycle's credits and when they reset, and the plans you could move to |
 | **Usage** | what was consumed, from the run records, and what each flow and agent cost by week from the ledger |
 | **Statement** | the ledger as a statement: grouped by day, human labels, month-to-date, filters, and a CSV for the month |
-| **Invoices** | a tax invoice for every card payment — the plan's fee and each top-up — hosted by Stripe, and a statement for every month |
+| **Invoices** | a tax invoice for every card payment — the plan's fee and each top-up — hosted by Stripe, and a statement for every month; `foldrun billing invoices` lists the invoices and receipts in a terminal |
 | **Payment** | the saved card and the auto top-up rule, with defaults derived from the burn |
 | **Details** | who the invoices are made out to: legal name, ABN, address and the invoice email |
-| **Spend limits** | the account's cap and each workspace's — over a day, a week or a month — as bars with the warning marks drawn where they fire, editable in place |
+| **Spend limits** | the account's cap and each workspace's — over a day, a week or a month — as bars with the warning marks drawn where they fire, editable in place; `foldrun usage budget` shows the same standing in a terminal |
 
 The balance also sits in the header of every page, tinted by runway, and a
 banner appears across the dashboard when the balance is under a week's cover
