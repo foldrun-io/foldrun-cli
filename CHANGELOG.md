@@ -12,6 +12,25 @@ edited by a person.
 
 <!-- releases -->
 
+## [16.0.0] — 2026-11-04
+
+### Breaking changes
+
+- a bare `foldrun observe` covers the last 7 days, as the (9709069)
+
+### New in the public API
+
+- `foldrun eval trends`
+- `foldrun runs outputs`
+- `foldrun usage budget`
+- `foldrun billing invoices`
+
+- fix(cli): runs reaches a deep --page, and --json on an empty account is still JSON ([dceaec8](https://github.com/foldrun-io/foldrun-cli/commit/dceaec8))
+- fix(cli): every billing verb says when there is no billing; runs --all and budget edge cases ([8e11f9e](https://github.com/foldrun-io/foldrun-cli/commit/8e11f9e))
+- feat(observe)!: the account Observe analysis in `foldrun observe`; `foldrun eval trends` ([9709069](https://github.com/foldrun-io/foldrun-cli/commit/9709069))
+- feat(runs): foldrun runs pages (--before, --page, --all, --json) and foldrun runs outputs lists what a run archived ([e57970d](https://github.com/foldrun-io/foldrun-cli/commit/e57970d))
+- feat(cli): usage budget and billing invoices ([187a1bb](https://github.com/foldrun-io/foldrun-cli/commit/187a1bb))
+
 ## [15.0.0] — 2026-11-04
 
 ### Breaking changes
