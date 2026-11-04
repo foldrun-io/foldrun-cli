@@ -8970,22 +8970,16 @@ function ownSandboxOf(agent) {
   return /** @type {{ sandbox?: string } | undefined} */ (agent)?.sandbox === "own";
 }
 
-/** An agent file's frontmatter as a run reads it, from its text. A run folds
- *  the four job blocks' keys up to the top (core's configMatter, kept private
- *  — not in @foldrun/core's publicApi), so `guardrail: { sandbox: own }` reads
- *  as `sandbox: own`. The CLI reads only two foldable keys off this — `sandbox`
- *  and `network`, both in an agent's `guardrail:` block — so it lifts just
- *  those, the same way a run does: a top-level value wins, else the block's is
- *  lifted. {} when it does not parse. */
+/** An agent file's frontmatter as a run reads it, from its text. Core's
+ *  readFrontmatter folds the four job blocks' keys up to the top (its
+ *  configMatter), so `guardrail: { sandbox: own }` reads as `sandbox: own`.
+ *  The CLI keeps no fold rule of its own (FOL-93). {} when it does not parse. */
 async function effectiveFront(raw) {
   const { readFrontmatter } = await core();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-front-"));
   try {
     fs.writeFileSync(path.join(dir, "agent.md"), raw);
-    const front = /** @type {Record<string, any>} */ (readFrontmatter(path.join(dir, "agent.md")) ?? {});
-    const guardrail = front.guardrail && typeof front.guardrail === "object" ? front.guardrail : {};
-    for (const key of ["sandbox", "network"]) if (!(key in front) && key in guardrail) front[key] = guardrail[key];
-    return front;
+    return /** @type {Record<string, any>} */ (readFrontmatter(path.join(dir, "agent.md")) ?? {});
   } catch {
     return {};
   } finally {
@@ -9234,7 +9228,7 @@ async function agentNetworkCmd(positional, flags, layout) {
     inTree(desk, files, async (dir) => {
       const { listAgents } = await core();
       // The folded view a run reads: `network` set inside a `guardrail:` block
-      // counts the same as a top-level one (effectiveFront lifts it).
+      // counts the same as a top-level one (core folds it).
       const front = await effectiveFront(fs.readFileSync(path.join(dir, rel), "utf8"));
       const info = listAgents("default", "workspace").find((a) => a.name === name);
       // May it browse? Core answers it (network.browses, with web: inherited

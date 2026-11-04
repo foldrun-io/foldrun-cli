@@ -81,3 +81,13 @@ test("--isolated reads the setting as a run does: a guardrail block counts, a de
   assert.equal(again.status, 0, again.stdout + again.stderr);
   assert.equal(fs.readFileSync(file("reader"), "utf8"), before, "already own, in its block: nothing written");
 });
+
+test("the CLI keeps no fold rule of its own: job blocks are folded by core's readFrontmatter (FOL-93)", () => {
+  // The fold rule (which block keys lift, which value wins) lives in core's
+  // configMatter. A second copy here drifted once already; the reads above
+  // pass through core alone.
+  const src = fs.readFileSync(path.join(ROOT, "src/commands.mjs"), "utf8");
+  const fn = /async function effectiveFront\(raw\) \{[\s\S]*?\n\}/.exec(src)?.[0] ?? "";
+  assert.ok(fn.includes("readFrontmatter"), "effectiveFront reads through core");
+  assert.doesNotMatch(fn, /guardrail|governance|observability|evaluation/, "no job block is folded by hand");
+});
