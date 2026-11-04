@@ -345,13 +345,17 @@ test("runs --since drops what is older, and a bad span is refused before any cal
   assert.equal(old.code, 0, old.out);
   assert.match(old.out, /no runs matching the last 1h/);
 
+  const today = await at(s.url, "runs", "--since", "today");
+  assert.equal(today.code, 0, today.out);
+  assert.match(today.out, /no runs matching today/);
+
   const wide = await at(s.url, "runs", "--since", "52w");
   assert.match(wide.out, /run-ok/);
 
   const bad = await at(s.url, "runs", "--since", "yesterday");
   s.close();
   assert.equal(bad.code, 1, bad.out);
-  assert.match(bad.out, /--since wants a span like 24h, 7d or 90m/);
+  assert.match(bad.out, /--since wants a span like 24h, 7d, 90m or today/);
 });
 
 test("runs --to asks one workspace and --limit caps the list", async () => {

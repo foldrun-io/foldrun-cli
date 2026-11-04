@@ -685,3 +685,17 @@ test("flow set writes max_output_tokens as the step editor does, and refuses wha
   assert.equal(cleared.status, 0, cleared.stderr);
   assert.doesNotMatch(flowOf(ws), /max_output_tokens/);
 });
+
+test("secrets set --kind client-cert --site binds it as it is stored, as the Connections form does", async () => {
+  const s = await serve({ "PUT /api/secrets": () => ({ ok: true }) });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-kind-sites-"));
+  fs.writeFileSync(path.join(dir, "c.pem"), "CERT\n");
+  fs.writeFileSync(path.join(dir, "k.pem"), "KEY\n");
+  const r = await at(s.url, "secrets", "set", "BANK_CERT", "--kind", "client-cert", "--cert-file", path.join(dir, "c.pem"), "--key-file", path.join(dir, "k.pem"), "--site", "api.bank.example", "--site", "*.bank.example", "--to", "desk");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(writes(s).map((w) => w.body), [
+    { name: "BANK_CERT", client_cert: { cert: "CERT\n", key: "KEY\n" }, workspace: "desk", sites: ["api.bank.example", "*.bank.example"] },
+  ]);
+  assert.match(r.out, /sent only to api\.bank\.example, \*\.bank\.example/);
+});

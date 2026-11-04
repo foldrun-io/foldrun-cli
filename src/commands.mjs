@@ -3462,12 +3462,17 @@ async function secretsCmd(positional, flags, layout) {
     // login, API headers, a service account's key, a client-credentials app.
     if (typeof flags.kind === "string") {
       const { body, local } = await secretOfKind(flags.kind, flags);
-      if (url) await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope, ...withLimit }) });
+      // --site binds it as it is stored, as the plain value does (and as the
+      // Connections form does for a client certificate). It used to be
+      // dropped here without a word.
+      const sites = siteFlags(flags);
+      if (url) await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope, ...(sites.length ? { sites } : {}), ...withLimit }) });
       else {
         const { k, limit } = await localLimit();
         local(k, name, body, scope, limit);
+        if (sites.length) await localSetSites(name, sites, scope);
       }
-      console.log(`\n  ${c.green("✓")} ${name} stored as ${flags.kind}${url ? "" : " on this machine"} — declare it in agent.md under \`secrets:\` to use it\n`);
+      console.log(`\n  ${c.green("✓")} ${name} stored as ${flags.kind}${url ? "" : " on this machine"}${sites.length ? ` and sent only to ${sites.join(", ")}` : ""} — declare it in agent.md under \`secrets:\` to use it\n`);
       return 0;
     }
     // --oauth2: store a refresh recipe instead of a static value. The
@@ -6216,14 +6221,29 @@ async function telemetryCmd(url, args, flags) {
   }
   if (sub !== "set") throw new Error(`unknown telemetry verb "${sub}" — set <url> [--header name=\${SECRET}], clear, test (bare: show it)`);
   if (!endpoint) throw new Error("`foldrun account telemetry set https://<collector>/v1/traces --header authorization=${OTEL_TOKEN}`");
-  const headers = {};
+  // The platform replaces the whole telemetry block, so the headers already
+  // there are sent back with it, as the dashboard's card does: `--header
+  // name=value` adds or changes one, `--header name=` drops one, and the rest
+  // are kept. Sending only the new ones used to drop every other header.
+  const given = {};
   for (const h of [flags.header].flat().filter((x) => typeof x === "string")) {
     const i = h.indexOf("=");
-    if (i < 1) throw new Error(`--header is name=value, e.g. --header authorization='\${OTEL_TOKEN}' — not "${h}"`);
-    headers[h.slice(0, i).trim().toLowerCase()] = h.slice(i + 1).trim();
+    if (i < 1) throw new Error(`--header is name=value (name= drops it), e.g. --header authorization='\${OTEL_TOKEN}' — not "${h}"`);
+    given[h.slice(0, i).trim().toLowerCase()] = h.slice(i + 1).trim();
   }
+  const { defaults } = await remoteCall(url, flags, "/api/account");
+  const current = defaults?.telemetry;
+  if (current?.hidden) throw new Error("the account's telemetry is hidden from this key (it needs access to every workspace) — set it from a key or login that has them all");
+  const headers = { ...(current?.headers ?? {}) };
+  for (const [k, v] of Object.entries(given)) {
+    if (v) headers[k] = v;
+    else delete headers[k];
+  }
+  const kept = Object.keys(headers).filter((k) => !(k in given));
   const r = await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify({ telemetry: { otlp: endpoint, ...(Object.keys(headers).length ? { headers } : {}) } }) });
-  console.log(`\n  ${c.green("✓")} every run that finishes is sent to ${r.defaults?.telemetry?.endpoint ?? endpoint} — \`foldrun account telemetry test\` proves it arrives\n`);
+  console.log(`\n  ${c.green("✓")} every run that finishes is sent to ${r.defaults?.telemetry?.endpoint ?? endpoint} — \`foldrun account telemetry test\` proves it arrives`);
+  if (kept.length) console.log(`  ${c.dim(`kept the header${kept.length === 1 ? "" : "s"} already set: ${kept.join(", ")} (--header name= drops one)`)}`);
+  console.log();
   return 0;
 }
 
@@ -6569,10 +6589,12 @@ function when(iso) {
   return `${pad(d.getDate())} ${month} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** `--since 24h`, `7d`, `90m`, `2w` — a window, in milliseconds. */
+/** `--since 24h`, `7d`, `90m`, `2w` — a window, in milliseconds. `today`
+ *  is the dashboard's "When: Today": the last 24 hours. */
 function parseSince(spec) {
+  if (String(spec).trim().toLowerCase() === "today") return 864e5;
   const m = /^(\d+(?:\.\d+)?)\s*([smhdw])$/i.exec(String(spec).trim());
-  if (!m) throw new Error(`--since wants a span like 24h, 7d or 90m — not "${spec}"`);
+  if (!m) throw new Error(`--since wants a span like 24h, 7d, 90m or today — not "${spec}"`);
   return Number(m[1]) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 }[m[2].toLowerCase()];
 }
 
@@ -7479,7 +7501,7 @@ async function runsCmd(flags, layout) {
     .slice(0, limit);
 
   if (!rows.length) {
-    const how = [wanted ? `status ${[...wanted].join(", ")}` : null, verdicts ? `verdict ${[...verdicts].join(", ")}` : null, outcomes ? `outcome ${[...outcomes].join(", ")}` : null, flags.since ? `the last ${flags.since}` : null]
+    const how = [wanted ? `status ${[...wanted].join(", ")}` : null, verdicts ? `verdict ${[...verdicts].join(", ")}` : null, outcomes ? `outcome ${[...outcomes].join(", ")}` : null, flags.since ? (String(flags.since).trim().toLowerCase() === "today" ? "today" : `the last ${flags.since}`) : null]
       .filter(Boolean)
       .join(" in ");
     console.log(`\n  ${c.dim(`no runs${how ? ` matching ${how}` : ""}${flags.to ? ` in ${flags.to}` : ""}`)}\n`);
@@ -12104,7 +12126,7 @@ async function secretOfKind(kind, flags) {
     }
     case "client-cert": {
       // A client certificate for mutual TLS. Bind it to the exact hosts it is
-      // for with `foldrun secrets sites NAME host`; the egress proxy presents
+      // for with --site host (or later `foldrun secrets sites NAME host`); the egress proxy presents
       // it there. --export also puts it in the sandbox as files.
       const cert = read(flags["cert-file"], "--cert-file <cert.pem> — the certificate, chain included");
       const key = read(flags["key-file"], "--key-file <key.pem> — its private key");

@@ -205,6 +205,7 @@ test("pause --stop names a run it could not stop and exits 1", async () => {
 test("account telemetry: set sends otlp and the secret-named header; test reports what the collector said", async () => {
   const seen: string[] = [];
   const s = await serve({
+    "GET /api/account": () => ({ defaults: { telemetry: null } }),
     "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true, defaults: { telemetry: { endpoint: "https://otel.example.com/v1/traces", headers: {} } } }; },
     "POST /api/account/telemetry/test": () => ({ ok: false, error: "the vault has no OTEL_TOKEN — foldrun secrets set OTEL_TOKEN", endpoint: "https://otel.example.com/v1/traces" }),
   });
@@ -218,6 +219,35 @@ test("account telemetry: set sends otlp and the secret-named header; test report
   assert.match(t.out, /not delivered .* foldrun secrets set OTEL_TOKEN/);
   assert.equal(clear.code, 0);
   assert.deepEqual(JSON.parse(seen[1]!), { telemetry: null });
+});
+
+test("account telemetry set keeps the headers already there: --header changes one, name= drops one (the dashboard card's merge)", async () => {
+  const seen: string[] = [];
+  const s = await serve({
+    "GET /api/account": () => ({ defaults: { telemetry: { endpoint: "https://old.example.com/v1/traces", headers: { authorization: "${OTEL_TOKEN}", "x-scope-orgid": "acme", "x-old": "1" } } } }),
+    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true, defaults: { telemetry: { endpoint: "https://otel.example.com/v1/traces", headers: {} } } }; },
+  });
+  const set = await at(s.url, "account", "telemetry", "set", "https://otel.example.com/v1/traces", "--header", "authorization=${NEW_TOKEN}", "--header", "x-old=");
+  const bare = await at(s.url, "account", "telemetry", "set", "https://otel.example.com/v1/traces");
+  s.close();
+  assert.equal(set.code, 0, set.out);
+  assert.deepEqual(JSON.parse(seen[0]!), { telemetry: { otlp: "https://otel.example.com/v1/traces", headers: { authorization: "${NEW_TOKEN}", "x-scope-orgid": "acme" } } });
+  assert.match(set.out, /kept the header already set: x-scope-orgid/);
+  assert.equal(bare.code, 0, bare.out);
+  assert.deepEqual(JSON.parse(seen[1]!).telemetry.headers, { authorization: "${OTEL_TOKEN}", "x-scope-orgid": "acme", "x-old": "1" }, "a new URL alone keeps every header");
+});
+
+test("account telemetry set refuses when the telemetry is hidden from this key, and sends nothing", async () => {
+  const seen: string[] = [];
+  const s = await serve({
+    "GET /api/account": () => ({ defaults: { telemetry: { endpoint: "", headers: {}, hidden: true } } }),
+    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true }; },
+  });
+  const r = await at(s.url, "account", "telemetry", "set", "https://otel.example.com/v1/traces");
+  s.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /hidden from this key/);
+  assert.equal(seen.length, 0);
 });
 
 const JOBS_VIEW = {

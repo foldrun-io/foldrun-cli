@@ -204,7 +204,7 @@ const HELP = `foldrun — agents are just folders
   foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
   foldrun identity          what your cloud must trust for keyless identities: the issuer and each agent's subject (--to <workspace>, --json)
   foldrun jobs              the four jobs — governance, guardrail, observability, evaluation — and what each has set (--to <workspace>, --json)
-  foldrun account           the account's defaults — also set <key> <value>, clear <key> (timezone, notify, budget, concurrency, compute vcpu <n> memory <GiB> disk <GiB>, deploy_block none|secrets|security, network_enforce on|off, owner, alerts <threshold> <value>, judge model|effort <value>; or <job>.<field>, e.g. governance.owner), pause [--reason] [--stop] / resume (the kill switch), telemetry [set <url> --header name=\${SECRET} | clear | test] (runs as OpenTelemetry traces), providers (--check) (singular; accounts lists logins)
+  foldrun account           the account's defaults — also set <key> <value>, clear <key> (timezone, notify, budget, concurrency, compute vcpu <n> memory <GiB> disk <GiB>, deploy_block none|secrets|security, network_enforce on|off, owner, alerts <threshold> <value>, judge model|effort <value>; or <job>.<field>, e.g. governance.owner), pause [--reason] [--stop] / resume (the kill switch), telemetry [set <url> --header name=\${SECRET} (others kept; name= drops one) | clear | test] (runs as OpenTelemetry traces), providers (--check) (singular; accounts lists logins)
   foldrun account export    everything the platform holds about the account as one JSON file (owner only; --file <path>, --force)
   foldrun account model     what steps run on — your own key: set <provider> --key <api key> (--key - reads stdin; custom --base-url --format), remove; or foldrun's models (billed in credits): use foldrun --provider <p>, use own, prices
   foldrun workspace         one deployed workspace's settings (--to) — also set <name|description|timezone|budget|compute|notify|network_enforce|owner|alerts|judge> <value> (compute vcpu <n> memory <GiB> disk <GiB>: this workspace's pool) (or <job>.<field>), clear <key>, pause [--reason] [--stop] / resume (the kill switch)
@@ -286,7 +286,7 @@ Options
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
-  --since <span>            runs, stop, rerun: only runs started within 24h, 7d, 90m, 2w
+  --since <span>            runs, stop, rerun: only runs started within 24h, 7d, 90m, 2w, or today (the last 24h)
   --since <span>            audit: entries from 24h, 7d, 30d ago, or a date (default 7d); --until <date> ends the window
   --action <a>              audit: one action (apikey.created) or a family (apikey, secret, member, support)
   --actor <who>             audit: one person or key — an email, key:<label>, support:<email>
@@ -426,7 +426,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes
