@@ -161,7 +161,8 @@ const HELP = `foldrun — agents are just folders
   foldrun promote <run-id>  keep a finished run as a regression case in evals/ (--eval <name>, --expect "contains: …" repeatable, --case <name>); a run that went wrong takes --should "what it should have done"
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs in one workspace, or one run's full event trail (--local: this machine's)
-  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --flow <name>, --q <words>, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>
+  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --flow <name>, --q <words>, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>; --limit is one page: --page <n>, --before <cursor> (printed when more match), --all, --json
+  foldrun runs outputs <run-id>  which files the run archived from its agents' outputs/, with their sizes (--to, --json); report <run-id> get downloads one
   foldrun runs views        your saved run searches (--local prints exactly what logs --local prints)
   foldrun runs views save <name> [filters]  save the runs filters given (--status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs) as a view; a name taken is replaced
   foldrun runs views rm <name>  delete a saved view (asks; --yes)
@@ -396,15 +397,17 @@ Options
   --reason "<text>"         account pause, workspace pause: why — shown to everyone who opens it
   --stop                    account pause, workspace pause: also stop every run going now (asks; --yes to mean it)
   --yes                     approve, stop, rerun (bulk), pause --stop, flow rotate-hook, flow draft, assistant, history restore, restore <ws>, import, billing plan, workspace set name, team remove, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
-  --json                    report: the raw run record instead of the report; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces, workspaces show, agent ls, flow ls, agent import --list, backups requests, team, hook ls, secrets ls, triggers, storage ls --all: the raw document; version: {cli, core, platform}
+  --json                    report: the raw run record instead of the report; runs: { runs, next }; runs outputs: { runId, files, totalBytes }; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, workspaces, workspaces show, agent ls, flow ls, agent import --list, backups requests, team, hook ls, secrets ls, triggers, storage ls --all: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
   --limit <n>               runs, billing, history, changelog: how many rows; triggers: how many decisions and deliveries (default 10)
+  --page <n>                runs: the nth page of --limit, newest first
+  --before <cursor>         runs: the page after the cursor the last page printed (a time or a run id works too)
   --limit <n>               usage: rows of by flow and by agent, the most charged first (default 10; 0 hides them)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
   --clear                   secrets sites: unbind it; flow compute: no cap of its own; me name: no name
-  --all                     secrets workspaces: every workspace may use the account secret again; storage ls: every workspace's storage; storage shares: expired and revoked links too; mcp connections: the disconnected ones too; team invite, team access: every workspace
+  --all                     runs: every run that matches, every page; secrets workspaces: every workspace may use the account secret again; storage ls: every workspace's storage; storage shares: expired and revoked links too; mcp connections: the disconnected ones too; team invite, team access: every workspace
   --none                    secrets workspaces, secrets set: no workspace may use the account secret; team access: no workspaces
   --if-workspaces <a,b|all|none>  secrets workspaces: change it only while the list is still this one (refused, 409, when someone changed it since)
   --if-version <n>          account model use: change it only while the choice is still that choiceVersion (account model --json; 0: never chosen)
