@@ -19,6 +19,11 @@ npm run e2e       # the slow one: real workspaces, still no model
 Node 22 or newer. No model key is needed: every test that would call a model
 uses the stub executor.
 
+CI tests against foldrun-core's main checked out beside this repository, and
+not only when this repository changes: core's ci dispatches a `core-main`
+run here whenever its main passes, a nightly run catches a missed one, and
+Actions → ci → Run workflow takes any core ref (`core_ref`).
+
 ## Git hooks
 
 Problems are caught before the push, not in CI or the deploy. `.githooks/` is
