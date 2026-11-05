@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { serve, at } from "./fake-platform.ts";
+import { serve, at, failing } from "./fake-platform.ts";
 
 const ago = (mins: number) => new Date(Date.now() - mins * 60_000).toISOString();
 
@@ -178,4 +178,35 @@ test("flow compute --dry-run sends nothing to the platform and writes nothing he
   } finally {
     fs.rmSync(path.dirname(root), { recursive: true, force: true });
   }
+});
+
+// ---- 5 Nov 2026 (FOL-100): the account's runs waiting for their turn.
+
+test("usage compute prints the runs waiting against the limit, and where a step maximum is the no-plan default", async () => {
+  const s = await serve({
+    "/api/usage/compute": () => ({
+      compute: { vcpu: null, memGiB: null, stepVcpu: 4, stepMemGiB: 8, stepDiskGiB: 20, source: null, stepDefault: ["stepVcpu", "stepMemGiB", "stepDiskGiB"] },
+      inUse: { vcpu: 0, memGiB: 0, steps: 0 },
+      waiting: [],
+      runsWaiting: { waiting: 12, limit: 50, source: "derived", slots: 1 },
+    }),
+  });
+  const r = await at(s.url, "usage", "compute");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /one step: up to 4 vCPU · 8 GiB · 20 GiB disk — the most for an account without a plan of its own/);
+  assert.match(r.out, /runs waiting for their turn: 12 of 50 — past the limit a new run is refused, not lined up \(20 × 1 at once, at least 50\)/);
+});
+
+test("a start refused at the waiting limit prints the platform's sentence and where to see the figures", async () => {
+  const s = await serve({
+    "POST /api/workspaces/rank-desk/flows/publish/run": () =>
+      failing(409, { error: "this account already has 50 runs waiting for their turn, its limit (50: …) — nothing was started", code: "waiting_cap", limit: 50, waiting: 50 }),
+  });
+  const r = await at(s.url, "invoke", "publish", "--to", "rank-desk");
+  s.close();
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /50 runs waiting for their turn/);
+  assert.match(r.out, /foldrun usage compute` shows the runs waiting and the limit/);
+  assert.equal(s.seen.filter((x) => x.method === "POST").length, 1, "a 409 is not retried");
 });
