@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [17.1.2] — 2026-11-05
+
+### docs
+
+- sync network.md from foldrun-docs (FOL-128) ([9da4c19](https://github.com/foldrun-io/foldrun-cli/commit/9da4c19))
+- sync — a run's wide event and the ops trace (FOL-122) ([993d302](https://github.com/foldrun-io/foldrun-cli/commit/993d302))
+- sync checks and security from foldrun-docs (FOL-130) ([aff9f61](https://github.com/foldrun-io/foldrun-cli/commit/aff9f61))
+
 ## [17.1.1] — 2026-11-05
 
 ### docs
