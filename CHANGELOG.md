@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [18.0.1] — 2026-11-05
+
+### docs
+
+- sync (flow-step POST and DELETE removed) ([b980163](https://github.com/foldrun-io/foldrun-cli/commit/b980163))
+
 ## [18.0.0] — 2026-11-05
 
 ### Breaking changes
