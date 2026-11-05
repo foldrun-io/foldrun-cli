@@ -193,7 +193,8 @@ is not a workflow: its root span is `run adhoc:<agent>` with no operation,
 and the step under it is the `invoke_agent`. `gen_ai.provider.name` is set
 where the run record says whose model it was — the platform's Claude
 (`anthropic`) or one of foldrun's models — and left out for your own
-`provider:` block. Every span also carries `foldrun.span.kind` (`run`,
+`provider:` block, and for a step that was retried on its fallback model
+(the record does not say which call went where). Every span also carries `foldrun.span.kind` (`run`,
 `step`, `model`, `tool`, `error`): filter on that, not on span names.
 
 A failed span has status ERROR and `error.type`, one of `timeout`,
