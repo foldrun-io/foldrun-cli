@@ -119,13 +119,15 @@ test("secrets sites binds, lists, refuses a URL, and unbinds", () => {
   }
 });
 
-test("agent network says a browsing agent is not held to its list yet (FOL-110); search and fetch only is", () => {
-  const d = desk({ scout: "tools: [web]\nnetwork: trusted\n", reader: "tools: [web]\nweb: {actions: [search, fetch]}\nnetwork: trusted\n", writer: "tools: [write]\n", spaced: "tools: [web]\nweb: {actions: [search, \" Browse \"]}\nnetwork: trusted\n" });
+test("agent network says where a browsing agent's list holds (FOL-110 phase 3); search and fetch only, or open, says nothing", () => {
+  const d = desk({ scout: "tools: [web]\nnetwork: trusted\n", reader: "tools: [web]\nweb: {actions: [search, fetch]}\nnetwork: trusted\n", writer: "tools: [write]\n", spaced: "tools: [web]\nweb: {actions: [search, \" Browse \"]}\nnetwork: trusted\n", roamer: "tools: [web]\nnetwork: open\n" });
   try {
     let r = d.foldrun("agent", "network", "scout", "--local");
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /browsing: this agent may browse, and a browsing step is not held to this list yet/);
-    assert.match(r.stdout, /web: \{actions: \[search, fetch\]\}/);
+    assert.match(r.stdout, /browsing: this agent may browse\. On a platform that confines browsing, with this list enforced/);
+    assert.match(r.stdout, /its browser runs walled in the step's sandbox and the list holds for it; on this machine, or with the list only reported/);
+    r = d.foldrun("agent", "network", "roamer", "--local");
+    assert.doesNotMatch(r.stdout, /browsing:/, "an open list has nothing to hold");
     r = d.foldrun("agent", "network", "reader", "--local");
     assert.doesNotMatch(r.stdout, /browsing:/, "no browse among its actions");
     r = d.foldrun("agent", "network", "writer", "--local");

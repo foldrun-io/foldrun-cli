@@ -9869,6 +9869,24 @@ async function agentLinkCmd(positional, flags, layout) {
 }
 
 /**
+ * The browsing line `agent network` prints for an agent that may browse with
+ * a restricted list (FOL-110). Whether the list holds is decided per step:
+ * on a platform that confines browsing (the k8s tier, FOLDRUN_BROWSE_ENFORCE)
+ * and with the list enforced, the browser runs walled in the step's sandbox
+ * and a vendor's browser is refused; on a laptop, or with a report-only list,
+ * it is not held. This folder's half — network_enforce and the vendor — comes
+ * from core's listAgents when it says (core ≥ the FOL-110 phase 3 release).
+ * @param {{ level?: string, enforceWanted?: unknown, browseVendor?: unknown }} p
+ */
+function browsingLine(p) {
+  const vendor = typeof p.browseVendor === "string" && p.browseVendor ? p.browseVendor : null;
+  const enforce = p.enforceWanted === true ? " (network_enforce: true here)" : "";
+  return vendor
+    ? `browsing: this agent browses with ${vendor}, which browses from its own network — on a platform that confines browsing, with this list enforced${enforce}, its steps are refused before they connect; elsewhere they are not held to the list (\`foldrun docs network\`, Browsing). Drop browse: ${vendor} to use foldrun's own browser, which is held to it.`
+    : `browsing: this agent may browse. On a platform that confines browsing, with this list enforced${enforce}, its browser runs walled in the step's sandbox and the list holds for it; on this machine, or with the list only reported, its browser and its other programs reach sites directly (\`foldrun docs network\`, Browsing).`;
+}
+
+/**
  * `foldrun agent network <agent> [open|trusted|none|inherit] [--add <site>]…
  * [--remove <site>]…` — which sites the agent's sandbox may reach, its
  * `network:` line, edited the way the dashboard's Network card edits it
@@ -9900,7 +9918,8 @@ async function agentNetworkCmd(positional, flags, layout) {
       // from AGENTS.md); an older core gets the runner's own test on this
       // file: the web tool, with browse among its actions (trimmed and
       // lowercased as webConfig reads them) or no actions: list at all.
-      // Such a step is not held to its list yet (FOL-110).
+      // Whether such a step is held to its list is the platform's to say as
+      // well (FOL-110 phase 3) — browsingLine says what this folder decides.
       const actions = front.web && typeof front.web === "object" && Array.isArray(front.web.actions) ? front.web.actions.map((a) => String(a).trim().toLowerCase()) : null;
       const fromCore = /** @type {{ browses?: unknown }} */ (info?.network ?? {}).browses; // core ≥ the FOL-110 release
       const browses = typeof fromCore === "boolean"
@@ -9913,7 +9932,7 @@ async function agentNetworkCmd(positional, flags, layout) {
     if (!p) return;
     console.log(`  ${net.networkLine(p, true)}`);
     if (p.level !== "open") console.log(`  ${c.dim("a run also allows its MCP servers, its web providers and the sites its secrets are bound to")}`);
-    if (browses) console.log(`  ${c.yellow("browsing: this agent may browse, and a browsing step is not held to this list yet — its browser and its other programs reach sites directly (`foldrun docs network`, Browsing). Give it web: {actions: [search, fetch]} to keep it inside the list.")}`);
+    if (browses && p.level !== "open") console.log(`  ${c.yellow(browsingLine(p))}`);
   };
   const raw = desk.files.get(rel);
   const now = await resolve(desk.files);

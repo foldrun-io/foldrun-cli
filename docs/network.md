@@ -180,24 +180,71 @@ in, so a program that ignores the variables still goes direct.
 
 ### Browsing
 
-A step that may **browse** with the `web` tool is not held to its list yet.
-Its browser cannot send the proxy's password the way the other programs do,
-so the step gets no proxy: the browser, and every other program in that
-step, reach sites directly. The trace says so on its network line —
+A step that may **browse** with the `web` tool is held to its list where the
+platform can wall the step in: on a cluster whose operator has switched it
+on (`FOLDRUN_BROWSE_ENFORCE=1`), for a step whose list is restricted
+(`trusted` or `none`) and enforced. Such a step gets the proxy like any
+other, its pod is walled to the egress proxy and DNS, and the browser runs
+inside that pod — the step's own, shared with no other step. Whatever the
+browser is told — another proxy, a new context with a proxy of its own, a
+page's script — the only way out is the egress proxy, which holds the list
+per connection, over IPv4 and IPv6, TCP and UDP alike. The trace says so —
 
 ```
-network: trusted (agent) — the trusted list (207 sites); added: example.com — not enforced in this step: it may browse, and browsing does not go through the egress proxy yet, so the browser and every other program in this step reach sites directly. Its browser is foldrun's own browser: it comes under network: when hosted enforcement ships (FOL-110).
+network: trusted (agent) — the trusted list (207 sites); added: example.com — enforced — hosted: the browser runs inside this step's sandbox, whose network reaches only the egress proxy (which holds the list) and DNS, so a page, a script or a changed proxy setting reaches no site off the list; DNS lookups themselves are not restricted.
 ```
 
-— and names which of three tiers the step's browser falls in, which is
-where it is headed:
+A site off the list fails in the browser as a failed tunnel
+(`ERR_TUNNEL_CONNECTION_FAILED`), and the trace names it with the usual
+advice: add just that site.
+
+What a held step does differently:
+
+- **foldrun's own browser, in the step.** The account's browser pod is not
+  used (it reaches the world, and a walled pod cannot reach it), so the step
+  runs on the image with browsers. Chromium and Chrome take the proxy and its
+  password as launch options (checked through an authenticating proxy);
+  Firefox and WebKit are given the same.
+- **Refused, saying why:** a vendor's browser (`web: {browse: browserbase}`
+  and every other — they browse from their own network, which no list here
+  holds), `proxy=` (a proxy of your own is not reachable), `live:` sessions,
+  and the Lightpanda and Obscura engines (no way through the proxy verified
+  yet). A vendor step is refused before it connects; to accept browsing that
+  no list holds for one agent, give that agent `network: open`.
+- **Secrets bound to sites** stay out of the sandbox: a `headers=` value can
+  carry the `${NAME}`, which the proxy fills; `auth=`, `cookies=` and
+  `storage=` need the value in the browser and are refused for a bound
+  secret — unbind it to use it there.
+- **Sites a secret is granted to** are where the proxy ends TLS to fill the
+  secret. Chromium is told to trust the egress CA for them; Firefox and
+  WebKit are not, and a page there fails its certificate check.
+- **Web search** through the account's search pod is not reachable from a
+  walled pod either; the trace says so. Name a search provider in `web:`
+  (it goes through the proxy) or leave search out of that step.
+
+Not covered: DNS lookups through the cluster's resolver (the wall admits
+DNS, and nothing restricts the names asked), WebSocket upgrades to a host a
+secret is granted to (they fail), and — as for every tunnel — which origins
+a page loads inside a connection to an allowed site.
+
+Everywhere else — `foldrun run` on your machine, the single-container tier,
+an install without the switch, a report-only list, `network: open` — a
+browsing step is **not** held: it gets no proxy, and the browser and every
+other program in the step reach sites directly. The trace says that too:
+
+```
+network: trusted (agent) — the trusted list (207 sites); added: example.com — not enforced in this step: it may browse, and browsing does not go through the egress proxy here, so the browser and every other program in this step reach sites directly. Its browser is foldrun's own browser: it is held to network: on an install that confines browsing, with the list enforced (FOL-110).
+```
+
+The trace names which of three tiers the step's browser falls in:
 
 | tier | browsers | under `network:` |
 |---|---|---|
-| hosted | foldrun's own: the account's browser, Lightpanda, Obscura, a live session | yes, when hosted enforcement ships: its network will reach only the egress proxy |
-| vendor | Browserbase, Steel, Hyperbrowser, Browserless — they take a customer proxy | through the egress proxy, once each vendor passes our own tests |
-| none | Bright Data, ZenRows, any DevTools address — they browse through their own network | never; a restricted, enforced `network:` will refuse them |
+| hosted | foldrun's own browser | held, where the platform confines browsing and the list is enforced |
+| vendor | Browserbase, Steel, Hyperbrowser, Browserless — they take a customer proxy | not yet: each comes under the list through the egress proxy once it passes our own tests; until then a held list refuses it |
+| none | Bright Data, ZenRows, any DevTools address — they browse through their own network | never; a held list refuses them |
 
-An agent that must stay inside its list should not browse until then: give
-it `web: {actions: [search, fetch]}`, which goes through the proxy like any
-other program.
+The dashboard's Network card and `foldrun agent network <agent>` say which
+applies to an agent. An agent that must stay inside its list where browsing
+is not held should not browse: give it `web: {actions: [search, fetch]}`,
+which goes through the proxy like any other program.
