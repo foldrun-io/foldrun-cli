@@ -518,12 +518,16 @@ step restores the snapshot instead, in about a second (154 packages, 432 MB:
 30 s through apt, under 1 s from the snapshot). A snapshot belongs to the
 runner image it was built on: it is restored only onto an image whose
 installed packages are exactly the same, because the files in it were built
-against those packages. A release whose image did not move any package keeps
-it; one that did (a Debian security update, a new Chrome) builds a new
-snapshot beside the old one the first time the set is needed — the run log
-then says `(apt, 30s, 1 snapshot did not fit this image)`. A snapshot is
-rebuilt 14 days after it was made, so the packages in it pick up Debian's
-fixes. The run log says `system packages ready: … (snapshot, 1s)` or
+against those packages. On the hosted platform the runner's operating system,
+its Debian packages and its browsers are a base image of their own, which
+changes only when it is refreshed: once a week, and at once when a critical
+security fix is out for something in it. A release that changes only
+foldrun's own code is built on the same base, so your snapshots keep working
+after it. After a refresh, the first step that needs a set builds a new
+snapshot beside the old one — the run log then says
+`(apt, 30s, 1 snapshot did not fit this image)` — and every step after it
+restores that one. A snapshot is also rebuilt 14 days after it was made, so
+the packages in it pick up Debian's fixes. The run log says `system packages ready: … (snapshot, 1s)` or
 `(apt, 30s)`, or fails the step with apt's own reason.
 
 A snapshot is written into the account's runtime cache, which steps can
