@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [17.0.0] — 2026-11-05
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 15.0.0, a new major. (3ef0dce)
+
+### deps
+
+- @foldrun/core ^15.0.0 ([3ef0dce](https://github.com/foldrun-io/foldrun-cli/commit/3ef0dce))
+
 ## [16.1.0] — 2026-11-05
 
 - feat(agent network): say where a browsing agent's list holds (FOL-110 phase 3) ([f3ca793](https://github.com/foldrun-io/foldrun-cli/commit/f3ca793))
