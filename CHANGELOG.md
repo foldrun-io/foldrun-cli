@@ -12,6 +12,32 @@ edited by a person.
 
 <!-- releases -->
 
+## [17.1.0] — 2026-11-05
+
+### New in the public API
+
+- the `--accept-risk` flag
+- the `--clear-accept-risk` flag
+
+- feat(runs): why a run failed in `report` and `runs`; `runs rm --until` (FOL-124) ([7df1e39](https://github.com/foldrun-io/foldrun-cli/commit/7df1e39))
+- fix(a2a): --accept-risk repeats; a2a ls's accept line names every agent of the flow (FOL-112, Codex review) ([28c3042](https://github.com/foldrun-io/foldrun-cli/commit/28c3042))
+- feat(cli): runs rm <id> <id>… deletes through runs/bulk, as the dashboard does (FOL-75) ([271f99a](https://github.com/foldrun-io/foldrun-cli/commit/271f99a))
+- feat(a2a): a2a publish --accept-risk, a2a ls lists secret-and-code agents (FOL-112) ([122268f](https://github.com/foldrun-io/foldrun-cli/commit/122268f))
+
+### ci
+
+- also run against core's main — on core's dispatch, nightly, or by hand (FOL-92) ([4aadf60](https://github.com/foldrun-io/foldrun-cli/commit/4aadf60))
+
+### deps
+
+- @foldrun/core ^15.1.0 ([a2de7d2](https://github.com/foldrun-io/foldrun-cli/commit/a2de7d2))
+
+### docs
+
+- sync (FOL-73/75/112/124/123/50 merges, retention default) ([c288518](https://github.com/foldrun-io/foldrun-cli/commit/c288518))
+- sync agents.md (system: snapshots, FOL-50) ([7b99c5e](https://github.com/foldrun-io/foldrun-cli/commit/7b99c5e))
+- synced from foldrun-docs (FOL-73) ([c7d5efd](https://github.com/foldrun-io/foldrun-cli/commit/c7d5efd))
+
 ## [17.0.1] — 2026-11-05
 
 ### docs
