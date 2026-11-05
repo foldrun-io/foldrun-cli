@@ -216,6 +216,20 @@ It holds by construction, not by care:
   source of core, platform and web is scanned for any log call that prints
   more than a literal; and metrics may only have fixed names and labels.
 
+Each run also has one **wide event** in the platform's database (5 Nov
+2026): when it was submitted, queued, picked up, when its first sandbox's
+pod was ready, its tools were built and the model first answered, when it
+finished; its runner image, size and model; what it held and used; its cost
+and its error class. The figures the run record already has, and nothing
+from its content — no prompt, reply, file or error text. It is what our run
+SLOs (success rate, queue wait, pod-ready-to-first-output) are computed
+from, and it goes with the run history (`runs.retention_days`) and with the
+account. Its trace — the same funnel, one span per stage — goes to our
+collector under the same rule as a log line: fixed span names, the fields
+above in their shapes, an error as its class; the collector drops any span
+that is not exactly that. It is not your `telemetry:` export, which sends
+your run's own trace to your collector.
+
 The incident this answers: a judge's model process crashed, and the full
 text of its error — which carried prompt text — went to the server log.
 Today that line is `model.process_failed` with `errorClass: model_error`.
@@ -238,6 +252,7 @@ an install that sets neither keeps everything, as before 5 Nov 2026.
 | Your files | `storage/`, `knowledge/`, `memory/`, `state/`, your agents and flows | until you delete them | you (`foldrun storage rm`, a deploy that drops a file) |
 | **Audit log** — security evidence | sign-ins and refusals, keys, roles, invites, secrets set or deleted (by name, never a value), deploys, exports, support access, the operator's own actions | **365 days** on the hosted platform (`audit.retention_days`; unset: kept) | the daily pass |
 | The ledger | what each run and pod session was charged | for good — a financial record | never |
+| A run's wide event | its funnel's timestamps, image, size, model, figures, cost and error class — metadata, never content | with run records (`runs.retention_days`) | the daily pass; closing the account |
 | The platform's own logs and metrics | ids, counts, classes — never your content ([above](#what-our-telemetry-carries)) | as the operations stack keeps them | the operations stack |
 
 Every period counts from when the record was written (a run: when it
