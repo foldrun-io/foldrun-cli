@@ -12,6 +12,17 @@ edited by a person.
 
 <!-- releases -->
 
+## [18.1.0] — 2026-11-05
+
+- docs(guide): a held step searches through the search door; name search at none (FOL-128) ([71d5b3a](https://github.com/foldrun-io/foldrun-cli/commit/71d5b3a))
+- feat(agent network): say how a walled step searches (FOL-128) ([3b6d583](https://github.com/foldrun-io/foldrun-cli/commit/3b6d583))
+
+### docs
+
+- sync security.md (the browse service holds the browser only) ([6c65ef9](https://github.com/foldrun-io/foldrun-cli/commit/6c65ef9))
+- sync network.md and security.md (the browse service, FOL-128 phase 2) ([b83dce1](https://github.com/foldrun-io/foldrun-cli/commit/b83dce1))
+- sync agents.md (snapshots survive code-only releases, FOL-50) ([451f995](https://github.com/foldrun-io/foldrun-cli/commit/451f995))
+
 ## [18.0.1] — 2026-11-05
 
 ### docs
