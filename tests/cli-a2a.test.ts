@@ -113,7 +113,40 @@ test("a2a ls prints each secret-and-code agent and how to accept it (FOL-112)", 
   assert.match(r.out, /Secret and code/);
   assert.match(r.out, /not accepted\s+publish · coder\s+holds CRM_TOKEN and can run code/);
   assert.match(r.out, /accepted\s+draft · helper/);
-  assert.match(r.out, /foldrun a2a publish publish --to blog-desk --accept-risk coder/);
+  assert.match(r.out, /foldrun a2a publish publish --to blog-desk --accept-risk coder`/);
+  assert.doesNotMatch(r.out, /--accept-risk helper/, "a flow with nothing left to accept gets no line");
+});
+
+test("a2a ls: the accept line names every risky agent of the flow — the list replaces the flow's", async () => {
+  let base = "";
+  const s = await serve({ "/api/workspaces/blog-desk/a2a": () => ({ ...view(base), risks: [{ flow: "publish", agent: "coder", secrets: ["A"], accepted: false }, { flow: "publish", agent: "analyst", secrets: ["B"], accepted: true }] }) });
+  base = s.url;
+  const r = await at(s.url, "a2a", "ls", "--to", "blog-desk");
+  s.close();
+  assert.match(r.out, /--accept-risk analyst,coder`/);
+});
+
+const hasAcceptRisk = hasPublish && (await import(PUBLISH_MODULE).then((m: any) => m.parseA2aPublish({ publish: true, accept_risk: ["x"] }) !== null, () => false));
+
+test("a2a publish --to --accept-risk a --accept-risk b sends both: the flag repeats", { skip: !hasAcceptRisk && "this @foldrun/core has no accept_risk" }, async () => {
+  const d = platformDesk();
+  const s = await serve(d.routes);
+  d.setBase(s.url);
+  const r = await at(s.url, "a2a", "publish", "publish", "--to", "blog-desk", "--accept-risk", "b", "--accept-risk", "a");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(writes(s)[0].body).a2a, { publish: true, accept_risk: ["a", "b"] });
+});
+
+test("a2a publish --accept-risk on a core without accept_risk refuses clearly and writes nothing", { skip: (hasAcceptRisk || !hasPublish) && "this @foldrun/core has accept_risk (or no a2a-publish)" }, async () => {
+  const d = platformDesk();
+  const s = await serve(d.routes);
+  d.setBase(s.url);
+  const r = await at(s.url, "a2a", "publish", "publish", "--to", "blog-desk", "--accept-risk", "a");
+  s.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /--accept-risk needs an @foldrun\/core that knows a2a: accept_risk/);
+  assert.equal(writes(s).length, 0);
 });
 
 test("a2a ls: keys null (not an admin) leaves the keys out; no workspace is refused before any request", async () => {

@@ -13979,9 +13979,12 @@ async function a2aLsCmd(flags, layout) {
       const mark = r.accepted ? c.dim("accepted".padEnd(12)) : c.yellow("not accepted");
       console.log(`  ${mark} ${c.bold(printable(r.flow))} · ${printable(r.agent)}  ${c.dim(printable(`holds ${(r.secrets ?? []).join(", ")} and can run code`))}`);
     }
-    if (risks.some((r) => !r.accepted)) {
-      const first = risks.find((r) => !r.accepted);
-      console.log(`  ${c.dim(`Take Bash or the secret away from it, or accept it: \`foldrun a2a publish ${printable(first.flow)} --to ${ws} --accept-risk ${printable(first.agent)}\` (an admin's)`)}`);
+    // One line per flow with an agent not accepted, naming EVERY agent of
+    // that flow (accepted ones too): the list replaces the flow's, so a line
+    // naming only the new one would take the others' acceptance away.
+    for (const flow of [...new Set(risks.filter((r) => !r.accepted).map((r) => r.flow))]) {
+      const all = [...new Set(risks.filter((r) => r.flow === flow).map((r) => printable(r.agent)))].sort().join(",");
+      console.log(`  ${c.dim(`Take Bash or the secret away, or accept: \`foldrun a2a publish ${printable(flow)} --to ${ws} --accept-risk ${all}\` (an admin's)`)}`);
     }
   }
   if (Array.isArray(view.keys)) {
@@ -14062,6 +14065,11 @@ async function a2aPublishCmd(verb, flow, flags, layout) {
   const matter = (await import("gray-matter")).default;
   const { patchFrontmatter } = await import("@foldrun/core/agents-md");
   const patch = a2aPatchFor(verb, flags);
+  // accept_risk (FOL-112) is a newer key: a core that does not read it would
+  // call it unknown and refuse the edit for a reason that is not one.
+  if ("accept_risk" in patch && pub.parseA2aPublish?.({ publish: true, accept_risk: ["x"] }) == null) {
+    throw new Error("--accept-risk needs an @foldrun/core that knows a2a: accept_risk — this install's is older; update foldrun (npm i -g foldrun@latest)");
+  }
   const code = await flowEditCmd(flags, layout, {
     flow,
     what: `a2a ${verb}`,

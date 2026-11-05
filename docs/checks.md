@@ -317,7 +317,9 @@ a caller can ask for the secret in the reply. Take Bash away
 have an admin accept it: `a2a: { accept_risk: [<agent>] }`
 ([A2A](a2a#secret-and-code-accept_risk)). This is check's half of a platform
 rule: until accepted, the platform refuses to publish the flow and refuses
-new A2A tasks for it. Accepted, the finding stays as `info`.
+new A2A tasks for it. Accepted, the finding stays as `info`. Offline, check
+cannot see which secrets are bound to sites, so it counts them all; the
+platform does not count one that is bound.
 
 ### security/published-flow-ungated
 

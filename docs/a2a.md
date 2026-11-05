@@ -108,8 +108,10 @@ a2a:
 - Rather than accept: take Bash away (`disallowedTools: [Bash]`, or a step
   without code), move the secret to an agent of a flow that is not published,
   or bind the secret to its sites (`foldrun secrets sites NAME host`) so it
-  never enters the sandbox — the check still counts a bound secret, because
-  binding is the vault's and can change without the flow.
+  never enters the sandbox. The platform reads binding from the vault at each
+  check, and again before every task it starts, so unbinding it later stops
+  new tasks at once. `foldrun check`, offline, cannot see the vault and still
+  warns on a bound secret.
 - Every acceptance is in the flow file's history (who, when, the diff) and in
   the audit log as `a2a.risk_accepted` with the agent and what it holds.
 
