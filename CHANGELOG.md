@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [16.0.2] — 2026-11-05
+
+- fix(observe): start-up table shows when each phase began and which ran in parallel (FOL-74) ([b1e6329](https://github.com/foldrun-io/foldrun-cli/commit/b1e6329))
+
 ## [16.0.1] — 2026-11-04
 
 ### deps
