@@ -524,7 +524,20 @@ snapshot beside the old one the first time the set is needed — the run log
 then says `(apt, 30s, 1 snapshot did not fit this image)`. A snapshot is
 rebuilt 14 days after it was made, so the packages in it pick up Debian's
 fixes. The run log says `system packages ready: … (snapshot, 1s)` or
-`(apt, 30s)`, or fails the step with apt's own reason. On a laptop (`foldrun run` with no container) there is nothing to
+`(apt, 30s)`, or fails the step with apt's own reason.
+
+A snapshot is written into the account's runtime cache, which steps can
+write — and it is restored as root. So it is **sealed**: the platform keeps a
+key for each account that steps never see, and a snapshot is restored only if
+its seal, made with that key when the start-up built it, matches the package
+set, the image and every byte of the file. A snapshot a step rewrote, or one
+whose seal does not match, is not restored; the step installs with apt and the
+run log says why on the next line — `snapshot refused: its contents do not
+match its seal`. Even a sealed snapshot can only put package files where
+packages go (`/etc`, `/usr`, `/var`, `/opt`), never a setuid file, a device,
+or anything through a link or a folder a step could change. A package set
+that installs a setuid program is installed with apt every time
+(`no snapshot kept: … is setuid or setgid`). On a laptop (`foldrun run` with no container) there is nothing to
 install into: the list is reported as assumed present.
 
 Manim, for one, needs all four of its kinds at once:
@@ -585,9 +598,12 @@ destroyed when the step ends.
 The agent is never root. A Debian package is installed by a small helper the
 container's root start-up leaves running before it drops to the agent user;
 the agent can only ask it, by name, and each name is checked against Debian's
-naming rule, so nothing but a package name reaches apt. It uses the same cache
-and snapshots as `runtime: system:`, so a package anyone in the account
-installed before is back in about a second. pip and npm packages need no root
+naming rule, so nothing but a package name reaches apt. It restores the same
+snapshots as `runtime: system:`, so a set the account's steps declare is back
+in about a second; it never saves one, because it runs beside the agent's own
+code, and only a step's start-up, before any of that code exists, seals a
+snapshot. Declare a package in `runtime: system:` to have it from a snapshot.
+pip and npm packages need no root
 and are installed as the agent, into a directory of the step's own.
 
 A pip or npm package runs none of its own code on the way in. npm installs
