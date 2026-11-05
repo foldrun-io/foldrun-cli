@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [16.1.0] — 2026-11-05
+
+- feat(agent network): say where a browsing agent's list holds (FOL-110 phase 3) ([f3ca793](https://github.com/foldrun-io/foldrun-cli/commit/f3ca793))
+- feat(cli): usage compute shows runs waiting against the limit; waiting_cap hint (FOL-100) ([4f46321](https://github.com/foldrun-io/foldrun-cli/commit/4f46321))
+
 ## [16.0.3] — 2026-11-05
 
 ### deps
