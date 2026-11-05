@@ -263,7 +263,9 @@ a connection to an allowed site.
 Everywhere else — `foldrun run` on your machine, the single-container tier,
 an install without the switch, a report-only list, `network: open` — a
 browsing step is **not** held: it gets no proxy, and the browser and every
-other program in the step reach sites directly. The trace says that too:
+other program in the step reach sites directly (unless the install runs the
+[browse service](#the-browse-service), below, which takes the browser out of
+the step). The trace says that too:
 
 ```
 network: trusted (agent) — the trusted list (207 sites); added: example.com — not enforced in this step: it may browse, and browsing does not go through the egress proxy here, so the browser and every other program in this step reach sites directly. Its browser is foldrun's own browser: it is held to network: on an install that confines browsing, with the list enforced (FOL-110).
@@ -281,3 +283,46 @@ The dashboard's Network card and `foldrun agent network <agent>` say which
 applies to an agent. An agent that must stay inside its list where browsing
 is not held should not browse: give it `web: {actions: [search, fetch]}`,
 which goes through the proxy like any other program.
+
+### The browse service
+
+On a cluster whose operator has switched it on (`FOLDRUN_BROWSE_SERVICE=1`,
+off by default), a step that browses but is **not** held to its list — an
+open list, a report-only one, an install that does not confine browsing —
+runs its browse calls outside its sandbox. Each such step gets a pod of its
+own beside its run pod, on the same runner image, running foldrun's own
+browse program; the pod goes when the step does. The step's `web` tool sends
+each call there through the egress proxy and gets back what the call wrote:
+
+- **The same calls, the same answers.** Every mode and action works as it
+  does in the step — clicks, fills, frames, `js=` and `eval` (which run in
+  the page, as always), screenshots, PDFs, video, HAR, downloads (they come
+  back to the path the call names), uploads (the file is sent from the
+  workspace), `session=` (kept as the browser's storage state in
+  `outputs/.browser/<name>/`, as on the account's browser pod), saved logins
+  (`state:` and `state_key:`, read from and written to `state/browser/`),
+  aria numbers, `mode=diff` and `mode=crawl`. The live view streams as before.
+- **Its browser goes through the egress proxy** under the step's own lease:
+  a site off the list is refused where the list is enforced, and named in
+  the trace where it is only reported. The pod's network reaches the proxy
+  and DNS, nothing else. The other programs in the step are not held by this
+  — only the browser is.
+- **What stays in the step**, exactly as before, saying so on the call: a
+  `live:` session, engines other than Chromium and Chrome (Firefox, WebKit,
+  Lightpanda, Obscura), `extensions:`, `proxy=`, a vendor's browser, a page
+  on the sandbox's own machine or a private address, and a workspace whose
+  copy of the `web` tool was edited (the service runs foldrun's own program,
+  never an edited one). A call the service could not start runs in the step;
+  a call that started there and was cut off is **not** run again — it may
+  have clicked — and fails saying so.
+- **A step held to its list** never uses it: its browser stays in its own
+  walled pod ([above](#browsing)). Nor does a [test run](runs#test-runs).
+
+The trace says which way a step went:
+
+```
+browser: foldrun's browse service — this step's browse calls run outside its sandbox, in a pod of the step's own, and every page goes through the egress proxy under this step's network: list (…)
+egress: browse service × 4 (21.3s total)
+```
+
+The pod's time is on the account's bill like the account's browser pod's.

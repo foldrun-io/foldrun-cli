@@ -43,7 +43,9 @@ its list of sites per connection; where it is enforced
 `FOLDRUN_NETWORK_ENFORCE=1` on the install) its pod has no other route, and no way to the
 account's browser or search pods. A step that browses is held the same way where the
 install sets `FOLDRUN_BROWSE_ENFORCE=1`: its browser runs inside that walled pod
-([Browsing](network#browsing)); elsewhere a browsing step is not held to its list. The policy denies every private range (RFC1918) and the
+([Browsing](network#browsing)); elsewhere a browsing step is not held to its list,
+unless the install runs the [browse service](network#the-browse-service), which moves
+that step's browser out of its sandbox and through the proxy. The policy denies every private range (RFC1918) and the
 cloud metadata endpoint — the address that, on a cloud host, hands out the
 machine's own credentials. It cannot reach the platform's API, its
 database, its object store, or another account's pods. Workspace files
