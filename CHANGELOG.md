@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [17.0.1] — 2026-11-05
+
+### docs
+
+- sync security.md — what our telemetry carries (FOL-121) ([683c7c0](https://github.com/foldrun-io/foldrun-cli/commit/683c7c0))
+
 ## [17.0.0] — 2026-11-05
 
 ### Breaking changes
