@@ -27,7 +27,9 @@ the web) reaches the internet only through the egress proxy, which holds
 its list of sites per connection; where it is enforced
 (`network_enforce: true` in the account's or workspace's `AGENTS.md`, or
 `FOLDRUN_NETWORK_ENFORCE=1` on the install) its pod has no other route, and no way to the
-account's browser or search pods. The policy denies every private range (RFC1918) and the
+account's browser or search pods. A step that browses is held the same way where the
+install sets `FOLDRUN_BROWSE_ENFORCE=1`: its browser runs inside that walled pod
+([Browsing](network#browsing)); elsewhere a browsing step is not held to its list. The policy denies every private range (RFC1918) and the
 cloud metadata endpoint — the address that, on a cloud host, hands out the
 machine's own credentials. It cannot reach the platform's API, its
 database, its object store, or another account's pods. Workspace files
