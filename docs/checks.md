@@ -223,6 +223,23 @@ it. The finding never repeats the value, and neither does any answer that
 shows the setting (notify's test send names the secret, or says it is not a
 name).
 
+### secret/reserved-env-name
+
+*warn · ASI03, ASI05.* An agent's or a tool's `secrets:` names a variable
+that steers programs rather than carries data: `LD_PRELOAD` and every other
+`LD_*`, `PATH`, `IFS`, `HOME`, `SHELL`, `BASH_ENV`, `ENV`, `CDPATH`,
+`NODE_OPTIONS`, `PYTHONPATH`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT`,
+`GCONV_PATH` and their like. A secret reaches the sandbox as an environment
+variable of its own name, so one called `LD_PRELOAD` loads its value into
+every program the agent starts, and one called `PATH` decides which program
+answers to `python3`. That is almost never what was meant, and a value that
+points into a folder the agent writes runs whatever is put there.
+
+The platform does not depend on it: the part of a step's start-up that runs
+as root never reads the step's environment, so it is the agent's own
+sandbox at stake. Give the secret a name of its own (`STRIPE_KEY`,
+`CRM_TOKEN`) and have the script read that.
+
 ### content/hidden-unicode
 
 *warn · ASI01, ASI04, ASI06.* Zero-width characters, bidirectional overrides
