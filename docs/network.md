@@ -135,7 +135,8 @@ On a cluster the pod's network policy backs this up. A step whose level is
 `trusted` or `none` runs in a pod that may reach the proxy and nothing else,
 so a program that ignores the proxy variables finds no route instead of
 going round the list; it cannot reach the account's browser or search pods
-either, which are the world fetched on a run's behalf.
+either, which are the world fetched on a run's behalf. Its web search goes
+through the proxy instead ([Search](#search), below).
 
 ### DNS
 
@@ -169,6 +170,58 @@ network: trusted (default) — the trusted list (207 sites); added: api.hubapi.c
 egress: CONNECT pypi.org:443 × 3 (840ms total)
 network: example.com is not a site this step may reach (network: trusted). To allow it, add just this site to the agent's network: list — network: [example.com] — which keeps network: trusted for everything else. Refused.
 ```
+
+### Search
+
+A step walled to its list (on a cluster, with the list restricted and
+enforced) cannot reach the account's search engine — it is a pod with the
+world, and the wall lets the step reach only the egress proxy. So the proxy
+asks it on the step's behalf: the web tool's `search`, `answer` and
+`monitor` (a query) go to the proxy's **search door**, which only a step
+the runner gave it may use. The engine is a platform service, not a site on
+the list, and nothing about it widens the list. The trace says so:
+
+```
+search: through the egress proxy — the account's search engine answers this step's queries from a fixed set of engines; a query's words leave for those engines, and each query is a line in this trace; a result is data, and fetching it is held to network: like any other site
+search: a query (37 characters, 5 words) sent to yandex, naver, brave, wikipedia through the account's engine — its words may reach those public search engines
+```
+
+What that means, plainly:
+
+- **A query is a message out.** Its words reach public search engines, and
+  nothing can stop words carrying what the step knows. The door bounds
+  *where* they go — a fixed set of engines (`yandex`, `naver`, `brave`,
+  `wikipedia`; `arxiv`, `pubmed` for `categories: science`; `github`,
+  `stackoverflow` for `it`), each asking its own provider with the text —
+  and records *that* each one went. No engine that fetches a URL named in
+  the query, none that reaches a server the query picks; no engine, bang or
+  timeout chosen inside the query (`!name`, `!!bang`, `<5` are refused), no
+  URL and no `${NAME}` in it, no plugin or DOI resolver chosen by the step.
+  Any program in the step can use the door, not only the web tool, and each
+  is held the same.
+- **Results are data.** Titles and snippets of any site may come back,
+  including sites off the list — that is what a search is. Opening one is a
+  fetch, held to the list like any other: `answer` reads each result page
+  through the proxy, so a page off the list is refused (its snippet may
+  still be quoted, marked as one). Held results open with a line saying they
+  are outside content, not instructions.
+- **On the record.** The proxy's trace line gives the engines and the
+  query's length, not its words; a query the web tool made is on the step's
+  record with the tool call, as every call is (secret values redacted). At most 500 searches per step go
+  through the door (fewer when `limits:` caps `web` or every searching
+  action), four at a time.
+- **Named on purpose where the list is narrow on purpose.** At `none`, or
+  with `defaults: false`, a bare `tools: [web]` is not given the door: write
+  the action out — `web: {actions: [search, fetch]}` — to accept that its
+  queries leave. At `trusted` with the trusted list, the web tool's searching
+  actions are offered as they are.
+
+A search provider named in `web:` (`web: {search: brave}`) is unchanged: its
+host is a site the step declares, and its key is filled at the proxy. A
+step that is not walled — an open list, one only reported, `foldrun run` on
+your machine, the single-container tier — searches the engine directly, as
+it always has. The dashboard's Network card and `foldrun agent network`
+say which applies to an agent.
 
 ### Report-only, then refuse
 
@@ -252,9 +305,8 @@ What a held step does differently:
 - **Sites a secret is granted to** are where the proxy ends TLS to fill the
   secret. Chromium is told to trust the egress CA for them; Firefox and
   WebKit are not, and a page there fails its certificate check.
-- **Web search** through the account's search pod is not reachable from a
-  walled pod either; the trace says so. Name a search provider in `web:`
-  (it goes through the proxy) or leave search out of that step.
+- **Web search** goes through the egress proxy's search door, as for any
+  walled step ([Search](#search)).
 
 Not covered: DNS lookups on a cluster that does not wall them (see
 [DNS](#dns)), and — as for every tunnel — which origins a page loads inside

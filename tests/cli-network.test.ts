@@ -138,3 +138,19 @@ test("agent network says where a browsing agent's list holds (FOL-110 phase 3); 
     d.done();
   }
 });
+
+test("agent network says how a held step's web search goes (FOL-128): the proxy's door, or not offered when the list is narrow on purpose", async () => {
+  const { searchLine } = await import("../src/commands.mjs");
+  const base = { level: "trusted", defaults: true, enforceWanted: false };
+  const s = (search: unknown, more: Record<string, unknown> = {}) => searchLine({ ...base, ...more, search });
+  assert.match(s({ web: true, actions: null, provided: [] })!, /web search goes through the egress proxy — the account's engine asks a fixed set of engines, a query's words reach them/);
+  assert.match(s({ web: true, actions: null, provided: [] }, { level: "none", defaults: false })!, /offered no web search — the list is narrow on purpose and web: names no actions; write web: \{actions: \[search, …\]\}/);
+  assert.match(s({ web: true, actions: null, provided: [] }, { defaults: false })!, /offered no web search/, "a trusted list without the trusted list is narrow on purpose too");
+  assert.match(s({ web: true, actions: ["search"], provided: [] }, { level: "none", defaults: false })!, /goes through the egress proxy/, "search written out is the declaration");
+  assert.equal(s({ web: true, actions: null, provided: ["search", "answer", "monitor"] }), null, "a provider answers every searching action: its host is on the list already");
+  assert.equal(s({ web: true, actions: ["fetch"], provided: [] }), null, "no searching action");
+  assert.equal(s({ web: false, actions: null, provided: [] }), null, "no web tool");
+  assert.equal(s({ web: true, actions: null, provided: [] }, { level: "open" }), null, "an open list reaches the engine directly");
+  assert.equal(searchLine({ ...base }), null, "an older core says nothing about search, and neither does this");
+  assert.match(s({ web: true, actions: null, provided: [] }, { enforceWanted: true })!, /\(network_enforce: true here\)/);
+});

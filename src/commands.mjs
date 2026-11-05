@@ -9898,6 +9898,24 @@ function browsingLine(p) {
     : `browsing: this agent may browse. On a platform that confines browsing, with this list enforced${enforce}, its browser runs walled in the step's sandbox and the list holds for it; on this machine, or with the list only reported, its browser and its other programs reach sites directly (\`foldrun docs network\`, Browsing).`;
 }
 
+/** What a held step's web search does under this list (FOL-128), from
+ *  core's `network.search` (core ≥ the FOL-128 release; null before): the
+ *  rule of core search-egress.ts searchDoorWanted, read loosely because the
+ *  CLI typechecks against the published core. Null when it does not apply. */
+export function searchLine(p) {
+  const s = p?.search;
+  if (!s || typeof s !== "object" || s.web !== true || p.level === "open") return null;
+  const actions = Array.isArray(s.actions) ? s.actions : null;
+  const provided = Array.isArray(s.provided) ? s.provided : [];
+  const ours = ["search", "answer", "monitor"].filter((a) => (!actions || actions.includes(a)) && !provided.includes(a));
+  if (!ours.length) return null;
+  const enforce = p.enforceWanted === true ? " (network_enforce: true here)" : "";
+  if ((p.level === "none" || p.defaults === false) && !actions) {
+    return `search: on a platform that walls this list, with it enforced${enforce}, this agent is offered no web search — the list is narrow on purpose and web: names no actions; write web: {actions: [search, …]} to let it search through the egress proxy (\`foldrun docs network\`, Search).`;
+  }
+  return `search: on a platform that walls this list, with it enforced${enforce}, web search goes through the egress proxy — the account's engine asks a fixed set of engines, a query's words reach them and each query is on the run's trace; opening a result is held to this list (\`foldrun docs network\`, Search).`;
+}
+
 /**
  * `foldrun agent network <agent> [open|trusted|none|inherit] [--add <site>]…
  * [--remove <site>]…` — which sites the agent's sandbox may reach, its
@@ -9945,6 +9963,8 @@ async function agentNetworkCmd(positional, flags, layout) {
     console.log(`  ${net.networkLine(p, true)}`);
     if (p.level !== "open") console.log(`  ${c.dim("a run also allows its MCP servers, its web providers and the sites its secrets are bound to")}`);
     if (browses && p.level !== "open") console.log(`  ${c.yellow(browsingLine(p))}`);
+    const search = searchLine(p);
+    if (search) console.log(`  ${c.dim(search)}`);
   };
   const raw = desk.files.get(rel);
   const now = await resolve(desk.files);
