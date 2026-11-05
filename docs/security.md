@@ -17,6 +17,17 @@ Startup is under a second warm, so this is not the latency it sounds like;
 it is the boundary that lets one account's agent and another's share a
 machine.
 
+What a sandbox keeps between steps is the account's runtime cache: the
+environments its `runtime:` declares, built once and reused. Steps write it,
+so nothing in it is trusted by the part of a step's start-up that runs as
+root. That part installs `runtime: system:` packages before the drop to the
+unprivileged agent user, in an environment with none of the step's variables
+but the proxy's, and touches the cache only as the agent user. The package
+snapshots it restores carry a seal made with a key per account that no step
+ever holds; a snapshot that does not match its seal is not restored, and even
+a sealed one can only write package files where packages go
+([system packages](agents#where-it-runs)).
+
 ## What the network allows
 
 A run pod may reach DNS, the egress proxy where its credentials are filled
