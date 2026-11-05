@@ -153,6 +153,51 @@ use and role change is in the audit log; every step's tool calls, script
 runs and refusals are in the run's events. A run can be reconstructed from
 its record.
 
+## What our telemetry carries
+
+Your run's record — its prompts, replies, files, tool arguments and errors —
+is yours, in your workspace, and goes where you send it (`telemetry:` to your
+own OpenTelemetry collector, `notify:` to your webhook). The platform's own
+logs and metrics are a different thing: they leave the cluster for our
+operations stack, and they never carry your content.
+
+| Carries | Never carries |
+|---|---|
+| ids: account, run, job, task, lease, pod | prompts, replies, a step's output |
+| the names of your workspaces, flows, agents and evals | file names or contents, knowledge, memory |
+| counts, durations, bytes, dollars, HTTP status | tool or script arguments and results |
+| an error's class (`timeout`, `oom`, `disk_full`, `model_error`, `network_error`, `policy_denied`, `user_code_error`, `not_found`, `cancelled`, `platform_error`), its type, its errno or SQLSTATE, and where in **our** code it happened | an error's message or stack text, a model process's stderr, a query or its values |
+| a reason word from a fixed set (`paused`, `no_egress_url`) | URLs, email addresses, anything with a space in it |
+
+It holds by construction, not by care:
+
+- **One writer.** Every platform log line is built from a closed list of
+  fields, each with a shape: a number, a short word, or an id with no space,
+  quote, slash, colon or `@`. A value that does not fit is dropped, not
+  shortened. An error gives its class and code, never its words.
+- **One boundary.** Every hosted process (web, worker, egress, assistant)
+  replaces its console and its stdout/stderr at start. Anything else that
+  prints — our older code, a dependency, Next.js — becomes "a line was
+  printed here", never what it said.
+- **A second line at the collector.** The log shipper forwards a line only
+  if it is exactly such a line, and never reads the namespace where steps
+  run.
+- **Tests.** A process inside the boundary tries every way to print a
+  marker (an error's message, stack, name and code; a forged envelope; a
+  raw write; an uncaught rejection) and the test reads the raw bytes; the
+  source of core, platform and web is scanned for any log call that prints
+  more than a literal; and metrics may only have fixed names and labels.
+
+The incident this answers: a judge's model process crashed, and the full
+text of its error — which carried prompt text — went to the server log.
+Today that line is `model.process_failed` with `errorClass: model_error`.
+
+A self-hosted install writes the same lines to its own logs;
+`FOLDRUN_LOG_MODE=raw` on a process puts it outside the boundary, for
+debugging on your own machine. On a laptop (`foldrun run`, `next dev`) there
+is no boundary: the reader is the person whose content it is, and errors
+print in full.
+
 ## People
 
 Four roles, least privilege by route, one owner. See
