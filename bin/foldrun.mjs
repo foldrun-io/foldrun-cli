@@ -170,7 +170,7 @@ const HELP = `foldrun — agents are just folders
   foldrun runs views rm <name>  delete a saved view (asks; --yes)
   foldrun runs doctor <run-id>  the run doctor: the assistant reads a failed run and the files it names, says why (platform, check, work or outside) and proposes the fix as diffs, saved on yes (--to, --yes, --dry-run, --json)
   foldrun runs rm <run-id>  delete a run's record and archived outputs (an admin); a live one is stopped first — asks first, --yes means it
-  foldrun runs rm <run-id> <run-id>…  delete several: lists them, asks once, then deletes each
+  foldrun runs rm <run-id> <run-id>…  delete several: lists them, asks once, then deletes them in one runs/bulk call per workspace, as the dashboard does
   foldrun report <run-id>   one run, whole: header, every step, what it wrote and what is still waiting
   foldrun report <run-id> get <agent>/<path>  download a file the run archived from that agent's outputs/ (--file <path>|-, --force)
   foldrun report <run-id> --compare [<run-id>]  beside the flow's last good run (or the one named): changed files and what differs step by step (--json)

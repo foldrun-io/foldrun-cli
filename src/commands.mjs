@@ -10794,8 +10794,10 @@ async function runRmCmd(runId, flags, layout) {
 }
 
 /** `foldrun runs rm <run-id> <run-id>…` — the selection bar's Delete: lists
- *  them, asks once, then one DELETE per run (there is no bulk delete route),
- *  each its own outcome so one refusal does not stop the rest. */
+ *  them, asks once, then deletes them as the bar does — POST …/runs/bulk
+ *  { action: "delete", runIds }, once per workspace in calls of at most 100
+ *  (FOL-75, 5 Nov 2026; it was one DELETE per run). Each run its own
+ *  outcome, so one refusal does not stop the rest. */
 async function runsRmManyCmd(ids, flags, layout) {
   const url = platformFor(flags, "runs rm");
   const unique = [...new Set(ids)];
@@ -10812,13 +10814,31 @@ async function runsRmManyCmd(ids, flags, layout) {
   if (!(await sureToDelete(flags, "runs rm", what))) return 1;
   let bad = 0;
   console.log();
-  for (const { id, ws } of runs) {
-    try {
-      await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(id)}`, { method: "DELETE" });
-      console.log(`  ${c.green("✓")} ${ws} ${id} deleted`);
-    } catch (err) {
-      bad++;
-      console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(` — ${explain(err)}`)}`);
+  const byWs = new Map();
+  for (const { id, ws } of runs) byWs.set(ws, [...(byWs.get(ws) ?? []), id]);
+  for (const [ws, all] of byWs) {
+    for (let i = 0; i < all.length; i += 100) {
+      const ids = all.slice(i, i + 100);
+      /** @type {any} */
+      let r;
+      try {
+        r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", runIds: ids }) });
+      } catch (err) {
+        // Refused whole (a 403 without workspace:manage): every run it carried.
+        for (const id of ids) console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(` — ${explain(err)}`)}`);
+        bad += ids.length;
+        continue;
+      }
+      const answered = new Set();
+      for (const x of r.runs ?? []) {
+        answered.add(x.runId);
+        if (!x.ok) bad++;
+        console.log(x.ok ? `  ${c.green("✓")} ${ws} ${x.runId} deleted` : `  ${c.red("✗")} ${ws} ${x.runId}${c.dim(` — ${x.error ?? "refused"}`)}`);
+      }
+      for (const id of ids.filter((x) => !answered.has(x))) {
+        bad++;
+        console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(" — not found (deleted since it was listed?)")}`);
+      }
     }
   }
   console.log(`\n  ${c.dim(`${runs.length - bad} of ${runs.length} deleted${bad ? ` · ${bad} refused` : ""}`)}\n`);
