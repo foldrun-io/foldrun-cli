@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.0.1] — 2026-11-05
+
+- fix(cli): a key typed or pasted into a terminal — account model set --key - asked nothing and threw EAGAIN; the hidden prompt never saw a pasted Enter ([88666d2](https://github.com/foldrun-io/foldrun-cli/commit/88666d2))
+
 ## [19.0.0] — 2026-11-05
 
 ### Breaking changes
