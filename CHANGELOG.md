@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.0.2] — 2026-11-05
+
+### deps
+
+- @foldrun/core ^17.0.1 ([1aa2795](https://github.com/foldrun-io/foldrun-cli/commit/1aa2795))
+
 ## [19.0.1] — 2026-11-05
 
 - fix(cli): a key typed or pasted into a terminal — account model set --key - asked nothing and threw EAGAIN; the hidden prompt never saw a pasted Enter ([88666d2](https://github.com/foldrun-io/foldrun-cli/commit/88666d2))
