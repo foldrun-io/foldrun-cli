@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.0.0] — 2026-11-05
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 17.0.0, a new major. (62fcd9e)
+
+### deps
+
+- @foldrun/core ^17.0.0 ([62fcd9e](https://github.com/foldrun-io/foldrun-cli/commit/62fcd9e))
+
 ## [18.1.0] — 2026-11-05
 
 - docs(guide): a held step searches through the search door; name search at none (FOL-128) ([71d5b3a](https://github.com/foldrun-io/foldrun-cli/commit/71d5b3a))
