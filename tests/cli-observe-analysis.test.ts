@@ -191,3 +191,37 @@ test("eval trends --help names it and calls nothing", async () => {
   const r = await at("http://127.0.0.1:9", "eval", "trends", "--help");
   assert.match(r.out, /eval trends --to <ws>/);
 });
+
+test("FOL-74: observe --to shows an overlapped start-up as the platform placed it — services in parallel, go held for it", async () => {
+  const sp = (p50: number, max = p50) => ({ n: 6, p50, p95: max, max });
+  const report = {
+    ...observation("blog-desk", 0),
+    startup: [
+      { phase: "services", took: sp(8), from: sp(0), at: sp(8), parallel: 5, waited: sp(0) },
+      { phase: "room", took: sp(0.1), from: sp(0), at: sp(0.1), parallel: 0, waited: sp(0) },
+      { phase: "ready", took: sp(2.5), from: sp(0.5), at: sp(3), parallel: 0, waited: sp(0) },
+      { phase: "files", took: sp(1), from: sp(3), at: sp(4), parallel: 0, waited: sp(0) },
+      { phase: "go", took: sp(0.1), from: sp(8), at: sp(8.1), parallel: 0, waited: sp(4) },
+    ],
+  };
+  const s = await serve({ "/api/workspaces/blog-desk/observe": () => report });
+  const r = await at(s.url, "observe", "--to", "blog-desk");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /start-up\s+n\s+took p50\s+p95\s+from p50\s+done by p50\s+p95/);
+  assert.match(r.out, /services\s+6\s+8\.00s\s+8\.00s\s+0ms\s+8\.00s\s+8\.00s\s+in parallel on 5 of 6/);
+  // the phases services overlapped keep their own shares
+  assert.match(r.out, /room\s+6\s+100ms\s+100ms\s+0ms\s+100ms/);
+  assert.match(r.out, /ready\s+6\s+2\.50s/);
+  assert.match(r.out, /go\s+6\s+100ms\s+100ms\s+8\.00s\s+8\.10s\s+8\.10s\s+held 4\.00s\/4\.00s for services/);
+});
+
+test("observe --to against a platform from before FOL-74: the start-up table without lanes", async () => {
+  const sp = (v: number) => ({ n: 6, p50: v, p95: v, max: v });
+  const s = await serve({ "/api/workspaces/blog-desk/observe": () => ({ ...observation("blog-desk", 0), startup: [{ phase: "ready", took: sp(1), at: sp(1) }] }) });
+  const r = await at(s.url, "observe", "--to", "blog-desk");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /ready\s+6\s+1\.00s\s+1\.00s\s+—\s+1\.00s\s+1\.00s\s*$/m);
+  assert.doesNotMatch(r.out, /in parallel|held/);
+});

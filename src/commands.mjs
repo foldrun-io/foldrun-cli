@@ -11059,6 +11059,25 @@ const spreadOf = (s, unit) => {
   return `${unit(s.p50)}/${unit(s.p95)}`;
 };
 
+/**
+ * The start-up table's rows (FOL-29): each phase's own share, when it began
+ * and when it was done, counted from the step's start. The platform places
+ * the phases on their lanes (FOL-74, core startup.ts#startupBreakdown): a
+ * services phase that booted beside the step pod says "in parallel", and go
+ * how long it was held for it. A platform from before FOL-74 sends no
+ * `from`, `parallel` or `waited`: "—" and no note.
+ */
+export function startupRows(startup) {
+  return (startup ?? []).map((p) => {
+    const n = p.took?.n ?? 0;
+    const note = [
+      p.parallel > 0 ? `in parallel${p.parallel < n ? ` on ${p.parallel} of ${n}` : ""}` : null,
+      p.waited?.max > 0 ? `held ${spreadOf(p.waited, fine)} for services` : null,
+    ].filter(Boolean).join(" · ");
+    return [p.phase, n, fine(p.took?.p50), fine(p.took?.p95), fine(p.from?.p50), fine(p.at?.p50), fine(p.at?.p95), note];
+  });
+}
+
 /** One workspace's observability report, as the Observe page reads it. */
 function printObservation(o) {
   console.log(`\n  ${c.bold(o.workspace)}  ${c.dim(`last ${o.sinceDays} days`)}`);
@@ -11073,9 +11092,11 @@ function printObservation(o) {
   table("flows", ["flow", "runs", "failed", "p50", "p95", "cost"], (o.flows ?? []).map((f) => [f.flow, f.runs, f.failed, secs(f.seconds?.p50), secs(f.seconds?.p95), `$${f.costUsd.toFixed(2)}`]));
   table("agents", ["agent", "steps", "failed", "retried", "skipped", "p95", "turns", "cached", "cost"], (o.agents ?? []).map((a) => [a.agent, a.steps, a.failed, a.retried, a.skipped, secs(a.seconds?.p95), spreadOf(a.turns, String), a.cacheHitRate == null ? "—" : `${Math.round(a.cacheHitRate * 100)}%`, `$${a.costUsd.toFixed(2)}`]));
   table("tools", ["tool", "calls", "errors", "p95", "result size", "heavy", "used by"], (o.tools ?? []).map((t) => [t.name, t.calls, t.errors, t.ms?.p95 == null ? "—" : `${Math.round(t.ms.p95)}ms`, spreadOf(t.resultSize, kchars), t.heavyCalls || "—", (t.agents ?? []).join(", ")]));
-  // Where a step's first seconds go, phase by phase (FOL-29): each phase's
-  // own share, and when it was done counted from the step's start.
-  table("start-up", ["start-up", "n", "took p50", "p95", "done by p50", "p95"], (o.startup ?? []).map((p) => [p.phase, p.took?.n ?? 0, fine(p.took?.p50), fine(p.took?.p95), fine(p.at?.p50), fine(p.at?.p95)]));
+  // Where a step's first seconds go, phase by phase — startupRows. The note
+  // column only when a phase has one.
+  const up = startupRows(o.startup);
+  const noted = up.some((r) => r[7]);
+  table("start-up", ["start-up", "n", "took p50", "p95", "from p50", "done by p50", "p95", ...(noted ? [""] : [])], noted ? up : up.map((r) => r.slice(0, 7)));
   const fails = (o.failures ?? []).slice(0, 8);
   if (fails.length) {
     console.log(`\n  ${c.dim("recent failures")}`);

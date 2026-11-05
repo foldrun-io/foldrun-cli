@@ -311,7 +311,8 @@ test("observe --to prints where the steps' first seconds went, phase by phase", 
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /start-up\s+n\s+took p50/);
-  assert.match(r.out, /ready\s+30\s+860ms\s+3\.40s\s+1\.20s\s+4\.00s/);
+  // a platform from before FOL-74 sends no `from`: an em dash in its column
+  assert.match(r.out, /ready\s+30\s+860ms\s+3\.40s\s+—\s+1\.20s\s+4\.00s/);
   // too few samples for a percentile: an em dash, never a made-up number
   assert.match(r.out, /model\s+3\s+—\s+—\s+—\s+—/);
 });
