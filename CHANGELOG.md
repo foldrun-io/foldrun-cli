@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [17.1.1] — 2026-11-05
+
+### docs
+
+- sync (FOL-129 sealed snapshots) ([1f0d395](https://github.com/foldrun-io/foldrun-cli/commit/1f0d395))
+
 ## [17.1.0] — 2026-11-05
 
 ### New in the public API
