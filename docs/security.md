@@ -218,14 +218,14 @@ print in full.
 ## What we keep, and for how long
 
 Two kinds of record, kept for different lengths of time (5 Nov 2026). The
-install's operator sets both; these are the defaults, and what foldrun's
-hosted platform uses.
+install's operator sets both. These are what foldrun's hosted platform uses;
+an install that sets neither keeps everything, as before 5 Nov 2026.
 
 | What | Holds | Kept | Deleted by |
 |---|---|---|---|
-| **Run records** — your content | a run's prompts, replies, tool input and output, errors, captured calls, archived outputs | **90 days** after the run finished (`runs.retention_days`) | the daily pass; or you, sooner — one run, a selection, or everything before a date ([how](runs#how-long-a-run-is-kept)) |
+| **Run records** — your content | a run's prompts, replies, tool input and output, errors, captured calls, archived outputs | **90 days** after the run finished on the hosted platform (`runs.retention_days`; unset: kept) | the daily pass; or you, sooner — one run, a selection, or everything before a date ([how](runs#how-long-a-run-is-kept)) |
 | Your files | `storage/`, `knowledge/`, `memory/`, `state/`, your agents and flows | until you delete them | you (`foldrun storage rm`, a deploy that drops a file) |
-| **Audit log** — security evidence | sign-ins and refusals, keys, roles, invites, secrets set or deleted (by name, never a value), deploys, exports, support access, the operator's own actions | **365 days** (`audit.retention_days`) | the daily pass |
+| **Audit log** — security evidence | sign-ins and refusals, keys, roles, invites, secrets set or deleted (by name, never a value), deploys, exports, support access, the operator's own actions | **365 days** on the hosted platform (`audit.retention_days`; unset: kept) | the daily pass |
 | The ledger | what each run and pod session was charged | for good — a financial record | never |
 | The platform's own logs and metrics | ids, counts, classes — never your content ([above](#what-our-telemetry-carries)) | as the operations stack keeps them | the operations stack |
 

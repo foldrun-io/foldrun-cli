@@ -544,10 +544,12 @@ that. See [Budgets and billing](budgets-and-billing).
 ## How long a run is kept
 
 A run's record — its prompts, replies, tool input and output, errors — its
-captured calls and its archived outputs are your content. They are kept
-**90 days after the run finished**, then deleted by the platform's daily
-pass (on the first pass after the day, not at that second). The install's
-operator sets the period (`runs.retention_days`; `0` keeps runs for ever);
+captured calls and its archived outputs are your content. On foldrun's
+hosted platform they are kept **90 days after the run finished**, then
+deleted by the platform's daily pass (on the first pass after the day, not
+at that second). The install's operator sets the period
+(`runs.retention_days`; unset or `0` keeps runs for ever, which is what a
+self-hosted install does until its operator chooses);
 a run whose charge is still being recorded waits for that first.
 
 Sooner is yours to decide:

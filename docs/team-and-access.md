@@ -178,7 +178,7 @@ workspace, page back, and download it as CSV for an auditor.
 The owner and admins who can open every workspace read it — people, or an
 `admin` key. A member or key scoped to some workspaces cannot: the log is
 the whole account's. It is the caller's own account, always; another
-account's entries are never in it. Entries are kept 365 days — security
+account's entries are never in it. Entries are kept 365 days on the hosted platform (an install sets its own) — security
 evidence, [how long we keep what](security#what-we-keep-and-for-how-long) —
 and go sooner when the account is deleted. Also `GET /api/audit` and `foldrun audit --since 7d --csv`.
 
