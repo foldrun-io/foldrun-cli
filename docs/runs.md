@@ -106,6 +106,52 @@ completed plus failed, and a run a person stopped is left out. What the
 completed runs found is counted beside it: **blocked** (BLOCKED), **problem
 found** (BAD), and **nothing to do** (QUIET).
 
+## Why it failed
+
+A failed run says why in one sentence, the same on the run page, the runs
+list, `GET …/runs/<id>` and `…/runs` (`failure`), `foldrun runs` and
+`foldrun report`. Beside the step's own last error (`reason`, as its trail
+has it) it carries:
+
+| Field | What |
+|---|---|
+| `class` | one word, from the same list the platform's operations logs count failures by: `policy_denied`, `timeout`, `oom`, `disk_full`, `model_error`, `network_error`, `user_code_error`, `not_found`, `cancelled`, `platform_error` |
+| `kind` | what the message and fix are about: `memory`, `cpu`, `disk`, `timeout`, `network`, `security`, `budget`, `check`, `model`, `credential`, `stopped`, `code`, `platform`, `other` |
+| `message` | the sentence |
+| `fix` | what to do, or null |
+| `used`, `allowed`, `unit`, `scope` | for a limit: what the step used or asked for (null when the sandbox ended before it could be read), what it may hold, in `GiB`, `vCPU` or `s`, and whose limit it is — `step`, `run`, `workspace`, `account`, `install` or `node` |
+| `host` | for a refused site: which |
+
+What each says:
+
+- **A limit is said in figures.** *This step asks for 8 GiB of memory; one
+  step on this account may hold 4 GiB* — ask for less with `size:` or
+  `resources:`, or a plan that allows more. *The step ran out of memory.
+  Memory limit: 4 GiB; last recorded peak: 3.9 GiB* — a larger `size:` or
+  `resources: { memory: … }`. The same for cores, disk and `timeout:`. A
+  step bigger than its flow's or workspace's `compute:` names that
+  `compute:`; only a limit a plan sets mentions a plan. A machine running
+  short and the cluster evicting the step is said as that — not as the
+  step over its own limit.
+- **A refused site is named** — your `network:` list is your own: *The step
+  was refused api.example.com: it is not on this agent's network: list*,
+  and the fix is the one site to add if the agent should reach it. When the
+  step's own program failed and a site was also refused on its trail, both
+  are said, the program's error first.
+- **A security control is generic.** *This step was stopped by a platform
+  security control.* Nothing else is said — not what was seen, not how —
+  on any surface; if you think it is a mistake, write to hello@foldrun.io
+  with the run's id. Only the platform writes this (a step's own output
+  saying the words is not one).
+- A budget, a stop, the model's cap or credential, a check that did not hold
+  and the account's own code each say so in their own words; anything else
+  is the step's last error as it was, classed `platform_error` — a bucket,
+  not a finding that the platform was at fault.
+
+A run that failed with no failed step — a budget hit or a stop between
+groups — says that too. Runs listed before 5 Nov 2026 say the class and
+sentence but not a limit's figures until the run is read whole.
+
 ## What a run records
 
 Every step keeps, beside its events:
@@ -453,8 +499,35 @@ groups: the group that crosses it is the last that runs, and the run fails
 saying so. The workspace's and the account's `budget:` over time sit above
 that. See [Budgets and billing](budgets-and-billing).
 
-Finished runs older than the install's retention are pruned. Their headline
-survives in the eval history and in what agents can recall.
+## How long a run is kept
+
+A run's record — its prompts, replies, tool input and output, errors — its
+captured calls and its archived outputs are your content. They are kept
+**90 days after the run finished**, then deleted by the platform's daily
+pass (on the first pass after the day, not at that second). The install's
+operator sets the period (`runs.retention_days`; `0` keeps runs for ever);
+a run whose charge is still being recorded waits for that first.
+
+Sooner is yours to decide:
+
+- one run or a few: tick them on the runs pages and choose **Delete**, or
+  `foldrun runs rm <run-id> [<run-id>…]` (`DELETE …/runs/<id>`; a run still
+  going is stopped first);
+- everything that started before a date: `foldrun runs rm --until 30d`
+  (or `--until 2026-08-01`, `--to <workspace>`, `--dry-run`), which is
+  `POST …/runs/bulk { action: "delete", until }` — finished runs only;
+- the whole account: close it (Settings → Account); the platform team then
+  deletes its data.
+
+Deleting needs an admin (`workspace:manage`). What the charge was stays on
+the ledger — money is not deleted because a trace was.
+
+What is **not** the run record, and so not deleted with it: the files a run
+wrote to `storage/`, `memory/` and `state/` (yours, kept until you delete
+them — `foldrun storage rm`), a run's headline where an eval's history
+recorded it, and backups, which this window does not reach — what they
+hold and how long they are kept is under [backups](backups-and-restore). See [Security](security#what-we-keep-and-for-how-long)
+for the whole list.
 
 ## The runs list
 
