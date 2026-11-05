@@ -68,7 +68,7 @@ level only narrows the one above it; a step must fit all of them.
 | **account** | the plan (or the install's `FOLDRUN_ACCOUNT_*`); `compute:` in the account's `AGENTS.md`, Settings → Governance or `foldrun account set compute` lowers it | everything the account's running steps hold together |
 | **workspace** | `compute:` in the workspace's `AGENTS.md`, its Settings → Governance, or `foldrun workspace set compute … --to <ws>` | what that workspace's running steps hold together |
 | **run** | `compute:` in the flow, the flow's card, or `foldrun flow compute <flow> …` | what one run of the flow holds at once across its parallel steps — each run has its own |
-| **step** | the agent's `size:` or `resources: { cpu, memory, disk }`; the plan's (or install's `FOLDRUN_STEP_MAX_*`) most for one step | one step's sandbox |
+| **step** | the agent's `size:` or `resources: { cpu, memory, disk }`; the plan's (or install's `FOLDRUN_STEP_MAX_*`) most for one step — on foldrun's hosted platform an account without a plan, or whose plan sets none, gets the entry plan's | one step's sandbox |
 
 ```yaml
 # AGENTS.md (the account's or a workspace's), or a flow's frontmatter
@@ -129,6 +129,41 @@ start-up time from the moment it is placed. One it can never place (a
 claim that does not exist, no node that matches and none being added)
 still fails. On a self-hosted Docker install there is no room gate, so nothing
 waits.
+
+### How many runs may wait
+
+Waiting is the rule, but not without end. An account may have a limited
+number of runs **waiting for their turn** at once — lined up and not yet
+started, sent back to the queue to wait for room, or let out of an approval
+or a `wait:` and waiting for a worker. A run asleep on its own `wait:` timer,
+at an approval gate or waiting for an event does not count, nor does a run
+that is running.
+
+- **The limit.** 20 for each run the account may drive at once (its plan's
+  runs at once, its own `concurrency:`, or the install's), and never fewer
+  than 50: Starter 50, Creator 50, Pro 80, Scale 160. An install sets one
+  number for every account with `FOLDRUN_MAX_WAITING_RUNS` (`0`: no limit).
+- **Past it, a new run is refused at once** — never lined up and dropped
+  later. A person or a key gets `409` with `code: "waiting_cap"`, `limit`
+  and `waiting`, and the sentence: *this account already has 50 runs
+  waiting for their turn, its limit … nothing was started*. The dashboard
+  shows it where you pressed Run, and the CLI prints it. A webhook or an
+  inbound email gets `503` with `Retry-After: 60`, so its sender tries
+  again, and the delivery is not remembered as handled. An outside agent
+  over A2A is told the agent is busy.
+- **A trigger that fires into it is skipped, not delayed.** A schedule's
+  fire, a watched page's change, a debounced burst, a chained or storage
+  trigger: each is written on the workspace's Triggers page as
+  *too many runs waiting*, with the sentence, and the flow waits for its
+  next fire. (A webhook's sender retries; nothing else does.)
+- **A threshold, not a ceiling.** The limit is checked when a new run is
+  admitted. Runs already admitted still come back — out of a gate, a
+  `wait:`, or back for room — so the count can pass the limit for a while;
+  new runs are refused until it falls below. Two starts in the same instant
+  may both take the last place.
+- **Seen.** Settings → Governance → Compute and `foldrun usage compute`
+  show *N of M runs waiting for their turn* (`runsWaiting` in
+  `GET /api/usage/compute`).
 
 ## Plans and credits
 

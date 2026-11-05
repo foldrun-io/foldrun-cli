@@ -2621,7 +2621,9 @@ async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
     // run that failed with 500 and a full record of why — status, steps, the
     // agent's last words — and a caller that prints only "HTTP 500" sends the
     // reader hunting for an outage that never happened.
-    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : res.status === 429 ? rateLimitHint(res, body) : "";
+    // The account's waiting limit (FOL-100): the sentence says why; where
+    // to see the figures is the CLI's to add.
+    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : res.status === 429 ? rateLimitHint(res, body) : body?.code === "waiting_cap" ? " — `foldrun usage compute` shows the runs waiting and the limit" : "";
     throw new HttpError(`${body.error ?? `${apiPath} → HTTP ${res.status}`}${hint}`, res.status, body);
   }
   return body;
@@ -6252,6 +6254,7 @@ const TRIGGER_REASON = {
   "overlap-skipped": ["previous run still live", "overlap: skip"],
   missed: ["missed while down", "catchup: none"],
   filtered: ["did not match the filter", "filter:"],
+  "queue-full": ["too many runs waiting", "the account's waiting limit (foldrun usage compute)"],
   failed: ["could not start", ""],
 };
 
@@ -11366,7 +11369,14 @@ async function usageComputeCmd(flags) {
   const from = { plan: "the plan's", account: "the account's own compute:", install: "this install's" }[p.source] ?? null;
   console.log(`\n  ${c.bold("account")}  ${c.dim(from ? `${from} — what all running steps may hold together` : "no pool set")}`);
   console.log(`  ${held(u, p)}  ${c.dim(`held by ${u.steps} running step${u.steps === 1 ? "" : "s"}`)}`);
-  if (p.stepVcpu != null || p.stepMemGiB != null || p.stepDiskGiB != null) console.log(`  ${c.dim(`one step: up to ${p.stepVcpu ?? "any"} vCPU · ${p.stepMemGiB ?? "any"} GiB · ${p.stepDiskGiB ?? "any"} GiB disk`)}`);
+  if (p.stepVcpu != null || p.stepMemGiB != null || p.stepDiskGiB != null) console.log(`  ${c.dim(`one step: up to ${p.stepVcpu ?? "any"} vCPU · ${p.stepMemGiB ?? "any"} GiB · ${p.stepDiskGiB ?? "any"} GiB disk${Array.isArray(p.stepDefault) && p.stepDefault.length ? " — the most for an account without a plan of its own" : ""}`)}`);
+  // Runs waiting for their turn (FOL-100): while the limit wait, a new run
+  // is refused at once (409, code waiting_cap) instead of lined up.
+  const rw = d.runsWaiting;
+  if (rw && rw.limit != null) {
+    const count = rw.waiting == null ? `up to ${rw.limit}` : `${rw.waiting} of ${rw.limit}`;
+    console.log(`  ${c.dim(`runs waiting for their turn: ${count} — past the limit a new run is refused, not lined up${rw.source === "install" ? " (FOLDRUN_MAX_WAITING_RUNS)" : rw.slots ? ` (20 × ${rw.slots} at once, at least 50)` : ""}`)}`);
+  }
   // Each workspace's own pool and each live run's (27 Oct 2026): a step
   // must fit every level it belongs to.
   const wss = Array.isArray(d.workspaces) ? d.workspaces.filter((w) => w.inUse?.steps || w.pool?.vcpu != null || w.pool?.memGiB != null || w.pool?.diskGiB != null) : [];

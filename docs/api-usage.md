@@ -165,6 +165,9 @@ Every error is JSON with one field you can show a person:
 { "error": "flow nightly not found" }
 ```
 
+Some carry a `code` a program can branch on beside it — `unknown_api_version`,
+`mail_not_configured`, `waiting_cap` — and the figures that go with it.
+
 | Status | Means |
 |---|---|
 | 400 | the request is malformed, or names an unknown `Foldrun-Version` |
@@ -172,7 +175,7 @@ Every error is JSON with one field you can show a person:
 | 402 | out of credit |
 | 403 | your role or scope does not cover this |
 | 404 | no such thing |
-| 409 | conflict — a run already live (`overlap: skip`), a file changed under `ifMatch`, an idempotent request still in flight |
+| 409 | conflict — a run already live (`overlap: skip`), a file changed under `ifMatch`, an idempotent request still in flight, or the account already has its most runs waiting for their turn (`code: "waiting_cap"`, with `limit` and `waiting` — [how many runs may wait](budgets-and-billing#how-many-runs-may-wait); a webhook or inbound email gets this as a `503` with `Retry-After`) |
 | 413 | body over 10 MB |
 | 422 | a refusal to read: a deploy with issues, an Idempotency-Key reused with a different body |
 | 429 | rate limited — wait `Retry-After` |

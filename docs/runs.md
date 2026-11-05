@@ -418,7 +418,9 @@ The hardest question this platform gets is not about a run — it is about a
 run that does not exist. Every honest answer to it is a thing that
 deliberately did not happen: a duplicate delivery, a burst still being
 waited out, a throttled trigger, a flow switched off after a bad week, an
-`overlap: skip`, a fire missed while nothing was running.
+`overlap: skip`, a fire missed while nothing was running, an account that
+already had its most runs waiting (*too many runs waiting* —
+[how many runs may wait](budgets-and-billing#how-many-runs-may-wait)).
 
 The Triggers page on each workspace records all of it: one row per flow
 saying how often its trigger fired, how often that became a run, and what
