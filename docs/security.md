@@ -137,6 +137,23 @@ The pattern that follows from it, and that the reference desks use: the
 tool that *proposes* a change and the tool that *applies* it are two tools,
 and only the step after a human gate holds the second.
 
+### Flows published to outside agents
+
+A flow published over [A2A](a2a) answers whoever holds a key for it, so its
+**answer is a way out** as much as a network is. Two rules hold on the
+platform, by every door into the files (since 5 Nov 2026):
+
+- **Secret and code.** An agent of a published flow that holds a secret in
+  its sandbox and can run code could be asked to print the secret into its
+  answer. Such a flow is not published, and takes no new task, until an
+  admin names the agent in `a2a: accept_risk` — recorded in the flow's
+  history and the audit log ([accept_risk](a2a#secret-and-code-accept_risk)).
+- **Only an admin widens it.** Publishing is an admin's approval of what the
+  flow's agents can reach. An editor's change that gives one of them a new
+  tool, secret, API, network, sub-agent or step, or takes a hook away, is
+  refused; an admin's is audited
+  ([details](a2a#an-editor-cannot-widen-a-published-flow)).
+
 ## Gates and the record
 
 A `!` on a step parks the run for a person, and the run cannot proceed

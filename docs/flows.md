@@ -348,7 +348,7 @@ normal outcome, recorded as one.
 | `approvers` | who may decide this flow's gates — addresses, or `admins` |
 | `approve_within` | how long a gate waits before the run is rejected |
 | `live` | `true` to make this flow's runs real where the platform would otherwise make them [test runs](runs#test-runs): as an eval's subject. Only ever an opt-out of the safe default |
-| `a2a` | serve this flow to outside agents over A2A 1.0 — `{ publish: true, name?, description?, examples?, public_card?, input? }`: the agent card's name, description and example requests (else the flow's own), `public_card: true` to let the card be read without a key, and `input` a JSON Schema the request's data part must match. A caller still needs an A2A key that names the flow; a block `foldrun check` cannot read publishes nothing. Changing it needs `workspace:manage`. See [A2A](a2a) |
+| `a2a` | serve this flow to outside agents over A2A 1.0 — `{ publish: true, name?, description?, examples?, public_card?, input?, accept_risk? }`: the agent card's name, description and example requests (else the flow's own), `public_card: true` to let the card be read without a key, `input` a JSON Schema the request's data part must match, and `accept_risk` the agents an admin accepts holding a secret while they can run code (without it such a flow is not published — [A2A](a2a#secret-and-code-accept_risk)). A caller still needs an A2A key that names the flow; a block `foldrun check` cannot read publishes nothing. Changing it needs `workspace:manage`. See [A2A](a2a) |
 
 Every duration here is written the way `wait:` is — `45s`, `10m`, `2h`, `3d`,
 or bare seconds — and capped at thirty days.

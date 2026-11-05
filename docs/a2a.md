@@ -31,6 +31,7 @@ a2a:
     type: object
     required: [city]
     properties: { city: { type: string } }
+  accept_risk: [researcher]           # only if needed: see "Secret and code" below
 ---
 
 1. [[researcher]] — Find three leads for the request.
@@ -45,6 +46,7 @@ a2a:
 | `examples` | up to 10 example requests, 500 characters each |
 | `public_card` | `true` lets anyone read the card without a key. Calling the flow always needs one. Default `false` |
 | `input` | a JSON Schema (up to 16,000 bytes as JSON). With it, every request must carry a data part that matches it, and a request that does not is refused before anything starts |
+| `accept_risk` | a list of this flow's agents that an admin accepts **holding a secret while they can run code** ([below](#secret-and-code-accept_risk)). Up to 50 names |
 
 A block `foldrun check` cannot read publishes nothing — a typo never opens a
 flow nobody meant to open. Whether a flow is published is the workspace's
@@ -73,6 +75,86 @@ the newest tasks with the key that asked.
 `foldrun check` warns on a published flow that is risky to open
 ([below](#security)).
 
+### Secret and code: `accept_risk`
+
+The flow's answer goes back to the caller, so **the answer is a way out**.
+An agent of a published flow that holds a secret in its sandbox and can run
+code (`tools: [code]`, `Bash`) can be asked to print the secret into its
+reply — no network needed. A secret reaches the sandbox when the agent lists
+it in `secrets:`, an `apis:` header or a granted tool names it as `${NAME}`,
+or a `web:` provider needs one. "Its agents" means every agent a run of the
+flow can put to work: each step's, its `on-fail:` rescuer and `delegate:`
+choices, the steps of every `[[flow:…]]` it runs, and their `subagents:`.
+
+So the platform does not publish such a flow until an **admin** accepts it,
+agent by agent:
+
+```yaml
+a2a:
+  publish: true
+  accept_risk: [researcher]
+```
+
+- Publishing (or keeping published while adding Bash or a secret) without it
+  is refused for everyone, admins too: `400`, `code: a2a_secret_code`, naming
+  the agent and what it holds. A name in `accept_risk` that no agent of the
+  flow answers to is refused (`a2a_accept_risk`), so an old entry never waits
+  to cover the next agent given that name.
+- A published flow that already had such an agent before 5 Nov 2026 keeps
+  its files, but **takes no new task** until it is accepted: `SendMessage`
+  answers `NOT_SERVING`. Tasks already running are not stopped, and `GetTask`,
+  `ListTasks` and `CancelTask` still answer. The check runs every time a task
+  is admitted, against the files as they are then.
+- Rather than accept: take Bash away (`disallowedTools: [Bash]`, or a step
+  without code), move the secret to an agent of a flow that is not published,
+  or bind the secret to its sites (`foldrun secrets sites NAME host`) so it
+  never enters the sandbox. The platform reads binding from the vault at each
+  check, and again before every task it starts, so unbinding it later stops
+  new tasks at once. `foldrun check`, offline, cannot see the vault and still
+  warns on a bound secret.
+- Every acceptance is in the flow file's history (who, when, the diff) and in
+  the audit log as `a2a.risk_accepted` with the agent and what it holds.
+
+The **Publish over A2A** control names each such agent before the first
+publish and has an **Accept for <agent>** box (admins); Save stays off until
+each is ticked. From the terminal:
+`foldrun a2a publish <flow> --to <ws> --accept-risk <agent,…>` (every agent
+accepted, as the list replaces the flow's; `--clear-accept-risk` takes it
+out). `foldrun a2a ls --to <ws>` lists them, and
+[`security/published-flow-secret-code`](checks#securitypublished-flow-secret-code)
+is `foldrun check`'s warning.
+
+### An editor cannot widen a published flow
+
+Publishing is an admin's decision about what the flow's agents can do. So
+once a flow is published, a change that lets one of its agents reach **more**
+needs the admin role too, by every door — the editor, `PUT /source`, a rename
+or delete, a deploy, an import, a restore, a proposed fix:
+
+- a new tool (a `{Bash: ask}` turned into a plain grant counts), secret, API,
+  MCP server, outside agent (`remotes:`), script or sub-agent; a changed API,
+  MCP or remote spec;
+- a wider network — the agent's, or the workspace's `network:` in AGENTS.md
+  (a higher level, or a new site);
+- a hook gone (the agent's own, or the workspace's `hooks:`),
+  `permissionMode: plan` dropped, `sandbox: own` added;
+- a new agent behind the flow — a step, rescuer, delegate, sub-agent or
+  subflow that was not there.
+
+An editor's write that does any of it is refused `403`
+(`code: a2a_widening`), naming the agent, the flow and what widened; the rest
+of a change goes through when they leave those alone. Prose, narrowing, and
+removing a step or the flow stay an editor's. An admin's widening goes
+through and is written to the audit log as `a2a.agent_widened`.
+`foldrun deploy --dry-run` (`POST …/deploy { dryRun: true }`) says
+`policy: { status, code, error }` when the real deploy would be refused.
+
+What this does not cover: the **code** of a script, hook or folder tool, and
+an agent's prose, stay an editor's — they change how an agent uses what it
+has, not what it has. A change to the account library (`/api/library`) is
+not checked here; the serve-time check above still refuses new tasks for a
+secret-and-code agent it creates.
+
 ## A2A keys
 
 A caller needs an **A2A key**: a key of its own kind, minted by an admin of
@@ -89,8 +171,10 @@ shown once.
 - It opens `/a2a/<account>/<workspace>/…` for its flows and nothing else.
   Every `/api` route refuses it (`403`): not runs, not source, not approvals,
   not storage, not secrets.
-- A flow must be both **named by the key** and **published**. Both are read
-  on every call, so unpublishing a flow closes it to every key at once.
+- A flow must be both **named by the key** and **published**. A key is
+  minted for published flows only (since 5 Nov 2026 — publish first, then
+  mint); both are read again on every call, so unpublishing a flow closes it
+  to every key at once.
 - `maxTasks` — its tasks open at once, 1 to 100, default 10. Past it,
   `SendMessage` is refused with `TOO_MANY_TASKS` until one ends or is
   canceled.
@@ -242,6 +326,7 @@ request foldrun cannot take **now** is `-32000` with a foldrun reason:
 | `UNAVAILABLE` | out of budget or funds, or otherwise not taking work |
 | `RATE_LIMITED` | the key's rate limit (`429` from the proxy carries `Retry-After`) |
 | `TOO_MANY_TASKS` | the key has `maxTasks` open |
+| `NOT_SERVING` | an agent of the flow holds a secret and can run code, and no admin has accepted it ([accept_risk](#secret-and-code-accept_risk)) — the caller is told nothing more |
 | `UNAUTHENTICATED` | no key, or a wrong, revoked or expired one (HTTP `401`) |
 | `PERMISSION_DENIED` | a key that is not an A2A key (HTTP `403`) |
 | `AGENT_NOT_FOUND` | the flow is not published, not named by the key, or not there — all alike (HTTP `404`) |
@@ -311,14 +396,27 @@ Ended tasks are kept 90 days.
   as data, fenced; your tool grants, network, bound secrets and human gates
   hold whatever it says. Publishing does not widen what an agent may do — it
   widens who can ask.
-- **`foldrun check` warns on two shapes** of published flow (warnings, not
+- **The answer is a way out.** The last step's answer goes to the caller, so
+  an agent that holds a secret and can run code is refused publishing and new
+  tasks until an admin accepts it ([accept_risk](#secret-and-code-accept_risk)),
+  and an editor cannot widen any agent of a published flow
+  ([above](#an-editor-cannot-widen-a-published-flow)).
+- **`foldrun check` warns on three shapes** of published flow (warnings, not
   errors): [`security/published-flow-trifecta`](checks#securitypublished-flow-trifecta)
-  — a step agent that holds something private and has a way out, which a
-  caller could steer into sending it; and
+  — an agent of the flow that holds something private, which a caller could
+  ask for in the answer or steer into sending; 
+  [`security/published-flow-secret-code`](checks#securitypublished-flow-secret-code)
+  — one that holds a secret and can run code (info once accepted); and
   [`security/published-flow-ungated`](checks#securitypublished-flow-ungated)
   — a step that acts outside the workspace with no approval or `ask:` before
   it, which any key holder starts. Put a gate (`2!.`) on it, or take a leg
   away.
+- **Left as they are** (FOL-112 N7, N8): one key can hold up to its
+  `maxTasks` runs waiting in the approvals queue — `maxTasks` bounds it; give
+  a partner's key a small one. A card URL carries the account and workspace
+  names (`/a2a/<account>/<ws>/…`) — treat them as disclosed to every key
+  holder, and to everyone when `public_card: true`; name a workspace you
+  publish from accordingly.
 - **A public card is metadata only**: the name, description and examples you
   wrote, the endpoint and the auth scheme — never steps, agents or files.
   It never lets anyone call the flow. Anonymous card reads are rate-limited.

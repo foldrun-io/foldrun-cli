@@ -13915,7 +13915,7 @@ function printPreview(p, rel) {
  * account's published flows, and this terminal calling any A2A agent.
  *
  *   a2a ls --to <ws>                            what the workspace serves: flows, cards, keys, recent tasks
- *   a2a publish <flow> [--to <ws>] [--name --description --example … --public-card|--private-card]
+ *   a2a publish <flow> [--to <ws>] [--name --description --example … --public-card|--private-card] [--accept-risk <agent,…>|--clear-accept-risk]
  *   a2a unpublish <flow> [--to <ws>]            publish: false, the rest of a2a: kept
  *   a2a card <flow> --to <ws>                   the card's URL, then the card
  *   a2a call <card-url> "<text>" [--data <json|@file>] [--context <id>] [--no-wait] [--max-wait <s>]
@@ -13981,6 +13981,7 @@ async function a2aLsCmd(flags, layout) {
   const flows = view.flows ?? [];
   console.log(`\n  ${c.bold(ws)} ${c.dim("· over A2A")}\n`);
   if (!flows.length) console.log(`  ${c.dim(`no flow says a2a: — \`foldrun a2a publish <flow> --to ${ws}\` publishes one`)}`);
+  const risks = Array.isArray(view.risks) ? view.risks : [];
   for (const f of flows) {
     const state = f.published ? c.green("published".padEnd(13)) : c.dim("not published");
     const extra = [f.publicCard ? "public card" : "private card", f.hasInputSchema ? "input schema" : null].filter(Boolean).join(" · ");
@@ -13988,6 +13989,22 @@ async function a2aLsCmd(flags, layout) {
     if (f.published) {
       console.log(`  ${" ".repeat(10)}${c.dim("card")}  ${printable(f.card)}`);
       console.log(`  ${" ".repeat(10)}${c.dim("url ")}  ${printable(f.url)}`);
+    }
+  }
+  // FOL-112: agents that hold a secret and can run code — their answer goes
+  // to the caller. Not accepted, a published flow takes no new task.
+  if (risks.length) {
+    console.log(`\n  ${c.bold("Secret and code")} ${c.dim("· the answer goes back to the caller")}`);
+    for (const r of risks) {
+      const mark = r.accepted ? c.dim("accepted".padEnd(12)) : c.yellow("not accepted");
+      console.log(`  ${mark} ${c.bold(printable(r.flow))} · ${printable(r.agent)}  ${c.dim(printable(`holds ${(r.secrets ?? []).join(", ")} and can run code`))}`);
+    }
+    // One line per flow with an agent not accepted, naming EVERY agent of
+    // that flow (accepted ones too): the list replaces the flow's, so a line
+    // naming only the new one would take the others' acceptance away.
+    for (const flow of [...new Set(risks.filter((r) => !r.accepted).map((r) => r.flow))]) {
+      const all = [...new Set(risks.filter((r) => r.flow === flow).map((r) => printable(r.agent)))].sort().join(",");
+      console.log(`  ${c.dim(`Take Bash or the secret away, or accept: \`foldrun a2a publish ${printable(flow)} --to ${ws} --accept-risk ${all}\` (an admin's)`)}`);
     }
   }
   if (Array.isArray(view.keys)) {
@@ -14032,6 +14049,13 @@ export function a2aPatchFor(verb, flags) {
   if (flags["public-card"] === true && flags["private-card"] === true) throw new Error("--public-card or --private-card, not both");
   if (flags["public-card"] === true) patch.public_card = true;
   if (flags["private-card"] === true) patch.public_card = null;
+  // --accept-risk a,b (FOL-112): the agents of this flow an admin accepts
+  // holding a secret while they can run code — every one, as the list is
+  // written (it replaces the flow's). --clear-accept-risk takes it out.
+  const accept = many(flags["accept-risk"]).flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
+  if (accept.length && flags["clear-accept-risk"] === true) throw new Error("--accept-risk or --clear-accept-risk, not both");
+  if (accept.length) patch.accept_risk = [...new Set(accept)].sort();
+  if (flags["clear-accept-risk"] === true) patch.accept_risk = null;
   return patch;
 }
 
@@ -14061,6 +14085,11 @@ async function a2aPublishCmd(verb, flow, flags, layout) {
   const matter = (await import("gray-matter")).default;
   const { patchFrontmatter } = await import("@foldrun/core/agents-md");
   const patch = a2aPatchFor(verb, flags);
+  // accept_risk (FOL-112) is a newer key: a core that does not read it would
+  // call it unknown and refuse the edit for a reason that is not one.
+  if ("accept_risk" in patch && pub.parseA2aPublish?.({ publish: true, accept_risk: ["x"] }) == null) {
+    throw new Error("--accept-risk needs an @foldrun/core that knows a2a: accept_risk — this install's is older; update foldrun (npm i -g foldrun@latest)");
+  }
   const code = await flowEditCmd(flags, layout, {
     flow,
     what: `a2a ${verb}`,

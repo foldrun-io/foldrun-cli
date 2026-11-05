@@ -304,6 +304,7 @@ Signing in
   foldrun a2a ls --to <ws>  what a workspace serves over A2A: each flow's a2a:, card and endpoint URLs, its A2A keys (admins), recent tasks and the key that asked (--json)
   foldrun a2a publish <flow>  set a2a: publish: true in the flow (--to <ws>: the deployed copy, an admin's) — --name, --description, --example "…" (repeatable), --public-card | --private-card; diff, checked, --dry-run
   foldrun a2a publish <flow> --clear-name | --clear-description | --clear-examples  drop the card's name, description or examples (also on unpublish)
+  foldrun a2a publish <flow> --accept-risk <agent,…>  accept that these agents hold a secret while they can run code (a2a: accept_risk, every one named; their answer goes to the caller) — without it such a flow is not published; --clear-accept-risk takes it out
   foldrun a2a unpublish <flow>  a2a: publish: false — no outside agent may call it; the rest of a2a: is kept (--to <ws>, --dry-run)
   foldrun a2a card <flow> --to <ws>  the flow's agent card URL and endpoint, then the card (a private card needs an A2A key in $FOLDRUN_A2A_KEY or --key-env)
   foldrun a2a call <card-url> "<text>"  send one message to an A2A 1.0 agent — a published flow or anyone's — and wait for the task (--data <json|@file>, --context <id>, --no-wait or --return-immediately, --max-wait <s>, --json); the A2A key comes from $FOLDRUN_A2A_KEY or --key-env NAME, never this CLI's API key
@@ -388,6 +389,7 @@ Options
   --name / --abn / --address / --email  billing details set: the invoice's legal name, ABN, "line1, city, state, postcode, AU", receipt email
   --clear-address / --clear-email / --clear-abn  billing details set: drop that one from the invoice details, the rest kept
   --clear-name / --clear-description / --clear-examples  a2a publish, a2a unpublish: drop that one from the card, the rest of a2a: kept
+  --accept-risk <agent,…> / --clear-accept-risk  a2a publish: the agents accepted holding a secret while they can run code (a2a: accept_risk)
   --days <n>                usage: the window the charges cover (default 56); status --platform --history: 1-90 (default 90); observe: the same as --since
   --id <revision>           history: one revision in full, as diffs
   --engine <e>              login: (with a site) the browser to sign in with — chrome (default: real Google Chrome, Chromium when it is not installed), chromium, firefox or safari
@@ -491,9 +493,9 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
-const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example"]);
+const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example", "accept-risk"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes
 // a span: `--wait 30m`, `--wait event`. Only a value that reads as one is
 // taken, so `invoke x --wait` and friends are as they were.
