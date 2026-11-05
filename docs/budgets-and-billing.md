@@ -165,6 +165,48 @@ that is running.
   show *N of M runs waiting for their turn* (`runsWaiting` in
   `GET /api/usage/compute`).
 
+### Fair share across accounts
+
+The platform's workers are shared, and one account sending a thousand runs
+does not make anyone else's wait (FOL-123). Four things hold it, in order:
+
+- **Turns in the queue.** A run's place is its account's runs already going
+  plus its place among its account's own waiting runs, so every account's
+  first run goes before anyone's second, and an account with work running
+  waits behind one with none. Within one account it is first come, first
+  served. A plan's lane weighs it — a fast lane takes more turns than a slow
+  one, never all of them — and a run that has waited long gains a turn
+  every ten minutes, so nothing waits for ever. The test the platform is
+  held to: one account floods 500 runs while three others keep sending
+  theirs, and the others' longest wait stays where it was without the flood.
+- **Runs at once** (above): an account at its number has its next run
+  stepped over, not refused; it starts when one of its own ends.
+- **Compute at once** (above): a step waits to start until its account's
+  running steps leave room for it in the account's pool. This is where a
+  plan's cores, memory and disk are enforced — before a sandbox exists, so
+  a step over it waits instead of failing. It is not a Kubernetes
+  `ResourceQuota`, on purpose: a quota refuses the pod at creation, which
+  would fail the step, and does not queue anything. It is also not as hard
+  as one: the gate is held by each worker for its own steps, so workers
+  looking at the cluster in the same moment can each start one more step
+  than the pool allows; a cluster that cannot be listed is not treated as
+  full; and nothing outside the gate stops the extra pods from running if
+  the cluster has the room. Each step's own limits are hard: its sandbox
+  cannot use more cores, memory or disk than it holds.
+- **How many may wait** (above): past it, new runs are refused with a
+  reason, never dropped.
+
+That is all the platform does on its own: it queues, it holds a step back,
+it refuses a new run with a reason. It never suspends an account for its
+load — that is a person's decision (the operator's), and the account sees
+why. An unpaid invoice past its grace is the one automatic pause
+([dunning](#the-billing-section)).
+
+The operator watches it on the metrics scrape:
+`foldrun_queue_account_pending`, `foldrun_queue_account_claimed` and
+`foldrun_queue_account_oldest_pending_seconds`, each for the five busiest
+accounts by rank (`rank="1"` … `"5"`) and never by name.
+
 ## Plans and credits
 
 Usage is sold in **credits: one credit is one cent** of what a step consumes

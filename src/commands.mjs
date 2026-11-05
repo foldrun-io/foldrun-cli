@@ -8030,7 +8030,7 @@ async function runsCmd(flags, layout) {
     if (typeof flags.q === "string") {
       const words = flags.q.toLowerCase().replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
       const shown = r.outcome === "stopped" ? "stopped" : r.status;
-      const hay = [r.id, r.flow.replace(/^(adhoc|eval):/, ""), r.workspace, shown, verdictOf(r) ?? "", r.summary ?? "", r.failure ? `${r.failure.agent} ${r.failure.reason}` : ""]
+      const hay = [r.id, r.flow.replace(/^(adhoc|eval):/, ""), r.workspace, shown, verdictOf(r) ?? "", r.summary ?? "", r.failure ? `${r.failure.agent} ${r.failure.reason}${r.failure.message ? ` ${r.failure.message}` : ""}` : ""]
         .join(" ")
         .toLowerCase()
         .replace(/\s+/g, " ");
@@ -8121,6 +8121,9 @@ async function runsCmd(flags, layout) {
       cost: typeof r.chargedUsd === "number" ? `${Math.round(r.chargedUsd * 100)} credits` : `$${runCost(r).toFixed(2)}`,
       id: r.id,
       summary: firstLine(r.summary, 110),
+      // Why it failed, as the dashboard's list says it (FOL-124); a
+      // platform from before then sends the last error alone.
+      failure: r.failure ? `${r.failure.agent}: ${firstLine(r.failure.message ?? r.failure.reason, 104)}` : null,
     };
   });
   const widest = (key) => Math.max(...cells.map((x) => x[key].length));
@@ -8140,7 +8143,8 @@ async function runsCmd(flags, layout) {
       `  ${x.mark} ${c.dim(pad(x.when, w.when))}  ${pad(x.workspace, w.workspace)}  ${c.bold(pad(x.flow, w.flow))}  ` +
         `${pad(x.status, w.status)} ${x.verdict}${" ".repeat(Math.max(...cells.map((y) => y.verdictWidth)) - x.verdictWidth)}  ${c.dim(`${pad(x.steps, w.steps)}  ${pad(x.took, w.took)}  ${pad(x.cost, w.cost)}`)}  ${c.dim(x.id)}`,
     );
-    if (x.summary) console.log(`      ${c.dim(x.summary)}`);
+    if (x.failure) console.log(`      ${c.red(`✗ ${x.failure}`)}`);
+    else if (x.summary) console.log(`      ${c.dim(x.summary)}`);
   }
   for (const [ws, why] of unreachable) console.error(`  ${c.red("✗")} ${ws}  ${c.dim(why)}`);
   if (next) console.log(`\n  ${c.dim(`more: the same with --before ${next}${pageNo > 1 ? "" : ` (or --page ${pageNo + 1})`}`)}`);
@@ -8436,6 +8440,14 @@ async function reportCmd(runId, flags, layout) {
   if (run.summary) {
     console.log();
     for (const line of wrap(run.summary, 84)) console.log(`  ${line}`);
+  }
+  // Why it failed (FOL-124): the sentence and the fix every surface gives.
+  // A platform from before then sends no `failure` on one run.
+  if (run.failure?.message) {
+    console.log();
+    const lines = wrap(`${run.failure.agent}: ${run.failure.message}`, 82);
+    lines.forEach((line, i) => console.log(`  ${i ? " " : c.red("✗")} ${c.red(line)}`));
+    if (run.failure.fix) for (const line of wrap(`fix: ${run.failure.fix}`, 82)) console.log(`    ${c.dim(line)}`);
   }
 
   console.log();
@@ -10791,6 +10803,56 @@ async function runRmCmd(runId, flags, layout) {
   await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`, { method: "DELETE" });
   console.log(`\n  ${c.green("✓")} ${runId} deleted from ${ws}\n`);
   return 0;
+}
+
+/**
+ * `foldrun runs rm --until 30d [--to <ws>] [--dry-run]` — every finished run
+ * that started before then, deleted: record, captured calls, archived
+ * outputs (POST …/runs/bulk { action: "delete", until }, FOL-124). The
+ * customer's way to erase run content sooner than the retention window.
+ * Counted first and asked once; then each workspace is asked again until
+ * nothing matches (the route deletes 100 a call and answers `remaining`),
+ * stopping at a call that deleted nothing.
+ */
+async function runsRmUntilCmd(ids, flags) {
+  const url = platformFor(flags, "runs rm");
+  if (ids.length) throw new Error("name the runs or give --until, not both — `foldrun runs rm --until 30d`");
+  const until = untilInstant(flags.until);
+  const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
+  const plans = await pool(names, 8, async (ws) => {
+    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", until, dryRun: true }) });
+    return { ws, count: (Array.isArray(r.matched) ? r.matched.length : 0) + (Number(r.remaining) || 0) };
+  });
+  const total = plans.reduce((n, p) => n + p.count, 0);
+  console.log();
+  for (const p of plans.filter((x) => x.count)) console.log(`  ${c.bold(p.ws)}  ${c.dim(`${p.count} finished run${p.count === 1 ? "" : "s"}`)}`);
+  if (!total) {
+    console.log(`  ${c.dim(`no finished run started before ${until} — nothing to delete`)}\n`);
+    return 0;
+  }
+  if (flags["dry-run"] === true) {
+    console.log(`\n  ${c.dim(`--dry-run: ${total} run${total === 1 ? "" : "s"} started before ${until} would be deleted; nothing touched`)}\n`);
+    return 0;
+  }
+  const what = `${total} finished run${total === 1 ? "" : "s"} that started before ${until} — their records, captured calls and archived outputs. Runs still going are left alone. The ledger lines stay`;
+  if (!(await sureToDelete(flags, "runs rm", what))) return 1;
+  let deleted = 0;
+  let bad = 0;
+  console.log();
+  for (const p of plans.filter((x) => x.count)) {
+    for (let round = 0; round < 10_000; round++) {
+      const r = await remoteCall(url, flags, `/api/workspaces/${enc(p.ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", until }) });
+      deleted += r.succeeded ?? 0;
+      for (const x of (r.runs ?? []).filter((x) => !x.ok)) {
+        bad++;
+        console.log(`  ${c.red("✗")} ${p.ws} ${x.runId}${x.error ? c.dim(` — ${x.error}`) : ""}`);
+      }
+      if (!r.remaining || !r.succeeded) break;
+    }
+    console.log(`  ${c.green("✓")} ${p.ws}`);
+  }
+  console.log(`\n  ${c.dim(`${deleted} deleted${bad ? ` · ${bad} refused` : ""}`)}\n`);
+  return bad ? 1 : 0;
 }
 
 /** `foldrun runs rm <run-id> <run-id>…` — the selection bar's Delete: lists
@@ -14601,6 +14663,7 @@ export async function run(command, positional, flags, workspace, layout) {
       // `runs` was a second spelling of `logs`, and --local keeps it one:
       // the local store has no table to draw across workspaces, because a
       // folder on a laptop is one workspace.
+      if (positional[0] === "rm" && flags.until !== undefined) return runsRmUntilCmd(positional.slice(1), flags);
       if (positional[0] === "rm") return positional.length > 2 ? runsRmManyCmd(positional.slice(1), flags, layout) : runRmCmd(positional[1], flags, layout);
       if (positional[0] === "outputs") return runsOutputsCmd(positional.slice(1), flags, layout);
       if (positional[0] === "views" && positional[1]) return runViewsEditCmd(positional.slice(1), flags);

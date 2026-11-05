@@ -116,7 +116,10 @@ edit `~/foldrun/.env` and run `docker compose up -d` there.
 | `FOLDRUN_DATA_DIR` | a named volume | a host path for the data instead |
 
 `docker-compose.yml` lists the rest (concurrency, retention, gVisor, other
-model endpoints). Put your own changes in `docker-compose.override.yml`
+model endpoints). Finished runs are deleted 90 days after they finished
+unless `FOLDRUN_RETENTION_DAYS` says otherwise (`0` keeps them for ever) —
+since 5 Nov 2026; before, an install kept every run. Set it before updating
+if you want to keep older history ([how long we keep what](security#what-we-keep-and-for-how-long)). Put your own changes in `docker-compose.override.yml`
 beside it, which Compose reads too: the installer replaces
 `docker-compose.yml` on an update and keeps a copy of one you edited.
 
