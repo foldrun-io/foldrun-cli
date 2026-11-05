@@ -295,11 +295,29 @@ stays visible ([agents](agents#isolated-sub-agents-sandbox-own)).
 ### security/published-flow-trifecta
 
 *warn · ASI01, ASI02, ASI03.* A flow published over A2A (`a2a: {publish:
-true}`) runs a step whose agent holds something private and has a way out —
-the trifecta above, with the outside caller as the untrusted content: what a
-caller sends reaches every step. Take a leg away from that agent (the same
-three ways as above), or do not publish the flow. A warning, like every new
-rule; `deploy_block: security` makes it refuse a deploy.
+true}`) runs an agent that holds something private — a secret, an API, an
+MCP server. What a caller sends reaches every step, and the flow's answer
+goes back to that caller, so **the answer itself is a way out** (since 5 Nov
+2026): the agent needs no network to hand over what it holds or reads, and a
+`hooks:` gate, which guards tool calls, does not close it. The finding names
+the network or outward tool too when there is one. Give that agent only what
+a stranger may see, move the private part to a flow that is not published,
+or do not publish the flow. "Its agents" are every agent a run can put to
+work — steps, rescuers, delegates, subflows' steps and sub-agents. A warning,
+like every new rule; `deploy_block: security` makes it refuse a deploy.
+
+### security/published-flow-secret-code
+
+*warn · ASI01, ASI03.* An agent of a published flow holds a secret that
+reaches its sandbox (`secrets:`, a `${NAME}` in `apis:` or a granted tool,
+a `web:` provider's key) and can run code (`Bash`, `tools: [code]`). Code
+reads the sandbox's environment, and the answer goes back to the caller — so
+a caller can ask for the secret in the reply. Take Bash away
+(`disallowedTools: [Bash]`), take the secret away or bind it to its sites, or
+have an admin accept it: `a2a: { accept_risk: [<agent>] }`
+([A2A](a2a#secret-and-code-accept_risk)). This is check's half of a platform
+rule: until accepted, the platform refuses to publish the flow and refuses
+new A2A tasks for it. Accepted, the finding stays as `info`.
 
 ### security/published-flow-ungated
 

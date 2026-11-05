@@ -63,6 +63,16 @@ test("a2aPatchFor: publish names only what was said; unpublish is publish: false
   assert.throws(() => a2aPatchFor("publish", { "public-card": true, "private-card": true }), /not both/);
 });
 
+// FOL-112: --accept-risk names every agent accepted holding a secret while it
+// can run code; the list replaces the flow's, and --clear-accept-risk removes it.
+test("a2aPatchFor: --accept-risk a,b (repeatable, deduped, sorted); --clear-accept-risk; not both", () => {
+  assert.deepEqual(a2aPatchFor("publish", { "accept-risk": "worker" }), { publish: true, accept_risk: ["worker"] });
+  assert.deepEqual(a2aPatchFor("publish", { "accept-risk": ["b, a", "a"] }), { publish: true, accept_risk: ["a", "b"] });
+  assert.deepEqual(a2aPatchFor("publish", { "clear-accept-risk": true }), { publish: true, accept_risk: null });
+  assert.throws(() => a2aPatchFor("publish", { "accept-risk": "a", "clear-accept-risk": true }), /not both/);
+  assert.deepEqual(a2aBlockFor({ publish: true, accept_risk: ["old"] }, { publish: true, accept_risk: ["new"] }), { publish: true, accept_risk: ["new"] }, "replaced, as the platform's PATCH merges it");
+});
+
 test("a2aBlockFor merges the patch over the flow's block as the platform does: publish first, null removes", () => {
   const current = { name: "Old", public_card: true, input: { type: "object" }, publish: true };
   assert.deepEqual(a2aBlockFor(current, { publish: false }), { publish: false, name: "Old", public_card: true, input: { type: "object" } });
@@ -92,6 +102,18 @@ test("a2a ls --to reads GET /api/workspaces/<ws>/a2a: flows with their cards, ke
   assert.match(r.out, /✓ completed\s+publish\s+A2A · partner bot/);
   assert.match(r.out, /working\s+publish\s+A2A · a key since removed/);
   assert.deepEqual(json(j.out).tasks.length, 2);
+});
+
+test("a2a ls prints each secret-and-code agent and how to accept it (FOL-112)", async () => {
+  let base = "";
+  const s = await serve({ "/api/workspaces/blog-desk/a2a": () => ({ ...view(base), risks: [{ flow: "publish", agent: "coder", secrets: ["CRM_TOKEN"], accepted: false }, { flow: "draft", agent: "helper", secrets: ["X"], accepted: true }] }) });
+  base = s.url;
+  const r = await at(s.url, "a2a", "ls", "--to", "blog-desk");
+  s.close();
+  assert.match(r.out, /Secret and code/);
+  assert.match(r.out, /not accepted\s+publish · coder\s+holds CRM_TOKEN and can run code/);
+  assert.match(r.out, /accepted\s+draft · helper/);
+  assert.match(r.out, /foldrun a2a publish publish --to blog-desk --accept-risk coder/);
 });
 
 test("a2a ls: keys null (not an admin) leaves the keys out; no workspace is refused before any request", async () => {
