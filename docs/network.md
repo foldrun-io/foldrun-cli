@@ -124,13 +124,43 @@ step's list and checks every connection against it:
 - a site **on the list** is a tunnel: the bytes pass through and the proxy
   never reads them;
 - a site a **secret is bound to** is intercepted, so the secret can be filled
-  in on the way out ([Secrets](secrets#bound-to-sites)).
+  in on the way out ([Secrets](secrets#bound-to-sites)). That holds for a
+  WebSocket too: a `wss://` to such a site has its opening request filled
+  like any other (URL, headers, Basic auth), and once the site agrees the
+  messages pass both ways unread. The platform's own model keys are never
+  sent over one, and a [test run](runs#test-runs) may open one only to a site it
+  could not write to.
 
 On a cluster the pod's network policy backs this up. A step whose level is
-`trusted` or `none` runs in a pod that may reach the proxy and DNS and
-nothing else, so a program that ignores the proxy variables finds no route
-instead of going round the list; it cannot reach the account's browser or
-search pods either, which are the world fetched on a run's behalf.
+`trusted` or `none` runs in a pod that may reach the proxy and nothing else,
+so a program that ignores the proxy variables finds no route instead of
+going round the list; it cannot reach the account's browser or search pods
+either, which are the world fetched on a run's behalf.
+
+### DNS
+
+A name is a message too: looking up `<anything>.example.net` reaches
+example.net's nameserver, whatever the list says. So on a cluster that walls
+it (`FOLDRUN_RUN_DNS_WALL=1`, on with foldrun's own manifests), a pod held to
+its list has **no DNS of its own**: no resolver to ask, and the cluster's
+resolver is not reachable from it. It does not need one. Every program sends
+the proxy the name of the site it wants (`CONNECT api.example.com:443`), the
+proxy looks up only a site the list allows, and the proxy's own address is
+written into the pod. curl, Python's requests and httpx, Node, Go, git, apt,
+pip, npm, the Claude CLI and the browser all work this way. The trace says
+so:
+
+```
+dns: this sandbox has no resolver of its own — every site is reached through the egress proxy by name, and the proxy looks up only sites on the list; a program that looks a name up itself (dig, an MX check, a client that resolves before it connects) fails here
+```
+
+What fails there is what asks DNS directly: `dig`, `nslookup`, `ping` by
+name, a mail-address check that looks up MX records, a library that resolves
+a name before it connects. Give such an agent the site of a DNS-over-HTTPS
+service in its list (`dns.google`, `cloudflare-dns.com`) and ask that over
+HTTPS, or give it `network: open`. What the wall cannot hold is what the
+list itself allows: the proxy looks up a name under an allowed wildcard
+site (`*.example.com`), and a tunnel to an allowed host may use any port.
 
 The trace opens with the step's network:
 
@@ -167,7 +197,8 @@ then switch it on. The trace line `network: … — report only` says which
 mode a step ran in.
 
 On a cluster, a refused step's pod also loses its direct route to the
-world: the network policy gives it the proxy and DNS only.
+world: the network policy gives it the proxy only (and DNS, on a cluster
+that does not wall it).
 
 ### Where it is not held
 
@@ -184,15 +215,18 @@ A step that may **browse** with the `web` tool is held to its list where the
 platform can wall the step in: on a cluster whose operator has switched it
 on (`FOLDRUN_BROWSE_ENFORCE=1`), for a step whose list is restricted
 (`trusted` or `none`) and enforced. Such a step gets the proxy like any
-other, its pod is walled to the egress proxy and DNS, and the browser runs
-inside that pod — the step's own, shared with no other step. Whatever the
+other, its pod is walled to the egress proxy (and, where the cluster walls
+it, has no [DNS](#dns) of its own), and the browser runs inside that pod — the step's own, shared with no other step. Whatever the
 browser is told — another proxy, a new context with a proxy of its own, a
 page's script — the only way out is the egress proxy, which holds the list
 per connection, over IPv4 and IPv6, TCP and UDP alike. The trace says so —
 
 ```
-network: trusted (agent) — the trusted list (207 sites); added: example.com — enforced — hosted: the browser runs inside this step's sandbox, whose network reaches only the egress proxy (which holds the list) and DNS, so a page, a script or a changed proxy setting reaches no site off the list; DNS lookups themselves are not restricted.
+network: trusted (agent) — the trusted list (207 sites); added: example.com — enforced — hosted: the browser runs inside this step's sandbox, whose network reaches only the egress proxy (which holds the list), so a page, a script or a changed proxy setting reaches no site off the list.
 ```
+
+followed by the `dns:` line above, or, on a cluster that does not wall DNS,
+one saying the sandbox can still look any name up.
 
 A site off the list fails in the browser as a failed tunnel
 (`ERR_TUNNEL_CONNECTION_FAILED`), and the trace names it with the usual
@@ -222,10 +256,9 @@ What a held step does differently:
   walled pod either; the trace says so. Name a search provider in `web:`
   (it goes through the proxy) or leave search out of that step.
 
-Not covered: DNS lookups through the cluster's resolver (the wall admits
-DNS, and nothing restricts the names asked), WebSocket upgrades to a host a
-secret is granted to (they fail), and — as for every tunnel — which origins
-a page loads inside a connection to an allowed site.
+Not covered: DNS lookups on a cluster that does not wall them (see
+[DNS](#dns)), and — as for every tunnel — which origins a page loads inside
+a connection to an allowed site.
 
 Everywhere else — `foldrun run` on your machine, the single-container tier,
 an install without the switch, a report-only list, `network: open` — a
