@@ -170,12 +170,53 @@ telemetry:
 In the account's `AGENTS.md` (Settings → Observability → *Send runs to your
 tracing*, or `foldrun account telemetry set <url> --header
 authorization='${OTEL_TOKEN}'`), or a workspace's, which replaces the
-account's whole. Every run that finishes is sent as one trace: a span for
-the run, each step (with `foldrun.agent` and `foldrun.owner`), each model
-call (`gen_ai.request.model`, token counts, finish reason) and each tool call
-(`gen_ai.tool.name`), failures as error spans. Resource attributes name the
-account, workspace, flow and run. Ids come from the run's, so a run sent
-twice is one trace. Test runs are not sent.
+account's whole. Every run that finishes is sent as one trace. Resource
+attributes name the account, workspace, flow and run. Ids come from the
+run's, so a run sent twice is one trace. Test runs are not sent.
+
+The spans follow the [OpenTelemetry GenAI semantic
+conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+(agent spans and client inference spans, as of November 2026; the spec is
+still marked *Development*), so a GenAI-aware backend draws them without
+any mapping:
+
+| Span | Name | `gen_ai.operation.name` | Also |
+|---|---|---|---|
+| the run | `invoke_workflow <flow>` | `invoke_workflow` | `gen_ai.workflow.name` |
+| each step | `invoke_agent <agent>` | `invoke_agent` | `gen_ai.agent.name`, `foldrun.agent`, `foldrun.owner`, `foldrun.step` |
+| each model call | `chat <model>` (kind CLIENT) | `chat` | `gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.usage.input_tokens` / `output_tokens` / `cache_read.input_tokens` / `cache_write.input_tokens`, `gen_ai.response.finish_reasons` |
+| each tool call | `execute_tool <tool>` | `execute_tool` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.agent.name` |
+| an error line | `error` | — | the step's error, as the status message |
+
+A run of one agent on its own (`foldrun agent run`, `POST …/agents/<a>/run`)
+is not a workflow: its root span is `run adhoc:<agent>` with no operation,
+and the step under it is the `invoke_agent`. `gen_ai.provider.name` is set
+where the run record says whose model it was — the platform's Claude
+(`anthropic`) or one of foldrun's models — and left out for your own
+`provider:` block. Every span also carries `foldrun.span.kind` (`run`,
+`step`, `model`, `tool`, `error`): filter on that, not on span names.
+
+A failed span has status ERROR and `error.type`, one of `timeout`,
+`cancelled` (a person or a caller stopped the run), `model_error` (the model
+credential refused, the usage cap spent, the provider overloaded), `oom`,
+`disk_full`, `network_error`, `not_found`, `policy_denied`,
+`platform_error` (the sandbox never started, the worker was lost), or
+`_OTHER` when the error's words match none of these — a failed `verify:`,
+say, or a failed tool call, whose record holds no words. The run's comes
+from its failing step.
+
+No content goes on a span: not the prompt, not the reply, not a tool
+call's input or output. The spec makes all of those opt-in, and the trace
+is built from the run record alone. What a failed span says is its class and
+the step's error line (at most 500 characters).
+
+Before 5 Nov 2026 spans were named `run <flow>`, `step <agent>`,
+`chat <model>` and `tool <name>`, and carried `gen_ai.response.finish_reason`
+(one string), `gen_ai.usage.cache_read_tokens` and
+`gen_ai.usage.cache_write_tokens`. Those three attributes are still sent
+beside the spec's names for one release, then dropped; move queries to
+`gen_ai.response.finish_reasons` and `gen_ai.usage.cache_read.input_tokens`
+/ `cache_write.input_tokens`.
 
 *Send a test trace* (`foldrun account telemetry test`) sends one made-up run
 and says what the collector answered. A header whose secret is not in the

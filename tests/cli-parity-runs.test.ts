@@ -104,21 +104,29 @@ test("rerun <id> <id> --from 2 reruns them from that step; --agent is for one ru
   assert.match(r.out, /r1 → r1-again/);
 });
 
-test("runs rm <id> <id> lists, asks once, then deletes each — one refusal does not stop the rest", async () => {
+test("runs rm <id> <id> lists, asks once, then deletes them through runs/bulk — one refusal does not stop the rest", async () => {
   const s = await serve({
+    "/api/workspaces": () => WORKSPACES,
     "GET /api/workspaces/blog-desk/runs/r1": () => RUN("r1", "completed"),
     "GET /api/workspaces/blog-desk/runs/r2": () => RUN("r2", "failed"),
-    "DELETE /api/workspaces/blog-desk/runs/r1": () => ({ __status: 403, body: { error: "needs workspace:manage" } }),
-    "DELETE /api/workspaces/blog-desk/runs/r2": () => ({ ok: true }),
+    "GET /api/workspaces/rank-desk/runs/r3": () => RUN("r3", "completed"),
+    "GET /api/workspaces/rank-desk/runs/r4": () => RUN("r4", "completed"),
+    "POST /api/workspaces/blog-desk/runs/bulk": () => ({ ok: true, action: "delete", runs: [{ runId: "r1", ok: false, error: "run not found" }, { runId: "r2", ok: true }] }),
+    "POST /api/workspaces/rank-desk/runs/bulk": () => ({ __status: 403, body: { error: "needs workspace:manage" } }),
   });
   const asked = await at(s.url, "runs", "rm", "r1", "r2", "--to", "blog-desk");
   assert.notEqual(asked.code, 0);
-  assert.equal(s.seen.filter((x) => x.method === "DELETE").length, 0);
+  assert.equal(s.seen.filter((x) => x.method === "POST" || x.method === "DELETE").length, 0, "nothing deleted without a yes");
   const r = await at(s.url, "runs", "rm", "r1", "r2", "--to", "blog-desk", "--yes");
-  s.close();
   assert.equal(r.code, 1, r.out);
-  assert.deepEqual(s.seen.filter((x) => x.method === "DELETE").map((x) => x.url), ["/api/workspaces/blog-desk/runs/r1", "/api/workspaces/blog-desk/runs/r2"]);
+  assert.equal(s.seen.filter((x) => x.method === "DELETE").length, 0, "no DELETE per run: the bulk route, as the dashboard's bar");
+  assert.deepEqual(s.seen.filter((x) => x.method === "POST").map((x) => [x.url, JSON.parse(x.body)]), [["/api/workspaces/blog-desk/runs/bulk", { action: "delete", runIds: ["r1", "r2"] }]]);
   assert.match(r.out, /1 of 2 deleted · 1 refused/);
+  assert.match(r.out, /r1.*run not found/);
+  const whole = await at(s.url, "runs", "rm", "r3", "r4", "--to", "rank-desk", "--yes");
+  s.close();
+  assert.equal(whole.code, 1, whole.out);
+  assert.match(whole.out, /0 of 2 deleted · 2 refused/, "a call refused whole refuses every run it carried");
 });
 
 // --------------------------------------------------- a `wait: event` step
