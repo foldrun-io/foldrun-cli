@@ -2038,18 +2038,25 @@ function promptHidden(question) {
     stdin.resume();
     stdin.setEncoding("utf8");
     let value = "";
-    const onData = (ch) => {
-      if (ch === "\u0003") {
-        cleanup();
-        reject(new Error("cancelled"));
-      } else if (ch === "\r" || ch === "\n") {
-        cleanup();
-        process.stdout.write("\n");
-        resolve(value);
-      } else if (ch === "\u007f" || ch === "\b") {
-        value = value.slice(0, -1);
-      } else {
-        value += ch;
+    // A chunk is not one key press: a pasted key arrives whole, Enter
+    // included, and treating the chunk as one character never saw the Enter
+    // (the prompt waited forever). Walk it a character at a time.
+    const onData = (chunk) => {
+      for (const ch of String(chunk)) {
+        if (ch === "\u0003") {
+          cleanup();
+          reject(new Error("cancelled"));
+          return;
+        } else if (ch === "\r" || ch === "\n") {
+          cleanup();
+          process.stdout.write("\n");
+          resolve(value);
+          return;
+        } else if (ch === "\u007f" || ch === "\b") {
+          value = value.slice(0, -1);
+        } else if (ch >= " ") {
+          value += ch;
+        }
       }
     };
     const cleanup = () => {
@@ -6388,7 +6395,8 @@ async function providersCmd(url, flags) {
  *   foldrun account model use own                           back to the account's own key
  *   foldrun account model prices [--provider <p>]           foldrun's price list
  *
- * `--key -` reads the key from stdin, so it stays out of the shell's history.
+ * `--key -` reads the key from stdin, so it stays out of the shell's history;
+ * in a terminal it (or no --key at all) asks for it, hidden.
  * The platform refuses a Claude login token for any account not allowed its
  * own credential: bring an API key.
  */
@@ -6510,8 +6518,12 @@ async function accountModelCmd(url, positional, flags) {
   const provider = positional[1];
   if (!provider) throw new Error("which provider? `foldrun account model set anthropic --key …` (a preset name, or `custom --base-url https://… --format openai`)");
   let apiKey = typeof flags.key === "string" ? flags.key : "";
-  if (apiKey === "-") apiKey = fs.readFileSync(0, "utf8").trim();
-  if (!apiKey) throw new Error("--key <api key> (or --key - to read it from stdin)");
+  // `--key -`, or no --key at all, in a terminal: ask for it, hidden. Reading
+  // fd 0 of an open terminal threw EAGAIN instead of waiting for the key.
+  if (apiKey === "-" || (!apiKey && flags.key === undefined && process.stdin.isTTY)) {
+    apiKey = (process.stdin.isTTY ? await promptHidden(`  ${provider} API key (hidden): `) : fs.readFileSync(0, "utf8")).trim();
+  }
+  if (!apiKey) throw new Error("--key <api key> (or --key - to read it from stdin, or type it when asked)");
   const body = {
     provider,
     apiKey,

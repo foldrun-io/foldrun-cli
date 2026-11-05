@@ -81,7 +81,7 @@ export function serve(
 
 /** The real binary, awaited — never spawnSync, since the fake platform
  *  answers from this very process and a blocked loop never replies. */
-export function cli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): Promise<{ out: string; code: number }> {
+export function cli(args: string[], opts: { cwd?: string; env?: Record<string, string>; input?: string } = {}): Promise<{ out: string; code: number }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd: opts.cwd ?? ROOT,
@@ -90,7 +90,7 @@ export function cli(args: string[], opts: { cwd?: string; env?: Record<string, s
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (out += d));
-    child.stdin.end();
+    child.stdin.end(opts.input ?? "");
     child.on("close", (code) => resolve({ out, code: code ?? 1 }));
   });
 }

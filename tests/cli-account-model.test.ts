@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { serve, at } from "./fake-platform.ts";
+import { serve, at, cli } from "./fake-platform.ts";
 
 const none = { set: false, provider: null, baseUrl: null, format: null, keyHint: null, runsOn: "none", platformKeyAllowed: false };
 const mine = { set: true, provider: "openrouter", baseUrl: "https://openrouter.ai/api", format: "anthropic", keyHint: "…9876", runsOn: "account", platformKeyAllowed: false };
@@ -48,6 +48,15 @@ test("set without a key is refused before anything is sent", async () => {
   assert.notEqual(r.code, 0);
   assert.match(r.out, /--key/);
   assert.equal(s.seen.length, 0);
+});
+
+test("--key - reads a piped key (no prompt, no echo); a terminal is asked for it hidden instead of EAGAIN", async () => {
+  const s = await serve({ "PUT /api/account/model": () => mine });
+  const r = await cli(["account", "model", "set", "openrouter", "--key", "-", "--url", s.url, "--token", "k"], { input: "piped-9876\n" });
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "PUT")!.body), { provider: "openrouter", apiKey: "piped-9876" });
+  assert.doesNotMatch(r.out, /piped-9876|EAGAIN/);
 });
 
 // ---- foldrun's models
