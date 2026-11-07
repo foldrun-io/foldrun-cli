@@ -133,7 +133,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun export [workspace]` | a deployed workspace as a `.zip` — agents, flows, tools, skills, scripts, evals, knowledge; never memory, state, storage or a secret's value. `--flow <name>` exports that flow with every flow and agent it runs and the tools, skills and scripts they grant; `--agent <name>` that agent and what it grants. Written under the name the platform gives it (`<ws>.zip`, `<ws>-flow-<name>.zip`); `--file <path>` (`-` for stdout), `--force` to replace (`GET …/export`) |
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a workspace package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
-| `foldrun status --platform` | is the platform up: overall, each component (dashboard and API, run workers, scheduler, model providers, email, storage) and any incident or maintenance the operator posted, with its latest update. Reads the open `/api/status` — no key needed; the signed-in platform, `--url`, or app.foldrun.io. `--json` prints the answer as is. Exits 1, saying *status unavailable — the platform may be down*, when it does not answer. Plain `foldrun status` opens with the same one-line verdict |
+| `foldrun status --platform` | is the platform up: overall, each component (dashboard and API, run workers, scheduler, model providers, email, storage) and any incident or maintenance the operator posted, with its latest update. Reads the open `/api/status` — no key needed; the signed-in platform, `--url` / `FOLDRUN_URL`, or the default, dash.foldrun.io. `--json` prints the answer as is. Exits 1, saying *status unavailable — the platform may be down*, when it does not answer. Plain `foldrun status` opens with the same one-line verdict |
 | `foldrun status --platform --history` | what the status page draws as bars: each component's uptime over the window and a mark per day — up, degraded or maintenance, an outage, or no samples — then the incidents and maintenance in it, from the open `GET /api/status/history?days=<n>`. `--days 1-90` (default 90), `--json` |
 | `foldrun workspaces` | what exists here, what exists on the platform, which are both — also `new <name>`, and `rm <name>` (locally; `--platform --yes` deletes it there). `--json`: `{ platform, workspaces: [{ name, here, platform }], error? }`, exit 1 when the platform could not be read |
 | `foldrun workspaces show <name>` | what is deployed in one workspace (`GET /api/workspaces/<name>`): its agents with model and description, its flows and how each fires, and its files counted by top-level folder. `--json` for the document |
@@ -490,8 +490,8 @@ the same platform** — an agency looking after four customers keeps four,
 and switches between them without pasting a key:
 
 ```sh
-foldrun login --url https://app.foldrun.io        # as acme
-foldrun login --url https://app.foldrun.io        # as beta, in a second browser
+foldrun login --url https://dash.foldrun.io        # as acme
+foldrun login --url https://dash.foldrun.io        # as beta, in a second browser
 foldrun accounts                                  # both, ● on the active one
 foldrun use acme                                  # from here on, acme
 foldrun logs --profile beta --to leads            # just this once, beta
@@ -525,7 +525,7 @@ foldrun keys create "alex's laptop" --role admin
 The key is printed once. They send it to you; you store it as a profile:
 
 ```sh
-foldrun login --url https://app.foldrun.io --token <the key> --profile acme
+foldrun login --url https://dash.foldrun.io --token <the key> --profile acme
 ```
 
 The key carries the role it was minted with, so an `editor` key cannot

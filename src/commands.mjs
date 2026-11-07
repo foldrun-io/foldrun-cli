@@ -4422,7 +4422,9 @@ async function connect(positional, flags) {
 
 // ---------------------------------------------------------------- login
 
-const DEFAULT_PLATFORM = "https://app.foldrun.io";
+// The hosted platform, when nothing names one (--url, FOLDRUN_URL, the
+// profile `foldrun login` last signed in to). Written once, here.
+const DEFAULT_PLATFORM = "https://dash.foldrun.io";
 
 function openInBrowser(target) {
   // A server-supplied address: only a web page, never a file, an app or a

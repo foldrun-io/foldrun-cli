@@ -227,7 +227,8 @@ foldrun deploy
 foldrun invoke publish --wait
 ```
 
-`foldrun login --url https://your-platform` signs in to your own installation.
+`foldrun login` signs in to the hosted platform, https://dash.foldrun.io;
+`foldrun login --url https://your-platform` (or `FOLDRUN_URL`) to your own installation.
 In CI, set `FOLDRUN_URL` and `FOLDRUN_TOKEN` instead — the environment always
 wins over the credentials file, so a job never reads one from disk.
 
