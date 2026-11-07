@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.2.0] — 2026-11-07
+
+### New in the public API
+
+- `foldrun signup status`
+
+- feat(cli): foldrun signup status — the open /api/signup, no key sent ([a3dc64a](https://github.com/foldrun-io/foldrun-cli/commit/a3dc64a))
+- fix(cli): the default platform is https://dash.foldrun.io ([f12fc9a](https://github.com/foldrun-io/foldrun-cli/commit/f12fc9a))
+
 ## [19.1.0] — 2026-11-07
 
 - feat(cli): foldrun onboarding --to <workspace> shows its checklist; points at /dashboard/welcome ([ce1d048](https://github.com/foldrun-io/foldrun-cli/commit/ce1d048))
