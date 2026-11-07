@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.1.0] — 2026-11-07
+
+- feat(cli): foldrun onboarding --to <workspace> shows its checklist; points at /dashboard/welcome ([ce1d048](https://github.com/foldrun-io/foldrun-cli/commit/ce1d048))
+
 ## [19.0.2] — 2026-11-05
 
 ### deps
