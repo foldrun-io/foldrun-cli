@@ -139,7 +139,7 @@ declared the same way.
 | `foldrun schedule tick` | fire whatever is due now — Settings' "Run scheduler now" |
 | `foldrun backups` | how the account is backed up and the snapshots it is in; `backups request --what runs --at "<when>" [--to <ws>]` asks the platform team for a restore, `backups requests` lists them |
 | `foldrun restore <ws> --to <commit\|time\|3d>` | a workspace's source back as it was then — shows the change, asks for the name typed back (`--dry-run`, `--yes`) |
-| `foldrun onboarding` | the account's getting-started steps, done or not, the next one first |
+| `foldrun onboarding` | the account's getting-started steps, done or not, the next one first; `--to <workspace>` adds that workspace's checklist |
 | `foldrun triggers` | why nothing ran: per flow, how often its trigger fired, how often that became a run, and every reason for the difference (`--since <days>`, `--to`) |
 | `foldrun webhooks deliveries` | the `notify:` webhooks a workspace sent: status, attempts, the last answer (`--failed`, `--to`) — and `redeliver <id>` to send one again |
 | `foldrun notifications` | what mail you get, per category; `set <category> on\|off` (`--to <workspace>` for run alerts and approvals) — security, invites, billing and account mail are always sent |

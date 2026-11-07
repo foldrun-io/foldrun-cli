@@ -35,6 +35,39 @@ test("onboarding lists every step, marks the next, and links it", async () => {
   assert.match(r.out, /\/dashboard\/desk\/agents\s+·\s+foldrun deploy/);
 });
 
+test("onboarding --to <workspace> asks for that workspace's checklist and prints it", async () => {
+  const s = await serve({
+    "/api/me/onboarding": () => ({
+      done: 1,
+      total: 1,
+      complete: true,
+      next: null,
+      steps: [{ id: "workspace", title: "Create a workspace", why: "w", href: "/dashboard/welcome?step=start", done: true }],
+      checklist: {
+        workspace: "desk",
+        done: 1,
+        total: 2,
+        complete: false,
+        dismissed: false,
+        show: true,
+        items: [
+          { id: "run", title: "Run a flow to the end", why: "Proof.", href: "/dashboard/desk/flows", done: true, hidden: false },
+          { id: "eval", title: "Add an eval", why: "A test its agents must pass.", href: "/dashboard/desk/evals", done: false, hidden: false },
+        ],
+      },
+    }),
+  });
+  const r = await at(s.url, "onboarding", "--to", "desk");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.ok(s.seen.some((x) => x.method === "GET" && x.url === "/api/me/onboarding" && x.query.get("workspace") === "desk"), JSON.stringify(s.seen));
+  assert.match(r.out, /desk checklist\s+1 of 2/);
+  assert.match(r.out, /✓ Run a flow to the end/);
+  assert.match(r.out, /○ Add an eval/);
+  assert.match(r.out, /\/dashboard\/desk\/evals/);
+  assert.doesNotMatch(r.out, /dashboard\/welcome$/m, "all steps done: no welcome link");
+});
+
 const backups = {
   policy: { schedule: "nightly at 03:30, the server's time", keepLocal: 14, keepOffsiteDays: 15, encrypted: true, covers: [], excludes: [] },
   last: { id: "b", at: "2026-10-01T17:30:00Z", verified: true, offsite: "r2", bytes: 52428800, kinds: ["files", "database", "keys"], encrypted: true, recipient: "sha256:0123456789abcdef" },

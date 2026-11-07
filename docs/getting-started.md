@@ -118,27 +118,46 @@ written into the workspace, so a workspace is always safe to commit.
 
 ## The checklist on the dashboard
 
-A new account's home page shows a **Getting started** card: add your model
-key (on a hosted platform, where the account brings its own), create a
-workspace, write or deploy an agent, run a flow, get a run to finish, add a
-secret, schedule a flow or give it a webhook, invite a teammate, set up
-billing (where the plan asks for it) and install the CLI — "4 of 8", with the
-next step first and a link to where to do it. Each step is worked out from
-the account as it is (a run on record, a secret in the vault, a key minted
-for the CLI), so it ticks itself whichever way you did the thing; there is
-nothing to mark. While an account has no model key every run is refused, so
-every dashboard page also carries a banner saying so, with a link to
-Settings → Model provider (`foldrun account model set anthropic --key …`,
-or on foldrun's own platform `foldrun account model use foldrun --provider anthropic`
-to run on foldrun's models, billed in credits). **Dismiss** hides it for you alone; the line at the foot of
-the page brings it back, and it goes away by itself once every step is done.
+The first time you open an account that has no workspace, the dashboard
+starts you in the **welcome flow** (`/dashboard/welcome`): add your model key
+(on a hosted platform, where the account brings its own — every run is
+refused until it has one), choose what to start with — the demo pipeline, a
+blank workspace, an imported .zip, the CLI, or connecting your AI app over
+MCP — then run it once and watch each step live, ending on the run's page or,
+if it stops, the reason and the Doctor. Every screen can be skipped, and the
+flow picks up wherever the account really is, however you did the work.
+
+After that the home page shows a **Getting started** card: add your model
+key, create a workspace, write or deploy an agent, run a flow, get a run to
+finish, add a secret, schedule a flow or give it a webhook, invite a
+teammate, set up billing (where the plan asks for it) and install the CLI —
+"4 of 8", with the next step opened up and a link to where to do it, and
+**Resume setup** back into the welcome flow. Each step is worked out from the
+account as it is (a run on record, a secret in the vault, a key minted for
+the CLI), so it ticks itself whichever way you did the thing; there is
+nothing to mark. While an account has no model key every dashboard page also
+carries a banner saying so, with a link to Settings → Model provider
+(`foldrun account model set anthropic --key …`, or on foldrun's own platform
+`foldrun account model use foldrun --provider anthropic` to run on foldrun's
+models, billed in credits). A step's **…** menu hides that step for you; the
+card's hides the whole card, and the line at the foot of the page brings it
+back. It goes away by itself once every step is done.
+
+Each workspace's overview has a **Workspace checklist** of what a desk needs
+before it can be left to run on its own: a flow that ran to the end, a
+schedule or webhook, an owner, an eval, and `notify:` so someone is told
+when a run fails — each ticked from the workspace itself (the owner and
+`notify:` count when the account's AGENTS.md sets them), each a link to
+where it is done. Hide an item, or the card, for yourself.
 
 ```sh
 foldrun onboarding                       # the same steps, in the terminal
+foldrun onboarding --to my-desk          # and that workspace's checklist
 ```
 
-The API is `GET /api/me/onboarding`; hiding the card is a person's own
-setting, so it is done from the dashboard, not with a key.
+The API is `GET /api/me/onboarding` (`?workspace=` for the checklist);
+hiding is a person's own setting, so it is done from the dashboard, not with
+a key.
 
 ## Where to go next
 

@@ -295,7 +295,7 @@ Signing in
   foldrun team remove <email|id>   remove a member — asks first (--yes with no terminal); their keys and pending invites stop. Transfer stays in Settings → Team
   foldrun team invites      the account's pending invites — address or "anyone with the link", role, workspaces, who made it, when it expires, its id (--all for accepted, revoked and expired too; --json). Never the link: each works once, shown only to its maker
   foldrun team invites revoke <id>   take an invite back: its link stops working at once (an admin's; a key may)
-  foldrun onboarding        the account's getting-started steps, done or not, the next one first (--json)
+  foldrun onboarding        the account's getting-started steps, done or not, the next one first; --to <workspace> adds that workspace's checklist (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
   foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /api/healthz
   foldrun accounts          every account signed in on this machine, and which one is active

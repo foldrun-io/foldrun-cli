@@ -12023,23 +12023,41 @@ async function historyCmd(positional, flags, layout) {
 
 /**
  * `foldrun onboarding` — the account's getting-started steps, each worked
- * out from what is really there, the next one first. Hiding the dashboard
- * card is a person's own setting, so it is done there, not with a key.
+ * out from what is really there, the next one first. `--to <workspace>`
+ * adds that workspace's checklist (a flow that ran to the end, a trigger,
+ * an owner, an eval, notify:). Hiding the dashboard card, a step or a
+ * checklist item is a person's own setting, so it is done there, not with
+ * a key.
  */
 async function onboardingCmd(flags) {
   const url = platformFor(flags, "onboarding");
-  const o = await remoteCall(url, flags, "/api/me/onboarding");
+  const ws = typeof flags.to === "string" && flags.to ? flags.to : null;
+  if (flags.to !== undefined && !ws) throw new Error("`foldrun onboarding --to <workspace>` — name the workspace whose checklist you want");
+  const o = await remoteCall(url, flags, `/api/me/onboarding${ws ? `?workspace=${encodeURIComponent(ws)}` : ""}`);
   if (flags.json === true) {
     console.log(JSON.stringify(o, null, 2));
     return 0;
   }
+  const base = String(url).replace(/\/$/, "");
   console.log(`\n  ${c.bold("Getting started")}  ${c.dim(`${o.done} of ${o.total}${o.complete ? " — all done" : ""}`)}\n`);
   for (const s of o.steps ?? []) {
     const mark = s.done ? c.green("✓") : s.id === o.next?.id ? c.yellow("→") : c.dim("○");
     console.log(`  ${mark} ${s.done ? c.dim(s.title) : c.bold(s.title)}`);
     if (!s.done) {
       console.log(`      ${c.dim(s.why)}`);
-      console.log(`      ${c.dim(`${String(url).replace(/\/$/, "")}${s.href}${s.cli ? `  ·  ${s.cli}` : ""}`)}`);
+      console.log(`      ${c.dim(`${base}${s.href}${s.cli ? `  ·  ${s.cli}` : ""}`)}`);
+    }
+  }
+  if (!o.complete) console.log(`\n  ${c.dim(`step by step in the browser: ${base}/dashboard/welcome`)}`);
+  const cl = o.checklist;
+  if (cl) {
+    console.log(`\n  ${c.bold(`${cl.workspace} checklist`)}  ${c.dim(`${cl.done} of ${cl.total}${cl.complete ? " — all done" : ""}`)}\n`);
+    for (const i of cl.items ?? []) {
+      console.log(`  ${i.done ? c.green("✓") : c.dim("○")} ${i.done ? c.dim(i.title) : c.bold(i.title)}`);
+      if (!i.done) {
+        console.log(`      ${c.dim(i.why)}`);
+        console.log(`      ${c.dim(`${base}${i.href}`)}`);
+      }
     }
   }
   console.log();
