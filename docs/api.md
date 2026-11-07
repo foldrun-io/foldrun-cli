@@ -18,7 +18,7 @@ proof instead of a key: a token or signature (`/s/<token>`, `/api/hooks`,
 `/api/billing/partner/…` (a storefront's signature),
 `/api/billing/confirm`), the sign-in and recovery steps (`/api/auth/signup`,
 `login`, `forgot`, `reset`, `verify`, `mfa/verify`, `session`, `/api/cli/login`,
-`/api/cli/login/<id>`, `/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz`, `/api/status`, `/api/status/history`, `/api/version` and `/api/openapi.json` — and an AI app's OAuth sign-in to `/api/mcp`: `/api/mcp/oauth/register` (open, as the protocol needs) and `/api/mcp/oauth/token` (its code and PKCE verifier, or its refresh token, are the proof).
+`/api/cli/login/<id>`, `/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz`, `/api/status`, `/api/status/history`, `/api/signup`, `/api/version` and `/api/openapi.json` — and an AI app's OAuth sign-in to `/api/mcp`: `/api/mcp/oauth/register` (open, as the protocol needs) and `/api/mcp/oauth/token` (its code and PKCE verifier, or its refresh token, are the proof).
 
 ```
 Authorization: Bearer <api-key>      # machines. Settings → API keys
@@ -471,7 +471,7 @@ X-Foldrun-Cli: 0.6.0               # the CLI released with this version (absent 
 
 | Route | Methods | |
 |---|---|---|
-| `/api/auth/signup` | POST | `email`, `password`, `account`, `invite`, `setup`. An install with `FOLDRUN_SETUP_TOKEN` set creates its first account only with `setup` equal to it (403 otherwise); once an account exists the token does nothing. Rate limited per address and per caller. With signups closed every address gets the same refusal, so the form cannot be used to discover which addresses are registered |
+| `/api/auth/signup` | POST | `email`, `password`, `account`, `invite`, `setup`. An install with `FOLDRUN_SETUP_TOKEN` set creates its first account only with `setup` equal to it (403 otherwise); once an account exists the token does nothing. Without an invite, a new account comes in by the first-account exception or free sign-up (`signup.open`) — decided again inside the write, so two first sign-ups at once make one owner; an invite needs no switch. A body with `plan` is refused (400): paid sign-up is not offered by this route yet. Rate limited per address and per caller. With signups closed every address gets the same refusal, so the form cannot be used to discover which addresses are registered |
 | `/api/auth/login` | POST | `email`, `password`. Wrong passwords are limited per account: 8 a quarter hour from one caller when a trusted proxy names the caller (`FOLDRUN_TRUST_PROXY`), so a stranger failing as someone locks out only themselves, and 40 from every caller together, reaching which mails the person; with no caller address, 8 per account from anyone. A 429 carries `Retry-After` |
 | `/api/auth/logout` | POST | ends the session |
 | `/api/auth/session` | GET | who am I |

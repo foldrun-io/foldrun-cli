@@ -286,6 +286,7 @@ Signing in
                             session: cookies, storage and the browser identity it needs
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, workspaces
+  foldrun signup status     can a stranger sign up on the platform: free sign-up, paid sign-up, and the plans sold while paid is in effect — the open /api/signup, no key sent (--url, --json; exits 1 when it does not answer)
   foldrun me                the person this machine is signed in as: name, address, timezone (--json)
   foldrun me name <first> [last]   set your name (--clear for none) · foldrun me timezone <zone|auto>   the zone you read times in
   foldrun team              who is in the account: role, the workspaces each may open, when they joined (--json)

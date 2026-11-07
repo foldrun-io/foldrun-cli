@@ -5490,6 +5490,59 @@ async function platformStatusCmd(flags) {
 }
 
 /**
+ * `foldrun signup status` — can a stranger sign up on this platform, and
+ * how: free sign-up, paid sign-up, and the plans it sells while paid is in
+ * effect. The open GET /api/signup the public site's buttons read; no key is
+ * ever sent with it, whatever platform --url names. For an operator checking
+ * what foldrun.io now sees after flipping a switch (the console shows each
+ * switch as set and as in effect), or a self-hoster checking theirs.
+ * Exits 1 when the platform does not answer or answers something else.
+ */
+async function signupCmd(positional, flags) {
+  const verb = positional[0] ?? "status";
+  if (verb !== "status") throw new Error(`signup: unknown verb "${verb}" — status`);
+  const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
+  let res;
+  try {
+    res = await remoteFetch(url, "/api/signup", {}, { seconds: timeoutSeconds(flags) });
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    if (flags.json === true) console.log(JSON.stringify({ url, error }, null, 2));
+    else console.log(`\n  ${c.red("✗")} ${url} did not answer (${error})\n`);
+    return 1;
+  }
+  /** @type {any} */
+  const body = await res.json().catch(() => null);
+  const shaped = body && typeof body === "object" && typeof body.free === "boolean" && typeof body.paid === "boolean" && Array.isArray(body.plans);
+  if (!res.ok || !shaped) {
+    const error = !res.ok ? `/api/signup → HTTP ${res.status}` : "/api/signup answered something that is not { free, paid, plans }";
+    if (flags.json === true) console.log(JSON.stringify({ url, error }, null, 2));
+    else console.log(`\n  ${c.red("✗")} ${error} — ${url}\n`);
+    return 1;
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify(body, null, 2));
+    return 0;
+  }
+  const door = (open) => (open ? c.green("open") : c.dim("closed"));
+  console.log(`\n  ${c.bold("sign-up")}  ${c.dim(url)}\n`);
+  console.log(`  free  ${door(body.free)}`);
+  console.log(`  paid  ${door(body.paid)}`);
+  if (!body.free && !body.paid) console.log(`\n  ${c.dim("new account registration is closed — invites still work")}`);
+  if (body.plans.length) {
+    console.log(`\n  ${c.dim("plans")}`);
+    for (const p of body.plans) {
+      const price = p.price && typeof p.price.amount === "number" ? `${(p.price.amount / 100).toFixed(p.price.amount % 100 ? 2 : 0)} ${String(p.price.currency ?? "").toUpperCase()}/${p.price.interval ?? "month"}` : "—";
+      console.log(`  ${String(p.name ?? p.id).padEnd(10)} ${price.padEnd(14)} ${c.dim(`${p.credits ?? "?"} credits · ${p.vcpu ?? "?"} vCPU · ${p.memoryGiB ?? "?"} GiB${p.priority ? " · high-priority lane" : ""}`)}`);
+    }
+  } else if (body.paid) {
+    console.log(`\n  ${c.dim("no plans listed")}`);
+  }
+  console.log();
+  return 0;
+}
+
+/**
  * `foldrun status --platform --history [--days n]` — what the status page
  * draws as bars: each component's uptime per day over the window (1–90,
  * default 90), and the incidents in it. The open GET /api/status/history.
@@ -14570,6 +14623,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return logout(flags);
     case "whoami":
       return whoami(flags);
+    case "signup":
+      return signupCmd(positional, flags);
     case "doctor":
       return doctor(flags);
     case "version":

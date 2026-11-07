@@ -77,7 +77,11 @@ whoever ran it (the token is `FOLDRUN_SETUP_TOKEN` in `~/foldrun/.env`, and
 does nothing once the owner exists). With `FOLDRUN_BIND` set to one address
 the link uses that address; from another machine, open it through the
 tunnel the installer prints (`ssh -o ExitOnForwardFailure=yes -L …`), never
-over plain http. Then sign the CLI in and deploy:
+over plain http. After the owner, the install takes new accounts only on an
+invite (Settings → Team) unless you open sign-up to strangers with
+`FOLDRUN_OPEN_SIGNUP=1`; with it off, `/signup` says registration is closed
+and `GET /api/signup` answers `{ "free": false, "paid": false, "plans": [] }`.
+Then sign the CLI in and deploy:
 
 ```sh
 npm install -g foldrun
