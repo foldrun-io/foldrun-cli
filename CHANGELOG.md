@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.2.4] — 2026-11-08
+
+### deps
+
+- @foldrun/core ^17.1.1 ([9483eb5](https://github.com/foldrun-io/foldrun-cli/commit/9483eb5))
+
 ## [19.2.3] — 2026-11-08
 
 - fix(docs): every Settings → … names a tab or section that exists ([a970ffe](https://github.com/foldrun-io/foldrun-cli/commit/a970ffe))
