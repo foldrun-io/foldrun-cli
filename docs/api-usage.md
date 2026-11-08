@@ -96,13 +96,12 @@ room: one for **the key or person** making it, one for **the whole account**
 (three times the first). Reads (`GET`, `HEAD`) and writes count separately,
 per one-minute window. Health, status and version reads
 (`/api/healthz`, `/api/status`, `/api/version`), signing out and ending a
-support view are never counted or refused:
+support view are never counted or refused; neither is the public `GET /api/pricing`:
 
 | Plan | Reads / key | Writes / key | Reads / account | Writes / account |
 |---|---|---|---|---|
-| none (trial, self-hosted) | 300 | 60 | 900 | 180 |
+| Free, none (self-hosted) | 300 | 60 | 900 | 180 |
 | Starter | 600 | 120 | 1,800 | 360 |
-| Creator | 1,200 | 240 | 3,600 | 720 |
 | Pro | 3,000 | 600 | 9,000 | 1,800 |
 | Scale | 6,000 | 1,200 | 18,000 | 3,600 |
 
