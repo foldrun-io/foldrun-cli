@@ -303,8 +303,11 @@ What a held step does differently:
   `storage=` need the value in the browser and are refused for a bound
   secret — unbind it to use it there.
 - **Sites a secret is granted to** are where the proxy ends TLS to fill the
-  secret. Chromium is told to trust the egress CA for them; Firefox and
-  WebKit are not, and a page there fails its certificate check.
+  secret. Chromium is told to trust the egress CA for them by its key;
+  Firefox browses in a profile whose certificate database holds it (the
+  session's profile, or one made for the call), and the trace says
+  `browser: firefox trusts the egress proxy's certificate`. WebKit is not
+  told yet, and a page there fails its certificate check.
 - **Web search** goes through the egress proxy's search door, as for any
   walled step ([Search](#search)).
 
