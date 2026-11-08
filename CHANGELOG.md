@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.2.5] — 2026-11-08
+
+### docs
+
+- sync network.md (a held Firefox trusts the egress CA, FOL-144) ([a243b1c](https://github.com/foldrun-io/foldrun-cli/commit/a243b1c))
+
 ## [19.2.4] — 2026-11-08
 
 ### deps
