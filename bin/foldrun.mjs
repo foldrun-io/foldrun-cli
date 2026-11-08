@@ -205,6 +205,8 @@ const HELP = `foldrun — agents are just folders
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
   foldrun usage --limit <n>  how many rows of by flow and by agent (the most charged; default 10, 0 hides them)
   foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each workspace, each live run — what they hold now, and the steps waiting for room (--json)
+  foldrun usage meters      what the period used, meter by meter: vCPU, RAM, step disk, storage, network with quantity, rate and credits, the plan fee, each step size, the two credit pots, and tokens by provider and model — your own key at 0 credits (--since <day>, --until <day>, --json)
+  foldrun usage rates       what each meter costs this account, its plan and the plans on offer, and the price list for foldrun's models (--json)
   foldrun usage budget      spend against each cap — the account's and each workspace's budget:, what is spent in its window (today, this week, this month) and how close it is (--to <workspace> for one, --json)
   foldrun schedule          every flow that fires on a clock, its cron line and the next times (--to <workspace>)
   foldrun schedule tick     fire whatever is due now — Settings' "Run scheduler now"
@@ -222,7 +224,7 @@ const HELP = `foldrun — agents are just folders
   foldrun billing details   who invoices are made out to — also set --name "…" --abn … --address "line1, city, state, postcode, AU" --email …
   foldrun billing details set --clear-address | --clear-email | --clear-abn  drop one from the invoice details, the rest kept
   foldrun billing portal    a link to Stripe's billing portal (owner only)
-  foldrun billing plans     the plans, which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
+  foldrun billing plans     the plans (credits, storage, compute at once), which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
   foldrun billing top-up <usd>  Stripe's checkout page for adding credit (owner only; --no-browser prints it)
   foldrun billing card      Stripe's page for saving a card for auto top-up (owner only)
   foldrun gallery           the platform's built-in tools (web) and whether you keep your own copy — also pull (a copy for offline runs), upgrade <tool>
@@ -329,11 +331,12 @@ Options
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
   --since <span>            runs, stop, rerun: only runs started within 24h, 7d, 90m, 2w, or today (the last 24h)
+  --since <day>             usage meters: the period's first UTC day, YYYY-MM-DD (default the first of this month)
   --since <span>            audit: entries from 24h, 7d, 30d ago, or a date (default 7d); --until <date> ends the window
   --action <a>              audit: one action (apikey.created) or a family (apikey, secret, member, support)
   --actor <who>             audit: one person or key — an email, key:<label>, support:<email>
   --since <days>            observe, triggers: the window in days (observe default 7 as the account Observe page, observe --to 30 as a workspace's; triggers 7); observe takes --days too
-  --until <span|date>       stop, rerun (bulk): only runs started before then — 2h ago, or a date
+  --until <span|date>       stop, rerun (bulk): only runs started before then — 2h ago, or a date; usage meters: the period's last UTC day (YYYY-MM-DD)
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
   --q <words>               runs: the runs page's text search — every word, any order, across id, flow, workspace, status, verdict, summary and failure; assistant history: search the conversations
   --flow <name>             export: that flow and everything it runs; runs, stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
