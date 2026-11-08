@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.3.0] — 2026-11-08
+
+- feat(agent network): say a doorable vendor may be held through the platform's vendor door (FOL-145) ([e4dcfc3](https://github.com/foldrun-io/foldrun-cli/commit/e4dcfc3))
+
 ## [19.2.7] — 2026-11-08
 
 ### docs
