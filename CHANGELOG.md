@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.2.2] — 2026-11-08
+
+### docs
+
+- bundled docs synced — the check-rule and anchor link fixes (foldrun-docs efedad3) ([9a3cde6](https://github.com/foldrun-io/foldrun-cli/commit/9a3cde6))
+
 ## [19.2.1] — 2026-11-07
 
 ### deps
