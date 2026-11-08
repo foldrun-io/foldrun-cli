@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.3.1] — 2026-11-08
+
+### deps
+
+- @foldrun/core ^17.3.0 ([d3a58c0](https://github.com/foldrun-io/foldrun-cli/commit/d3a58c0))
+
 ## [19.3.0] — 2026-11-08
 
 - feat(agent network): say a doorable vendor may be held through the platform's vendor door (FOL-145) ([e4dcfc3](https://github.com/foldrun-io/foldrun-cli/commit/e4dcfc3))
