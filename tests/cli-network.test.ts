@@ -154,3 +154,20 @@ test("agent network says how a held step's web search goes (FOL-128): the proxy'
   assert.equal(searchLine({ ...base }), null, "an older core says nothing about search, and neither does this");
   assert.match(s({ web: true, actions: null, provided: [] }, { enforceWanted: true })!, /\(network_enforce: true here\)/);
 });
+
+test("agent network: a vendor that takes a customer proxy may be held through the platform's vendor door; one that never can, not (FOL-145)", () => {
+  const d = desk({
+    steelbot: "tools: [web]\nnetwork: { level: none, allow: [example.com] }\nweb: { browse: steel }\n",
+    brdbot: "tools: [web]\nnetwork: { level: none, allow: [example.com] }\nweb: { browse: brightdata }\n",
+  });
+  try {
+    const steel = d.foldrun("agent", "network", "steelbot");
+    assert.equal(steel.status, 0, steel.stdout + steel.stderr);
+    assert.match(steel.stdout, /browses with steel/);
+    assert.match(steel.stdout, /unless the platform holds steel through its vendor door/);
+    const brd = d.foldrun("agent", "network", "brdbot");
+    assert.equal(brd.status, 0, brd.stdout + brd.stderr);
+    assert.match(brd.stdout, /browses with brightdata/);
+    assert.doesNotMatch(brd.stdout, /vendor door/, "Bright Data always uses its own network");
+  } finally { d.done(); }
+});

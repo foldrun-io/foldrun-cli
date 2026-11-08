@@ -296,7 +296,8 @@ What a held step does differently:
   and every other — they browse from their own network, which no list here
   holds), `proxy=` (a proxy of your own is not reachable), `live:` sessions,
   and the Lightpanda and Obscura engines (no way through the proxy verified
-  yet). A vendor step is refused before it connects; to accept browsing that
+  yet). A vendor step is refused before it connects — unless the install
+  holds that vendor through its vendor door (below); to accept browsing that
   no list holds for one agent, give that agent `network: open`.
 - **Secrets bound to sites** stay out of the sandbox: a `headers=` value can
   carry the `${NAME}`, which the proxy fills; `auth=`, `cookies=` and
@@ -343,6 +344,39 @@ The dashboard's Network card and `foldrun agent network <agent>` say which
 applies to an agent. An agent that must stay inside its list where browsing
 is not held should not browse: give it `web: {actions: [search, fetch]}`,
 which goes through the proxy like any other program.
+
+### A vendor's browser, through foldrun's vendor door
+
+A rented browser — Browserbase, Steel, Hyperbrowser or Browserless, the four
+that take a customer's proxy — runs on the vendor's machines, so the egress
+proxy never sees its pages. On an install that holds a vendor through its
+**vendor door** (`FOLDRUN_VENDOR_EGRESS`, below; FOL-145), a held step may
+use that vendor instead of being refused:
+
+- the vendor's key is bound to the vendor's API, so it is only a name in the
+  sandbox and the egress proxy fills it;
+- every call to the vendor goes through the proxy, under that vendor's
+  session rules: the call that **starts** a browser is rewritten so its only
+  proxy is foldrun's vendor door, with a credential made for that session
+  (fifteen minutes at most, ended with the step); reading or ending a
+  session passes; anything else is refused, and the trace says why;
+- the vendor's remote-control connection goes through the proxy's `/e/`
+  door as well — the walled sandbox reaches nothing else;
+- the door holds every page to the step's list, refuses private addresses,
+  caps connections and bytes per step, and closes the step's connections
+  within a second of the step ending;
+- **no site a secret is bound to**: a vendor's browser cannot trust foldrun's
+  certificate, so the proxy cannot fill a secret there — such a page is
+  refused (`unsupported capability: vendor secret filling`); use foldrun's
+  own browser for those steps;
+- for such a step there is no way round: plain `http://` to a vendor, a
+  tunnel to a vendor whose key is not bound, and a tunnel to a bare address
+  are refused.
+
+Bright Data, ZenRows and a raw DevTools address always browse through their
+own network and are never held this way. A vendor is listed on an install
+only once it has passed foldrun's qualification for it (FOL-151); until then
+it is refused under a held list, as before.
 
 ### The browse service
 

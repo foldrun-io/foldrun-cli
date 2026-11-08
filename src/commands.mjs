@@ -9957,11 +9957,16 @@ async function agentLinkCmd(positional, flags, layout) {
  * from core's listAgents when it says (core ≥ the FOL-110 phase 3 release).
  * @param {{ level?: string, enforceWanted?: unknown, browseVendor?: unknown }} p
  */
-function browsingLine(p) {
+function browsingLine(p, doorable = false) {
   const vendor = typeof p.browseVendor === "string" && p.browseVendor ? p.browseVendor : null;
   const enforce = p.enforceWanted === true ? " (network_enforce: true here)" : "";
+  // FOL-145: a vendor that takes a customer proxy can be held through the
+  // platform's vendor door, where the install lists it; the rest never can.
+  const door = doorable
+    ? ` — unless the platform holds ${vendor} through its vendor door (an install that lists it): then the session it starts has foldrun's door as its only proxy and its pages are held to this list, sites a secret is bound to excepted`
+    : "";
   return vendor
-    ? `browsing: this agent browses with ${vendor}, which browses from its own network — on a platform that confines browsing, with this list enforced${enforce}, its steps are refused before they connect; elsewhere they are not held to the list (\`foldrun docs network\`, Browsing). Drop browse: ${vendor} to use foldrun's own browser, which is held to it.`
+    ? `browsing: this agent browses with ${vendor}, which browses from its own network — on a platform that confines browsing, with this list enforced${enforce}, its steps are refused before they connect${door}; elsewhere they are not held to the list (\`foldrun docs network\`, Browsing). Drop browse: ${vendor} to use foldrun's own browser, which is held to it.`
     : `browsing: this agent may browse. On a platform that confines browsing, with this list enforced${enforce}, its browser runs walled in the step's sandbox and the list holds for it; on this machine, or with the list only reported, its browser and its other programs reach sites directly (\`foldrun docs network\`, Browsing).`;
 }
 
@@ -10024,12 +10029,18 @@ async function agentNetworkCmd(positional, flags, layout) {
         : (info?.tools ?? []).includes("web") && (!actions || actions.includes("browse"));
       return { info, own: net.readNetwork(front.network).setting, browses };
     });
+  // FOL-145: which vendors can be held through a vendor door (core providers).
+  const doorProviders = await import("@foldrun/core/providers").catch(() => null);
   const show = (info, browses) => {
     const p = info?.network;
     if (!p) return;
     console.log(`  ${net.networkLine(p, true)}`);
     if (p.level !== "open") console.log(`  ${c.dim("a run also allows its MCP servers, its web providers and the sites its secrets are bound to")}`);
-    if (browses && p.level !== "open") console.log(`  ${c.yellow(browsingLine(p))}`);
+    if (browses && p.level !== "open") {
+      const vendor = typeof p.browseVendor === "string" ? p.browseVendor : "";
+      const doorable = !!vendor && /** @type {any} */ (doorProviders)?.findBrowserApi?.(vendor)?.egress === "proxy";
+      console.log(`  ${c.yellow(browsingLine(p, doorable))}`);
+    }
     const search = searchLine(p);
     if (search) console.log(`  ${c.dim(search)}`);
   };
