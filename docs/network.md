@@ -306,8 +306,13 @@ What a held step does differently:
   secret. Chromium is told to trust the egress CA for them by its key;
   Firefox browses in a profile whose certificate database holds it (the
   session's profile, or one made for the call), and the trace says
-  `browser: firefox trusts the egress proxy's certificate`. WebKit is not
-  told yet, and a page there fails its certificate check.
+  `browser: firefox trusts the egress proxy's certificate`. WebKit trusts
+  only the system store, so the platform puts the CA there for any step that
+  gets it: an init container builds the store from a platform-owned
+  ConfigMap and the sandbox mounts it at `/etc/ssl/certs`, root's and not
+  the agent's to change (the
+  trace says `egress CA: in this sandbox's system trust store too`), and
+  every other program that reads only the system store trusts it as well.
 - **Web search** goes through the egress proxy's search door, as for any
   walled step ([Search](#search)).
 
