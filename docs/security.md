@@ -268,7 +268,7 @@ run whose charge has not yet been recorded is kept until it is. `0` keeps a
 record for ever. An install without a database keeps its audit log in a
 file, numbered by line, and does not prune it.
 
-Closing the account (Settings → Account) suspends it at once and tells the
+Closing the account (Settings → General → Close this account) suspends it at once and tells the
 platform team, who settle the last invoice and delete the account's data:
 its records, files, keys and sessions. The ledger and the audit entry that
 says it was deleted are kept. Backups are their own matter:

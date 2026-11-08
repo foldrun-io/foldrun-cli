@@ -215,7 +215,7 @@ to the next level with one line in the trace rather than failing the step.
 
 When something is going wrong — an agent posting what it should not, a
 loop spending money — pause the workspace, or the whole account, from its
-Settings → Governance → Pause, `foldrun workspace pause` / `foldrun account pause`, or
+Settings → Policies → Pause runs, `foldrun workspace pause` / `foldrun account pause`, or
 the API (`POST /api/workspaces/<ws>/pause`, `POST /api/account/pause`).
 
 While paused, nothing new starts: a schedule's fire, a webhook delivery, a

@@ -81,7 +81,7 @@ listed with it. `deploy_block:` in `AGENTS.md` turns them into refusals:
 | `security` | any security finding: `secret/*`, `content/*`, `security/*`, `supply-chain/*`, and `flow/outward-ungated` (a step that acts outside with no check or approval) |
 
 Set it in the account's `AGENTS.md` for every workspace, or in one
-workspace's `AGENTS.md`, which wins. Settings → Governance → **Refuse a
+workspace's `AGENTS.md`, which wins. Settings → Policies → Governance → **Refuse a
 deploy on**, or `foldrun account set deploy_block secrets`. A refused
 deploy names each finding and its rule; a `foldrun-ignore` with a reason
 (below) still accepts one.
@@ -465,7 +465,7 @@ at `high`, Kimi has `low`, `high` and `max`, DeepSeek runs `medium` and
 `xhigh` as `high`. The step is not refused: it runs at the nearest level the
 model has, and its log says so, so a file stays valid when the account
 changes provider. Write a level the model has, or choose a provider whose
-model has the one you want (Settings → Model provider). Checked on the
+model has the one you want (Settings → Models). Checked on the
 platform (the Checks page, a save, a deploy) when the account runs on
 foldrun's models; `foldrun check` offline does not know the account's
 choice, and an agent or workspace with its own `provider:` is not checked.

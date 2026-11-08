@@ -136,7 +136,7 @@ teammate, set up billing (where the plan asks for it) and install the CLI —
 account as it is (a run on record, a secret in the vault, a key minted for
 the CLI), so it ticks itself whichever way you did the thing; there is
 nothing to mark. While an account has no model key every dashboard page also
-carries a banner saying so, with a link to Settings → Model provider
+carries a banner saying so, with a link to Settings → Models
 (`foldrun account model set anthropic --key …`, or on foldrun's own platform
 `foldrun account model use foldrun --provider anthropic` to run on foldrun's
 models, billed in credits). A step's **…** menu hides that step for you; the

@@ -2,7 +2,7 @@
 
 ## Your account's own model key
 
-The simplest way to bring a key: **Settings → Model provider**, or
+The simplest way to bring a key: **Settings → Models**, or
 `foldrun account model set <provider> --key <api key>`, or
 `PUT /api/account/model`. Pick a name from the table below (or `custom`
 with a base URL and a format), paste an **API key**, and every step in
@@ -37,7 +37,7 @@ time for the whole account. No provider account is needed; the tokens are
 billed in credits at **foldrun's price list**
 ([budgets and billing](budgets-and-billing.md#foldruns-models)).
 
-- **Choose it:** Settings → Model provider → *foldrun's models*, pick the
+- **Choose it:** Settings → Models → *foldrun's models*, pick the
   provider, *Use*. Or `foldrun account model use foldrun --provider openai`,
   or `PUT /api/account/model` with `{ "source": "foldrun", "supply": "openai" }`.
   An admin chooses, as for the key. `foldrun account model use own` (or the
@@ -268,7 +268,7 @@ what would be checked; `POST` forces one, for the minute after rotating a
 key. From the terminal, `foldrun account providers` prints the same table
 (✓, ✗ with the verdict, or · for never checked) and `--check` forces one;
 a dead key is a non-zero exit, so a deploy script can refuse to continue.
-In the dashboard, Settings → Model provider shows the same check per
+In the dashboard, Settings → Models shows the same check per
 provider, with **Check now** (editor and above, since it spends a request).
 
 ## When a provider says no, the run says why

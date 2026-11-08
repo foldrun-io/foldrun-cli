@@ -13,7 +13,7 @@ with a team.
 **Which models does it use?** Whatever you point it at. `model:` takes a
 tier — `fast`, `default`, `max` — and the platform resolves the tier to a
 model. Bring your own key for any provider that speaks the Anthropic or the
-Chat Completions API — once for the whole account in Settings → Model
+Chat Completions API — once for the whole account in Settings → Models
 (`foldrun account model set`), or per workspace or agent with a `provider:`
 block — and the platform bills you nothing for those tokens. On a hosted
 platform every account brings its own API key — Claude login tokens are not

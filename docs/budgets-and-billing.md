@@ -25,9 +25,9 @@ mistake the editor names rather than a cap it quietly keeps.
 When an agent's cap and the flow's both apply to one step, the tighter one
 wins, and the step's error says which line set it: `budget: in the flow
 file` or `budget: on the writer agent`.
-| **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`) or plan number (`FOLDRUN_PLAN_CONCURRENCY`, which applies only where billing is on), or no cap. Your own number can lower that, never raise it; a higher number comes with a plan |
+| **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Policies → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`) or plan number (`FOLDRUN_PLAN_CONCURRENCY`, which applies only where billing is on), or no cap. Your own number can lower that, never raise it; a higher number comes with a plan |
 | **the queue lane** | the plan's lane (`high` \| `normal` \| `low`); `priority: low` in the account's `AGENTS.md` lowers it, and `high` there counts only with a plan that gives it | when slots are short, accounts take turns, weighted by lane — high 3, normal 2, low 1: every account's first run goes before anyone's second, a fast lane takes three turns to a slow lane's one and never all of them, an account with runs going waits behind one with none, and a run that has waited ten minutes moves up a turn. A flow's own `priority:` orders runs within that. The cap above still holds |
-| **compute at once** | the plan's cores, GiB and disk (below); `compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }` in the account's `AGENTS.md`, or Settings → Governance, lowers it — and a workspace's and a flow's `compute:` narrow it further ([four levels](#compute-at-four-levels)) | what all the account's running steps may hold together — each step's cores, memory and disk, its `size:` class's or its own `resources:` ([agents](agents#resources--your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB` / `FOLDRUN_ACCOUNT_DISK_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
+| **compute at once** | the plan's cores, GiB and disk (below); `compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }` in the account's `AGENTS.md`, or Settings → Policies → Governance, lowers it — and a workspace's and a flow's `compute:` narrow it further ([four levels](#compute-at-four-levels)) | what all the account's running steps may hold together — each step's cores, memory and disk, its `size:` class's or its own `resources:` ([agents](agents#resources--your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB` / `FOLDRUN_ACCOUNT_DISK_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
 | **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB`, `FOLDRUN_RUN_DISK_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed and has no time limit; the run page's start-up chip shows it as `room` ([waiting for room](#waiting-for-room)) |
 
 A cap is a literal, never an expression, so it is readable off the file. The
@@ -65,8 +65,8 @@ level only narrows the one above it; a step must fit all of them.
 
 | level | where | what it caps |
 |---|---|---|
-| **account** | the plan (or the install's `FOLDRUN_ACCOUNT_*`); `compute:` in the account's `AGENTS.md`, Settings → Governance or `foldrun account set compute` lowers it | everything the account's running steps hold together |
-| **workspace** | `compute:` in the workspace's `AGENTS.md`, its Settings → Governance, or `foldrun workspace set compute … --to <ws>` | what that workspace's running steps hold together |
+| **account** | the plan (or the install's `FOLDRUN_ACCOUNT_*`); `compute:` in the account's `AGENTS.md`, Settings → Policies → Governance or `foldrun account set compute` lowers it | everything the account's running steps hold together |
+| **workspace** | `compute:` in the workspace's `AGENTS.md`, its Settings → Policies → Governance, or `foldrun workspace set compute … --to <ws>` | what that workspace's running steps hold together |
 | **run** | `compute:` in the flow, the flow's card, or `foldrun flow compute <flow> …` | what one run of the flow holds at once across its parallel steps — each run has its own |
 | **step** | the agent's `size:` or `resources: { cpu, memory, disk }`; the plan's (or install's `FOLDRUN_STEP_MAX_*`) most for one step — on foldrun's hosted platform an account without a plan, or whose plan sets none, gets the entry plan's | one step's sandbox |
 
@@ -107,7 +107,7 @@ fails, at once, because nothing finishing would make room.
   running waits beside it. A wait is not a try: it spends none of the
   step's `retry:`, and a stop ends it like any other.
 - **Seen.** The run page says *Waiting for room to start*, why, and since
-  when; Settings → Governance and `foldrun usage compute` list every
+  when; Settings → Policies → Governance and `foldrun usage compute` list every
   waiting step, oldest first (`waiting` in `GET /api/usage/compute`).
 - **Told.** After an hour (`FOLDRUN_ROOM_ALERT_MIN`) the workspace's
   `notify:` hears of it once, as event `room`, with what to change: ask for
@@ -161,7 +161,7 @@ that is running.
   `wait:`, or back for room — so the count can pass the limit for a while;
   new runs are refused until it falls below. Two starts in the same instant
   may both take the last place.
-- **Seen.** Settings → Governance → Compute and `foldrun usage compute`
+- **Seen.** Settings → Policies → Governance and `foldrun usage compute`
   show *N of M runs waiting for their turn* (`runsWaiting` in
   `GET /api/usage/compute`).
 
@@ -264,7 +264,7 @@ per-seat fee would tax the approver the safety story depends on.
 is billed to your own provider account — so a plan then buys sandbox time
 and the platform, which is most of what a BYOK customer's credits go on.
 A step counts as BYOK when it ran on a key of the account's own (Settings →
-Model, or a `provider:` block); the run page says which credential each step
+Models, or a `provider:` block); the run page says which credential each step
 used. On a hosted platform every customer account brings one
 ([providers](providers.md#your-accounts-own-model-key)).
 
@@ -316,7 +316,7 @@ cost from what the last one consumed.
 An account on [foldrun's models](providers.md#foldruns-models) pays for each
 model call at **foldrun's price list** — per million input, output,
 cache-read and cache-write tokens, per model — times the margin in force.
-Settings → Model provider shows the list as you pay it, and so does
+Settings → Models shows the list as you pay it, and so does
 `foldrun account model prices`. A model not on it is refused.
 
 - **Metered per call**, by the platform's model gateway, from the usage the
@@ -463,7 +463,7 @@ they are kept and sent with the next save or payment.
 **Manage in Stripe.** The Payment, Plan, Invoices and Details tabs carry a
 button into Stripe's Billing Portal — the card, every invoice as a PDF, the
 plan — for the owner. Its look and what it allows (cancelling, switching
-plan) are set once at Stripe, under Settings → Billing → Customer portal.
+plan) are set once in Stripe's own Dashboard, under Settings → Billing → Customer portal.
 
 **When a plan payment fails.** Stripe retries the card on its own
 schedule. On the first failure of an invoice the owner is emailed once —

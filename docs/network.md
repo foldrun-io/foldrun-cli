@@ -233,7 +233,7 @@ The list is refused when any one of three says so:
 
 Each only switches it on. A workspace cannot turn off what its account
 turned on, and nothing in an account turns off the install's. Settings →
-Guardrail, on the account's and a workspace's Settings, has the switch, and so does
+Policies → Guardrail, on the account's and a workspace's Settings, has the switch, and so does
 `foldrun account set network_enforce on` / `foldrun workspace set
 network_enforce on --to <workspace>`.
 

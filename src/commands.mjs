@@ -2644,7 +2644,7 @@ async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
 function rateLimitHint(res, body) {
   const after = body?.retry_after ?? res.headers.get("retry-after");
   const limit = res.headers.get("x-ratelimit-limit");
-  return ` — rate limited${limit ? ` (${limit} a minute)` : ""}; already waited once${after ? `, try again in ${after}s` : ""}. Settings → API shows this account's limits`;
+  return ` — rate limited${limit ? ` (${limit} a minute)` : ""}; already waited once${after ? `, try again in ${after}s` : ""}. Settings → API keys → API shows this account's limits`;
 }
 
 /** The glyph an event leads with: a fault, a tool, or a plain line. */
@@ -3350,7 +3350,7 @@ async function secretWorkspacesCmd(args, flags, url, layout) {
   }
   const workspaces = flags.all === true ? null : flags.none === true ? [] : named;
   // --if-workspaces a,b (or all, or none): the list read before. Refused (409)
-  // when another admin changed it since, as Settings → Connections does.
+  // when another admin changed it since, as Settings → Secrets → Connections does.
   /** @type {{ ifWorkspaces?: string[] | null }} */
   const guard = {};
   if (flags["if-workspaces"] !== undefined) {
@@ -3372,7 +3372,7 @@ function siteFlags(flags) {
 }
 
 /**
- * Whether the far end still accepts a secret, as Settings → Connections says
+ * Whether the far end still accepts a secret, as Settings → Secrets → Connections says
  * it: accepted, refused (with when it last worked), the host's own failure,
  * or never used — which is not the same as working.
  */
@@ -5020,7 +5020,7 @@ async function sourceShare(url, flags, ws, base, spec) {
     // The route's own 404 says "no <path> in <ws>"; any other 404 is a
     // platform from before the route.
     if (err instanceof HttpError && err.status === 404 && !/^no /.test(err.message)) {
-      throw new Error(`${url} has no "Move to shared" route yet — it is newer than this platform; move it in Settings → the workspace's assets, or update the platform`);
+      throw new Error(`${url} has no "Move to shared" route yet — it is newer than this platform; move it on the dashboard (the workspace's Files or Tools & hooks page → Move to shared), or update the platform`);
     }
     throw err;
   }
@@ -11562,7 +11562,7 @@ function computeText(p, none) {
 /**
  * `foldrun usage compute` — the cores and GiB the account's running steps
  * may hold together and in one step, what they hold now, and the steps
- * waiting for room (Settings → Governance, GET /api/usage/compute).
+ * waiting for room (Settings → Policies → Governance, GET /api/usage/compute).
  */
 async function usageComputeCmd(flags) {
   const url = platformFor(flags, "usage compute");
@@ -13136,7 +13136,7 @@ async function libraryCmd(positional, flags) {
 
 /**
  * `foldrun secrets clients [add <name> | rm <name>]` — the OAuth apps saved on
- * the platform (Settings → Connections), which a consent runs from without
+ * the platform (Settings → Secrets → Connections), which a consent runs from without
  * anyone typing a client id again. The client secret is never shown.
  */
 async function oauthClientsCmd(positional, flags) {
@@ -13461,7 +13461,7 @@ async function billingPlansCmd(verb, sub, flags) {
 }
 
 /**
- * `foldrun api version [pin <YYYY-MM-DD> | unpin]` — Settings → API: the API
+ * `foldrun api version [pin <YYYY-MM-DD> | unpin]` — Settings → API keys → API: the API
  * version this account's requests get when they send no Foldrun-Version, the
  * versions still served, and the rate limits.
  */
@@ -13837,7 +13837,7 @@ async function teamRemoveCmd(positional, flags) {
  * <zone|auto>` the zone timestamps and crons are read in (POST
  * /api/auth/timezone). Only a `foldrun login` key is a person; a key made by
  * hand is refused. Password, email, two-step sign-in and sessions stay in
- * Settings → Profile.
+ * Profile.
  */
 async function meCmd(positional, flags) {
   const url = remoteUrl(flags);
@@ -13873,7 +13873,7 @@ async function meCmd(positional, flags) {
   console.log(`  account     ${me.account}`);
   console.log(`  role        ${me.role}${me.actor?.kind === "key" ? c.dim(" (this machine's sign-in)") : ""}`);
   console.log(`  timezone    ${p.timezone ?? c.dim("automatic (the browser's)")}`);
-  console.log(`\n  ${c.dim("foldrun me name <first> [last] · foldrun me timezone <zone|auto> · password, email, two-step sign-in: Settings → Profile")}\n`);
+  console.log(`\n  ${c.dim("foldrun me name <first> [last] · foldrun me timezone <zone|auto> · password, email, two-step sign-in: Profile")}\n`);
   return 0;
 }
 

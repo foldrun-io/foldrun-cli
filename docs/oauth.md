@@ -23,7 +23,7 @@ authorization server (Keycloak) and against recorded provider answers.
 
 | What | Spec | Status | How, or why not |
 |---|---|---|---|
-| Authorization code with PKCE (S256) | RFC 6749 §4.1, RFC 7636 | Supported | Settings → Connections or `foldrun connect`. PKCE is on for every connection. |
+| Authorization code with PKCE (S256) | RFC 6749 §4.1, RFC 7636 | Supported | Settings → Secrets → Connections or `foldrun connect`. PKCE is on for every connection. |
 | Refresh, and refresh-token rotation | RFC 6749 §6, RFC 9700 §2.2.2 | Supported | Refreshed before every use; a rotated refresh token replaces the stored one. |
 | Client credentials (machine to machine) | RFC 6749 §4.4 | Supported | The "OAuth — client credentials" connection, or `foldrun secrets set NAME --kind m2m`. |
 | Client secret in the form body | RFC 6749 §2.3.1 | Supported | The default (`token_auth: client_secret_post`). |

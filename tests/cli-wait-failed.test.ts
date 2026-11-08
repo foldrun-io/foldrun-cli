@@ -14,7 +14,7 @@ import { serve, at, failing } from "./fake-platform.ts";
 
 const FLOW = "/api/workspaces/blog-desk/flows/daily/run";
 const AGENT = "/api/workspaces/blog-desk/agents/writer/run";
-const REASON = "no model key: this account runs on its own API key, and none is set — add one in Settings → Model";
+const REASON = "no model key: this account runs on its own API key, and none is set — add one in Settings → Models";
 const failed = { ok: false, runId: "run-f1", status: "failed", result: null, failure: { agent: "writer", reason: REASON }, costUsd: 0, steps: [{ agent: "writer", status: "failed", skipReason: null }] };
 
 test("invoke --wait: a 200 failed run prints the step, the reason and how to read it, and exits 1", async () => {

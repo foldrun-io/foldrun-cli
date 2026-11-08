@@ -107,7 +107,7 @@ and yours now, in the workspaces both allow; a key is never an owner, so an
 owner's sign-in here is an admin, and inviting, changing or removing an admin
 stays in Settings → Team. The audit log marks each such act `via: foldrun
 login`. Transferring the account, your password, email, two-step sign-in and
-sessions stay in the browser. Any other key — one made in Settings → API
+sessions stay in the browser. Any other key — one made in Settings → API keys → API
 keys, a CI key — is refused all of these.
 A scoped admin sees and revokes only keys inside its own scope; a key wider
 than that, the owner's included, is not in its list.

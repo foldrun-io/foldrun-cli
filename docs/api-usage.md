@@ -29,7 +29,7 @@ Foldrun-Version: 2026-10-01
 
 Every response says which version answered it, in `Foldrun-Version`.
 
-- **No header**: for an API key, your account's pin (**Settings → API**, or
+- **No header**: for an API key, your account's pin (**Settings → API keys → API**, or
   `PATCH /api/account/api {"version": "2026-10-01"}`), and with no pin, the
   current version. The dashboard always uses the current version: it ships
   with the platform, so a pin never applies to it.
@@ -76,7 +76,7 @@ shows the platform, and warns when its commands would be refused.
   can only be removed once its deprecation has passed its sunset date.
 - **You are told if it affects you.** Every request is counted by the
   version that answered it, and a call to a deprecated route by the key or
-  person that made it. **Settings → API** and `foldrun api version` show the
+  person that made it. **Settings → API keys → API** and `foldrun api version` show the
   last 30 days. An account that called a deprecated route in the last 30
   days is emailed when it is first seen doing so, and again 90, 30 and 7
   days before the sunset — one email per step, naming the keys that still
@@ -120,7 +120,7 @@ Over the limit the answer is `429`, with `Retry-After` in seconds and
 { "error": "rate limit: this API key may make 120 writes a minute — retry in 41s", "retry_after": 41 }
 ```
 
-Your account's limits are on **Settings → API** and at `GET /api/account/api`.
+Your account's limits are on **Settings → API keys → API** and at `GET /api/account/api`.
 The counters are shared by every server in the deployment. A self-hosted
 install can switch them off with `FOLDRUN_API_RATE_LIMIT=off` (for example
 behind its own gateway).

@@ -111,7 +111,7 @@ edit `~/foldrun/.env` and run `docker compose up -d` there.
 | `FOLDRUN_PUBLIC_URL` | `http://localhost:3900` | the address people open. CLI sign-in, approve links, password resets and shares are made with it |
 | `FOLDRUN_BIND` | `127.0.0.1` | where the dashboard listens. The default is this machine only — reach it over an SSH tunnel or a reverse proxy. `0.0.0.0` opens it to the network: sign up straight away, because the first account becomes the owner |
 | `FOLDRUN_VERSION` | the current `stable` | a version to pin, `vYYYY.MM.DD.N`; `stable` unpins. Give it to the installer: in `.env` by hand it holds only with `FOLDRUN_PINNED=yes` beside it, or the next installer run moves it to `stable` |
-| `ANTHROPIC_API_KEY` | none | the install's model key. Without one, each account adds its own in Settings → Model; a step with neither is refused with what to set |
+| `ANTHROPIC_API_KEY` | none | the install's model key. Without one, each account adds its own in Settings → Models; a step with neither is refused with what to set |
 | `FOLDRUN_DIR` | `~/foldrun` | where the install lives (installer only) |
 | `FOLDRUN_DOCKER_SOCK` | `/var/run/docker.sock` | the Docker socket; rootless Docker is found by the installer |
 | `FOLDRUN_SETUP_TOKEN` | made once | the first account (the owner) is created only with this, through the printed `/signup?setup=…` link |

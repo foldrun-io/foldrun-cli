@@ -116,7 +116,7 @@ with the platform's keys, the rename or delete is refused and names it — set
 it again or delete it, then try again. Only an admin with access to every
 workspace sets the limit, and the account's `RESEND_API_KEY` and `EMAIL_FROM`
 stay the owner's, signed in (no key, not even `foldrun login`). The account's own uses of a secret — its model key in
-Settings → Model, and the mail the platform sends for the account (password
+Settings → Models, and the mail the platform sends for the account (password
 resets, invites, billing) — are not a workspace's and are not limited. A new
 value or a new site binding keeps the limit. Limiting a secret seals the list
 with the value, like `sites` (see [How they are kept](#how-they-are-kept)),
@@ -252,7 +252,7 @@ secrets: GA_KEY materialised in the sandbox for bash; DATAFORSEO_PASSWORD bound 
 ## Connected accounts
 
 Some third parties are connected rather than pasted — Google, GitHub,
-anything OAuth. Settings → Connections walks the consent flow once and stores
+anything OAuth. Settings → Secrets → Connections walks the consent flow once and stores
 the result as an `oauth2` secret; the platform refreshes it. An agent names
 it in `secrets:` like any other.
 

@@ -79,10 +79,10 @@ a workspace that sets only `effort` keeps the account's `model`.
 
 | Job | In the dashboard | In the CLI |
 |---|---|---|
-| Governance | Settings → Governance: owner, budget, deploy rules, pause, team, API | `foldrun jobs`, `foldrun account set governance.<field>` |
-| Guardrail | Settings → Guardrail: network enforcement; each agent's page | `foldrun check --security`, `foldrun agent network` |
-| Observability | Settings → Observability: notify, alerts, telemetry; Observe, Issues | `foldrun issues`, `foldrun account telemetry` |
-| Evaluation | Settings → Evaluation: the judge; the Evals page | `foldrun eval --to <workspace>` |
+| Governance | Settings → Policies → Governance: owner, budget, deploy rules, pause, team, API | `foldrun jobs`, `foldrun account set governance.<field>` |
+| Guardrail | Settings → Policies → Guardrail: network enforcement; each agent's page | `foldrun check --security`, `foldrun agent network` |
+| Observability | Settings → Policies → Observability: notify, alerts, telemetry; Observe, Issues | `foldrun issues`, `foldrun account telemetry` |
+| Evaluation | Settings → Policies → Evaluation: the judge; the Evals page | `foldrun eval --to <workspace>` |
 
 `foldrun jobs` prints all four; with `--to <workspace>`, each field's value
 there, the account's, and how the two combine. They do not all simply

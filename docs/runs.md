@@ -213,7 +213,7 @@ telemetry:
     authorization: ${OTEL_TOKEN}             # a vault secret, by name
 ```
 
-In the account's `AGENTS.md` (Settings → Observability → *Send runs to your
+In the account's `AGENTS.md` (Settings → Policies → Observability → *Send runs to your
 tracing*, or `foldrun account telemetry set <url> --header
 authorization='${OTEL_TOKEN}'`), or a workspace's, which replaces the
 account's whole. Every run that finishes is sent as one trace. Resource
@@ -560,7 +560,7 @@ Sooner is yours to decide:
 - everything that started before a date: `foldrun runs rm --until 30d`
   (or `--until 2026-08-01`, `--to <workspace>`, `--dry-run`), which is
   `POST …/runs/bulk { action: "delete", until }` — finished runs only;
-- the whole account: close it (Settings → Account); the platform team then
+- the whole account: close it (Settings → General → Close this account); the platform team then
   deletes its data.
 
 Deleting needs an admin (`workspace:manage`). What the charge was stays on

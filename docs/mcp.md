@@ -74,7 +74,7 @@ claude mcp add --transport http foldrun https://<your platform>/api/mcp \
   --header "Authorization: Bearer mda_..."
 ```
 
-Settings → API keys → **Connecting an AI app (MCP)** shows this install's
+Settings → API keys → **Connect an AI app (MCP)** shows this install's
 address and the same lines.
 
 ## Connected apps

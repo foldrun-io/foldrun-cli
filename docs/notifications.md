@@ -149,7 +149,7 @@ Three watch for behaviour that is out of character rather than broken:
   usual".
 - `runs_per_hour` — one flow started that many times in the last hour: a
   loop, a webhook sender retrying, a schedule written wrong. At most once a
-  day per flow. `throttle:` caps it for good; Settings → Governance → Pause stops it now.
+  day per flow. `throttle:` caps it for good; Settings → Policies → Pause runs stops it now.
 - `new_host` — after each run, the sites every agent reached (from the
   egress lines on its trail) are compared with what it reached before, and a
   new one is told: "blog-desk: agent researcher reached a site it never
