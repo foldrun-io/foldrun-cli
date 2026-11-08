@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [19.2.7] — 2026-11-08
+
+### docs
+
+- sync network.md (a held WebKit trusts the egress CA, FOL-144) ([84470a2](https://github.com/foldrun-io/foldrun-cli/commit/84470a2))
+
 ## [19.2.6] — 2026-11-08
 
 ### deps
