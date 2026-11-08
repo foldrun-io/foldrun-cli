@@ -264,7 +264,7 @@ What it may reach and send:
 - **Untrusted.** What a remote answers reaches the model fenced as data from
   another organisation's system, with invisible characters removed. An agent
   with `remotes:` counts as reading untrusted content in the
-  [lethal-trifecta check](checks#securitylethal-trifecta).
+  [lethal-trifecta check](checks#security-lethal-trifecta).
 - **Limits.** `limits: {a2a: 10}` caps the messages a step sends (`a2a_send`
   and `a2a_reply`); `a2a.status`, `a2a.send`, `a2a.reply` and `a2a.cancel` cap
   each tool alone, so polling is capped apart from sending. A step sends at
@@ -382,7 +382,7 @@ What holds:
   serve a writer with secrets and no web: a page that tells the reader to
   send something finds nothing to send, and the writer never read the page.
   `foldrun check` names what it holds that the parent does not
-  ([`security/subagent-own-sandbox`](checks#securitysubagent-own-sandbox)).
+  ([`security/subagent-own-sandbox`](checks#security-subagent-own-sandbox)).
 - **Only the reply comes back.** The reply is still text the parent reads —
   it can carry an instruction — but it reaches a model whose sandbox never
   held the page.

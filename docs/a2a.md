@@ -121,7 +121,7 @@ each is ticked. From the terminal:
 `foldrun a2a publish <flow> --to <ws> --accept-risk <agent,…>` (every agent
 accepted, as the list replaces the flow's; `--clear-accept-risk` takes it
 out). `foldrun a2a ls --to <ws>` lists them, and
-[`security/published-flow-secret-code`](checks#securitypublished-flow-secret-code)
+[`security/published-flow-secret-code`](checks#security-published-flow-secret-code)
 is `foldrun check`'s warning.
 
 ### An editor cannot widen a published flow
@@ -402,12 +402,12 @@ Ended tasks are kept 90 days.
   and an editor cannot widen any agent of a published flow
   ([above](#an-editor-cannot-widen-a-published-flow)).
 - **`foldrun check` warns on three shapes** of published flow (warnings, not
-  errors): [`security/published-flow-trifecta`](checks#securitypublished-flow-trifecta)
+  errors): [`security/published-flow-trifecta`](checks#security-published-flow-trifecta)
   — an agent of the flow that holds something private, which a caller could
   ask for in the answer or steer into sending; 
-  [`security/published-flow-secret-code`](checks#securitypublished-flow-secret-code)
+  [`security/published-flow-secret-code`](checks#security-published-flow-secret-code)
   — one that holds a secret and can run code (info once accepted); and
-  [`security/published-flow-ungated`](checks#securitypublished-flow-ungated)
+  [`security/published-flow-ungated`](checks#security-published-flow-ungated)
   — a step that acts outside the workspace with no approval or `ask:` before
   it, which any key holder starts. Put a gate (`2!.`) on it, or take a leg
   away.

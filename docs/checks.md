@@ -90,9 +90,9 @@ deploy names each finding and its rule; a `foldrun-ignore` with a reason
 
 `foldrun check` stays offline. Two checks need the network, so they run on
 the platform against the deployed copy: known vulnerabilities for exact
-runtime pins ([`supply-chain/known-vulnerability`](#supply-chainknown-vulnerability))
+runtime pins ([`supply-chain/known-vulnerability`](#supply-chain-known-vulnerability))
 and the tool text of MCP servers reached by URL
-([`content/mcp-tool-text`](#contentmcp-tool-text)).
+([`content/mcp-tool-text`](#content-mcp-tool-text)).
 
 - **When you ask:** Checks → **Online checks**, `foldrun check --to <ws>
   --online`, or `GET /api/workspaces/<ws>/check?online=1` — editor and
@@ -299,7 +299,7 @@ is the other answer, though this rule looks at the agent, not the flow.
 sub-agent never gets more than its parent, so they are dropped inside the
 delegation. Grant them to the parent, or remove them from the sub-agent.
 A sub-agent with `sandbox: own` is not this rule's: its tools are its own
-([below](#securitysubagent-own-sandbox)).
+([below](#security-subagent-own-sandbox)).
 
 ### security/subagent-own-sandbox
 
