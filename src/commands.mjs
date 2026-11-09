@@ -4695,6 +4695,7 @@ async function doctor(flags) {
  *   keys revoke <id>
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
+ *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
  *                                      one ends now, or when the grace runs out.
  *                                      A key already rotated is refused (409):
@@ -4719,6 +4720,8 @@ async function keysCmd(positional, flags) {
       // A deploy key opened the platform's own git, gone since 17 Oct 2026.
       const what = k.scope
         ? "deploy key · opens nothing since the platform's git went — revoke it"
+        : k.purpose === "gateway"
+          ? gatewayLine(k.gateway)
         : k.purpose === "a2a"
           ? `A2A · ${k.a2a?.workspace ?? "?"} · ${(k.a2a?.flows ?? []).join(",")}${k.a2a?.maxTasks ? ` · up to ${k.a2a.maxTasks} open` : ""}`
           : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
@@ -4738,7 +4741,9 @@ async function keysCmd(positional, flags) {
   }
   if (verb === "create" || verb === "new") {
     if (!arg) throw new Error("what is the key for? foldrun keys create <label>");
+    if (flags.a2a === true && flags.gateway === true) throw new Error("--a2a or --gateway, not both");
     if (flags.a2a === true) return keysCreateA2a(url, arg, flags);
+    if (flags.gateway === true) return keysCreateGateway(url, arg, flags);
     const body = { label: arg };
     if (typeof flags.role === "string") body.role = flags.role;
     // --expires 30d|90d|365d|never (--forever is never); unsaid, 90 days —
@@ -4818,6 +4823,57 @@ async function keysCreateA2a(url, label, flags) {
   if (made.key == null) return lostSecret(made.id);
   console.log(`  ${made.key}\n`);
   console.log(`  ${c.dim(`Shown once. The outside agent sends it as its bearer token; it opens /a2a only. Try it: ${A2A_KEY_ENV}=<key> foldrun a2a call <card-url> "…" — \`foldrun a2a ls --to ${flags.to}\` has the card URLs. \`foldrun keys revoke ${made.id}\` ends it.`)}\n`);
+  return 0;
+}
+
+/** How `keys ls` describes a gateway key: its limits, and what it has spent. */
+function gatewayLine(g) {
+  const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+  const parts = ["gateway · Claude Code"];
+  if (g?.capUsd != null) parts.push(`${usd(g.spentUsd)} of ${usd(g.capUsd)}`);
+  else if (g?.spentUsd != null) parts.push(`${usd(g.spentUsd)} spent`);
+  if (g?.dailyUsd != null) parts.push(`${usd(g.todayUsd)} of ${usd(g.dailyUsd)} today`);
+  return parts.join(" · ");
+}
+
+/** A dollar limit from a flag: above 0, at most 100000 (what the platform takes). */
+function usdFlag(v, name) {
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (v === true || !Number.isFinite(n) || n <= 0 || n > 100_000) throw new Error(`${name} takes a number of dollars above 0 and at most 100000 — e.g. ${name} 20`);
+  return n;
+}
+
+/**
+ * `foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]` — a
+ * key for a CODING agent (Claude Code, or any tool that takes an Anthropic
+ * base URL and key): it spends the account's credits on foldrun's Anthropic
+ * models through the gateway, up to its own limits, and opens no /api route.
+ * An admin of every workspace mints it.
+ */
+async function keysCreateGateway(url, label, flags) {
+  if (flags.role !== undefined || flags.workspaces !== undefined || flags.to !== undefined || flags.flows !== undefined) {
+    throw new Error("a gateway key takes --cap and --daily, not --role, --workspaces, --to or --flows — it opens the gateway only, never the API");
+  }
+  const capUsd = usdFlag(flags.cap, "--cap");
+  const dailyUsd = usdFlag(flags.daily, "--daily");
+  if (capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both)");
+  const body = { label, purpose: "gateway" };
+  if (capUsd !== undefined) body.capUsd = capUsd;
+  if (dailyUsd !== undefined) body.dailyUsd = dailyUsd;
+  if (flags.forever === true && flags.expires !== undefined) throw new Error("--forever or --expires <span>, not both");
+  // As for an API key: a bare --expires is refused, never read as 90 days (Codex review).
+  if (flags.expires !== undefined && typeof flags.expires !== "string") throw new Error("--expires needs a span: 30d, 90d, 365d or never");
+  body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
+  const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+  console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0 }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+  if (made.key == null) return lostSecret(made.id);
+  console.log(`  ${made.key}\n`);
+  const base = made.gatewayUrl ?? "<the gateway URL — not set on this platform yet>";
+  console.log(`  ${c.dim("Shown once. Point Claude Code at it:")}\n`);
+  console.log(`    export ANTHROPIC_BASE_URL=${base}`);
+  console.log(`    export ANTHROPIC_API_KEY=<key>\n`);
+  console.log(`  ${c.dim(`It opens the gateway only. \`foldrun keys ls\` shows what it has spent; \`foldrun keys revoke ${made.id}\` ends it.`)}\n`);
   return 0;
 }
 

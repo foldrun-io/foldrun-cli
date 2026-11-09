@@ -214,6 +214,54 @@ Nothing about the folder changes. What the platform adds is the operating around
 [Secrets](secrets) in a vault, [Notifications](notifications),
 [Budgets and billing](budgets-and-billing), [Team and access](team-and-access).
 
+## Moving records into the database
+
+Runs, the trigger log and the storage file index used to be files on the data
+volume. With a database configured they move into Postgres, one workspace at a
+time, while the other processes keep running.
+
+A row per workspace in `records_routing` says where its records are, and every
+process with a database reads the same rows:
+
+| State | Meaning |
+|---|---|
+| `files` | The files are the records. |
+| `moving` | An import is making the rows match the files. A record call waits up to 5 s, then is refused as busy. |
+| `database` | The rows are the records, for good. There is no way back to files. |
+
+A workspace with no row follows `('*', '*')`, the install's default, which
+stays `files` until a move has taken everything. `FOLDRUN_RECORDS=files` means
+only "this process never starts a move": a workspace another process moved is
+read and written as rows there too, and a process that cannot read the routing
+for 10 s refuses record calls rather than guess.
+
+A move copies the files into rows, holds the workspaces at `moving` until every
+process seen in the last 30 s has acknowledged it, makes the rows exactly what
+the files say, flips them to `database`, and only then sets the files aside as
+`.imported-<date>`.
+
+**Upgrading:**
+
+1. Deploy this release with `FOLDRUN_RECORDS=files` on every process (web,
+   worker, assistant) and wait until no process of the old release is left
+   (`kubectl rollout status deploy/<name>` for each). An older process reads no
+   routing, so a move while one runs would hide what it reads.
+2. Remove `FOLDRUN_RECORDS=files`. A rolling restart is fine: the first process
+   to boot in database mode moves everything. Pick a quiet moment — a run
+   saving while its workspace is held can fail as busy.
+3. Watch the ops log: `records.on_files` (workspaces still on files, with the
+   `records.import_failed` that says why; the next boot tries again),
+   `records.move_abandoned` (`reason=not_acknowledged`: an old or stuck process
+   did not answer within 60 s) and `records.stray_set_aside` (a record file
+   found in a workspace already in the database; kept as `.stray-<date>`, never
+   merged in).
+
+The timings are `FOLDRUN_RECORDS_ROUTING_BEAT_MS` (1000),
+`FOLDRUN_RECORDS_ROUTING_LEASE_MS` (10000), `FOLDRUN_RECORDS_MOVING_WAIT_MS`
+(5000), `FOLDRUN_RECORDS_ACK_WAIT_MS` (60000) and `FOLDRUN_RECORDS_SETTLE_MS`
+(120000, raise it for very large workspaces); keep them the same on every
+process.
+
 ## Where the data is
 
 On your machine: in the folder. On the platform: your workspace's files and
