@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.0.0] — 2026-11-09
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 18.0.0, a new major. (d1b0aaf)
+
+### deps
+
+- @foldrun/core ^18.0.0 ([d1b0aaf](https://github.com/foldrun-io/foldrun-cli/commit/d1b0aaf))
+
 ## [19.3.2] — 2026-11-09
 
 ### deps
