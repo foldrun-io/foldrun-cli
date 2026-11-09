@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.1.0] — 2026-11-09
+
+### New in the public API
+
+- the `--gateway` flag
+- the `--cap` flag
+- the `--daily` flag
+
+- feat(keys): `foldrun keys create --gateway --cap <usd> [--daily <usd>]` ([86e25fc](https://github.com/foldrun-io/foldrun-cli/commit/86e25fc))
+
 ## [20.0.0] — 2026-11-09
 
 ### Breaking changes
