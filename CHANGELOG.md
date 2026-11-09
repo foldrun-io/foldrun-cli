@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.2.0] — 2026-11-09
+
+### New in the public API
+
+- the `--login` flag
+
+- feat(keys): `keys create --gateway --login`: on the operator's Claude login ([6676101](https://github.com/foldrun-io/foldrun-cli/commit/6676101))
+
 ## [20.1.0] — 2026-11-09
 
 ### New in the public API
