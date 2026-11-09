@@ -4696,6 +4696,7 @@ async function doctor(flags) {
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
+ *   keys create <label> --gateway --login   on the operator's Claude login (its own accounts): not metered
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
  *                                      one ends now, or when the grace runs out.
  *                                      A key already rotated is refused (409):
@@ -4828,6 +4829,7 @@ async function keysCreateA2a(url, label, flags) {
 
 /** How `keys ls` describes a gateway key: its limits, and what it has spent. */
 function gatewayLine(g) {
+  if (g?.credential === "login") return "gateway · Claude Code · the operator's Claude login · not metered";
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const parts = ["gateway · Claude Code"];
   if (g?.capUsd != null) parts.push(`${usd(g.spentUsd)} of ${usd(g.capUsd)}`);
@@ -4855,10 +4857,14 @@ async function keysCreateGateway(url, label, flags) {
   if (flags.role !== undefined || flags.workspaces !== undefined || flags.to !== undefined || flags.flows !== undefined) {
     throw new Error("a gateway key takes --cap and --daily, not --role, --workspaces, --to or --flows — it opens the gateway only, never the API");
   }
-  const capUsd = usdFlag(flags.cap, "--cap");
-  const dailyUsd = usdFlag(flags.daily, "--daily");
-  if (capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both)");
+  // --login: the operator's own Claude login, for an account the operator
+  // allows it (its desks' accounts) — not metered, so it takes no limit.
+  if (flags.login === true && (flags.cap !== undefined || flags.daily !== undefined)) throw new Error("--login takes no --cap or --daily — the operator's Claude login is not metered, so a dollar limit could not hold it");
+  const capUsd = flags.login === true ? undefined : usdFlag(flags.cap, "--cap");
+  const dailyUsd = flags.login === true ? undefined : usdFlag(flags.daily, "--daily");
+  if (flags.login !== true && capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both) — or --login, on an account the operator's Claude login is for");
   const body = { label, purpose: "gateway" };
+  if (flags.login === true) body.credential = "login";
   if (capUsd !== undefined) body.capUsd = capUsd;
   if (dailyUsd !== undefined) body.dailyUsd = dailyUsd;
   if (flags.forever === true && flags.expires !== undefined) throw new Error("--forever or --expires <span>, not both");
@@ -4866,7 +4872,7 @@ async function keysCreateGateway(url, label, flags) {
   if (flags.expires !== undefined && typeof flags.expires !== "string") throw new Error("--expires needs a span: 30d, 90d, 365d or never");
   body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
   const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
-  console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0 }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+  console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
   if (made.key == null) return lostSecret(made.id);
   console.log(`  ${made.key}\n`);
   const base = made.gatewayUrl ?? "<the gateway URL — not set on this platform yet>";

@@ -454,6 +454,7 @@ Options
   --a2a                     keys create: an A2A key for an outside agent — with --to <workspace> and --flows a,b; --max-tasks <n> caps its open tasks (1–100, default 10)
   --gateway                 keys create: a gateway key for Claude Code — with --cap <usd> (in all) and/or --daily <usd> (per UTC day)
   --cap <usd>, --daily <usd>  keys create --gateway: the key's own spending limits, $0.01–$100000
+  --login                   keys create --gateway: on the operator's Claude login instead (the operator's own accounts; not metered, no limits)
   --key-env <NAME>          a2a call, a2a status, a2a cancel, a2a card: the environment variable holding the A2A key (default FOLDRUN_A2A_KEY) — a key is never taken on the command line
   --card <url>              a2a status, a2a cancel: the agent card of the agent that holds the task
 
@@ -498,7 +499,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "login", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example", "accept-risk"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

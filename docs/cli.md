@@ -314,7 +314,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `--expires <span>` | `keys create`: when it stops working — `30d`, `90d` (the default, as in the dashboard; before CLI 15.0.0 the default was never), `365d` or `never`; `--forever` is `never` |
 | `--grace <span>` | `keys rotate`: keep the old key working for `1h` or `24h` (default `0`: revoked now) |
 | `--a2a` | `keys create`: an A2A key for an outside agent, with `--to <workspace>`, `--flows a,b` and optionally `--max-tasks <n>` |
-| `--gateway` | `keys create`: a gateway key for Claude Code, with `--cap <usd>` and/or `--daily <usd>` |
+| `--gateway` | `keys create`: a gateway key for Claude Code, with `--cap <usd>` and/or `--daily <usd>` — or `--login` (the operator's Claude login, on the operator's own accounts; not metered, no limits) |
 | `--key-env <NAME>` | `a2a call`, `a2a status`, `a2a cancel`, `a2a card`: the environment variable that holds the A2A key (default `FOLDRUN_A2A_KEY`) |
 | `--card <url>` | `a2a status`, `a2a cancel`: the agent card of the agent that holds the task |
 | `--force` | `deploy`: deploy while runs are in flight. `pull`, `storage get`: overwrite local files |

@@ -28,9 +28,8 @@ foldrun keys create laptop --gateway --cap 20 --daily 5
 - **A limit of its own is required:** `--cap` (USD, in all) or `--daily`
   (USD, per UTC day), or both — from $0.01 to $100,000.
   Limits are in dollars charged — what the account pays at foldrun's price
-  list — and so is the spend `keys ls` shows. Spend is counted at the margin in force
-  now, so if foldrun changes its margin, a key's past spend is counted at the
-  new one.
+  list — and so is the spend `keys ls` shows. Each call is kept at the
+  margin it was charged at, so a margin changed later re-prices nothing.
 - **Who may mint one:** an admin of every workspace. The key spends the
   whole account's balance, so a workspace-scoped admin cannot.
 - **What it opens:** the gateway only. Every `/api` route refuses it (403),
@@ -42,6 +41,30 @@ foldrun keys create laptop --gateway --cap 20 --daily 5
 
 The API is `POST /api/keys { purpose: "gateway", capUsd?, dailyUsd?, label?, expires? }`
 ([API](api.md)).
+
+## On the operator's Claude login
+
+An account the operator allows its own model credential — the one its desks
+run on — may mint a gateway key on the operator's Claude login instead:
+
+```sh
+foldrun keys create mine --gateway --login
+```
+
+or **Runs on → The operator's Claude login** on Settings → API keys (shown
+only on such an account). Such a key:
+
+- sends the operator's Claude login to Anthropic, read fresh on every call,
+  so the platform's token refresh reaches it with no restart;
+- is **not metered or billed** and takes no `--cap` or `--daily` — the
+  login is a flat-rate subscription, so there is no dollar figure to hold;
+- shares that subscription's weekly cap with the account's desks: a long
+  coding session can leave the desks out of their window until it resets;
+- opens nothing once the account is no longer allowed the credential: the
+  gateway asks on every call.
+
+It is for the operator's own use. A subscription's terms are its owner's to
+keep; foldrun's models (the rest of this page) are what to give anyone else.
 
 ## What the gateway serves
 

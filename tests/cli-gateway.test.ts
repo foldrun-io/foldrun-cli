@@ -62,6 +62,23 @@ test("--gateway is a switch: a word after it is not swallowed as its value", asy
   assert.match(r.out, /not set on this platform yet/, "no gateway URL yet: said so");
 });
 
+test("keys create --gateway --login posts credential: login, takes no limit, and keys ls says it is not metered", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "mda_login", id: "g3", purpose: "gateway", credential: "login", capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
+    "/api/keys": () => ({ keys: [{ id: "g3", prefix: "mda_login123", label: "mine", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: null, dailyUsd: null, credential: "login" }, createdAt: "2026-11-10T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }], gatewayUrl: null }),
+  });
+  const r = await at(s.url, "keys", "create", "mine", "--gateway", "--login");
+  const withCap = await at(s.url, "keys", "create", "mine", "--gateway", "--login", "--cap", "5");
+  const ls = await at(s.url, "keys", "ls");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(s.seen[0].body), { label: "mine", purpose: "gateway", credential: "login", expires: "90d" });
+  assert.match(r.out, /the operator's Claude login · not metered/);
+  assert.equal(withCap.code, 1);
+  assert.match(withCap.out, /--login takes no --cap or --daily/);
+  assert.match(ls.out, /gateway · Claude Code · the operator's Claude login · not metered/);
+});
+
 test("keys --help names --gateway", async () => {
   const k = await cli(["keys", "--help"]);
   assert.match(k.out, /--gateway/);
