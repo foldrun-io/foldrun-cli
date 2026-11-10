@@ -12,6 +12,24 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.7.0] — 2026-11-10
+
+### New in the public API
+
+- `foldrun keys create laptop`
+- the `--claude-code` flag
+
+- fix(keys): --claude-code's settings helpers typecheck (JSDoc types for the values that start null) ([e6150f5](https://github.com/foldrun-io/foldrun-cli/commit/e6150f5))
+- feat(keys): keys create --gateway --claude-code writes the key into Claude Code's settings ([dd5a41e](https://github.com/foldrun-io/foldrun-cli/commit/dd5a41e))
+
+### docs
+
+- sync (claude-code page removed from the public docs) ([3326dcb](https://github.com/foldrun-io/foldrun-cli/commit/3326dcb))
+
+### test+docs
+
+- key fixtures by kind (fr_api_/fr_a2a_), api/checks/mcp/a2a docs synced (FOL-154) ([568b2c0](https://github.com/foldrun-io/foldrun-cli/commit/568b2c0))
+
 ## [20.6.0] — 2026-11-10
 
 ### New in the public API
