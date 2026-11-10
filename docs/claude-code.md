@@ -109,8 +109,10 @@ the reason:
 | `401` | no key, an unknown, revoked or expired key |
 | `403` | not a gateway key; foldrun's models off for the account |
 | `402` | out of credits; the key's limit or the account's daily limit has no room; a model with no price |
+| `429` | the key's request rate (300 a minute) or its open calls (32 at once) — with `Retry-After`; waiting helps. Every route and every kind of key counts |
 | `400` | a request field that is not offered (named in the message) |
 
-A spent limit is a `402`, not a `429`: Claude Code retries a `429` for minutes,
+A key that is revoked can still answer for up to 10 seconds: each gateway pod
+caches a key for that long. A spent limit is a `402`, not a `429`: Claude Code retries a `429` for minutes,
 and no retry makes room under a limit. A `429` from Anthropic itself comes
 back as it was.
