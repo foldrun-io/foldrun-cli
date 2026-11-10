@@ -258,6 +258,7 @@ const HELP = `foldrun — agents are just folders
   foldrun pull [workspace]  bring the platform's account down here (refuses to clobber; --force overrides)
   foldrun export [workspace]  a deployed workspace as a .zip — agents, flows, tools, skills, scripts, evals, knowledge; never memory, state or secret values (--flow <name> or --agent <name> for one, with what it needs; --file <path>|-, --force)
   foldrun import <file.zip>  take a package in: shows what it adds, would replace and still needs, then asks (--to <workspace>; a new name makes a workspace; --dry-run, --overwrite, --yes, --json)
+  foldrun snapshot push [dir]  send a git folder for an agent on foldrun to work on: what git would commit, checked for secrets here and on the platform, answers the snapshot id (--to <workspace>; --dry-run, --out <file.tar.gz> (--force over one that is there), --json)
   foldrun status [workspace]  per workspace: what is added, changed or gone since the last deploy
   foldrun status --platform  is the platform up: each component, and any incident or maintenance posted (--json)
   foldrun status --platform --history  uptime per component per day and the incidents in the window, as the status page's bars (--days 1-90, default 90; --json)

@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage } from "./guide.mjs";
 import { createRequire } from "node:module";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
@@ -11366,6 +11366,130 @@ async function importCmd(positional, flags, layout) {
 }
 
 /**
+ * `foldrun snapshot push [dir] --to <workspace>` — send a folder for an agent
+ * on foldrun to work on (Part B3). What goes is what git would commit: the
+ * tracked files and the untracked ones .gitignore does not exclude
+ * (`git ls-files --cached --others --exclude-standard`), as they are on disk
+ * now. Links and anything that is not a plain file are left out and named.
+ * Checked HERE before anything leaves the machine — a secret in any file
+ * stops it, with no way to silence it but removing the secret or the file —
+ * and checked again by the platform. Answers the snapshot id a run takes.
+ */
+async function snapshotCmd(positional, flags, layout) {
+  const verb = positional[0];
+  if (verb !== "push") throw new Error("`foldrun snapshot push [dir] --to <workspace>` — send a git folder for an agent on foldrun to work on (--dry-run, --out <file.tar.gz> [--force], --json)");
+  const dir = path.resolve(positional[1] ?? ".");
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`${dir} is not a folder`);
+  const git = spawnSync("git", ["-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "buffer", maxBuffer: 256 * 1024 * 1024 });
+  if (git.error || git.status !== 0) {
+    throw new Error(`${dir} is not in a git repository — a snapshot sends what git would commit, so \`git init\` it first (${String(git.stderr ?? git.error?.message ?? "").trim().split("\n")[0]})`);
+  }
+  const { packSnapshot, SnapshotRefused, SNAPSHOT_LIMITS } = await import("@foldrun/core/snapshot-archive");
+  const { uploadSecretFindings } = await import("@foldrun/core/scan");
+  const names = [...new Set(git.stdout.toString("utf8").split("\0").filter(Boolean))].sort();
+  const entries = [];
+  const left = [];
+  let total = 0;
+  const realDir = fs.realpathSync(dir);
+  for (const rel of names) {
+    const abs = path.join(dir, rel);
+    let st;
+    try {
+      st = fs.lstatSync(abs);
+    } catch {
+      continue; // tracked, but deleted on disk: it is not in the folder now
+    }
+    // lstat looks through a link in a PARENT: a tracked folder replaced by a
+    // link to elsewhere still lists its old children (Codex). A file goes only
+    // when its real path is exactly <folder>/<path> — no link on the way.
+    if (st.isFile()) {
+      let real = "";
+      try {
+        real = fs.realpathSync(abs);
+      } catch {
+        /* gone meanwhile */
+      }
+      if (real !== path.join(realDir, rel)) {
+        left.push(`${rel} (under a link)`);
+        continue;
+      }
+    }
+    if (!st.isFile()) {
+      left.push(`${rel} (${st.isSymbolicLink() ? "a link" : st.isDirectory() ? "a submodule" : "not a plain file"})`);
+      continue;
+    }
+    if (st.size > SNAPSHOT_LIMITS.maxFileBytes) throw new Error(`${rel} is ${st.size} bytes — the most for one file is ${SNAPSHOT_LIMITS.maxFileBytes}; add it to .gitignore or remove it`);
+    total += st.size;
+    if (total > SNAPSHOT_LIMITS.maxTotalBytes) throw new Error(`the folder is past ${SNAPSHOT_LIMITS.maxTotalBytes} bytes — leave out build output and dependencies (.gitignore)`);
+    entries.push({ path: rel, mode: st.mode & 0o111 ? 0o755 : 0o644, content: fs.readFileSync(abs) });
+  }
+  if (!entries.length) throw new Error(`nothing to send — git sees no files in ${dir}`);
+
+  const scan = uploadSecretFindings(entries.map((e) => ({ path: e.path, content: e.content.toString("utf8") })));
+  if (scan.findings.length) {
+    for (const f of scan.findings.slice(0, 20)) console.error(`  ${c.red("✗")} ${f.file}${f.line ? `:${f.line}` : ""}  ${c.dim(f.rule)}`);
+    throw new Error(`not sent: ${scan.findings.length} place${scan.findings.length === 1 ? "" : "s"} look${scan.findings.length === 1 ? "s" : ""} like a secret — remove ${scan.findings.length === 1 ? "it" : "them"} (or leave the file out with .gitignore) and push again; a snapshot cannot carry one`);
+  }
+
+  // Files the scanner cannot read as text (a NUL early on): sent, but named,
+  // so nobody takes "checked for secrets" to cover them.
+  const unscanned = scan.unscanned;
+  let packed;
+  try {
+    packed = packSnapshot(entries);
+  } catch (err) {
+    if (err instanceof SnapshotRefused) throw new Error(`not sent: ${err.message}`);
+    throw err;
+  }
+  if (typeof flags.out === "string") {
+    // Never over a file that is there unless asked (--force), as export does:
+    // a preview must not be able to destroy a file named by mistake (Codex).
+    if (fs.existsSync(flags.out) && flags.force !== true) throw new Error(`${flags.out} already exists — --force replaces it`);
+    fs.writeFileSync(flags.out, packed.archive);
+  }
+  const summary = `${packed.files} file${packed.files === 1 ? "" : "s"}, ${packed.bytes} bytes (${packed.archive.length} compressed)`;
+  if (flags["dry-run"] === true) {
+    if (flags.json === true) console.log(JSON.stringify({ dryRun: true, snapshotId: packed.sha256, files: packed.files, bytes: packed.bytes, compressedBytes: packed.archive.length, leftOut: left, unscanned }, null, 2));
+    else {
+      console.log(`\n  ${c.bold(summary)} ${c.dim(`· ${packed.sha256.slice(0, 12)}`)}`);
+      for (const l of left.slice(0, 20)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+      if (unscanned.length) console.log(`  ${c.amber("!")} not checked for secrets (binary): ${unscanned.slice(0, 10).join(", ")}${unscanned.length > 10 ? " …" : ""}`);
+      console.log(`\n  ${c.dim("(--dry-run: nothing sent)")}\n`);
+    }
+    return 0;
+  }
+
+  const url = platformFor(flags, "snapshot push");
+  const ws = platformWorkspace(flags, layout, "snapshot push");
+  const token = await renewedToken(url, flags);
+  const res = await remoteFetch(
+    url,
+    `/api/workspaces/${enc(ws)}/snapshots`,
+    { method: "POST", body: packed.archive, headers: { "content-type": "application/gzip" } },
+    { token, seconds: timeoutSeconds(flags) },
+  );
+  const text = await res.text();
+  let body = {};
+  try {
+    body = text.trim() ? JSON.parse(text) : {};
+  } catch {
+    /* not JSON — the status says enough */
+  }
+  if (!res.ok) throw new HttpError(`${body.error ?? `snapshot push → HTTP ${res.status}`}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, body);
+  if (flags.json === true) {
+    console.log(JSON.stringify({ ...body, leftOut: left, unscanned }, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.green("✓")} ${summary} → ${c.bold(ws)}${body.reused ? c.dim("  (already there)") : ""}`);
+  console.log(`  snapshot ${c.bold(String(body.snapshotId))}`);
+  console.log(`  ${c.dim(`kept until ${body.expiresAt}, and while a run uses it`)}`);
+  for (const l of left.slice(0, 20)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+  if (unscanned.length) console.log(`  ${c.amber("!")} not checked for secrets (binary): ${unscanned.slice(0, 10).join(", ")}${unscanned.length > 10 ? " …" : ""}`);
+  console.log();
+  return 0;
+}
+
+/**
  * `foldrun report <run-id> get <agent>/<path>` — one file a run archived:
  * whatever an agent left in outputs/, copied under the run when it ended.
  */
@@ -14870,6 +14994,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return exportCmd(positional, flags, layout);
     case "import":
       return importCmd(positional, flags, layout);
+    case "snapshot":
+      return snapshotCmd(positional, flags, layout);
     case "status":
       return statusCmd(layout, flags, positional[0]);
     case "workspaces":
