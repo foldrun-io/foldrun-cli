@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.5.0] — 2026-11-10
+
+- feat(account): account model use foldrun names zai, qwen, minimax and mimo; docs synced ([44d2c5b](https://github.com/foldrun-io/foldrun-cli/commit/44d2c5b))
+
 ## [20.4.0] — 2026-11-10
 
 ### New in the public API
