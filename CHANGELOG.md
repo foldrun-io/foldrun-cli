@@ -12,6 +12,28 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.4.0] — 2026-11-10
+
+### New in the public API
+
+- `foldrun keys set`
+- the `--sonnet` flag
+- the `--opus` flag
+- the `--haiku` flag
+
+- feat(keys): `foldrun keys set <id> --sonnet openai/gpt-6` — a gateway key's model map ([f59a9d2](https://github.com/foldrun-io/foldrun-cli/commit/f59a9d2))
+- fix(keys): a login gateway key's mint says it is not metered, not "shows what it has spent" ([aad32fa](https://github.com/foldrun-io/foldrun-cli/commit/aad32fa))
+
+### deps
+
+- @foldrun/core ^18.0.1 ([b099eaf](https://github.com/foldrun-io/foldrun-cli/commit/b099eaf))
+
+### docs
+
+- sync (OpenAI and Gemini through the gateway) ([b09fe43](https://github.com/foldrun-io/foldrun-cli/commit/b09fe43))
+- sync (other providers through the gateway) ([64ab6bd](https://github.com/foldrun-io/foldrun-cli/commit/64ab6bd))
+- sync (gateway settings, the key's 429) ([c19c0af](https://github.com/foldrun-io/foldrun-cli/commit/c19c0af))
+
 ## [20.3.0] — 2026-11-10
 
 ### New in the public API
