@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.6.0] — 2026-11-10
+
+### New in the public API
+
+- `foldrun snapshot push`
+
+- feat(snapshot): foldrun snapshot push — send a git folder for an agent to work on (Part B3) ([62010bf](https://github.com/foldrun-io/foldrun-cli/commit/62010bf))
+
+### docs
+
+- sync api.md (agent run snapshot) ([8c509ec](https://github.com/foldrun-io/foldrun-cli/commit/8c509ec))
+
 ## [20.5.3] — 2026-11-10
 
 ### deps
