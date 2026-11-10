@@ -32,7 +32,8 @@ Tokens on your own key are billed by your provider, not by the platform
 ## foldrun's models
 
 On foldrun's own hosted platform an account can run on **foldrun's keys**
-instead of its own: Anthropic, OpenAI, Google Gemini, DeepSeek or Moonshot Kimi, one at a
+instead of its own: Anthropic, OpenAI, Google Gemini, DeepSeek, Moonshot Kimi, Z.ai GLM,
+Alibaba Qwen, MiniMax or Xiaomi MiMo, one at a
 time for the whole account. No provider account is needed; the tokens are
 billed in credits at **foldrun's price list**
 ([budgets and billing](budgets-and-billing.md#foldruns-models)).
@@ -60,12 +61,16 @@ billed in credits at **foldrun's price list**
   (`medium` and `xhigh` run as `high`). Kimi takes `low`, `high` and
   `max`: `medium` and `xhigh` run as `high`, and it always thinks. OpenAI's
   GPT-6 models (over its Responses API) take all five; Gemini takes `low`,
-  `medium`, `high`, so `xhigh` and `max` run as `high`. Where a level is
-  changed the step's log says so. No provider is sent `temperature` or
+  `medium`, `high`, so `xhigh` and `max` run as `high`. MiniMax takes all
+  five. Qwen 3.8 runs `max` and `high` as `xhigh` (Alibaba's own mapping).
+  Z.ai sends effort as written, and documents nothing about it. MiMo has no
+  effort setting, so none is sent. Where a level is changed the step's log
+  says so. No provider is sent `temperature` or
   `top_p` — the reasoning models fix them.
 - **Where each provider processes the prompt** is its own: DeepSeek in
   the People's Republic of China (its privacy policy), Moonshot in
-  Singapore, the others as their own terms say. Choose the provider
+  Singapore, Alibaba's Qwen in its Singapore region, the others as their own
+  terms say. Choose the provider
   your data may go to.
 - **What is refused**, before anything is sent: a model not on the price
   list; the provider's own paid tools (web search, code execution run by

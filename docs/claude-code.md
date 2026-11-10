@@ -68,23 +68,31 @@ keep; foldrun's models (the rest of this page) are what to give anyone else.
 
 ## Other providers' models
 
-The same key reaches DeepSeek's, Kimi's, OpenAI's and Gemini's models: name
-one, and the gateway sends it to that provider on foldrun's models (billed at
-its price, under the same limits).
+The same key reaches OpenAI's, Gemini's, DeepSeek's, Kimi's, Z.ai's (GLM),
+Alibaba's (Qwen), MiniMax's and Xiaomi's (MiMo) models: name one, and the
+gateway sends it to that provider on foldrun's models (billed at its price,
+under the same limits).
 
 ```sh
 claude --model deepseek/deepseek-v4      # or /model deepseek/deepseek-v4 in a session
 claude --model kimi/kimi-k3
 claude --model openai/gpt-6              # or gpt-6
 claude --model gemini/gemini-3-pro       # or gemini-3-pro
+claude --model glm-5.3                   # Z.ai
+claude --model qwen3.8-max               # Alibaba
+claude --model MiniMax-M3                # MiniMax
+claude --model mimo-v2.6-pro             # Xiaomi
 ```
 
 - **Choosing a provider.** `provider/model` always works (`anthropic/`,
-  `deepseek/`, `kimi/`, `openai/`, `gemini/`). A bare name with a known prefix
-  works too: `deepseek-…`, `kimi-…`, `gpt-…`, `gemini-…`, or `claude-…` for
-  Anthropic. Anything else goes to Anthropic.
-- **How each is reached.** DeepSeek and Kimi speak Anthropic's format and are
-  sent as they are. OpenAI (Responses API) and Gemini (Chat Completions) are
+  `openai/`, `gemini/`, `deepseek/`, `kimi/`, `zai/`, `qwen/`, `minimax/`,
+  `mimo/`). A bare name with a known prefix works too: `gpt-…`, `gemini-…`,
+  `deepseek-…`, `kimi-…`, `glm-…`, `qwen…`, `minimax-…`, `mimo-…`, or
+  `claude-…` for Anthropic. Anything else goes to Anthropic.
+- **How each is reached.** DeepSeek, Kimi, Z.ai, Qwen, MiniMax and MiMo speak
+  Anthropic's format and are sent as they are, less what each one's API does
+  not document (context editing, Claude's tool search, `service_tier`;
+  `thinking` in the words each one takes). OpenAI (Responses API) and Gemini (Chat Completions) are
   translated both ways, by the same translator runs use.
   - Tools work on all of them.
   - Gemini's thought signatures are kept between your calls (in the
