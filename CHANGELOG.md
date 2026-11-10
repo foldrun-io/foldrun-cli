@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.3.0] — 2026-11-10
+
+### New in the public API
+
+- `foldrun accounts prune`
+- the `--unreachable` flag
+
+- feat(accounts): list only sign-ins that work; `accounts prune` forgets the rest ([d451ce5](https://github.com/foldrun-io/foldrun-cli/commit/d451ce5))
+
 ## [20.2.0] — 2026-11-09
 
 ### New in the public API
