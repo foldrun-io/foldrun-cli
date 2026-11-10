@@ -68,19 +68,30 @@ keep; foldrun's models (the rest of this page) are what to give anyone else.
 
 ## Other providers' models
 
-The same key reaches DeepSeek's and Kimi's models: name one, and the gateway
-sends it to that provider on foldrun's models (billed at its price, under the
-same limits).
+The same key reaches DeepSeek's, Kimi's, OpenAI's and Gemini's models: name
+one, and the gateway sends it to that provider on foldrun's models (billed at
+its price, under the same limits).
 
 ```sh
 claude --model deepseek/deepseek-v4      # or /model deepseek/deepseek-v4 in a session
 claude --model kimi/kimi-k3
+claude --model openai/gpt-6              # or gpt-6
+claude --model gemini/gemini-3-pro       # or gemini-3-pro
 ```
 
 - **Choosing a provider.** `provider/model` always works (`anthropic/`,
-  `deepseek/`, `kimi/`). A bare name with a known prefix works too:
-  `deepseek-…`, `kimi-…`, or `claude-…` for Anthropic. Anything else goes to
-  Anthropic.
+  `deepseek/`, `kimi/`, `openai/`, `gemini/`). A bare name with a known prefix
+  works too: `deepseek-…`, `kimi-…`, `gpt-…`, `gemini-…`, or `claude-…` for
+  Anthropic. Anything else goes to Anthropic.
+- **How each is reached.** DeepSeek and Kimi speak Anthropic's format and are
+  sent as they are. OpenAI (Responses API) and Gemini (Chat Completions) are
+  translated both ways, by the same translator runs use.
+  - Tools work on all of them.
+  - Gemini's thought signatures are kept between your calls (in the
+    platform's cache, per account, for two hours), so a multi-turn tool loop
+    works on Gemini too.
+  - Translation drops prompt caching, thinking where the provider has none,
+    and Anthropic's server tools (web search, web fetch).
 - **What Claude Code sends.** It sends the name you give it unchanged.
   Claude Code's own `/model` list shows Claude models only, so type the name.
   Each provider gets only the request fields its API takes; the rest are
@@ -89,10 +100,7 @@ claude --model kimi/kimi-k3
   (marked `x-foldrun-estimate: 1`).
 - **What Claude Code can't know.** For non-Claude models it shows the wrong
   cost and context size. The charge is foldrun's.
-- **What isn't offered.**
-  - OpenAI's and Gemini's models are refused for now (they need translation;
-    planned).
-  - A login gateway key stays Claude-only.
+- **What isn't offered.** A login gateway key stays Claude-only.
 
 ## What the gateway serves
 
