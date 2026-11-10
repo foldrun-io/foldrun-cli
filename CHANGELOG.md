@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.5.3] — 2026-11-10
+
+### deps
+
+- @foldrun/core ^18.2.0 ([ff9065f](https://github.com/foldrun-io/foldrun-cli/commit/ff9065f))
+
+### docs
+
+- sync api.md (snapshots route) ([ccabeab](https://github.com/foldrun-io/foldrun-cli/commit/ccabeab))
+
 ## [20.5.2] — 2026-11-10
 
 ### docs
