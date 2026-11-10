@@ -66,6 +66,34 @@ only on such an account). Such a key:
 It is for the operator's own use. A subscription's terms are its owner's to
 keep; foldrun's models (the rest of this page) are what to give anyone else.
 
+## Other providers' models
+
+The same key reaches DeepSeek's and Kimi's models: name one, and the gateway
+sends it to that provider on foldrun's models (billed at its price, under the
+same limits).
+
+```sh
+claude --model deepseek/deepseek-v4      # or /model deepseek/deepseek-v4 in a session
+claude --model kimi/kimi-k3
+```
+
+- **Choosing a provider.** `provider/model` always works (`anthropic/`,
+  `deepseek/`, `kimi/`). A bare name with a known prefix works too:
+  `deepseek-…`, `kimi-…`, or `claude-…` for Anthropic. Anything else goes to
+  Anthropic.
+- **What Claude Code sends.** It sends the name you give it unchanged.
+  Claude Code's own `/model` list shows Claude models only, so type the name.
+  Each provider gets only the request fields its API takes; the rest are
+  dropped.
+- **Token counts.** A provider with no token-count route gets an estimate
+  (marked `x-foldrun-estimate: 1`).
+- **What Claude Code can't know.** For non-Claude models it shows the wrong
+  cost and context size. The charge is foldrun's.
+- **What isn't offered.**
+  - OpenAI's and Gemini's models are refused for now (they need translation;
+    planned).
+  - A login gateway key stays Claude-only.
+
 ## What the gateway serves
 
 | Route | |
