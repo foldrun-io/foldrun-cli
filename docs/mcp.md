@@ -131,16 +131,18 @@ and that automatic disconnect are in the audit log (`mcp.connected`,
 | `inbox` | what waits on you: approvals, questions, issues, proposed fixes, your failed runs (`bucket`, `kind`, `workspace`) | `GET /api/me/inbox` |
 | `list_approvals` | every gate waiting on a person, and every question an agent is asking | `GET /api/approvals` |
 | `list_flows` | a workspace's flows | `GET …/flows` |
+| `list_agents` | a workspace's agents: what each is for and when it last ran | `GET …/agents` |
 | `list_runs` | recent runs, with outcome, summary and failure (`limit` up to 100, default 20; `flow` keeps that flow's among the newest 500) | `GET …/runs` |
 | `get_run` | one run in full | `GET …/runs/<id>` |
 | `read_file` | one file of a workspace's source, or the tree | `GET …/source` |
 | `run_flow` | start a flow (`task`, `test: true` for a [test run](runs#test-runs)) | `POST …/flows/<flow>/run` |
+| `run_agent` | run one agent on a task of your own, in its own sandbox, no flow needed (`task`, `test: true` for a [test run](runs#test-runs)); answers a run id at once — read it with `get_run` | `POST …/agents/<agent>/run` |
 | `decide_approval` | approve or reject a gate (`note`, `step`) | `POST …/runs/<id>/approve` |
 | `answer_question` | answer an agent's question mid-step | `POST …/runs/<id>/answer` |
 | `message_run` | say something to a running agent | `POST …/runs/<id>/message` |
 | `stop_run` | stop a run | `POST …/runs/<id>/stop` |
 
-The first eight read. The last five act, and are marked so for the app
+The first nine read. The last six act, and are marked so for the app
 (`readOnlyHint: false`; `stop_run` also `destructiveHint: true`), which is
 what an app uses to ask you before calling one.
 
