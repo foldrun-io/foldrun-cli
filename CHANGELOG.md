@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.5.2] — 2026-11-10
+
+### docs
+
+- sync (MCP run_agent and list_agents) ([adb202b](https://github.com/foldrun-io/foldrun-cli/commit/adb202b))
+
 ## [20.5.1] — 2026-11-10
 
 ### deps
