@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.7.1] — 2026-11-10
+
+- build(deps): Bump softprops/action-gh-release (#121) ([aefc1b7](https://github.com/foldrun-io/foldrun-cli/commit/aefc1b7))
+
+### deps
+
+- @foldrun/core ^18.3.0 ([2881564](https://github.com/foldrun-io/foldrun-cli/commit/2881564))
+
 ## [20.7.0] — 2026-11-10
 
 ### New in the public API
