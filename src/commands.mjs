@@ -4926,6 +4926,7 @@ async function keysCreateGateway(url, label, flags) {
   // Written from the file as it is NOW, not as it was before the request,
   // so a change made meanwhile is kept. A write that fails after the key
   // exists says so and falls back to the lines to copy.
+  /** @type {{ file: string, dropped: string[], backup: string | null } | null} */
   let done = null;
   if (claude && made.gatewayUrl) {
     try { done = writeClaudeSettings(readClaudeSettings(), made.gatewayUrl, made.key); }
@@ -4964,8 +4965,10 @@ function claudeSettingsFile() {
  *  file that is not a JSON object, or an env that is not one. */
 function readClaudeSettings() {
   const file = claudeSettingsFile();
+  /** @type {string | null} */
   let text = null;
   try { text = fs.readFileSync(file, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw new Error(`cannot read ${file}: ${e.message}`); }
+  /** @type {any} */
   let settings = {};
   if (text !== null && text.trim()) {
     try { settings = JSON.parse(text); } catch { throw new Error(`${file} is not valid JSON, so it was left alone — fix the file, or leave out --claude-code and set the two lines by hand`); }
@@ -5005,6 +5008,7 @@ function writeClaudeSettings({ file, text, settings }, baseUrl, key) {
   env.ANTHROPIC_AUTH_TOKEN = key;
   const next = { ...settings, env };
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  /** @type {string | null} */
   let backup = null;
   if (text !== null) {
     backup = `${file}.before-foldrun`;
