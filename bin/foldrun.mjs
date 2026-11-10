@@ -307,6 +307,7 @@ Signing in
   foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no /api route (--max-tasks N open at once, default 10; --expires); shown once
   foldrun keys set <id> --sonnet openai/gpt-6   which model a gateway key runs each Claude Code tier on (--opus, --haiku; - clears one, --clear all)
   foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]  a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — it spends the account's credits on foldrun's models through the gateway, up to its own limits, and opens no /api route; an admin of every workspace; shown once
+  foldrun keys create laptop --gateway --cap 20 --claude-code   the same, and Claude Code is set up on this machine: the URL and key go into its settings
   foldrun a2a ls --to <ws>  what a workspace serves over A2A: each flow's a2a:, card and endpoint URLs, its A2A keys (admins), recent tasks and the key that asked (--json)
   foldrun a2a publish <flow>  set a2a: publish: true in the flow (--to <ws>: the deployed copy, an admin's) — --name, --description, --example "…" (repeatable), --public-card | --private-card; diff, checked, --dry-run
   foldrun a2a publish <flow> --clear-name | --clear-description | --clear-examples  drop the card's name, description or examples (also on unpublish)
@@ -458,6 +459,7 @@ Options
   --gateway                 keys create: a gateway key for Claude Code — with --cap <usd> (in all) and/or --daily <usd> (per UTC day)
   --cap <usd>, --daily <usd>  keys create --gateway: the key's own spending limits, $0.01–$100000
   --login                   keys create --gateway: on the operator's Claude login instead (the operator's own accounts; not metered, no limits)
+  --claude-code             keys create --gateway: also write the gateway URL and the key into Claude Code's settings (~/.claude/settings.json, or $CLAUDE_CONFIG_DIR) — nothing to copy
   --opus, --sonnet, --haiku <model>  keys set <id>: which model that Claude Code tier runs on with a gateway key (e.g. openai/gpt-6; - clears it)
   --key-env <NAME>          a2a call, a2a status, a2a cancel, a2a card: the environment variable holding the A2A key (default FOLDRUN_A2A_KEY) — a key is never taken on the command line
   --card <url>              a2a status, a2a cancel: the agent card of the agent that holds the task
@@ -503,7 +505,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "login", "unreachable", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "claude-code", "login", "unreachable", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example", "accept-risk"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes

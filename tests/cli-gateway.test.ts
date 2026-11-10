@@ -107,3 +107,118 @@ test("keys --help names --gateway", async () => {
   const k = await cli(["keys", "--help"]);
   assert.match(k.out, /--gateway/);
 });
+
+// `--claude-code` (11 Nov 2026): the key goes straight into Claude Code's
+// user settings, so nothing is copied by hand. CLAUDE_CONFIG_DIR points the
+// CLI at a temporary folder here.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const gw = () => ({ "POST /api/keys": () => ({ ok: true, key: "fr_gw_cc_secret", id: "g9", purpose: "gateway", capUsd: 20, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }) });
+const inDir = (url: string, dir: string, ...args: string[]) => cli([...args, "--url", url, "--token", "k"], { env: { CLAUDE_CONFIG_DIR: dir } });
+
+test("keys create --gateway --claude-code writes the URL and key into a new Claude Code settings file, readable only by you", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  const s = await serve(gw());
+  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  const file = path.join(dir, "settings.json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" } });
+  if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.match(r.out, /Claude Code now runs on it/);
+  assert.doesNotMatch(r.out, /export ANTHROPIC_API_KEY/, "no lines to copy when the file was written");
+  assert.equal(fs.existsSync(`${file}.before-foldrun`), false, "no backup of a file that was not there");
+});
+
+test("--claude-code keeps every other setting, drops a competing ANTHROPIC_API_KEY, and keeps the old file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  const file = path.join(dir, "settings.json");
+  const before = JSON.stringify({ model: "opus", permissions: { allow: ["Bash(ls)"] }, env: { FOO: "1", ANTHROPIC_API_KEY: "sk-old", ANTHROPIC_BASE_URL: "https://old.example" } }, null, 2);
+  fs.writeFileSync(file, before);
+  const s = await serve(gw());
+  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), {
+    model: "opus",
+    permissions: { allow: ["Bash(ls)"] },
+    env: { FOO: "1", ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" },
+  });
+  assert.equal(fs.readFileSync(`${file}.before-foldrun`, "utf8"), before);
+  assert.match(r.out, /removed from that env block: ANTHROPIC_API_KEY/);
+});
+
+test("--claude-code refuses a settings file it cannot safely rewrite, before any key is made", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  const file = path.join(dir, "settings.json");
+  fs.writeFileSync(file, "{ not json");
+  const s = await serve(gw());
+  const broken = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  fs.writeFileSync(file, JSON.stringify({ env: ["x"] }));
+  const badEnv = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  const noGateway = await inDir(s.url, dir, "keys", "create", "laptop", "--claude-code");
+  const a2a = await inDir(s.url, dir, "keys", "create", "bot", "--a2a", "--to", "ws", "--flows", "f", "--claude-code");
+  s.close();
+  for (const r of [broken, badEnv, noGateway, a2a]) assert.equal(r.code, 1, r.out);
+  assert.match(a2a.out, /--claude-code goes with --gateway/, "an A2A key is not made with it (Codex review)");
+  assert.match(broken.out, /not valid JSON.*no key was made/);
+  assert.match(badEnv.out, /"env" that is not an object/);
+  assert.match(noGateway.out, /--claude-code goes with --gateway/);
+  assert.equal(s.seen.length, 0, "nothing was minted");
+  assert.equal(fs.readFileSync(file, "utf8"), JSON.stringify({ env: ["x"] }), "the file is untouched");
+});
+
+test("--claude-code on a platform with no gateway URL writes nothing and says so", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_gw_x", id: "g8", purpose: "gateway", capUsd: 5, dailyUsd: null, gatewayUrl: null }) });
+  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "5", "--claude-code");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.equal(fs.existsSync(path.join(dir, "settings.json")), false);
+  assert.match(r.out, /no gateway URL yet, so Claude Code's settings were not written/);
+});
+
+test("--claude-code refuses a settings folder it cannot write, before any key is made (Codex review)", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  fs.writeFileSync(path.join(dir, "settings.json"), "{}");
+  fs.chmodSync(dir, 0o500);
+  const s = await serve(gw());
+  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  s.close();
+  fs.chmodSync(dir, 0o700);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /no key was made/);
+  assert.equal(s.seen.length, 0, "nothing was minted");
+});
+
+test("--claude-code writes from the file as it is after the key is made, so a change made meanwhile is kept (Codex review)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  const file = path.join(dir, "settings.json");
+  fs.writeFileSync(file, JSON.stringify({ model: "opus" }));
+  const s = await serve({ "POST /api/keys": () => {
+    fs.writeFileSync(file, JSON.stringify({ model: "sonnet", theme: "dark" }));
+    return { ok: true, key: "fr_gw_cc_secret", id: "g9", purpose: "gateway", capUsd: 20, dailyUsd: null, gatewayUrl: "https://gateway.example.test" };
+  } });
+  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { model: "sonnet", theme: "dark", env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" } });
+});
+
+test("--claude-code: a file broken after the key is made is left alone, and the lines to copy are printed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  const file = path.join(dir, "settings.json");
+  fs.writeFileSync(file, "{}");
+  const s = await serve({ "POST /api/keys": () => {
+    fs.writeFileSync(file, "{ broken");
+    return { ok: true, key: "fr_gw_cc_secret", id: "g9", purpose: "gateway", capUsd: 20, dailyUsd: null, gatewayUrl: "https://gateway.example.test" };
+  } });
+  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /The key was made, but Claude Code's settings were not written/);
+  assert.match(r.out, /export ANTHROPIC_BASE_URL=https:\/\/gateway\.example\.test/);
+  assert.equal(fs.readFileSync(file, "utf8"), "{ broken");
+});

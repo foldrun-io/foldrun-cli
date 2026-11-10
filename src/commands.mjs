@@ -4697,6 +4697,7 @@ async function doctor(flags) {
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
  *   keys create <label> --gateway --login   on the operator's Claude login (its own accounts): not metered
+ *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings
  *   keys set <id> --opus|--sonnet|--haiku <provider/model>  which model each Claude Code tier runs on (a gateway key; `-` clears one, --clear all)
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
  *                                      one ends now, or when the grace runs out.
@@ -4744,6 +4745,7 @@ async function keysCmd(positional, flags) {
   if (verb === "create" || verb === "new") {
     if (!arg) throw new Error("what is the key for? foldrun keys create <label>");
     if (flags.a2a === true && flags.gateway === true) throw new Error("--a2a or --gateway, not both");
+    if (flags["claude-code"] === true && flags.gateway !== true) throw new Error("--claude-code goes with --gateway: only a gateway key runs Claude Code");
     if (flags.a2a === true) return keysCreateA2a(url, arg, flags);
     if (flags.gateway === true) return keysCreateGateway(url, arg, flags);
     const body = { label: arg };
@@ -4905,6 +4907,9 @@ async function keysCreateGateway(url, label, flags) {
   const capUsd = flags.login === true ? undefined : usdFlag(flags.cap, "--cap");
   const dailyUsd = flags.login === true ? undefined : usdFlag(flags.daily, "--daily");
   if (flags.login !== true && capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both) — or --login, on an account the operator's Claude login is for");
+  // --claude-code: read Claude Code's settings BEFORE minting, so a file we
+  // could not safely rewrite stops here with nothing made.
+  const claude = flags["claude-code"] === true ? preflightClaudeSettings() : null;
   const body = { label, purpose: "gateway" };
   if (flags.login === true) body.credential = "login";
   if (capUsd !== undefined) body.capUsd = capUsd;
@@ -4918,15 +4923,99 @@ async function keysCreateGateway(url, label, flags) {
   if (made.key == null) return lostSecret(made.id);
   console.log(`  ${made.key}\n`);
   const base = made.gatewayUrl ?? "<the gateway URL — not set on this platform yet>";
-  console.log(`  ${c.dim("Shown once. Point Claude Code at it:")}\n`);
-  console.log(`    export ANTHROPIC_BASE_URL=${base}`);
-  console.log(`    export ANTHROPIC_API_KEY=<key>\n`);
+  // Written from the file as it is NOW, not as it was before the request,
+  // so a change made meanwhile is kept. A write that fails after the key
+  // exists says so and falls back to the lines to copy.
+  let done = null;
+  if (claude && made.gatewayUrl) {
+    try { done = writeClaudeSettings(readClaudeSettings(), made.gatewayUrl, made.key); }
+    catch (e) { console.log(`  ${c.yellow(`The key was made, but Claude Code's settings were not written: ${e.message}`)}\n`); }
+  }
+  if (done) {
+    console.log(`  ${c.green("✓")} ${c.dim("Claude Code now runs on it — written to")} ${done.file}`);
+    console.log(`    ${c.dim(`env: ANTHROPIC_BASE_URL=${made.gatewayUrl}, ANTHROPIC_AUTH_TOKEN=<this key>`)}`);
+    if (done.dropped.length) console.log(`    ${c.dim(`removed from that env block: ${done.dropped.join(", ")} (it would have competed with the key)`)}`);
+    if (done.backup) console.log(`    ${c.dim(`the file as it was: ${done.backup}`)}`);
+    console.log(`    ${c.dim("Start a new claude session; /status shows the gateway. Claude Desktop is set in its own Developer → Configure Third-Party Inference.")}\n`);
+  } else {
+    if (claude && !made.gatewayUrl) console.log(`  ${c.yellow("This platform has no gateway URL yet, so Claude Code's settings were not written.")}\n`);
+    console.log(`  ${c.dim("Shown once. Point Claude Code at it:")}\n`);
+    console.log(`    export ANTHROPIC_BASE_URL=${base}`);
+    console.log(`    export ANTHROPIC_API_KEY=<key>\n`);
+  }
   // A login key is not metered: there is no spend for `keys ls` to show.
   const after = made.credential === "login"
     ? `It opens the gateway only and runs on the operator's Claude login, not metered — it shares that subscription's weekly cap with the desks. \`foldrun keys revoke ${made.id}\` ends it.`
     : `It opens the gateway only. \`foldrun keys ls\` shows what it has spent; \`foldrun keys revoke ${made.id}\` ends it.`;
   console.log(`  ${c.dim(after)}\n`);
   return 0;
+}
+
+/** Claude Code's user settings: $CLAUDE_CONFIG_DIR/settings.json, else
+ *  ~/.claude/settings.json (%USERPROFILE%\.claude on Windows). Its env block
+ *  reaches the CLI, the IDE extensions' sessions and background agents. */
+function claudeSettingsFile() {
+  const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  return path.join(dir, "settings.json");
+}
+
+/** Read Claude Code's settings for `keys create --gateway --claude-code`,
+ *  refusing anything we could not rewrite without losing what is there: a
+ *  file that is not a JSON object, or an env that is not one. */
+function readClaudeSettings() {
+  const file = claudeSettingsFile();
+  let text = null;
+  try { text = fs.readFileSync(file, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw new Error(`cannot read ${file}: ${e.message}`); }
+  let settings = {};
+  if (text !== null && text.trim()) {
+    try { settings = JSON.parse(text); } catch { throw new Error(`${file} is not valid JSON, so it was left alone — fix the file, or leave out --claude-code and set the two lines by hand`); }
+  }
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error(`${file} is not a JSON object, so it was left alone`);
+  if (settings.env !== undefined && (!settings.env || typeof settings.env !== "object" || Array.isArray(settings.env))) throw new Error(`${file} has an "env" that is not an object, so it was left alone`);
+  return { file, text, settings };
+}
+
+/** Before a key is made: the settings can be read and rewritten — the
+ *  folder exists or can be made, and a file can be written in it. Anything
+ *  else stops here, with no key made. */
+function preflightClaudeSettings() {
+  try {
+    const found = readClaudeSettings();
+    fs.mkdirSync(path.dirname(found.file), { recursive: true, mode: 0o700 });
+    const probe = `${found.file}.${process.pid}.probe`;
+    fs.writeFileSync(probe, "", { mode: 0o600 });
+    fs.rmSync(probe, { force: true });
+    if (found.text !== null) fs.accessSync(found.file, fs.constants.W_OK);
+    return found;
+  } catch (e) {
+    throw new Error(`${e.message} — no key was made`);
+  }
+}
+
+/** Put the gateway URL and key into Claude Code's env block, keeping every
+ *  other setting. ANTHROPIC_AUTH_TOKEN (a Bearer) wins over a saved Claude
+ *  login with no prompt; an ANTHROPIC_API_KEY in the same block would compete
+ *  with it, so it goes. The old file is kept beside it, the new one is
+ *  written whole (a temp file, then a rename) and readable only by you. */
+function writeClaudeSettings({ file, text, settings }, baseUrl, key) {
+  const env = { ...(settings.env ?? {}) };
+  const dropped = ["ANTHROPIC_API_KEY"].filter((k) => k in env);
+  for (const k of dropped) delete env[k];
+  env.ANTHROPIC_BASE_URL = baseUrl;
+  env.ANTHROPIC_AUTH_TOKEN = key;
+  const next = { ...settings, env };
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  let backup = null;
+  if (text !== null) {
+    backup = `${file}.before-foldrun`;
+    fs.writeFileSync(backup, text, { mode: 0o600 });
+    try { fs.chmodSync(backup, 0o600); } catch { /* Windows: no modes */ }
+  }
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, file);
+  try { fs.chmodSync(file, 0o600); } catch { /* Windows: no modes */ }
+  return { file, dropped, backup };
 }
 
 /** A retried mint or rotate is answered from the first call, and the server
