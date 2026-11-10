@@ -39,9 +39,9 @@ function view(base: string, over: Record<string, unknown> = {}) {
       { flow: "publish", published: true, publicCard: false, name: "Lead finder", description: "Finds leads.", hasInputSchema: false, card: `${endpoint}/.well-known/agent-card.json`, url: endpoint, ...over },
       { flow: "draft", published: false, publicCard: false, name: "draft", description: null, hasInputSchema: false, card: `${base}/a2a/acme/blog-desk/flows/draft/.well-known/agent-card.json`, url: `${base}/a2a/acme/blog-desk/flows/draft` },
     ],
-    keys: [{ id: "k9", label: "partner bot", prefix: "mda_a2a12345", flows: ["publish"], maxTasks: 10, expiresAt: null }],
+    keys: [{ id: "k9", label: "partner bot", prefix: "fr_a2a_a2a12345", flows: ["publish"], maxTasks: 10, expiresAt: null }],
     tasks: [
-      { id: "t1", flow: "publish", state: "TASK_STATE_COMPLETED", runId: "r1", contextId: "c1", key: { id: "k9", label: "partner bot", prefix: "mda_a2a12345", revoked: false }, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:01:00Z" },
+      { id: "t1", flow: "publish", state: "TASK_STATE_COMPLETED", runId: "r1", contextId: "c1", key: { id: "k9", label: "partner bot", prefix: "fr_a2a_a2a12345", revoked: false }, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:01:00Z" },
       { id: "t2", flow: "publish", state: "TASK_STATE_WORKING", runId: "r2", contextId: "c2", key: { id: "k0", label: null, prefix: null, revoked: true }, createdAt: "2026-11-01T00:02:00Z", updatedAt: "2026-11-01T00:02:00Z" },
     ],
   };
@@ -98,7 +98,7 @@ test("a2a ls --to reads GET /api/workspaces/<ws>/a2a: flows with their cards, ke
   assert.match(r.out, new RegExp(`card\\s+${base}/a2a/acme/blog-desk/flows/publish/\\.well-known/agent-card\\.json`));
   assert.match(r.out, /not published\s+draft/);
   assert.doesNotMatch(r.out, /flows\/draft\/\.well-known/, "an unpublished flow's card is not offered");
-  assert.match(r.out, /k9\s+mda_a2a12345…\s+partner bot\s+publish · up to 10 open/);
+  assert.match(r.out, /k9\s+fr_a2a_a2a12345…\s+partner bot\s+publish · up to 10 open/);
   assert.match(r.out, /✓ completed\s+publish\s+A2A · partner bot/);
   assert.match(r.out, /working\s+publish\s+A2A · a key since removed/);
   assert.deepEqual(json(j.out).tasks.length, 2);
@@ -168,14 +168,14 @@ test("a2a ls: keys null (not an admin) leaves the keys out; no workspace is refu
 
 test("keys create --a2a posts { purpose: a2a, workspace, flows, maxTasks } and prints the key once", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "mda_a2asecret", id: "k9", prefix: "mda_a2asecr", purpose: "a2a", workspace: "blog-desk", flows: ["publish", "draft"], maxTasks: 3, role: "viewer", workspaces: ["blog-desk"], expiresAt: null }),
+    "POST /api/keys": () => ({ ok: true, key: "fr_a2a_a2asecret", id: "k9", prefix: "fr_a2a_a2asecr", purpose: "a2a", workspace: "blog-desk", flows: ["publish", "draft"], maxTasks: 3, role: "viewer", workspaces: ["blog-desk"], expiresAt: null }),
   });
   const r = await at(s.url, "keys", "create", "partner bot", "--a2a", "--to", "blog-desk", "--flows", "publish, draft,publish", "--max-tasks", "3", "--expires", "90d");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(JSON.parse(s.seen[0].body), { label: "partner bot", purpose: "a2a", workspace: "blog-desk", flows: ["publish", "draft"], maxTasks: 3, expires: "90d" });
   assert.match(r.out, /✓ partner bot\s+k9\s+A2A · blog-desk · publish, draft · up to 3 open/);
-  assert.equal(r.out.split("mda_a2asecret").length - 1, 1, "the key is printed once");
+  assert.equal(r.out.split("fr_a2a_a2asecret").length - 1, 1, "the key is printed once");
   assert.match(r.out, /opens \/a2a only/);
   assert.match(r.out, /FOLDRUN_A2A_KEY=<key> foldrun a2a call/);
 });
@@ -198,13 +198,13 @@ test("keys create --a2a refuses, before any request, without --to or --flows, a 
 test("keys ls shows an A2A key as A2A · <workspace> · <flows>", async () => {
   const s = await serve({
     "/api/keys": () => ({
-      keys: [{ id: "k9", prefix: "mda_a2a12345", label: "partner bot", role: "viewer", workspaces: ["blog-desk"], purpose: "a2a", a2a: { workspace: "blog-desk", flows: ["publish"], principal: "k9", maxTasks: 10 }, createdAt: "2026-11-01T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }],
+      keys: [{ id: "k9", prefix: "fr_a2a_a2a12345", label: "partner bot", role: "viewer", workspaces: ["blog-desk"], purpose: "a2a", a2a: { workspace: "blog-desk", flows: ["publish"], principal: "k9", maxTasks: 10 }, createdAt: "2026-11-01T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }],
     }),
   });
   const r = await at(s.url, "keys", "ls");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /live\s+k9\s+mda_a2a12345…\s+partner bot\s+A2A · blog-desk · publish · up to 10 open/);
+  assert.match(r.out, /live\s+k9\s+fr_a2a_a2a12345…\s+partner bot\s+A2A · blog-desk · publish · up to 10 open/);
 });
 
 // ------------------------------------------------------------------ publish
@@ -316,7 +316,7 @@ test("a2a card: a public card is fetched with no Authorization at all — never 
     "/a2a/acme/blog-desk/flows/publish/.well-known/agent-card.json": () => card,
   });
   base = s.url;
-  const r = await cli(["a2a", "card", "publish", "--to", "blog-desk", "--url", s.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "mda_a2asecret" } });
+  const r = await cli(["a2a", "card", "publish", "--to", "blog-desk", "--url", s.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "fr_a2a_a2asecret" } });
   s.close();
   assert.equal(r.code, 0, r.out);
   const got = s.seen.find((x) => x.url.endsWith("agent-card.json"))!;
@@ -336,12 +336,12 @@ test("a2a card: a private card without an A2A key prints the URLs and says how; 
   assert.equal(bare.code, 0, bare.out);
   assert.match(bare.out, /a private card — reading it takes an A2A key/);
   assert.equal(s.seen.filter((x) => x.url.endsWith("agent-card.json")).length, 0, "nothing sent to the card");
-  const keyed = await cli(["a2a", "card", "publish", "--to", "blog-desk", "--url", s.url, "--token", "k", "--key-env", "PARTNER_KEY"], { env: { PARTNER_KEY: "mda_partner" } });
+  const keyed = await cli(["a2a", "card", "publish", "--to", "blog-desk", "--url", s.url, "--token", "k", "--key-env", "PARTNER_KEY"], { env: { PARTNER_KEY: "fr_a2a_partner" } });
   const unpub = await at(s.url, "a2a", "card", "draft", "--to", "blog-desk");
   s.close();
   assert.equal(keyed.code, 0, keyed.out);
   const got = s.seen.find((x) => x.url.endsWith("agent-card.json"))!;
-  assert.equal(got.headers.authorization, "Bearer mda_partner");
+  assert.equal(got.headers.authorization, "Bearer fr_a2a_partner");
   assert.equal(unpub.code, 1);
   assert.match(unpub.out, /is not published/);
 });
@@ -375,7 +375,7 @@ test("a2a call: SendMessage with the text and data, then GetTask until it ends; 
     calls.push({ method, params });
     return { result: method === "SendMessage" ? { task: task("TASK_STATE_WORKING") } : DONE };
   });
-  const r = await cli(["a2a", "call", a.card, "Leads", "for", "Perth", "--data", '{"city":"Perth"}', "--context", "c1", "--url", a.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "mda_a2asecret" } });
+  const r = await cli(["a2a", "call", a.card, "Leads", "for", "Perth", "--data", '{"city":"Perth"}', "--context", "c1", "--url", a.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "fr_a2a_a2asecret" } });
   a.close();
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(calls.map((c) => c.method), ["SendMessage", "GetTask"]);
@@ -386,7 +386,7 @@ test("a2a call: SendMessage with the text and data, then GetTask until it ends; 
   assert.ok(sent.messageId, "a messageId on every message");
   for (const x of a.seen) {
     assert.notEqual(x.headers.authorization, "Bearer k", "this CLI's API key never goes to a card's address");
-    assert.equal(x.headers.authorization, "Bearer mda_a2asecret");
+    assert.equal(x.headers.authorization, "Bearer fr_a2a_a2asecret");
     assert.equal(x.headers["a2a-version"], "1.0");
   }
   assert.match(r.out, /task t1/);
@@ -396,7 +396,7 @@ test("a2a call: SendMessage with the text and data, then GetTask until it ends; 
 
 test("a2a call --no-wait answers the task as SendMessage left it, with how to ask again", { skip: !hasClient && "this @foldrun/core has no a2a-client" }, async () => {
   const a = await agent(() => ({ result: { task: task("TASK_STATE_WORKING") } }));
-  const r = await cli(["a2a", "call", a.card, "Leads", "--no-wait", "--url", a.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "mda_a2asecret" } });
+  const r = await cli(["a2a", "call", a.card, "Leads", "--no-wait", "--url", a.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "fr_a2a_a2asecret" } });
   a.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(a.seen.filter((x) => x.method === "POST").length, 1, "no GetTask");
@@ -416,7 +416,7 @@ test("a2a call: a refused key says where the A2A key goes; a failed task exits 1
   assert.equal(s.seen[0].headers.authorization, undefined, "with no A2A key, nothing — not the API key");
 
   const a = await agent(() => ({ result: { task: task("TASK_STATE_FAILED", { status: { state: "TASK_STATE_FAILED", message: { messageId: "s", role: "ROLE_AGENT", parts: [{ text: "the run failed" }] } } }) } }));
-  const failed = await cli(["a2a", "call", a.card, "hi", "--url", a.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "mda_a2asecret" } });
+  const failed = await cli(["a2a", "call", a.card, "hi", "--url", a.url, "--token", "k"], { env: { FOLDRUN_A2A_KEY: "fr_a2a_a2asecret" } });
   a.close();
   assert.equal(failed.code, 1, failed.out);
   assert.match(failed.out, /✗ failed/);
@@ -429,7 +429,7 @@ test("a2a status and cancel ask the card's agent; cancel asks first (--yes) and 
     calls.push({ method, params });
     return { result: method === "CancelTask" ? task("TASK_STATE_CANCELED") : task("TASK_STATE_WORKING") };
   });
-  const env = { env: { FOLDRUN_A2A_KEY: "mda_a2asecret" } };
+  const env = { env: { FOLDRUN_A2A_KEY: "fr_a2a_a2asecret" } };
   const st = await cli(["a2a", "status", "t1", "--card", a.card, "--url", a.url, "--token", "k"], env);
   const noYes = await cli(["a2a", "cancel", "t1", "--card", a.card, "--url", a.url, "--token", "k"], env);
   const cancel = await cli(["a2a", "cancel", "t1", "--card", a.card, "--yes", "--url", a.url, "--token", "k"], env);
@@ -450,7 +450,7 @@ const ESC = "\u001b";
 const HOSTILE = `${ESC}]52;c;cm0gLXJmIH4=\u0007${ESC}[2J${ESC}]0;owned\u0007`;
 
 test("a2a call/status: an agent's reply text and ids are printed without control sequences", { skip: !hasClient && "this @foldrun/core has no a2a-client" }, async () => {
-  const env = { env: { FOLDRUN_A2A_KEY: "mda_a2asecret" } };
+  const env = { env: { FOLDRUN_A2A_KEY: "fr_a2a_a2asecret" } };
   const evilTask = { id: `t1${HOSTILE}`, contextId: `c1${HOSTILE}`, status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ artifactId: "a1", parts: [{ text: `Three leads${HOSTILE}\nline two` }] }] };
   // GetTask answers about the task it was asked for (core refuses an answer
   // about another one); the hostile text still rides its context id and reply.
@@ -490,7 +490,7 @@ test("a2aExitCode: the same answer for words and --json; cancel succeeds only on
 });
 
 test("a2a status --json exits 1 for a failed or rejected task; cancel --json exits 1 when the task is not canceled", { skip: !hasClient && "this @foldrun/core has no a2a-client" }, async () => {
-  const env = { env: { FOLDRUN_A2A_KEY: "mda_a2asecret" } };
+  const env = { env: { FOLDRUN_A2A_KEY: "fr_a2a_a2asecret" } };
   for (const state of ["TASK_STATE_FAILED", "TASK_STATE_REJECTED"]) {
     const a = await agent(() => ({ result: task(state) }));
     const words = await cli(["a2a", "status", "t1", "--card", a.card, "--url", a.url, "--token", "k"], env);

@@ -12,7 +12,7 @@ import { serve, at, raw, failing } from "./fake-platform.ts";
 
 const ENTRIES = [
   { id: "9", at: "2026-10-01T02:00:00.000Z", actor: "support:boss@foldrun.io", action: "support.viewed", subject: "v1", detail: { reason: "Ticket 42: daily flow not starting", until: "2026-10-01T02:30:00.000Z" } },
-  { id: "8", at: "2026-10-01T01:00:00.000Z", actor: "owner@acme.test", action: "apikey.created", subject: "k1", detail: { label: "ci", prefix: "mda_abcdef12", role: "editor" } },
+  { id: "8", at: "2026-10-01T01:00:00.000Z", actor: "owner@acme.test", action: "apikey.created", subject: "k1", detail: { label: "ci", prefix: "fr_api_abcdef12", role: "editor" } },
   { id: "7", at: "2026-10-01T00:00:00.000Z", actor: "owner@acme.test", action: "secret.set", subject: "CRM_TOKEN", detail: { name: "CRM_TOKEN", kind: "value" } },
 ];
 
@@ -27,7 +27,7 @@ test("audit: one page of the log, with the filters as query parameters", async (
   assert.equal(q.get("actor"), "owner@acme.test");
   assert.equal(q.get("workspace"), "leads");
   assert.match(r.out, /support\.viewed\s+support:boss@foldrun\.io\s+support viewed your account: Ticket 42/);
-  assert.match(r.out, /apikey\.created\s+owner@acme\.test\s+ci · mda_abcdef12… · editor/);
+  assert.match(r.out, /apikey\.created\s+owner@acme\.test\s+ci · fr_api_abcdef12… · editor/);
   assert.match(r.out, /secret\.set[\s\S]*CRM_TOKEN/);
   assert.match(r.out, /3 entries/);
 });
@@ -68,31 +68,31 @@ test("keys ls shows created, last used, expires and scope", async () => {
   const s = await serve({
     "/api/keys": () => ({
       keys: [
-        { id: "k1", prefix: "mda_abcdef12", label: "ci", role: "editor", workspaces: ["leads"], createdAt: "2026-09-01T00:00:00Z", createdBy: "owner@acme.test", revokedAt: null, expiresAt: "2026-12-01T00:00:00Z", lastUsedAt: "2026-09-30T10:00:00Z", lastIp: "203.0.113.0/24" },
-        { id: "k2", prefix: "mda_00000000", label: "old", role: "admin", workspaces: null, createdAt: "2026-01-01T00:00:00Z", revokedAt: null, expiresAt: "2026-02-01T00:00:00Z", lastUsedAt: null },
+        { id: "k1", prefix: "fr_api_abcdef12", label: "ci", role: "editor", workspaces: ["leads"], createdAt: "2026-09-01T00:00:00Z", createdBy: "owner@acme.test", revokedAt: null, expiresAt: "2026-12-01T00:00:00Z", lastUsedAt: "2026-09-30T10:00:00Z", lastIp: "203.0.113.0/24" },
+        { id: "k2", prefix: "fr_api_00000000", label: "old", role: "admin", workspaces: null, createdAt: "2026-01-01T00:00:00Z", revokedAt: null, expiresAt: "2026-02-01T00:00:00Z", lastUsedAt: null },
       ],
     }),
   });
   const r = await at(s.url, "keys", "ls");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /live\s+k1\s+mda_abcdef12…\s+ci\s+editor · leads/);
+  assert.match(r.out, /live\s+k1\s+fr_api_abcdef12…\s+ci\s+editor · leads/);
   assert.match(r.out, /created 2026-09-01 · last used 2026-09-30 from 203\.0\.113\.0\/24 · expires 2026-12-01/);
   assert.match(r.out, /expired\s+k2[\s\S]*last used never · expires 2026-02-01/);
 });
 
 test("keys create --expires sends it and prints when it ends", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "mda_new", id: "k9", prefix: "mda_new", role: "editor", workspaces: null, expiresAt: "2026-12-30T00:00:00.000Z" }) });
+  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: null, expiresAt: "2026-12-30T00:00:00.000Z" }) });
   const r = await at(s.url, "keys", "create", "ci", "--expires", "90d");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(JSON.parse(s.seen[0].body), { label: "ci", expires: "90d" });
   assert.match(r.out, /expires 2026-12-30/);
-  assert.match(r.out, /mda_new/);
+  assert.match(r.out, /fr_api_new/);
 });
 
 test("keys create with no --expires asks for 90 days, as the dashboard does; --forever asks for never", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "mda_new", id: "k9", prefix: "mda_new", role: "editor", workspaces: null, expiresAt: null }) });
+  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: null, expiresAt: null }) });
   assert.equal((await at(s.url, "keys", "create", "ci")).code, 0);
   assert.equal(JSON.parse(s.seen[0].body).expires, "90d");
   assert.equal((await at(s.url, "keys", "create", "ci", "--forever")).code, 0);
@@ -105,14 +105,14 @@ test("keys create with no --expires asks for 90 days, as the dashboard does; --f
 
 test("keys rotate --grace 1h posts to the rotate route and prints the new key once", async () => {
   const s = await serve({
-    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_fresh", id: "k2", prefix: "mda_fresh", expiresAt: null, replaced: { id: "k1", endsAt: "2026-10-01T03:00:00.000Z" } }),
+    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "fr_api_fresh", id: "k2", prefix: "fr_api_fresh", expiresAt: null, replaced: { id: "k1", endsAt: "2026-10-01T03:00:00.000Z" } }),
   });
   const r = await at(s.url, "keys", "rotate", "k1", "--grace", "1h");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(JSON.parse(s.seen[0].body), { grace: "1h" });
   assert.match(r.out, /rotated k1 → k2/);
-  assert.match(r.out, /mda_fresh/);
+  assert.match(r.out, /fr_api_fresh/);
   assert.match(r.out, /keeps working until 2026-10-01 03:00 UTC/);
 });
 
@@ -130,16 +130,16 @@ test("keys rotate with no grace revokes now, so it asks — and on a pipe withou
 
 test("keys rotate on a key already rotated: the refusal, and the command for the key that replaced it", async () => {
   const s = await serve({
-    "POST /api/keys/k1/rotate": () => failing(409, { error: 'this key was already rotated to mda_fresh… ("ci"); rotate that one — if you lost its secret, rotating mda_fresh… mints another and ends it' }),
+    "POST /api/keys/k1/rotate": () => failing(409, { error: 'this key was already rotated to fr_api_fresh… ("ci"); rotate that one — if you lost its secret, rotating fr_api_fresh… mints another and ends it' }),
     "/api/keys": () => ({ keys: [
-      { id: "k1", prefix: "mda_old", label: "ci", createdAt: "2026-09-01T00:00:00.000Z", revokedAt: null, replacedBy: "k2", expiresAt: "2026-10-02T00:00:00.000Z" },
-      { id: "k2", prefix: "mda_fresh", label: "ci", createdAt: "2026-10-01T00:00:00.000Z", revokedAt: null },
+      { id: "k1", prefix: "fr_api_old", label: "ci", createdAt: "2026-09-01T00:00:00.000Z", revokedAt: null, replacedBy: "k2", expiresAt: "2026-10-02T00:00:00.000Z" },
+      { id: "k2", prefix: "fr_api_fresh", label: "ci", createdAt: "2026-10-01T00:00:00.000Z", revokedAt: null },
     ] }),
   });
   const r = await at(s.url, "keys", "rotate", "k1", "--grace", "1h");
   s.close();
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /already rotated to mda_fresh/);
+  assert.match(r.out, /already rotated to fr_api_fresh/);
   assert.match(r.out, /foldrun keys rotate k2/, "names the command for the new key");
   assert.doesNotMatch(r.out, /✓/);
 });
@@ -147,14 +147,14 @@ test("keys rotate on a key already rotated: the refusal, and the command for the
 test("keys ls shows a rotated key as rotated, and to which", async () => {
   const s = await serve({
     "/api/keys": () => ({ keys: [
-      { id: "k1", prefix: "mda_old", label: "ci", createdAt: "2026-09-01T00:00:00.000Z", revokedAt: null, replacedBy: "k2", expiresAt: "2099-10-02T00:00:00.000Z" },
-      { id: "k2", prefix: "mda_fresh", label: "ci", createdAt: "2026-10-01T00:00:00.000Z", revokedAt: null },
+      { id: "k1", prefix: "fr_api_old", label: "ci", createdAt: "2026-09-01T00:00:00.000Z", revokedAt: null, replacedBy: "k2", expiresAt: "2099-10-02T00:00:00.000Z" },
+      { id: "k2", prefix: "fr_api_fresh", label: "ci", createdAt: "2026-10-01T00:00:00.000Z", revokedAt: null },
     ] }),
   });
   const r = await at(s.url, "keys", "ls");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /rotated → k2 \(mda_fresh…\)/);
+  assert.match(r.out, /rotated → k2 \(fr_api_fresh…\)/);
 });
 
 test("help: audit and the key verbs are documented, and --help runs nothing", async () => {

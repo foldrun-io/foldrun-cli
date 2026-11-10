@@ -196,7 +196,8 @@ The OWASP ids are from the
 
 *warn · ASI03.* A credential is written into a file: an Anthropic, OpenAI,
 AWS, GitHub, GitLab, Slack, Google, Stripe, SendGrid, Twilio, Telegram, npm,
-Hugging Face, Linear, DigitalOcean, Shopify or Resend key, a JSON web token,
+Hugging Face, Linear, DigitalOcean, Shopify, Resend or foldrun key (`fr_api_`, `fr_gw_`,
+`fr_a2a_`, `fr_dep_`, and the older `mda_`/`mdk_`), a JSON web token,
 a private key, a webhook URL that carries its own secret, a password inside a
 URL, or a field named like a credential (`api_key:`, `token:`, `password=`)
 holding a literal value that looks random. Everything in a workspace is

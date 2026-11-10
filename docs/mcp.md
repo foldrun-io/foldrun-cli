@@ -71,7 +71,7 @@ Over HTTP, with a key from Settings → API keys:
 
 ```sh
 claude mcp add --transport http foldrun https://<your platform>/api/mcp \
-  --header "Authorization: Bearer mda_..."
+  --header "Authorization: Bearer fr_api_..."
 ```
 
 Settings → API keys → **Connect an AI app (MCP)** shows this install's
@@ -165,7 +165,7 @@ that act are not offered, and a call to one is refused:
 
 ```sh
 claude mcp add foldrun -- foldrun mcp --read-only
-claude mcp add --transport http foldrun "https://<your platform>/api/mcp?readonly=1" --header "Authorization: Bearer mda_..."
+claude mcp add --transport http foldrun "https://<your platform>/api/mcp?readonly=1" --header "Authorization: Bearer fr_api_..."
 ```
 
 A viewer's key is the stronger version of the same: read-only by role,

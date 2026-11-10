@@ -198,7 +198,7 @@ the flow's page and `foldrun a2a card` show them whole.
 | `POST /a2a/<account>/<ws>/flows/<flow>` | the JSON-RPC endpoint |
 | `GET /a2a/<account>/<ws>` | the flows this key may call here, each with its card and endpoint — a convenience index, not an A2A operation |
 
-Every call sends the key as `Authorization: Bearer mda_…` and the protocol
+Every call sends the key as `Authorization: Bearer fr_a2a_…` and the protocol
 version as `A2A-Version: 1.0` (or `?A2A-Version=1.0`). A request without the
 header is A2A 0.3, which is not served: it is answered
 `VersionNotSupportedError` (`-32009`). A session cookie never opens `/a2a`.
