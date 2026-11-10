@@ -4879,7 +4879,11 @@ async function keysCreateGateway(url, label, flags) {
   console.log(`  ${c.dim("Shown once. Point Claude Code at it:")}\n`);
   console.log(`    export ANTHROPIC_BASE_URL=${base}`);
   console.log(`    export ANTHROPIC_API_KEY=<key>\n`);
-  console.log(`  ${c.dim(`It opens the gateway only. \`foldrun keys ls\` shows what it has spent; \`foldrun keys revoke ${made.id}\` ends it.`)}\n`);
+  // A login key is not metered: there is no spend for `keys ls` to show.
+  const after = made.credential === "login"
+    ? `It opens the gateway only and runs on the operator's Claude login, not metered — it shares that subscription's weekly cap with the desks. \`foldrun keys revoke ${made.id}\` ends it.`
+    : `It opens the gateway only. \`foldrun keys ls\` shows what it has spent; \`foldrun keys revoke ${made.id}\` ends it.`;
+  console.log(`  ${c.dim(after)}\n`);
   return 0;
 }
 

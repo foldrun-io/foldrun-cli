@@ -74,6 +74,8 @@ test("keys create --gateway --login posts credential: login, takes no limit, and
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(JSON.parse(s.seen[0].body), { label: "mine", purpose: "gateway", credential: "login", expires: "90d" });
   assert.match(r.out, /the operator's Claude login · not metered/);
+  assert.doesNotMatch(r.out, /shows what it has spent/, "a login key has no spend to show");
+  assert.match(r.out, /shares that subscription's weekly cap/);
   assert.equal(withCap.code, 1);
   assert.match(withCap.out, /--login takes no --cap or --daily/);
   assert.match(ls.out, /gateway · Claude Code · the operator's Claude login · not metered/);
