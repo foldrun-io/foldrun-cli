@@ -275,3 +275,78 @@ test("a key from --token or FOLDRUN_TOKEN is announced as such, not as a stored 
       p.close();
     }
   }));
+
+// Only sign-ins that work are listed (owner, 10 Nov 2026): a key the platform
+// refuses, or a platform that does not answer, is left out of `accounts`,
+// counted in one line; `--all` shows them; `prune` forgets them.
+
+test("a sign-in whose key no longer works is not listed; --all shows it; prune forgets it", async () =>
+  withHome(async (home) => {
+    const keys: Record<string, { account: string; email: string; role: string }> = {
+      key_acme: { account: "acme", email: "a@acme.test", role: "admin" },
+      key_beta: { account: "beta", email: "b@beta.test", role: "editor" },
+    };
+    const p = await fakePlatform(keys);
+    try {
+      await run(home, ["login", "--url", p.url, "--token", "key_beta"]);
+      await run(home, ["login", "--url", p.url, "--token", "key_acme"]); // acme is active
+      delete keys.key_beta; // beta's key is revoked on the platform
+
+      const list = await run(home, ["accounts"]);
+      assert.equal(list.code, 0, list.out);
+      assert.match(list.out, /acme/);
+      assert.doesNotMatch(list.out, /\bbeta\b/, "a sign-in that fails is not printed");
+      assert.match(list.out, /1 more saved sign-in not shown \(1 no longer works\)/);
+
+      const all = await run(home, ["accounts", "--all"]);
+      assert.match(all.out, /beta.*sign-in no longer works/);
+
+      const kept = await run(home, ["accounts", "prune"], {}); // no terminal, no --yes: nothing removed
+      assert.notEqual(kept.code, 0);
+      assert.ok(creds(home).profiles.beta ?? Object.values(creds(home).profiles).some((x: any) => x.account === "beta"), "kept without --yes");
+
+      const pruned = await run(home, ["accounts", "prune", "--yes"]);
+      assert.equal(pruned.code, 0, pruned.out);
+      const left = Object.values(creds(home).profiles) as { account: string }[];
+      assert.deepEqual(left.map((x) => x.account), ["acme"]);
+    } finally {
+      p.close();
+    }
+  }));
+
+test("the active sign-in is shown even when it fails, and says so", async () =>
+  withHome(async (home) => {
+    const keys: Record<string, { account: string; email: string; role: string }> = { key_acme: { account: "acme", email: "a@acme.test", role: "admin" } };
+    const p = await fakePlatform(keys);
+    try {
+      await run(home, ["login", "--url", p.url, "--token", "key_acme"]);
+      delete keys.key_acme;
+      const list = await run(home, ["accounts"]);
+      assert.match(list.out, /acme.*sign-in no longer works/);
+      assert.match(list.out, /the active one, acme, does not work/);
+    } finally {
+      p.close();
+    }
+  }));
+
+test("a platform that does not answer: not listed, counted apart, pruned only with --unreachable", async () =>
+  withHome(async (home) => {
+    const live = await fakePlatform({ key_acme: { account: "acme", email: "a@acme.test", role: "admin" } });
+    const gone = await fakePlatform({ key_old: { account: "old", email: "o@old.test", role: "admin" } });
+    try {
+      await run(home, ["login", "--url", gone.url, "--token", "key_old"]);
+      await run(home, ["login", "--url", live.url, "--token", "key_acme"]);
+      gone.close();
+      const list = await run(home, ["accounts"]);
+      assert.doesNotMatch(list.out, /\bold\b/);
+      assert.match(list.out, /1 did not answer/);
+      const kept = await run(home, ["accounts", "prune", "--yes"]);
+      assert.match(kept.out, /nothing to remove/);
+      assert.equal(Object.keys(creds(home).profiles).length, 2);
+      const pruned = await run(home, ["accounts", "prune", "--unreachable", "--yes"]);
+      assert.equal(pruned.code, 0, pruned.out);
+      assert.equal(Object.keys(creds(home).profiles).length, 1);
+    } finally {
+      live.close();
+    }
+  }));

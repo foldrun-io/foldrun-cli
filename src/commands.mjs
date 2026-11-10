@@ -5877,27 +5877,99 @@ async function workspacesCmd(positional, flags, layout) {
 }
 
 /**
+ * Whether a stored sign-in still works: one GET /api/me with its key, all
+ * at once, a few seconds each. `refused`: the platform answered and said no
+ * (a revoked, expired or unknown key, an account that is gone). `unreachable`:
+ * nothing answered (an install that is down, a laptop offline, a 5xx).
+ * @typedef {{ ok: boolean, why: "refused" | "unreachable" | null, detail: string }} SignInStatus
+ * @returns {Promise<SignInStatus>}
+ */
+async function signInWorks(p, seconds = 6) {
+  if (!p.token || !p.url) return { ok: false, why: "refused", detail: "no key stored" };
+  /** @type {(why: "refused" | "unreachable", detail: string) => SignInStatus} */
+  const fail = (why, detail) => ({ ok: false, why, detail });
+  try {
+    // Resolved as remoteFetch resolves every call (against the origin), so
+    // the check asks the endpoint real commands use (Codex review).
+    const res = await fetch(new URL("/api/me", p.url), {
+      headers: { authorization: `Bearer ${p.token}`, "user-agent": `foldrun-cli/${CLI_VERSION}` },
+      signal: AbortSignal.timeout(seconds * 1000),
+    });
+    await res.body?.cancel().catch(() => {});
+    if (res.ok) return { ok: true, why: null, detail: "" };
+    if (res.status === 401 || res.status === 403) return fail("refused", `${res.status} — the key no longer works`);
+    return fail("unreachable", `the platform answered ${res.status}`);
+  } catch (err) {
+    const timedOut = err && typeof err === "object" && "name" in err && err.name === "TimeoutError";
+    return fail("unreachable", timedOut ? `no answer in ${seconds}s` : "could not reach it");
+  }
+}
+
+/**
  * `foldrun accounts` — every account this machine is signed in to, and
  * which one a bare command talks as. `foldrun use <name>` switches.
  *
  * The list is the point: someone looking after four customers on one
  * platform could see only the last one they signed in as, and had to paste
  * --token to reach the others.
+ *
+ * Only sign-ins that still work are listed (owner, 10 Nov 2026): each is
+ * asked once (GET /api/me), and one whose key is refused or whose platform
+ * does not answer is left out — counted in one line, so the stale keys in
+ * the file are never silently forgotten. The active one is always shown,
+ * marked when it fails, since every bare command uses it. `--all` lists
+ * every one with what it answered; `prune` removes the refused ones
+ * (`--unreachable` too: those that did not answer).
  */
-function accountsCmd(positional) {
+async function accountsCmd(positional, flags = {}) {
   const profiles = listProfiles();
   if (!profiles.length) {
     console.log(`\n  ${c.dim("not signed in anywhere — `foldrun login`")}\n`);
     return 0;
   }
   const verb = positional[0];
-  if (verb && verb !== "ls" && verb !== "list") throw new Error(`accounts: unknown verb "${verb}" — it takes none; \`foldrun use <name>\` switches`);
-  const width = Math.max(...profiles.map((p) => p.name.length));
+  if (verb && verb !== "ls" && verb !== "list" && verb !== "prune") throw new Error(`accounts: unknown verb "${verb}" — ls (the default) or prune; \`foldrun use <name>\` switches`);
+  const checks = await Promise.all(profiles.map((p) => signInWorks(p)));
+  /** @type {(p: { name: string }) => SignInStatus} */
+  const statusOf = (p) => checks[profiles.findIndex((x) => x.name === p.name)] ?? { ok: false, why: "unreachable", detail: "not asked" };
+
+  if (verb === "prune") {
+    const gone = profiles.filter((p) => {
+      const s = statusOf(p);
+      return !s.ok && (s.why === "refused" || (flags.unreachable === true && s.why === "unreachable"));
+    });
+    if (!gone.length) {
+      console.log(`\n  ${c.dim(`nothing to remove — every saved sign-in works${flags.unreachable === true ? " or was not asked to go" : " (or only did not answer: --unreachable removes those)"}`)}\n`);
+      return 0;
+    }
+    const what = `${gone.length} saved sign-in${gone.length === 1 ? "" : "s"} on this machine (${gone.map((p) => p.name).join(", ")}) — their keys stay wherever else they are; only this machine forgets them`;
+    if (!(await sureToDelete(flags, "accounts prune", what))) return 1;
+    for (const p of gone) removeCredential(p.name);
+    console.log(`\n  ${c.green("✓")} removed ${gone.map((p) => c.bold(p.name)).join(", ")}\n`);
+    return 0;
+  }
+
+  const all = flags.all === true;
+  const shown = profiles.filter((p) => all || p.current || statusOf(p).ok);
+  const hidden = profiles.filter((p) => !shown.includes(p));
+  const width = Math.max(...shown.map((p) => p.name.length));
   console.log("");
-  for (const p of profiles) {
-    const mark = p.current ? c.green("●") : " ";
+  for (const p of shown) {
+    const s = statusOf(p);
+    const mark = p.current ? (s.ok ? c.green("●") : c.red("●")) : " ";
     const who = p.email ?? c.dim("api key");
-    console.log(`  ${mark} ${c.bold(p.name.padEnd(width))}  ${p.account}  ${c.dim(`${p.role ?? "?"} · ${who} · ${p.url}`)}`);
+    const state = s.ok ? "" : `  ${c.red(s.why === "refused" ? "sign-in no longer works" : "platform not answering")} ${c.dim(`(${s.detail})`)}`;
+    console.log(`  ${mark} ${c.bold(p.name.padEnd(width))}  ${p.account}  ${c.dim(`${p.role ?? "?"} · ${who} · ${p.url}`)}${state}`);
+  }
+  const current = profiles.find((p) => p.current);
+  if (current && !statusOf(current).ok) {
+    console.log(`\n  ${c.amber("!")} ${c.dim(`the active one, ${current.name}, does not work: \`foldrun login\` again, or \`foldrun use <name>\` another`)}`);
+  }
+  if (hidden.length) {
+    const refused = hidden.filter((p) => statusOf(p).why === "refused").length;
+    const away = hidden.length - refused;
+    const parts = [refused ? `${refused} no longer work${refused === 1 ? "s" : ""}` : "", away ? `${away} did not answer` : ""].filter(Boolean).join(", ");
+    console.log(`\n  ${c.dim(`${hidden.length} more saved sign-in${hidden.length === 1 ? "" : "s"} not shown (${parts}) — \`foldrun accounts --all\` lists them, \`foldrun accounts prune\` removes the ones that no longer work.`)}`);
   }
   console.log(`\n  ${c.dim("● is the one a bare command talks as. `foldrun use <name>` switches; --profile <name> is one command.")}\n`);
   return 0;
@@ -14713,7 +14785,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return auditCmd(positional, flags);
     case "accounts":
     case "profiles":
-      return accountsCmd(positional);
+      return accountsCmd(positional, flags);
     case "use":
     case "switch":
       return useCmd(positional);
