@@ -4697,6 +4697,7 @@ async function doctor(flags) {
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
  *   keys create <label> --gateway --login   on the operator's Claude login (its own accounts): not metered
+ *   keys set <id> --opus|--sonnet|--haiku <provider/model>  which model each Claude Code tier runs on (a gateway key; `-` clears one, --clear all)
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
  *                                      one ends now, or when the grace runs out.
  *                                      A key already rotated is refused (409):
@@ -4795,7 +4796,8 @@ async function keysCmd(positional, flags) {
     console.log(`  ${c.dim(`Shown once. The old key ${grace === "0" ? "is revoked" : `keeps working until ${String(ends).slice(0, 16).replace("T", " ")} UTC`}.`)}\n`);
     return 0;
   }
-  throw new Error(`keys: unknown verb "${verb}" — ls, create, rotate, revoke`);
+  if (verb === "set") return keysSetModels(url, arg, flags);
+  throw new Error(`keys: unknown verb "${verb}" — ls, create, set, rotate, revoke`);
 }
 
 /**
@@ -4827,15 +4829,55 @@ async function keysCreateA2a(url, label, flags) {
   return 0;
 }
 
+/**
+ * `foldrun keys set <id> --sonnet openai/gpt-6 [--opus …] [--haiku …]` — a
+ * gateway key's model map: which model each Claude Code tier runs on with
+ * that key. The tiers named change; the rest stay. `-` clears one tier,
+ * `--clear` every one. PATCH /api/keys/<id> { models }.
+ */
+async function keysSetModels(url, id, flags) {
+  if (!id) throw new Error("which key? foldrun keys set <id> --sonnet openai/gpt-6 — ids are in `foldrun keys ls`");
+  const tiers = ["opus", "sonnet", "haiku"];
+  const named = tiers.filter((t) => flags[t] !== undefined);
+  if (flags.clear !== true && !named.length) throw new Error("which tier? --opus, --sonnet or --haiku <provider/model> (`-` clears one), or --clear for all");
+  for (const t of named) if (typeof flags[t] !== "string" || !flags[t]) throw new Error(`--${t} needs a model, e.g. --${t} openai/gpt-6 (or - to clear it)`);
+  let models = null;
+  if (flags.clear !== true) {
+    const { keys = [] } = await remoteCall(url, flags, "/api/keys");
+    const key = keys.find((k) => k.id === id);
+    if (!key) throw new Error(`no key ${id} — \`foldrun keys ls\` lists them`);
+    if (key.purpose !== "gateway") throw new Error(`${id} is not a gateway key — only a gateway key has a model map`);
+    const next = { ...(key.gateway?.models ?? {}) };
+    for (const t of named) {
+      if (flags[t] === "-") delete next[t];
+      else next[t] = flags[t];
+    }
+    models = Object.keys(next).length ? next : null;
+  }
+  const made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ models }) });
+  const line = modelsLine(made.models);
+  console.log(`\n  ${c.green("✓")} ${c.bold(id)}  ${line ? c.dim(line) : c.dim("runs Claude Code's models as named")}\n`);
+  return 0;
+}
+
+/** A gateway key's model map in one line, or null when there is none. */
+function modelsLine(m) {
+  const label = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku" };
+  const parts = ["opus", "sonnet", "haiku"].filter((t) => m?.[t]).map((t) => `${label[t]} → ${m[t]}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 /** How `keys ls` describes a gateway key: its limits, and what it has spent. */
 function gatewayLine(g) {
-  if (g?.credential === "login") return "gateway · Claude Code · the operator's Claude login · not metered";
+  const map = modelsLine(g?.models);
+  const tail = map ? ` · ${map}` : "";
+  if (g?.credential === "login") return `gateway · Claude Code · the operator's Claude login · not metered${tail}`;
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const parts = ["gateway · Claude Code"];
   if (g?.capUsd != null) parts.push(`${usd(g.spentUsd)} of ${usd(g.capUsd)}`);
   else if (g?.spentUsd != null) parts.push(`${usd(g.spentUsd)} spent`);
   if (g?.dailyUsd != null) parts.push(`${usd(g.todayUsd)} of ${usd(g.dailyUsd)} today`);
-  return parts.join(" · ");
+  return parts.join(" · ") + tail;
 }
 
 /** A dollar limit from a flag: above 0, at most 100000 (what the platform takes). */

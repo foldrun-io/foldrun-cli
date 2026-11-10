@@ -102,6 +102,24 @@ claude --model gemini/gemini-3-pro       # or gemini-3-pro
   cost and context size. The charge is foldrun's.
 - **What isn't offered.** A login gateway key stays Claude-only.
 
+## Run Claude Code's own tiers on other models
+
+Claude Code's `/model` list shows Claude's tiers alone. A gateway key can map
+each tier to any model foldrun offers, so picking Sonnet in `/model` (or
+`--model sonnet`) runs, say, GPT — with no setting in Claude Code at all:
+
+```sh
+foldrun keys set <id> --sonnet openai/gpt-6 --haiku deepseek/deepseek-v4
+foldrun keys set <id> --haiku -          # Haiku back to Claude
+foldrun keys set <id> --clear            # every tier as Claude Code names it
+```
+
+On Settings → API keys, a gateway key's **Models** button does the same, and
+the row shows what each tier runs on. A mapped model must be on foldrun's
+price list; a login gateway key maps to Claude models only. The gateway reads a
+change within 10 seconds. API: `PATCH /api/keys/<id> { models }`, or `models`
+when minting.
+
 ## What the gateway serves
 
 | Route | |

@@ -81,6 +81,28 @@ test("keys create --gateway --login posts credential: login, takes no limit, and
   assert.match(ls.out, /gateway · Claude Code · the operator's Claude login · not metered/);
 });
 
+test("keys set changes the tiers named, keeps the rest, and clears with - or --clear", async () => {
+  const s = await serve({
+    "/api/keys": () => ({ keys: [{ id: "g5", prefix: "mda_g5", label: "laptop", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: 5, dailyUsd: null, models: { haiku: "deepseek/deepseek-v4" } }, createdAt: "2026-11-10T00:00:00Z", revokedAt: null }], gatewayUrl: null }),
+    "PATCH /api/keys/g5": (body: string) => ({ ok: true, id: "g5", models: JSON.parse(body).models }),
+  });
+  const set = await at(s.url, "keys", "set", "g5", "--sonnet", "openai/gpt-6");
+  const drop = await at(s.url, "keys", "set", "g5", "--haiku", "-");
+  const clear = await at(s.url, "keys", "set", "g5", "--clear");
+  const none = await at(s.url, "keys", "set", "g5");
+  s.close();
+  assert.equal(set.code, 0, set.out);
+  assert.equal(drop.code, 0, drop.out);
+  assert.equal(clear.code, 0, clear.out);
+  const patches = s.seen.filter((x) => x.method === "PATCH").map((x) => JSON.parse(x.body).models);
+  assert.deepEqual(patches[0], { haiku: "deepseek/deepseek-v4", sonnet: "openai/gpt-6" }, "the tier named changes, the rest stay");
+  assert.match(set.out, /Sonnet → openai\/gpt-6 · Haiku → deepseek\/deepseek-v4/);
+  assert.deepEqual(patches[1], null, "the only tier cleared: no map left");
+  assert.deepEqual(patches[2], null);
+  assert.equal(none.code, 1);
+  assert.match(none.out, /which tier/);
+});
+
 test("keys --help names --gateway", async () => {
   const k = await cli(["keys", "--help"]);
   assert.match(k.out, /--gateway/);

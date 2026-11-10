@@ -304,6 +304,7 @@ Signing in
   foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys: created, last used, expires, scope, and which are a machine's CLI sign-in (they renew themselves) — also create <label> [--expires 90d], rotate <id> [--grace 1h], revoke <id>
   foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no /api route (--max-tasks N open at once, default 10; --expires); shown once
+  foldrun keys set <id> --sonnet openai/gpt-6   which model a gateway key runs each Claude Code tier on (--opus, --haiku; - clears one, --clear all)
   foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]  a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — it spends the account's credits on foldrun's models through the gateway, up to its own limits, and opens no /api route; an admin of every workspace; shown once
   foldrun a2a ls --to <ws>  what a workspace serves over A2A: each flow's a2a:, card and endpoint URLs, its A2A keys (admins), recent tasks and the key that asked (--json)
   foldrun a2a publish <flow>  set a2a: publish: true in the flow (--to <ws>: the deployed copy, an admin's) — --name, --description, --example "…" (repeatable), --public-card | --private-card; diff, checked, --dry-run
@@ -456,6 +457,7 @@ Options
   --gateway                 keys create: a gateway key for Claude Code — with --cap <usd> (in all) and/or --daily <usd> (per UTC day)
   --cap <usd>, --daily <usd>  keys create --gateway: the key's own spending limits, $0.01–$100000
   --login                   keys create --gateway: on the operator's Claude login instead (the operator's own accounts; not metered, no limits)
+  --opus, --sonnet, --haiku <model>  keys set <id>: which model that Claude Code tier runs on with a gateway key (e.g. openai/gpt-6; - clears it)
   --key-env <NAME>          a2a call, a2a status, a2a cancel, a2a card: the environment variable holding the A2A key (default FOLDRUN_A2A_KEY) — a key is never taken on the command line
   --card <url>              a2a status, a2a cancel: the agent card of the agent that holds the task
 
