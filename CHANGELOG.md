@@ -12,6 +12,13 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.9.5] — 2026-11-11
+
+### docs
+
+- sync secrets.md (MCP anchor fix) ([432d9f6](https://github.com/foldrun-io/foldrun-cli/commit/432d9f6))
+- sync providers.md (Persian results after the prompt fix) ([0156a7a](https://github.com/foldrun-io/foldrun-cli/commit/0156a7a))
+
 ## [20.9.4] — 2026-11-11
 
 ### deps
