@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.7.2] — 2026-11-11
+
+### deps
+
+- @foldrun/core ^18.3.1 ([8127808](https://github.com/foldrun-io/foldrun-cli/commit/8127808))
+
+### docs
+
+- sync checks.md (joiners) ([099af43](https://github.com/foldrun-io/foldrun-cli/commit/099af43))
+
 ## [20.7.1] — 2026-11-10
 
 - build(deps): Bump softprops/action-gh-release (#121) ([aefc1b7](https://github.com/foldrun-io/foldrun-cli/commit/aefc1b7))
