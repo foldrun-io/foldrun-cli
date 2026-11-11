@@ -8840,7 +8840,11 @@ async function reportCmd(runId, flags, layout) {
   const blocked = run.status === "completed" && verdictOf(run) === "BLOCKED";
   console.log(`\n  ${blocked ? c.red("⛔") : statusMark(run.status)} ${c.bold(run.flow)}  ${c.dim(run.id)}`);
   console.log(`  ${c.dim(`${ws} · ${run.status}`)}${verdictTag(run) ? ` ${verdictTag(run)}` : ""}${c.dim(run.test ? " · test run" : "")}`);
-  console.log(`  ${c.dim(`started ${when(run.startedAt)} (${ago(run.startedAt)} ago) · ${runDuration(run)} · $${cost.toFixed(4)}`)}`);
+  // The run's money as the platform answers it (FOL-157): what was charged
+  // once it settles, the list-price estimate until then; a local run (or an
+  // older platform) has neither, and shows the token cost as before.
+  const money = typeof run.chargedUsd === "number" ? `charged $${run.chargedUsd.toFixed(4)}` : typeof run.estimatedUsd === "number" ? `$${run.estimatedUsd.toFixed(4)} estimated, not settled yet` : `$${cost.toFixed(4)}`;
+  console.log(`  ${c.dim(`started ${when(run.startedAt)} (${ago(run.startedAt)} ago) · ${runDuration(run)} · ${money}`)}`);
   if (tokens.input || tokens.output) {
     const cached = cachedLabel(measuredShare((run.steps ?? []).map((s) => s.tokens)));
     console.log(`  ${c.dim(`${tokens.input.toLocaleString()} in / ${tokens.output.toLocaleString()} out tokens${cached ? ` · ${cached}` : ""}`)}`);
