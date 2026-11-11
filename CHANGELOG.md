@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [21.1.0] — 2026-11-11
+
+### New in the public API
+
+- `foldrun customers`
+- the `--starts-per-minute` flag
+- the `--gateway-rpm` flag
+- the `--gateway-concurrency` flag
+- the `--customer` flag
+
+- feat(cli): foldrun customers, and --customer on invoke, agent run and runs (FOL-168) ([2cedd9b](https://github.com/foldrun-io/foldrun-cli/commit/2cedd9b))
+
 ## [21.0.0] — 2026-11-11
 
 ### Breaking changes
