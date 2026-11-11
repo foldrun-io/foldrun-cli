@@ -146,6 +146,15 @@ Both transports the SDK supports: a local process (`command:`, with `args:` and
 exposes reaches the agent that grants it. `mcpServers:` in an agent's own
 frontmatter is the inline spelling of the same thing.
 
+A remote server is called with MCP's Streamable HTTP transport, the one the
+current spec names; the older SSE transport, which it replaced, is not
+offered. `${NAME}` works in `url:` and `headers:` alike. A secret **bound to
+the server's host** ([Bound to sites](secrets#bound-to-sites)) never enters
+the sandbox: the sandbox's copy of the server's URL and headers holds
+`${NAME}`, and the egress proxy fills it in requests to that host and no
+other. An unbound secret is filled before the step starts, so the sandbox
+holds its value — bind a key you would not hand the agent.
+
 ## The library — define it once
 
 ```

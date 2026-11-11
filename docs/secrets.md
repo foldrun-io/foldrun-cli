@@ -219,6 +219,10 @@ PATCH /api/secrets   { "name": "DATAFORSEO_PASSWORD", "sites": ["api.dataforseo.
 PUT   /api/secrets   { "name": "…", "value": "…", "sites": ["api.dataforseo.com"] }   # set and bind at once
 ```
 
+A **remote MCP server**'s `headers:` and `url:` work the same way: bind the
+key to the server's host and the sandbox's copy of them holds `${NAME}`,
+filled by the proxy on the way to that host alone ([MCP](tools#mcp-someone-elses-tools)).
+
 What a program in the sandbox writes is unchanged; it sends the placeholder
 where the value would go:
 
