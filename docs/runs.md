@@ -646,10 +646,20 @@ re-run is for the same customer.
 What follows from it:
 
 - **Held alone.** Each customer is held to its own limits, checked before the
-  account's own: by default **30 run starts a minute**. One customer past its
-  limit is refused (`429`, with `Retry-After` and code `customer_rate`) while
-  your other customers carry on. Runs that name no customer are held to the
-  account's limits alone, as before.
+  account's own: by default **30 run starts a minute** and **10 runs open at
+  once** (queued, running or waiting at a gate, across every workspace). One
+  customer past a limit is refused while your other customers carry on: too
+  many starts is `429` with `Retry-After` and code `customer_rate`; too many
+  open is `429` with code `customer_open_runs` — one must finish first. Open
+  runs are counted from the runs themselves, so two starts at once cannot both
+  take the last place. Runs that name no customer are held to the account's
+  limits alone, as before.
+- **A daily spend of its own.** Set **model spend a day** and each customer's
+  calls on foldrun's models may be charged at most that much in a UTC day,
+  held with the account's daily limit — each call at the most it could cost —
+  so calls at once cannot pass it together. A run past it is refused at its
+  next model call. None is set by default. `GET /api/customers/usage?days=7`
+  and `foldrun customers usage` show what each customer was charged.
 - **Blocked.** An admin with every workspace can block a customer
   (Settings → API keys → Customers, `foldrun customers block <id>`, or
   `PUT /api/customers/<id>/block`). Its runs are refused at start (`403`,
@@ -664,8 +674,9 @@ What follows from it:
   to it; `foldrun runs --customer c-8812` and `GET …/runs?customer=c-8812` list
   them.
 
-The limits are the account's to change: `PATCH /api/customers` or
-`foldrun customers limits --starts-per-minute 60` (`default` puts one back).
+The limits are the account's to change, in Settings → API keys → Customers,
+with `PATCH /api/customers`, or `foldrun customers limits --max-open-runs 20
+--daily-model-usd 5` (`default`, or `none` for the spend, puts one back).
 A customer is a grouping and a limit, not an access boundary: anyone who may
 start runs in the account may name any customer.
 

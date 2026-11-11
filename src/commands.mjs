@@ -14391,6 +14391,12 @@ async function preferencesCmd(positional, flags) {
  * [--reason "…"]`, `unblock <id>` (asks; --yes), `limits --starts-per-minute
  * N --gateway-rpm N --gateway-concurrency N` (`default` puts one back).
  */
+/** The limits in force, in one line; a changed one marks its default. */
+function customerLimitsLine(L, D) {
+  const mark = (k) => (D && L[k] !== D[k] ? c.dim(` (default ${D[k] ?? "none"})`) : "");
+  return `${L.startsPerMinute} run starts a minute${mark("startsPerMinute")} · ${L.maxOpenRuns ?? "?"} open at once${mark("maxOpenRuns")} · ${L.gatewayRpm} gateway calls a minute${mark("gatewayRpm")} · ${L.gatewayConcurrency} at once${mark("gatewayConcurrency")} · model spend ${L.dailyModelUsd == null ? "no daily limit" : `$${L.dailyModelUsd} a day`}${mark("dailyModelUsd")}`;
+}
+
 async function customersCmd(positional, flags) {
   const url = platformFor(flags, "customers");
   const [verb, id] = positional;
@@ -14409,27 +14415,50 @@ async function customersCmd(positional, flags) {
   }
   if (verb === "limits") {
     const patch = {};
-    for (const [flag, key] of [["starts-per-minute", "startsPerMinute"], ["gateway-rpm", "gatewayRpm"], ["gateway-concurrency", "gatewayConcurrency"]]) {
+    for (const [flag, key] of [["starts-per-minute", "startsPerMinute"], ["max-open-runs", "maxOpenRuns"], ["gateway-rpm", "gatewayRpm"], ["gateway-concurrency", "gatewayConcurrency"]]) {
       if (flags[flag] === undefined) continue;
       if (flags[flag] === "default") patch[key] = null;
       else if (/^\d+$/.test(String(flags[flag]))) patch[key] = Number(flags[flag]);
       else throw new Error(`--${flag} is a whole number, or default`);
     }
-    if (!Object.keys(patch).length) throw new Error("`foldrun customers limits --starts-per-minute N --gateway-rpm N --gateway-concurrency N` (default puts one back)");
+    // Dollars a day on foldrun's models; `none` (or default) takes the limit away.
+    if (flags["daily-model-usd"] !== undefined) {
+      const v = String(flags["daily-model-usd"]);
+      if (v === "none" || v === "default") patch.dailyModelUsd = null;
+      else if (/^\d+(\.\d{1,2})?$/.test(v) && Number(v) > 0) patch.dailyModelUsd = Number(v);
+      else throw new Error("--daily-model-usd is dollars a day (e.g. 5 or 2.50), or none");
+    }
+    if (!Object.keys(patch).length) throw new Error("`foldrun customers limits --starts-per-minute N --max-open-runs N --gateway-rpm N --gateway-concurrency N --daily-model-usd D` (default / none puts one back)");
     const r = await remoteCall(url, flags, "/api/customers", { method: "PATCH", body: JSON.stringify(patch) });
     if (flags.json === true) console.log(JSON.stringify(r, null, 2));
-    else console.log(`\n  ${c.green("✓")} per customer: ${r.limits.startsPerMinute} run starts a minute · ${r.limits.gatewayRpm} gateway calls a minute · ${r.limits.gatewayConcurrency} at once\n`);
+    else console.log(`\n  ${c.green("✓")} per customer: ${customerLimitsLine(r.limits)}\n`);
     return 0;
   }
-  if (verb !== undefined && verb !== "ls") throw new Error("`foldrun customers` — ls, block <id>, unblock <id>, limits");
+  if (verb === "usage") {
+    const days = flags.days === undefined ? 7 : Number(flags.days);
+    if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error("--days is 1 to 90");
+    const r = await remoteCall(url, flags, `/api/customers/usage?days=${days}`);
+    if (flags.json === true) {
+      console.log(JSON.stringify(r, null, 2));
+      return 0;
+    }
+    if (!r.customers.length) {
+      console.log(`\n  ${c.dim(`no model calls named a customer in the last ${r.days} day${r.days === 1 ? "" : "s"}`)}\n`);
+      return 0;
+    }
+    const usd = (n) => `$${n < 1 ? n.toFixed(3) : n.toFixed(2)}`;
+    console.log(`\n  ${c.bold(`charged on foldrun's models · last ${r.days} day${r.days === 1 ? "" : "s"}`)}`);
+    for (const x of r.customers.slice(0, Number(flags.limit) > 0 ? Number(flags.limit) : 20)) console.log(`  ${usd(x.chargedUsd).padStart(9)}  ${c.dim(`today ${usd(x.todayUsd)} · ${x.calls} calls`)}  ${x.customer}`);
+    console.log();
+    return 0;
+  }
+  if (verb !== undefined && verb !== "ls") throw new Error("`foldrun customers` — ls, usage, block <id>, unblock <id>, limits");
   const r = await remoteCall(url, flags, "/api/customers");
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
   }
-  const L = r.limits, D = r.defaults;
-  const mark = (k) => (L[k] === D[k] ? "" : c.dim(` (default ${D[k]})`));
-  console.log(`\n  ${c.bold("per customer")}  ${L.startsPerMinute} run starts a minute${mark("startsPerMinute")} · ${L.gatewayRpm} gateway calls a minute${mark("gatewayRpm")} · ${L.gatewayConcurrency} at once${mark("gatewayConcurrency")}`);
+  console.log(`\n  ${c.bold("per customer")}  ${customerLimitsLine(r.limits, r.defaults)}`);
   console.log(`  ${c.dim("only for runs and gateway calls that name a customer")}`);
   if (!r.blocked.length) console.log(`\n  ${c.dim("no customer is blocked")}`);
   else {

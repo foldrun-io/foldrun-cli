@@ -318,7 +318,7 @@ Signing in
   foldrun a2a card <flow> --to <ws>  the flow's agent card URL and endpoint, then the card (a private card needs an A2A key in $FOLDRUN_A2A_KEY or --key-env)
   foldrun a2a call <card-url> "<text>"  send one message to an A2A 1.0 agent — a published flow or anyone's — and wait for the task (--data <json|@file>, --context <id>, --no-wait or --return-immediately, --max-wait <s>, --json); the A2A key comes from $FOLDRUN_A2A_KEY or --key-env NAME, never this CLI's API key
   foldrun a2a status <task-id> --card <url>  the task as it stands now (--json) — cancel <task-id> --card <url> stops it (asks; --yes)
-  foldrun customers         your own users, by the id on their runs and gateway calls: the limits each is held to and who is blocked — block <id> [--reason], unblock <id>, limits --starts-per-minute N --gateway-rpm N --gateway-concurrency N (default puts one back), --json
+  foldrun customers         your own users, by the id on their runs and gateway calls: the limits each is held to and who is blocked — block <id> [--reason], unblock <id>, usage [--days 7] (model spend per customer), limits --starts-per-minute N --max-open-runs N --gateway-rpm N --gateway-concurrency N --daily-model-usd D (default / none puts one back), --json
   foldrun audit             the account's audit log, newest first: sign-ins, keys, invites, secrets by name, deploys, support views (--since 7d, --action, --actor, --to, --all, --csv)
   foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
   foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)

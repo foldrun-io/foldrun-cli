@@ -64,3 +64,26 @@ test("--customer names the run's customer on agent run and invoke; runs --custom
     s.close();
   }
 });
+
+test("customers usage lists spend per customer; limits takes --max-open-runs and --daily-model-usd (none takes it away)", async () => {
+  const s = await serve({
+    "GET /api/customers/usage": (_b, q) => ({ days: Number(q.get("days")), customers: [{ customer: "c-big", chargedUsd: 4.2, todayUsd: 0.5, calls: 120 }] }),
+    "PATCH /api/customers": (body) => ({ limits: { startsPerMinute: 30, gatewayRpm: 60, gatewayConcurrency: 4, maxOpenRuns: 3, dailyModelUsd: JSON.parse(body).dailyModelUsd ?? null }, defaults: { startsPerMinute: 30, gatewayRpm: 60, gatewayConcurrency: 4, maxOpenRuns: 10, dailyModelUsd: null } }),
+  });
+  try {
+    const u = await at(s.url, "customers", "usage", "--days", "30");
+    assert.equal(u.code, 0, u.out);
+    assert.match(u.out, /\$4\.20\s+today \$0\.500 · 120 calls\s+c-big/);
+    assert.equal(s.seen.find((x) => x.url.includes("/usage"))!.query.get("days"), "30");
+    const l = await at(s.url, "customers", "limits", "--max-open-runs", "3", "--daily-model-usd", "2.50");
+    assert.equal(l.code, 0, l.out);
+    assert.deepEqual(JSON.parse(s.seen.filter((x) => x.method === "PATCH").at(-1)!.body), { maxOpenRuns: 3, dailyModelUsd: 2.5 });
+    assert.match(l.out, /\$2\.5 a day/);
+    await at(s.url, "customers", "limits", "--daily-model-usd", "none");
+    assert.deepEqual(JSON.parse(s.seen.filter((x) => x.method === "PATCH").at(-1)!.body), { dailyModelUsd: null });
+    assert.notEqual((await at(s.url, "customers", "limits", "--daily-model-usd", "-1")).code, 0);
+    assert.notEqual((await at(s.url, "customers", "usage", "--days", "400")).code, 0);
+  } finally {
+    s.close();
+  }
+});
