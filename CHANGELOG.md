@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [21.1.1] — 2026-11-11
+
+### docs
+
+- say which model sees run images, and that audio never reaches one ([1f6b156](https://github.com/foldrun-io/foldrun-cli/commit/1f6b156))
+
 ## [21.1.0] — 2026-11-11
 
 ### New in the public API
