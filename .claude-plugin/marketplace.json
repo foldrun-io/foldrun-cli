@@ -1,0 +1,12 @@
+{
+  "name": "foldrun",
+  "description": "foldrun for Claude Code: speak your prompts with /talk, transcribed on foldrun's own Whisper (Persian included).",
+  "owner": { "name": "foldrun", "email": "hello@foldrun.io" },
+  "plugins": [
+    {
+      "name": "foldrun",
+      "source": "./claude-plugin/foldrun",
+      "description": "/talk: record your voice, foldrun turns it into text, and it is sent as your message. Needs the foldrun CLI and a foldrun gateway key."
+    }
+  ]
+}

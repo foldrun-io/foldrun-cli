@@ -1,0 +1,8 @@
+{
+  "name": "foldrun",
+  "description": "/talk: speak your prompt. foldrun records the microphone, transcribes it on its own Whisper servers (Persian with a Persian model), and sends the words as your message.",
+  "version": "1.0.0",
+  "author": { "name": "foldrun", "email": "hello@foldrun.io" },
+  "homepage": "https://foldrun.ir/claude-code",
+  "license": "FSL-1.1-ALv2"
+}

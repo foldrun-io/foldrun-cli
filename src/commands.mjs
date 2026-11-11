@@ -5101,6 +5101,235 @@ export async function gatewayStatusLine(env = process.env, flags = {}, now = Dat
   return line;
 }
 
+/**
+ * `foldrun talk` — speak a prompt. Records from the microphone until you stop
+ * talking (2 s of quiet) or `--max` seconds, sends the recording to the
+ * foldrun gateway's POST /v1/foldrun/transcribe, where foldrun's own Whisper
+ * pods turn it into text (the Persian model for Persian), and prints the
+ * words. `--file <audio>` transcribes a file instead.
+ *
+ * Inside Claude Code it is the `/talk` skill's one command, `foldrun talk
+ * --plain`: only the words reach stdout and nothing reaches stderr unless it
+ * fails, because the skill pastes the output as the prompt. Claude Code's own
+ * /voice needs a claude.ai login, is off with a gateway key, sends audio to
+ * Anthropic only and has no Persian.
+ *
+ * The gateway and key come from --url / --key, FOLDRUN_GATEWAY_URL /
+ * FOLDRUN_GATEWAY_KEY, ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN (what Claude
+ * Code hands its commands), or the env block of ~/.claude/settings.json that
+ * `keys create --gateway --claude-code` wrote.
+ */
+async function talkCmd(flags) {
+  const started = Date.now();
+  const plain = flags.plain === true;
+  const lang = typeof flags.lang === "string" ? flags.lang.toLowerCase() : "auto";
+  if (lang !== "auto" && !/^[a-z]{2,3}$/.test(lang)) throw new Error("--lang is auto, or a language code such as fa or en");
+  const max = flags.max === undefined ? 60 : Number(flags.max);
+  if (!Number.isFinite(max) || max < 1 || max > TALK_MAX_SECONDS) throw new Error(`--max is a number of seconds, 1 to ${TALK_MAX_SECONDS}`);
+  const quiet = flags.silence === undefined ? 2 : Number(flags.silence);
+  if (!Number.isFinite(quiet) || quiet < 0.5 || quiet > 10) throw new Error("--silence is the seconds of quiet that end a recording, 0.5 to 10");
+  const { base, key } = talkEndpoint(process.env, flags);
+  const say = (s) => { if (!plain) process.stderr.write(s); };
+  let wav;
+  if (typeof flags.file === "string") {
+    wav = await talkFileWav(flags.file);
+  } else {
+    say(`  ${c.bold("listening…")} ${c.dim(`speak, then stop for ${quiet} s (at most ${max} s; Ctrl+C to cancel)`)}\n`);
+    wav = await talkRecord({ max, quiet, mic: typeof flags.mic === "string" ? flags.mic : null, beep: flags["no-beep"] !== true, until: started + TALK_DEADLINE_MS - 20_000 });
+  }
+  say(`  ${c.dim(`transcribing ${(Math.max(0, wav.length - 44) / 32000).toFixed(1)} s…`)}\n`);
+  let res;
+  try {
+    // Claude Code kills a skill's command at 2 minutes and drops the prompt:
+    // the whole of `talk` stays inside 110 s, recording included.
+    const wait = Math.max(10_000, TALK_DEADLINE_MS - (Date.now() - started));
+    res = await fetch(`${base}/v1/foldrun/transcribe?lang=${lang}`, { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "audio/wav" }, body: wav, signal: AbortSignal.timeout(wait) });
+  } catch (err) {
+    throw new Error(`the gateway at ${base} did not answer (${err.name === "TimeoutError" ? "no transcript in time — try a shorter recording" : err.message})`);
+  }
+  const text = await res.text();
+  /** @type {any} */
+  let j = null;
+  try { j = JSON.parse(text); } catch { /* not JSON: said below */ }
+  if (!res.ok) throw new Error(j?.error?.message ? `the gateway refused it (${res.status}): ${j.error.message}` : res.status === 404 ? `${base} is not a foldrun gateway with transcription (404)` : `the gateway answered ${res.status}`);
+  const words = talkClean(typeof j?.text === "string" ? j.text : "");
+  if (!words) throw new Error("no speech was heard — check the microphone, and that this terminal may use it");
+  if (flags.json === true) console.log(JSON.stringify({ ...j, text: words }));
+  else process.stdout.write(`${words}\n`);
+  say(`  ${c.dim(`${j.language ?? "?"} · ${j.model ?? "?"} · ${j.seconds ?? "?"} s`)}\n`);
+  return 0;
+}
+
+const TALK_MAX_SECONDS = 120;
+/** All of `foldrun talk`, recording to words: under Claude Code's 2-minute
+ *  limit on a skill's command. */
+const TALK_DEADLINE_MS = 110_000;
+
+/** The gateway and key `foldrun talk` uses, or why there is none. */
+export function talkEndpoint(env = process.env, flags = {}, settingsFile = path.join(os.homedir(), ".claude", "settings.json")) {
+  let settings = {};
+  try { settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"))?.env ?? {}; } catch { /* no Claude Code settings */ }
+  const pick = (...vals) => vals.map((v) => (typeof v === "string" ? v.trim() : "")).find(Boolean) ?? "";
+  const base = pick(flags.url, env.FOLDRUN_GATEWAY_URL, env.ANTHROPIC_BASE_URL, settings.ANTHROPIC_BASE_URL).replace(/\/+$/, "");
+  const key = pick(flags.key, env.FOLDRUN_GATEWAY_KEY, env.ANTHROPIC_AUTH_TOKEN, env.ANTHROPIC_API_KEY, settings.ANTHROPIC_AUTH_TOKEN, settings.ANTHROPIC_API_KEY);
+  if (!base) throw new Error("no foldrun gateway set — make a key with `foldrun keys create <label> --gateway --cap <usd> --claude-code`, or pass --url and --key");
+  if (!/^https?:\/\//.test(base)) throw new Error(`the gateway URL must start with https:// (got ${base})`);
+  if (/(^|\.)anthropic\.com$/.test(new URL(base).hostname)) throw new Error("ANTHROPIC_BASE_URL points at Anthropic, not a foldrun gateway — /talk sends recordings to foldrun");
+  if (!key) throw new Error("no gateway key set (ANTHROPIC_AUTH_TOKEN) — `foldrun keys create <label> --gateway --cap <usd> --claude-code` makes one");
+  return { base, key };
+}
+
+/** Whisper's notes for no words ([BLANK_AUDIO], (music)…) are not words. */
+export function talkClean(text) {
+  const t = text.replace(/\s+/g, " ").trim();
+  return /^([[(][^\])]*[\])]\s*)+$/.test(t) ? "" : t;
+}
+
+/** ffmpeg, which records and converts: FOLDRUN_FFMPEG, else on the PATH. */
+function talkFfmpeg() {
+  const bin = process.env.FOLDRUN_FFMPEG || "ffmpeg";
+  const probe = spawnSync(bin, ["-hide_banner", "-version"], { stdio: "ignore" });
+  if (probe.error || probe.status !== 0) throw new Error(`/talk needs ffmpeg to record — install it (${process.platform === "darwin" ? "brew install ffmpeg" : process.platform === "win32" ? "winget install ffmpeg" : "sudo apt install ffmpeg"})`);
+  return bin;
+}
+
+/** A file as the 16 kHz mono WAV the gateway takes: sent as it is when it
+ *  already is one, else converted by ffmpeg (any audio, or a video's sound). */
+async function talkFileWav(file) {
+  const buf = fs.readFileSync(file);
+  // Already the right shape and not too long: sent as it is. A longer one is
+  // cut to TALK_MAX_SECONDS by ffmpeg below, as any other file is.
+  if (talkIsWav16k(buf) && buf.length <= 44 + TALK_MAX_SECONDS * 32000) return buf;
+  const out = spawnSync(talkFfmpeg(), ["-hide_banner", "-nostdin", "-loglevel", "error", "-i", file, "-vn", "-ac", "1", "-ar", "16000", "-t", String(TALK_MAX_SECONDS), "-f", "s16le", "pipe:1"], { maxBuffer: 64 * 1024 * 1024 });
+  if (out.status !== 0 || !out.stdout?.length) throw new Error(`ffmpeg could not read ${file}: ${String(out.stderr ?? "").trim().split("\n").pop() || "no audio in it"}`);
+  return talkWav(out.stdout);
+}
+
+/** Is this already PCM 16-bit, 16 kHz, mono WAV? */
+export function talkIsWav16k(b) {
+  return b.length >= 44 && b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WAVE" && b.toString("ascii", 12, 16) === "fmt " && b.readUInt16LE(20) === 1 && b.readUInt16LE(22) === 1 && b.readUInt32LE(24) === 16000 && b.readUInt16LE(34) === 16;
+}
+
+/** Raw PCM 16-bit 16 kHz mono, with a WAV header in front. */
+export function talkWav(pcm) {
+  const h = Buffer.alloc(44);
+  h.write("RIFF", 0, "ascii");
+  h.writeUInt32LE(36 + pcm.length, 4);
+  h.write("WAVE", 8, "ascii");
+  h.write("fmt ", 12, "ascii");
+  h.writeUInt32LE(16, 16);
+  h.writeUInt16LE(1, 20);
+  h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(16000, 24);
+  h.writeUInt32LE(32000, 28);
+  h.writeUInt16LE(2, 32);
+  h.writeUInt16LE(16, 34);
+  h.write("data", 36, "ascii");
+  h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+
+/** ffmpeg's input for the default microphone on this system. macOS: the
+ *  device System Settings has chosen (by name — index 0 may be an iPhone). */
+function talkInput(device) {
+  if (process.platform === "darwin") {
+    let name = device;
+    if (!name) {
+      const sp = spawnSync("system_profiler", ["SPAudioDataType", "-json"], { encoding: "utf8", timeout: 10_000 });
+      try {
+        const items = JSON.parse(sp.stdout).SPAudioDataType.flatMap((g) => g._items ?? []);
+        name = items.find((i) => i.coreaudio_default_audio_input_device === "spaudio_yes")?._name ?? null;
+      } catch { /* the first device below */ }
+    }
+    return ["-f", "avfoundation", "-i", `:${name ?? "0"}`];
+  }
+  if (process.platform === "win32") {
+    let name = device;
+    if (!name) {
+      const ls = spawnSync(talkFfmpeg(), ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], { encoding: "utf8" });
+      name = /"([^"]+)"\s+\(audio\)/.exec(`${ls.stderr}`)?.[1] ?? null;
+      if (!name) throw new Error("no microphone found — name one with --mic \"<name>\" (ffmpeg -list_devices true -f dshow -i dummy)");
+    }
+    return ["-f", "dshow", "-i", `audio=${name}`];
+  }
+  const pulse = spawnSync("pactl", ["info"], { stdio: "ignore" });
+  return pulse.status === 0 ? ["-f", "pulse", "-i", device ?? "default"] : ["-f", "alsa", "-i", device ?? "default"];
+}
+
+/** A short sound at the start and end of recording, where the system has
+ *  one: inside Claude Code nothing is drawn while a command runs. */
+function talkBeep(which) {
+  if (process.platform !== "darwin") return;
+  const f = `/System/Library/Sounds/${which === "start" ? "Tink" : "Pop"}.aiff`;
+  if (fs.existsSync(f)) spawnSync("afplay", [f], { stdio: "ignore", timeout: 2000 });
+}
+
+/**
+ * Record until `quiet` seconds of silence after speech, or `max` seconds.
+ * ffmpeg's silencedetect reports `silence_start: <t>` on stderr once a quiet
+ * spell has lasted `quiet` seconds; one that starts after the first tenth of a second is
+ * the end of speech (one at 0 is quiet before speaking, and is waited out
+ * up to 15 s). The samples come back raw on stdout and get a WAV header here.
+ */
+async function talkRecord({ max, quiet, mic, beep, until }) {
+  const bin = talkFfmpeg();
+  const input = talkInput(mic);
+  if (beep) talkBeep("start");
+  const child = (await import("node:child_process")).spawn(bin, ["-hide_banner", "-nostdin", "-loglevel", "info", ...input, "-ac", "1", "-ar", "16000", "-af", `silencedetect=noise=-35dB:d=${quiet}`, "-t", String(max), "-f", "s16le", "pipe:1"], { stdio: ["ignore", "pipe", "pipe"] });
+  const chunks = [];
+  let bytes = 0;
+  let err = "";
+  let stopped = null;
+  let heard = false;
+  let quietAtStart = false;
+  let partial = "";
+  const stop = (why) => {
+    if (stopped) return;
+    stopped = why;
+    child.kill("SIGTERM");
+  };
+  child.stdout.on("data", (b) => {
+    chunks.push(b);
+    bytes += b.length;
+    if (bytes / 32000 > 15 && !heard) stop("nothing");
+  });
+  child.stderr.on("data", (b) => {
+    err = (err + b.toString()).slice(-4000);
+    // Whole lines only: a report split across two chunks is read once it
+    // is complete (ffmpeg never repeats one).
+    const lines = (partial + b.toString()).split(/\r?\n|\r/);
+    partial = lines.pop() ?? "";
+    for (const m of lines.join("\n").matchAll(/silence_(start|end): (-?[\d.]+)/g)) {
+      // A quiet spell that began at 0 is quiet before speaking; one that
+      // began any later followed speech, however short ("yes").
+      if (m[1] === "end") heard = true;
+      else if (Number(m[2]) > 0.1) { heard = true; stop("quiet"); }
+      else quietAtStart = true;
+    }
+    // Speaking from the first moment: no quiet spell at 0 was reported once
+    // one could have been.
+    if (!heard && !quietAtStart && bytes / 32000 > quiet + 0.5) heard = true;
+  });
+  const onSig = () => stop("cancel");
+  process.once("SIGINT", onSig);
+  // ffmpeg's -t counts audio, not time: a microphone that never starts (a
+  // permission prompt nobody answers) would hold it for ever. A clock of our
+  // own, inside the whole command's deadline.
+  const watchdog = setTimeout(() => stop("clock"), Math.max(1000, Math.min(max * 1000 + 5000, until - Date.now())));
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  clearTimeout(watchdog);
+  process.removeListener("SIGINT", onSig);
+  if (beep) talkBeep("end");
+  if (stopped === "cancel") throw new Error("cancelled");
+  if (stopped === "nothing") throw new Error("no speech was heard in 15 s — check the microphone, and that this terminal may use it");
+  if (stopped === "clock" && !bytes) throw new Error("the microphone did not start — allow this terminal in System Settings → Privacy & Security → Microphone, or name one with --mic");
+  if (!bytes) {
+    const last = err.trim().split("\n").filter((l) => !/silence_/.test(l)).pop() ?? "";
+    throw new Error(/permission|not authorized|denied/i.test(err) ? "this terminal may not use the microphone — allow it in System Settings → Privacy & Security → Microphone" : `ffmpeg recorded nothing (exit ${code}): ${last}`);
+  }
+  return talkWav(Buffer.concat(chunks));
+}
+
 /** A retried mint or rotate is answered from the first call, and the server
  *  never stores a key's secret — so a retry after a lost answer has none. */
 function lostSecret(id) {
@@ -15361,6 +15590,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return workspacesCmd(positional, flags, layout);
     case "extract":
       return extract(workspace, flags);
+    case "talk":
+      return talkCmd(flags);
     case "deploy":
       return deploy(positional[0] ?? ".", flags, layout);
     case "run":
