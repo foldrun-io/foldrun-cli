@@ -226,11 +226,27 @@ The three failures were following the task, not the language:
 - `default` added an introductory line and ran one list item past its
   ten-word limit.
 
-So `default` is a sound default for Persian, and an agent whose output must
-follow a strict shape (a fixed format, an exact length) earns `max`, or a
-`verify:` that checks the shape. One run per case is a small sample — run
-the comparison on your own agent's cases with `repeat: 3` before moving a
-step to `fast`. The whole comparison cost $0.42 (runs and judges together).
+The whole comparison cost $0.42 (runs and judges together).
+
+**The prompt fixed them, not the tier.** The same agent was then told, in
+its prose, the four things it had got wrong: the reply is the deliverable
+(no line about itself, no closing offer); never invent a date, name or
+number; count before answering when the task sets a limit; check that
+subject and verb agree. Run again with `repeat: 2`, `fast` passed 16 / 16
+and `max` 16 / 16, at $0.010 and $0.020 a run ($0.49 for the comparison).
+
+A flow around the first agent instead — a `verify: judge:` that the reply
+holds no extra line and meets its limits, with `retry: 2` — did worse:
+`fast` 14 / 16 and `default` 16 / 16, three times slower (about 34 s a
+run). Both of `fast`'s misses were one technical translation that opened
+with a stray English "The", which the verify claim did not ask about. A
+judge checks what its claim names, so name the failure you have seen.
+
+So for Persian: write the rules your eval catches into the agent's prose
+first, and keep `fast` if it passes them. A strict shape (a fixed format,
+an exact length) is checked best by a deterministic `verify:` on the
+artefact. Two runs per case is still a small sample: run the comparison on
+your own agent's cases with `repeat: 3` before moving a step to `fast`.
 
 ## Why a turn stopped
 
