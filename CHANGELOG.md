@@ -12,6 +12,21 @@ edited by a person.
 
 <!-- releases -->
 
+## [21.3.0] — 2026-11-11
+
+### New in the public API
+
+- the `--require-customer` flag
+- the `--max-open-runs` flag
+- the `--daily-model-usd` flag
+
+- feat(cli): keys create --require-customer, keys set <id> --customer required|optional (FOL-168) ([8da017c](https://github.com/foldrun-io/foldrun-cli/commit/8da017c))
+- feat(cli): customers usage, and --max-open-runs / --daily-model-usd on customers limits (FOL-168 phase 2) ([b8396e3](https://github.com/foldrun-io/foldrun-cli/commit/b8396e3))
+
+### test
+
+- the --all help line names runs first now — match secrets workspaces anywhere on it ([7a04911](https://github.com/foldrun-io/foldrun-cli/commit/7a04911))
+
 ## [21.2.1] — 2026-11-11
 
 ### deps
