@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.10.0] — 2026-11-11
+
+- feat(cli): --context on invoke, agent run and runs (FOL-162) ([81eae8f](https://github.com/foldrun-io/foldrun-cli/commit/81eae8f))
+
+### deps
+
+- @foldrun/core ^18.5.0 ([5fc8ce1](https://github.com/foldrun-io/foldrun-cli/commit/5fc8ce1))
+
 ## [20.9.5] — 2026-11-11
 
 ### docs
