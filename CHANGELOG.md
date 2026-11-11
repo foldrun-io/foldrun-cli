@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [21.3.1] — 2026-11-11
+
+### deps
+
+- @foldrun/core ^19.3.0 ([ebf3edb](https://github.com/foldrun-io/foldrun-cli/commit/ebf3edb))
+
 ## [21.3.0] — 2026-11-11
 
 ### New in the public API
