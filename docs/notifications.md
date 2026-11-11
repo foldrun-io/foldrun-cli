@@ -51,6 +51,12 @@ another's webhook flow and be accepted. Name no secret and nothing is
 signed, which is what every existing destination keeps doing. How to check
 it is under [Verifying a delivery](#verifying-a-delivery).
 
+A question an agent asks mid-step (`tools: [ask]`) goes out as
+`awaiting-approval`, as a gate does, and its webhook body also carries
+`reason: "question"` and `question: { text, options, agent }`, so a receiver
+can tell the two apart and show the question. `events: [asking]` subscribes
+to questions alone, without the gates.
+
 The default events are `failed` and `awaiting-approval`. `completed` is
 opt-in on purpose: a schedule that works is the quiet kind of good news, and
 a channel that pings on every success gets muted — which un-pings the
@@ -240,7 +246,7 @@ Every attempt carries these headers:
 | header | |
 |---|---|
 | `X-Foldrun-Delivery` | the delivery's id, `dlv_…` — **the same on every attempt and every redelivery**. Dedupe on it: a receiver that took attempt 2 but timed out answering may see attempt 3 |
-| `X-Foldrun-Event` | `failed`, `completed`, `blocked`, `awaiting-approval`, `quarantined`, `sla`, `budget`, `room`, or `test` |
+| `X-Foldrun-Event` | `failed`, `completed`, `blocked`, `awaiting-approval` (a question too: its body has `reason: "question"`), `quarantined`, `sla`, `budget`, `room`, or `test` |
 | `X-Foldrun-Attempt` | 1, 2, … |
 | `X-Foldrun-Timestamp`, `X-Foldrun-Signature` | when `signing_secret:` is set — see below |
 
