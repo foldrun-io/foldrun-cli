@@ -108,3 +108,36 @@ test("agent new still works, and an unknown verb names both", async () => {
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /new, run, link, unlink, import, ls are the verbs, not "wibble"/);
 });
+
+test("--context sends the conversation (FOL-162); invoke carries it too, and runs --context lists only its runs", async () => {
+  const s = await serve({
+    [`POST ${RUN}`]: () => ({ ok: true, runId: "run-adhoc-1", test: false, context: "order-42" }),
+    "POST /api/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-flow-1", steps: 1, test: false, context: "order-42" }),
+    "GET /api/workspaces/rank-desk/runs": () => ({
+      runs: [
+        { id: "run-a", flow: "adhoc:tracker", status: "completed", startedAt: "2026-11-11T01:00:00.000Z", finishedAt: "2026-11-11T01:01:00.000Z", summary: "first turn", context: { id: "order-42", key: "k" }, steps: [] },
+        { id: "run-b", flow: "adhoc:tracker", status: "completed", startedAt: "2026-11-11T00:00:00.000Z", finishedAt: "2026-11-11T00:01:00.000Z", summary: "another chat", context: { id: "order-7", key: "k2" }, steps: [] },
+      ],
+      next: null,
+    }),
+  });
+  try {
+  const r = await at(s.url, "agent", "run", "tracker", "--to", "rank-desk", "--task", "and april?", "--context", "order-42");
+  assert.equal(r.code, 0, r.out);
+  assert.equal(JSON.parse(s.seen.find((x) => x.method === "POST" && x.url.includes("/agents/"))!.body).context, "order-42");
+  const inv = await at(s.url, "invoke", "weekly", "--to", "rank-desk", "--task", "x", "--context", "order-42");
+  assert.equal(inv.code, 0, inv.out);
+  assert.equal(JSON.parse(s.seen.find((x) => x.method === "POST" && x.url.includes("/flows/"))!.body).context, "order-42");
+  const listed = await at(s.url, "runs", "--to", "rank-desk", "--context", "order-42");
+  assert.equal(listed.code, 0, listed.out);
+  assert.match(listed.out, /first turn/);
+  assert.doesNotMatch(listed.out, /another chat/, "only that conversation's runs, even where the platform does not filter");
+  assert.equal(s.seen.find((x) => x.method === "GET" && x.url.includes("/runs"))!.query.get("context"), "order-42", "the platform is asked to filter");
+  const none = await at(s.url, "agent", "run", "tracker", "--to", "rank-desk", "--task", "x", "--context");
+  assert.notEqual(none.code, 0);
+  assert.match(none.out, /which conversation/);
+  assert.equal(s.seen.filter((x) => x.method === "POST" && x.url.includes("/agents/")).length, 1, "nothing was started for it");
+  } finally {
+    s.close();
+  }
+});

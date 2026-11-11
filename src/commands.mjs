@@ -3976,6 +3976,7 @@ async function invoke(target, flags) {
   // "Run with…" reads and writes, as the platform has it.
   const task = typeof flags.inputs === "string" ? await savedInputs(url, flags, ws, target, flags.inputs) : typeof flags.task === "string" ? flags.task : "";
   if (flags.inputs !== undefined && typeof flags.inputs !== "string") throw new Error("which input set? `--inputs <name>`");
+  if (flags.context !== undefined && typeof flags.context !== "string") throw new Error("which conversation? `--context <id>`");
   let body;
   try {
     body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
@@ -3994,6 +3995,9 @@ async function invoke(target, flags) {
         ...(typeof flags.once === "string" && flags.once ? { idempotencyKey: flags.once } : {}),
         // --tag a --tag b: labels on the run, as the API's `tags`.
         ...(many(flags.tag).length ? { tags: many(flags.tag) } : {}),
+        // --context <id> (FOL-162): a turn of that conversation — the first
+        // step reads the earlier runs started with the same context.
+        ...(typeof flags.context === "string" ? { context: flags.context } : {}),
       }),
     });
   } catch (err) {
@@ -7714,7 +7718,7 @@ async function runViewsCmd(flags) {
 
 /** The filter flags a saved view keeps, as the runs page's query names them
  *  (run-views-model.ts VIEW_KEYS) — the reverse of what --view reads. */
-const VIEW_FLAGS = [["status", "status"], ["flow", "flow"], ["to", "workspace"], ["since", "since"], ["q", "q"], ["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"]];
+const VIEW_FLAGS = [["status", "status"], ["flow", "flow"], ["to", "workspace"], ["since", "since"], ["q", "q"], ["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"], ["context", "context"]];
 
 /**
  * `foldrun runs views save <name> [filters]` and `runs views rm <name>` — the
@@ -7732,13 +7736,13 @@ async function runViewsEditCmd([verb, ...rest], flags) {
   if (verb === "save") {
     if (name.length > 40) throw new Error("a view's name is 1 to 40 characters");
     // Said, not dropped: the route would keep only the keys it knows.
-    for (const f of ["verdict", "outcome"]) if (flags[f] !== undefined) throw new Error(`a saved view keeps --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens and --min-secs — not --${f}`);
+    for (const f of ["verdict", "outcome"]) if (flags[f] !== undefined) throw new Error(`a saved view keeps --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs and --context — not --${f}`);
     const query = new URLSearchParams();
     for (const [flag, key] of VIEW_FLAGS) if (flags[flag] !== undefined && flags[flag] !== true) query.set(key, String(flags[flag]));
     if (flags["tool-error"] === true) query.set("tool_error", "1");
     // The dashboard's windows are today, 7d and 30d; its Today is 24 hours.
     if (["24h", "1d"].includes(String(query.get("since")).trim().toLowerCase())) query.set("since", "today");
-    if (!query.size) throw new Error("a view needs at least one filter — --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens or --min-secs");
+    if (!query.size) throw new Error("a view needs at least one filter — --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs or --context");
     list = [...runViews.filter((v) => v.name !== name), { name, query: query.toString() }];
     const since = query.get("since");
     const d = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
@@ -8404,11 +8408,11 @@ async function runsCmd(flags, layout) {
   // Search (FOL-72 step 9): by what happened inside a run, filtered by the
   // platform; --view <name> starts from a saved search (the dashboard's).
   const search = new URLSearchParams();
-  for (const [flag, key] of [["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"]]) {
+  for (const [flag, key] of [["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"], ["context", "context"]]) {
     if (flags[flag] !== undefined && flags[flag] !== true) search.set(key, String(flags[flag]));
   }
   if (flags["tool-error"] === true) search.set("tool_error", "1");
-  const searching = [...search.keys()].some((k) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs"].includes(k));
+  const searching = [...search.keys()].some((k) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs", "context"].includes(k));
   // A view's flow or text filters here, after the fetch: ask for the ceiling
   // as for a status, or matches past the newest few go missing (Codex review).
   const localText = typeof flags.flow === "string" || typeof flags.q === "string";
@@ -8432,6 +8436,9 @@ async function runsCmd(flags, layout) {
     if (wanted && !wanted.has(r.outcome === "stopped" ? "stopped" : r.status)) return false;
     if (verdicts && !(r.status === "completed" && verdicts.has(verdictOf(r)))) return false;
     if (outcomes && !(typeof r.outcome === "string" && outcomes.has(r.outcome))) return false;
+    // --context (FOL-162): one conversation's runs. The platform filters too;
+    // checked here as well, so a platform from before it lists none, not all.
+    if (typeof flags.context === "string" && r.context?.id !== flags.context) return false;
     // A view's flow and free text (the runs page's): "agent: x" is a direct run.
     // The dashboard names a run by what ran (whatRan): a direct agent run's
     // or an eval's own name, without adhoc:/eval: (Codex review).
@@ -8455,7 +8462,7 @@ async function runsCmd(flags, layout) {
   for (let round = 0; ; round++) {
     const answers = await pool(names, 8, async (ws) => {
       try {
-        const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs"].includes(k)));
+        const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs", "context"].includes(k)));
         forApi.set("limit", String(perWorkspace));
         if (cursor) forApi.set("before", cursor);
         const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?${forApi}`);
@@ -9093,6 +9100,7 @@ async function agentRunCmd(positional, flags, layout) {
   const WAIT_PIECE_S = 25;
   const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
   const base = `/api/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
+  if (flags.context !== undefined && typeof flags.context !== "string") throw new Error("which conversation? `--context <id>`");
 
   // A waited run that FAILS is the answer to the question, not a fault in
   // the call: 200 with its status since FOL-106, 500 with the same record
@@ -9112,7 +9120,9 @@ async function agentRunCmd(positional, flags, layout) {
       method: "POST",
       // --test: the platform marks the run a test run — sends refused or sunk
       // at the proxy, send-capable secrets withheld, state/ kept.
-      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}) }),
+      // --context <id> (FOL-162): a turn of that conversation — the agent
+      // reads the earlier runs started with the same context first.
+      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}), ...(typeof flags.context === "string" ? { context: flags.context } : {}) }),
     }),
   );
   const runId = body?.runId;

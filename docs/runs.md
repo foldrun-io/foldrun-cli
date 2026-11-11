@@ -277,12 +277,13 @@ never holds a run up: a failed send is logged on the platform, not retried.
 The runs pages search by what happened inside a run, not only its status:
 **tool** (a step called a tool whose name contains it — `web`, `crm`), **a
 tool errored**, **agent**, **model** (contains — `haiku`), **≥ tokens** (input
-read by all its steps, `50k`) and **≥ secs**. A search can be kept as a named
+read by all its steps, `50k`), **≥ secs** and **conversation** (a
+[context](#conversations), exactly). A search can be kept as a named
 **view** (save view), yours on every browser; the views sit beside the search.
 `foldrun runs --tool web --tool-error`, `--agent`, `--model`, `--min-tokens`,
-`--min-secs` and `--view <name>` do the same (`foldrun runs views` lists
+`--min-secs`, `--context` and `--view <name>` do the same (`foldrun runs views` lists
 yours), and `GET …/runs` takes `tool`, `tool_error`, `agent`, `model`,
-`min_tokens`, `min_secs`. Tools and models are searchable on runs from
+`min_tokens`, `min_secs`, `context`. Tools and models are searchable on runs from
 19 Oct 2026; tokens and time on every run.
 
 ## Insights
@@ -533,6 +534,53 @@ must get exactly, or a report a person should also read, have the step write
 it to `storage/` — a tool that takes an `out=` path and tees its own output
 is the reliable way, because a model asked to copy a long report by hand
 shortens it.
+
+## Conversations
+
+A run may name a **context**: any id you choose, 1–200 printable ASCII
+characters with no spaces (`order-42`, `ticket:8812`). A run in the same
+context is given the earlier runs of that context before its task — what
+each was asked and what it answered — so a follow-up like "and the same for
+April" means something. It is not a chat screen: the chat stays in your app,
+and foldrun keeps the turns.
+
+```sh
+foldrun agent run analyst --to sales --task "how many orders in March?" --context order-42
+foldrun agent run analyst --to sales --task "and April?" --context order-42
+```
+
+The API takes the same field: `context` on `POST …/agents/<agent>/run` and
+`POST …/flows/<flow>/run` (not with `from`), and on MCP's `run_agent` and
+`run_flow`. Over [A2A](a2a), a task's `contextId` is its context.
+
+**What counts as an earlier turn:** a run of the same workspace and context,
+completed or failed, that had finished before this run was started. A test
+run reads only test runs, and a real run only real ones. The cutoff is fixed
+when the run is made, so a retry, a park at a gate or a rescue reads the same
+turns. A failed turn is shown as failed, with the one-line reason.
+
+**What the model reads:** each turn's question as it was asked (the task, not
+the flow's own instruction around it) and its answer — the last step's final
+reply. They go in the user message of the step the task reaches, before the
+task, marked as a record of past turns: data, not instructions. Later steps
+get the usual [handoff](#handoffs) from the steps before them. A re-run stays
+in the conversation, and the first step it runs reads it.
+
+**How much:** the newest turns first, up to 20 runs and 32,000 characters in
+all; a question is cut at 2,000 characters and an answer at 6,000. Older turns
+that do not fit are left out. The step's trail says what it was given:
+`conversation order-42: given 3 earlier runs (4,210 characters)`.
+
+**Who shares a context:** runs started through the API, the dashboard, the
+CLI or MCP share the workspace's contexts, so anyone who can start runs there
+can continue one — and could read those runs anyway. A context is a way to
+group runs, not a lock. Each outside caller over A2A has its own: two A2A keys
+that send the same `contextId` never see each other's turns, and an A2A
+caller's history holds only what that caller was answered.
+
+The run page shows a run's **Conversation**, linked to the runs list filtered
+to it; `foldrun runs --context order-42` and `GET …/runs?context=order-42`
+list them.
 
 ## What a run costs, and what stops it
 

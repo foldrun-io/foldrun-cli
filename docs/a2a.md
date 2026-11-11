@@ -266,7 +266,11 @@ not taken: one request object per call.
 
 A task takes **one message**. A follow-up `SendMessage` with the task's
 `taskId` is refused (`-32004`); send a new message without `taskId`, with the
-`contextId` to keep the conversation together.
+`contextId` to keep the conversation together. The flow's first step then
+reads the earlier tasks of that `contextId` — what you sent and what you were
+answered — before your message ([conversations](runs#conversations)). Your
+contexts are your key's own: another caller's same `contextId` is a different
+conversation, and you see only the answers you were given.
 
 ### Retries: `messageId`
 

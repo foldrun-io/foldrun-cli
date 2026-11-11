@@ -116,7 +116,7 @@ const HELP = `foldrun — agents are just folders
   foldrun check --security  only the security rules: hard-coded secrets, hidden text, agents that can leak, unpinned code — fails on a warning
   foldrun check --rules     every rule check knows: id, level, what it guards against (--json)
   foldrun check --to <ws> --online  also the network checks, run by the platform: known vulnerabilities for exact runtime pins (OSV) and remote MCP servers' tool text — and what could not be checked
-  foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test)
+  foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test, --context <id>)
   foldrun agent run <name> --no-task  run it with no instruction, on its own prompt alone — the dashboard's Run (--to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker> (--isolated: sandbox: own on the worker), --consult <agent> or --can-ask (--description for a worker with none)
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
@@ -163,10 +163,10 @@ const HELP = `foldrun — agents are just folders
   foldrun promote <run-id>  keep a finished run as a regression case in evals/ (--eval <name>, --expect "contains: …" repeatable, --case <name>); a run that went wrong takes --should "what it should have done"
   foldrun probe <model>     live check: can this model hold a tool loop here?
   foldrun logs [run-id]     recent runs in one workspace, or one run's full event trail (--local: this machine's)
-  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --flow <name>, --q <words>, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, or --view <name>; --limit is one page: --page <n>, --before <cursor> (printed when more match), --all, --json
+  foldrun runs              what has run lately, across the account — --status, --verdict, --outcome (good, done, quiet, blocked, bad, failed, needs-you, …), --since, --to, --flow <name>, --q <words>, --limit; search with --tool, --tool-error, --agent, --model, --min-tokens 50k, --min-secs, --context <id>, or --view <name>; --limit is one page: --page <n>, --before <cursor> (printed when more match), --all, --json
   foldrun runs outputs <run-id>  which files the run archived from its agents' outputs/, with their sizes (--to, --json); report <run-id> get downloads one
   foldrun runs views        your saved run searches (--local prints exactly what logs --local prints)
-  foldrun runs views save <name> [filters]  save the runs filters given (--status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs) as a view; a name taken is replaced
+  foldrun runs views save <name> [filters]  save the runs filters given (--status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs, --context) as a view; a name taken is replaced
   foldrun runs views rm <name>  delete a saved view (asks; --yes)
   foldrun runs doctor <run-id>  the run doctor: the assistant reads a failed run and the files it names, says why (platform, check, work or outside) and proposes the fix as diffs, saved on yes (--to, --yes, --dry-run, --json)
   foldrun runs rm <run-id>  delete a run's record and archived outputs (an admin); a live one is stopped first — asks first, --yes means it
@@ -331,6 +331,7 @@ Options
   --no-task                 agent run: start it with no instruction — the agent works from its own prompt alone
   --task "<text>"           flow inputs save: the task the saved set holds (--file <path> reads it from a file)
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
+  --context <id>            invoke, agent run: a turn of that conversation — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters); runs: only that conversation's runs
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
   --since <span>            runs, stop, rerun: only runs started within 24h, 7d, 90m, 2w, or today (the last 24h)

@@ -34,7 +34,8 @@ page says which app is asking, where the answer goes (`claude.ai`), and lets
 you choose:
 
 - **what it may do** — read only (inbox, runs, flows, files), or read and act
-  (also start and stop runs, approve gates, answer and message agents);
+  (also start and stop runs, approve gates, answer and message agents, and
+  create workspaces and write or delete their files);
 - **which workspaces** — every one you may open, or the ones you tick.
 
 **Connect** sends you back to claude.ai, connected; **Deny** sends it a no.
@@ -134,17 +135,45 @@ and that automatic disconnect are in the audit log (`mcp.connected`,
 | `list_agents` | a workspace's agents: what each is for and when it last ran | `GET …/agents` |
 | `list_runs` | recent runs, with outcome, summary and failure (`limit` up to 100, default 20; `flow` keeps that flow's among the newest 500) | `GET …/runs` |
 | `get_run` | one run in full | `GET …/runs/<id>` |
-| `read_file` | one file of a workspace's source, or the tree | `GET …/source` |
-| `run_flow` | start a flow (`task`, `test: true` for a [test run](runs#test-runs)) | `POST …/flows/<flow>/run` |
-| `run_agent` | run one agent on a task of your own, in its own sandbox, no flow needed (`task`, `test: true` for a [test run](runs#test-runs)); answers a run id at once — read it with `get_run` | `POST …/agents/<agent>/run` |
+| `read_file` | one file of a workspace's source (with its `sha256`), or the tree | `GET …/source` |
+| `check_workspace` | what `foldrun check` says about a workspace: findings with rule ids (`security: true` for the security rules alone) | `GET …/check` |
+| `run_flow` | start a flow (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations)) | `POST …/flows/<flow>/run` |
+| `run_agent` | run one agent on a task of your own, in its own sandbox, no flow needed (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations)); answers a run id at once — read it with `get_run` | `POST …/agents/<agent>/run` |
 | `decide_approval` | approve or reject a gate (`note`, `step`) | `POST …/runs/<id>/approve` |
 | `answer_question` | answer an agent's question mid-step | `POST …/runs/<id>/answer` |
 | `message_run` | say something to a running agent | `POST …/runs/<id>/message` |
 | `stop_run` | stop a run | `POST …/runs/<id>/stop` |
+| `create_workspace` | a new, blank workspace — an `AGENTS.md` and nothing else; refused when the name is taken | `POST /api/workspaces` |
+| `write_file` | create or replace one file — an agent, a flow, knowledge, a skill, `AGENTS.md` (`message` for the revision, `if_match` below) | `PUT …/source` |
+| `delete_file` | delete one file or folder | `DELETE …/source` |
 
-The first nine read. The last six act, and are marked so for the app
-(`readOnlyHint: false`; `stop_run` also `destructiveHint: true`), which is
-what an app uses to ask you before calling one.
+The first ten read. The other nine act, and are marked so for the app
+(`readOnlyHint: false`; `stop_run` and `delete_file` also
+`destructiveHint: true`), which is what an app uses to ask you before
+calling one.
+
+## Building with it
+
+The last three tools let an app with no shell, such as Claude Desktop,
+build an automation, not only drive one: `create_workspace`, then
+`write_file` for each agent (`agents/<name>/agent.md`) and flow
+(`flows/<name>.md`), then `check_workspace`, then `run_flow` with
+`test: true`.
+
+- **A file written is live at once.** The next run reads it; there is no
+  separate deploy. Each write is a revision in the workspace's
+  [History](deploying#history-and-rollback), so a mistake is undone from there.
+- **It is checked as a deploy checks it.** A file with an error (a flow
+  naming an agent that is not there, frontmatter YAML cannot read) is
+  refused with `HTTP 422` and its issues, and nothing is written. Warnings
+  come back as `issues` on a save that went through.
+- **A change never overwrites someone else's.** Pass the `sha256` that
+  `read_file` gave as `if_match`: a file changed since is refused with
+  `HTTP 409`. `if_match: "absent"` creates only, and is refused when a file
+  is already there.
+
+A key with a CLI and a shell (Claude Code, Codex) can also work on a local
+folder and `foldrun deploy` it ([CLI](cli)); both reach the same files.
 
 ## What it may do
 
