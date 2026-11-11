@@ -4701,7 +4701,7 @@ async function doctor(flags) {
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
  *   keys create <label> --gateway --login   on the operator's Claude login (its own accounts): not metered
- *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings
+ *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings (its status line too)
  *   keys set <id> --opus|--sonnet|--haiku <provider/model>  which model each Claude Code tier runs on (a gateway key; `-` clears one, --clear all)
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
  *                                      one ends now, or when the grace runs out.
@@ -4930,7 +4930,7 @@ async function keysCreateGateway(url, label, flags) {
   // Written from the file as it is NOW, not as it was before the request,
   // so a change made meanwhile is kept. A write that fails after the key
   // exists says so and falls back to the lines to copy.
-  /** @type {{ file: string, dropped: string[], backup: string | null } | null} */
+  /** @type {{ file: string, dropped: string[], backup: string | null, statusLine: "added" | "kept" | "theirs" } | null} */
   let done = null;
   if (claude && made.gatewayUrl) {
     try { done = writeClaudeSettings(readClaudeSettings(), made.gatewayUrl, made.key); }
@@ -4941,12 +4941,18 @@ async function keysCreateGateway(url, label, flags) {
     console.log(`    ${c.dim(`env: ANTHROPIC_BASE_URL=${made.gatewayUrl}, ANTHROPIC_AUTH_TOKEN=<this key>`)}`);
     if (done.dropped.length) console.log(`    ${c.dim(`removed from that env block: ${done.dropped.join(", ")} (it would have competed with the key)`)}`);
     if (done.backup) console.log(`    ${c.dim(`the file as it was: ${done.backup}`)}`);
+    if (done.statusLine === "theirs") console.log(`    ${c.dim(`your own statusLine was kept; for the key's spend there, run \`${STATUS_LINE_COMMAND}\` from it`)}`);
+    else console.log(`    ${c.dim(`statusLine: ${STATUS_LINE_COMMAND} — the key's spend under Claude Code's input box`)}`);
     console.log(`    ${c.dim("Start a new claude session; /status shows the gateway. Claude Desktop is set in its own Developer → Configure Third-Party Inference.")}\n`);
   } else {
     if (claude && !made.gatewayUrl) console.log(`  ${c.yellow("This platform has no gateway URL yet, so Claude Code's settings were not written.")}\n`);
     console.log(`  ${c.dim("Shown once. Point Claude Code at it:")}\n`);
+    // ANTHROPIC_AUTH_TOKEN, not ANTHROPIC_API_KEY: Claude Code asks about a
+    // "custom API key" with No preselected, and No leaves the gateway unused.
     console.log(`    export ANTHROPIC_BASE_URL=${base}`);
-    console.log(`    export ANTHROPIC_API_KEY=<key>\n`);
+    console.log(`    export ANTHROPIC_AUTH_TOKEN=<key>\n`);
+    console.log(`  ${c.dim(`The key's spend under Claude Code's input box: add to ~/.claude/settings.json`)}`);
+    console.log(`    "statusLine": { "type": "command", "command": "${STATUS_LINE_COMMAND}" }\n`);
   }
   // A login key is not metered: there is no spend for `keys ls` to show.
   const after = made.credential === "login"
@@ -5011,6 +5017,11 @@ function writeClaudeSettings({ file, text, settings }, baseUrl, key) {
   env.ANTHROPIC_BASE_URL = baseUrl;
   env.ANTHROPIC_AUTH_TOKEN = key;
   const next = { ...settings, env };
+  // The key's spend under Claude Code's input box — unless a status line of
+  // the person's own is set, which is theirs and stays.
+  /** @type {"added" | "kept" | "theirs"} */
+  const statusLine = settings.statusLine === undefined ? "added" : settings.statusLine?.command === STATUS_LINE_COMMAND ? "kept" : "theirs";
+  if (statusLine === "added") next.statusLine = { type: "command", command: STATUS_LINE_COMMAND };
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   /** @type {string | null} */
   let backup = null;
@@ -5023,7 +5034,66 @@ function writeClaudeSettings({ file, text, settings }, baseUrl, key) {
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   fs.renameSync(tmp, file);
   try { fs.chmodSync(file, 0o600); } catch { /* Windows: no modes */ }
-  return { file, dropped, backup };
+  return { file, dropped, backup, statusLine };
+}
+
+/** Claude Code's status line, as `keys create --gateway --claude-code`
+ *  writes it: the key's spend, read from the gateway itself. */
+const STATUS_LINE_COMMAND = "foldrun gateway status-line";
+
+/**
+ * `foldrun gateway status-line` — one line for Claude Code's status line:
+ * what the gateway key in this environment has spent against its limits,
+ *
+ *   foldrun · $3.12 of $20.00 · today $1.10 of $5.00
+ *
+ * It reads ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY)
+ * — the env Claude Code hands the status line — and asks the gateway's
+ * GET /v1/usage, never the platform's API. Claude Code redraws the line
+ * after every message, so an answer is kept 10 s on this machine. It always
+ * prints one line and exits 0: a status line has no place for an error.
+ */
+async function gatewayCmd(positional, flags) {
+  const sub = positional[0];
+  if (sub !== "status-line") throw new Error("foldrun gateway status-line — the one line Claude Code's status line shows: the gateway key's spend and limits");
+  // Claude Code sends the session as JSON on stdin; it is not needed here.
+  if (!process.stdin.isTTY) process.stdin.resume().on("error", () => {});
+  console.log(await gatewayStatusLine(process.env, flags));
+  if (!process.stdin.isTTY) process.stdin.destroy();
+  return 0;
+}
+
+/** The line itself; exported for tests. */
+export async function gatewayStatusLine(env = process.env, flags = {}, now = Date.now()) {
+  const base = (env.ANTHROPIC_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  const key = (env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || "").trim();
+  if (!base) return "foldrun · no gateway set (ANTHROPIC_BASE_URL)";
+  if (!key) return "foldrun · no key set (ANTHROPIC_AUTH_TOKEN)";
+  // Kept per gateway and key, under a name that shows neither.
+  const cacheFile = path.join(os.tmpdir(), `foldrun-status-${crypto.createHash("sha256").update(`${base}\n${key}`).digest("hex").slice(0, 24)}`);
+  const ttl = typeof flags.cache === "string" && /^\d+$/.test(flags.cache) ? Number(flags.cache) * 1000 : 10_000;
+  try {
+    const st = fs.statSync(cacheFile);
+    if (now - st.mtimeMs < ttl) return fs.readFileSync(cacheFile, "utf8");
+  } catch { /* none yet */ }
+  let line;
+  try {
+    const res = await fetch(`${base}/v1/usage?format=line`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(3000) });
+    const text = await res.text();
+    // The gateway's own line; anything else (a proxy's page, Anthropic's own
+    // API) is not shown as if it were.
+    const first = text.split("\n")[0] ?? "";
+    line = /^foldrun · /.test(first) ? first : res.status === 404 ? "foldrun · this base URL is not a foldrun gateway" : `foldrun · usage not available (${res.status})`;
+  } catch {
+    line = "foldrun · gateway not reachable";
+  }
+  // Only printable text reaches the terminal, and not much of it.
+  line = line.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, 160);
+  try {
+    fs.writeFileSync(`${cacheFile}.${process.pid}`, line, { mode: 0o600 });
+    fs.renameSync(`${cacheFile}.${process.pid}`, cacheFile);
+  } catch { /* the next draw asks again */ }
+  return line;
 }
 
 /** A retried mint or rotate is answered from the first call, and the server
@@ -15128,6 +15198,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return apiCmd(positional, flags);
     case "keys":
       return keysCmd(positional, flags);
+    case "gateway":
+      return gatewayCmd(positional, flags);
     case "a2a":
       return a2aCmd(positional, flags, layout);
     case "audit":

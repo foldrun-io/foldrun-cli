@@ -18,7 +18,9 @@ test("keys create --gateway posts { purpose: gateway, capUsd, dailyUsd } and pri
   assert.match(r.out, /✓ laptop\s+g1\s+gateway · Claude Code · \$0\.00 of \$20\.00 · \$0\.00 of \$5\.00 today/);
   assert.equal(r.out.split("mda_gwsecret").length - 1, 1, "the key is printed once");
   assert.match(r.out, /export ANTHROPIC_BASE_URL=https:\/\/gateway\.example\.test/);
-  assert.match(r.out, /export ANTHROPIC_API_KEY=<key>/);
+  assert.match(r.out, /export ANTHROPIC_AUTH_TOKEN=<key>/, "the auth token: an API key makes Claude Code ask, with No preselected");
+  assert.doesNotMatch(r.out, /ANTHROPIC_API_KEY/);
+  assert.match(r.out, /"statusLine": \{ "type": "command", "command": "foldrun gateway status-line" \}/);
   assert.match(r.out, /opens the gateway only/);
 });
 
@@ -125,7 +127,8 @@ test("keys create --gateway --claude-code writes the URL and key into a new Clau
   s.close();
   assert.equal(r.code, 0, r.out);
   const file = path.join(dir, "settings.json");
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" }, statusLine: { type: "command", command: "foldrun gateway status-line" } });
+  assert.match(r.out, /statusLine: foldrun gateway status-line/);
   if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.match(r.out, /Claude Code now runs on it/);
   assert.doesNotMatch(r.out, /export ANTHROPIC_API_KEY/, "no lines to copy when the file was written");
@@ -145,6 +148,7 @@ test("--claude-code keeps every other setting, drops a competing ANTHROPIC_API_K
     model: "opus",
     permissions: { allow: ["Bash(ls)"] },
     env: { FOO: "1", ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" },
+    statusLine: { type: "command", command: "foldrun gateway status-line" },
   });
   assert.equal(fs.readFileSync(`${file}.before-foldrun`, "utf8"), before);
   assert.match(r.out, /removed from that env block: ANTHROPIC_API_KEY/);
@@ -204,7 +208,7 @@ test("--claude-code writes from the file as it is after the key is made, so a ch
   const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { model: "sonnet", theme: "dark", env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { model: "sonnet", theme: "dark", env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" }, statusLine: { type: "command", command: "foldrun gateway status-line" } });
 });
 
 test("--claude-code: a file broken after the key is made is left alone, and the lines to copy are printed", async () => {
@@ -221,4 +225,86 @@ test("--claude-code: a file broken after the key is made is left alone, and the 
   assert.match(r.out, /The key was made, but Claude Code's settings were not written/);
   assert.match(r.out, /export ANTHROPIC_BASE_URL=https:\/\/gateway\.example\.test/);
   assert.equal(fs.readFileSync(file, "utf8"), "{ broken");
+});
+
+test("--claude-code keeps a status line of the person's own and says how to add the spend", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
+  const file = path.join(dir, "settings.json");
+  fs.writeFileSync(file, JSON.stringify({ statusLine: { type: "command", command: "~/bin/my-line" } }));
+  const s = await serve(gw());
+  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).statusLine, { type: "command", command: "~/bin/my-line" });
+  assert.match(r.out, /your own statusLine was kept/);
+});
+
+// `foldrun gateway status-line` (11 Nov 2026): Claude Code's status line,
+// from the gateway's GET /v1/usage, with the key in the env Claude Code gives.
+import http from "node:http";
+
+function fakeGateway(reply: (req: http.IncomingMessage) => [number, string]) {
+  const seen: http.IncomingMessage[] = [];
+  const server = http.createServer((req, res) => {
+    seen.push(req);
+    const [status, body] = reply(req);
+    res.writeHead(status, { "content-type": "text/plain" });
+    res.end(body);
+  });
+  return new Promise<{ url: string; seen: http.IncomingMessage[]; close: () => void }>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve({ url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, seen, close: () => server.close() })),
+  );
+}
+const line = (env: Record<string, string>, ...args: string[]) => cli(["gateway", "status-line", ...args], { env: { ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "", ANTHROPIC_BASE_URL: "", ...env }, input: '{"session_id":"s1"}' });
+
+test("gateway status-line prints the gateway's line, asked with the key as a Bearer, and keeps it a few seconds", async () => {
+  const g = await fakeGateway(() => [200, "foldrun · $3.12 of $20.00 · today $1.10 of $5.00\n"]);
+  const key = `fr_gw_${Date.now()}`;
+  const first = await line({ ANTHROPIC_BASE_URL: `${g.url}/`, ANTHROPIC_AUTH_TOKEN: key });
+  const again = await line({ ANTHROPIC_BASE_URL: g.url, ANTHROPIC_AUTH_TOKEN: key });
+  g.close();
+  assert.equal(first.code, 0, first.out);
+  assert.equal(first.out.trim(), "foldrun · $3.12 of $20.00 · today $1.10 of $5.00");
+  assert.equal(again.out.trim(), first.out.trim());
+  assert.equal(g.seen.length, 1, "the second draw was answered from the cache");
+  assert.equal(g.seen[0].url, "/v1/usage?format=line");
+  assert.equal(g.seen[0].headers.authorization, `Bearer ${key}`);
+});
+
+test("gateway status-line: an API key works too; with --cache 0 it asks every time", async () => {
+  const g = await fakeGateway(() => [200, "foldrun · not metered (Claude login)\n"]);
+  const key = `fr_gw_api_${Date.now()}`;
+  await line({ ANTHROPIC_BASE_URL: g.url, ANTHROPIC_API_KEY: key }, "--cache", "0");
+  const r = await line({ ANTHROPIC_BASE_URL: g.url, ANTHROPIC_API_KEY: key }, "--cache", "0");
+  g.close();
+  assert.equal(r.out.trim(), "foldrun · not metered (Claude login)");
+  assert.equal(g.seen.length, 2);
+});
+
+test("gateway status-line always prints one line and exits 0: no gateway, no key, not foldrun, unreachable", async () => {
+  const notOurs = await fakeGateway(() => [404, '{"type":"error","error":{"type":"not_found_error"}}']);
+  const proxy = await fakeGateway(() => [502, "<html>Bad gateway\u001b[31m</html>"]);
+  const t = Date.now();
+  const none = await line({});
+  const noKey = await line({ ANTHROPIC_BASE_URL: notOurs.url });
+  const other = await line({ ANTHROPIC_BASE_URL: notOurs.url, ANTHROPIC_AUTH_TOKEN: `k1${t}` });
+  const bad = await line({ ANTHROPIC_BASE_URL: proxy.url, ANTHROPIC_AUTH_TOKEN: `k2${t}` });
+  notOurs.close();
+  proxy.close();
+  const gone = await line({ ANTHROPIC_BASE_URL: "http://127.0.0.1:9", ANTHROPIC_AUTH_TOKEN: `k3${t}` });
+  for (const r of [none, noKey, other, bad, gone]) {
+    assert.equal(r.code, 0, r.out);
+    assert.equal(r.out.trim().split("\n").length, 1, r.out);
+  }
+  assert.match(none.out, /no gateway set/);
+  assert.match(noKey.out, /no key set/);
+  assert.match(other.out, /not a foldrun gateway/);
+  assert.equal(bad.out.trim(), "foldrun · usage not available (502)", "a proxy's page is not printed");
+  assert.match(gone.out, /gateway not reachable/);
+});
+
+test("gateway with no subcommand says what it does", async () => {
+  const r = await cli(["gateway"]);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /gateway status-line/);
 });
