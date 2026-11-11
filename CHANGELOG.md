@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.9.0] — 2026-11-11
+
+- feat(report): a run's money — charged once settled, its estimate until then (FOL-157) ([5bbee70](https://github.com/foldrun-io/foldrun-cli/commit/5bbee70))
+
 ## [20.8.1] — 2026-11-11
 
 ### deps
