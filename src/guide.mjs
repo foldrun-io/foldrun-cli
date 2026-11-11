@@ -69,6 +69,15 @@ function upsert(text, block) {
   return `${b}${nl}${text ? `${nl}${text}` : ""}`;
 }
 
+/** What writeAgentFiles writes to an AGENTS.md holding `text`: the current
+ *  block put in (or replaced), the gap after the frontmatter tidied, a final
+ *  newline. Two files that read the same through this are the same to a
+ *  person and to a running agent (core withoutAgentRules). */
+export function withAgentRules(text) {
+  const next = upsert(text ?? "", agentRulesBlock());
+  return next.endsWith("\n") ? next : `${next}\n`;
+}
+
 /** True when AGENTS.md (or CLAUDE.md) at `root` already carries the current block. */
 export function hasCurrentAgentRules(root) {
   const want = agentRulesBlock();

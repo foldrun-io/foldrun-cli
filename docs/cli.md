@@ -367,12 +367,15 @@ foldrun runs blog-desk
 foldrun deploy blog-desk
 ```
 
-**One gap.** The platform has no endpoint that reads or writes an account's own
-`AGENTS.md` — `/api/account` patches a handful of known frontmatter keys and
-nothing serves the file. So `deploy` does not push it and `pull` does not fetch
-it; both say so rather than dropping the scope in silence. Edit it in Settings,
-or on the installation itself. The shared `library/` has a full per-file API
-and is pushed and pulled normally.
+**The account's own AGENTS.md** — the shared context every agent in every
+workspace reads — goes up with the account: `deploy` at an account root sends
+it when it differs (`PUT /api/account/agents-md`, checked as a deploy checks
+it; an admin of every workspace may send it — anyone else is told and the
+rest of the deploy goes on), and `pull` fetches it (refusing to overwrite a
+local edit without `--force`, as for every file). The coding-agent block the
+CLI keeps in that file is never compared or read by a running agent. It is
+also edited in Settings → Policies → AGENTS.md. The shared `library/` has a
+full per-file API and is pushed and pulled normally.
 
 ## Signing in
 

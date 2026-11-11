@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import crypto from "node:crypto";
 import { spawnSync, execFile } from "node:child_process";
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -176,6 +177,8 @@ interface Fake {
   library: Map<string, Map<string, string>>;
   deploys: string[];
   deleted: string[];
+  /** The account's AGENTS.md (/api/account/agents-md) — served only when `route` is on, as a platform of 11 Nov 2026 does. */
+  accountMd: { route: boolean; content: string | null; puts: { content: string; ifMatch: unknown }[] };
 }
 
 function fakePlatform(): Promise<Fake> {
@@ -183,6 +186,8 @@ function fakePlatform(): Promise<Fake> {
   const library = new Map<string, Map<string, string>>();
   const deploys: string[] = [];
   const deleted: string[] = [];
+  const accountMd: Fake["accountMd"] = { route: false, content: null, puts: [] };
+  const shaOf = (t: string) => crypto.createHash("sha256").update(t).digest("hex");
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url!, "http://x");
@@ -193,6 +198,19 @@ function fakePlatform(): Promise<Fake> {
         res.setHeader("content-type", "application/json");
         const send = (o: unknown) => res.end(JSON.stringify(o));
 
+        if (url.pathname === "/api/account/agents-md" && accountMd.route) {
+          if (req.method === "PUT") {
+            accountMd.puts.push({ content: json.content, ifMatch: json.ifMatch });
+            const now = accountMd.content === null ? null : shaOf(accountMd.content);
+            if (json.ifMatch !== undefined && json.ifMatch !== now) {
+              res.statusCode = 409;
+              return send({ error: "the file changed since you read it" });
+            }
+            accountMd.content = json.content;
+            return send({ ok: true, sha256: shaOf(json.content), issues: [] });
+          }
+          return send({ content: accountMd.content ?? "", sha256: accountMd.content === null ? null : shaOf(accountMd.content), exists: accountMd.content !== null });
+        }
         let m = /^\/api\/workspaces\/([^/]+)\/source$/.exec(url.pathname);
         if (m) {
           const files = workspaces.get(m[1]) ?? new Map();
@@ -237,7 +255,7 @@ function fakePlatform(): Promise<Fake> {
     });
     server.listen(0, "127.0.0.1", () => {
       const { port } = server.address() as { port: number };
-      resolve({ url: `http://127.0.0.1:${port}`, close: () => server.close(), workspaces, library, deploys, deleted });
+      resolve({ url: `http://127.0.0.1:${port}`, close: () => server.close(), workspaces, library, deploys, deleted, accountMd });
     });
   });
 }
@@ -514,4 +532,105 @@ test("a flat workspace still needs no workspace named anywhere", () => {
   assert.equal(foldrunIn(dir, "secrets", "set", "TOKEN", "--value", "v", "--local").status, 0);
   assert.match(foldrunIn(dir, "secrets", "ls", "--local").stdout, /TOKEN/);
   assert.match(foldrunIn(dir, "logs", "--local").stdout, /no runs yet/);
+});
+
+// ------------------------------------------- the account's own AGENTS.md
+
+test("deploy sends the account AGENTS.md when it differs, with ifMatch, and not when it is the same (cloudhost, 11 Nov 2026)", async () => {
+  const root = account();
+  const prose = "---\ntimezone: Asia/Tehran\n---\n\n# Shared\n\nAnswer in Persian.\n";
+  fs.writeFileSync(path.join(root, "AGENTS.md"), prose);
+  const p = await fakePlatform();
+  p.accountMd.route = true;
+  try {
+    const r = await foldrunAsync(root, "deploy", "--url", p.url, "--token", "k");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /AGENTS\.md \(account\) sent/);
+    assert.equal(p.accountMd.puts.length, 1);
+    assert.equal(p.accountMd.puts[0]!.ifMatch, null, "there was no file: ifMatch null");
+    assert.equal(p.accountMd.content, prose);
+    const again = await foldrunAsync(root, "deploy", "--url", p.url, "--token", "k");
+    assert.match(again.stdout, /AGENTS\.md \(account\) unchanged/);
+    assert.equal(p.accountMd.puts.length, 1, "nothing sent when nothing changed");
+    fs.writeFileSync(path.join(root, "AGENTS.md"), prose + "More.\n");
+    const dry = await foldrunAsync(root, "deploy", "--dry-run", "--url", p.url, "--token", "k");
+    assert.match(dry.stdout, /AGENTS\.md \(account\) would be updated/);
+    assert.equal(p.accountMd.puts.length, 1, "a dry run sends nothing");
+  } finally {
+    p.close();
+  }
+});
+
+test("pull brings the account AGENTS.md down (the managed block is put back), and will not clobber a local edit without --force", async () => {
+  const root = path.join(tmp(), "acme");
+  foldrun("init", root);
+  const p = await fakePlatform();
+  p.accountMd.route = true;
+  p.accountMd.content = "---\ntimezone: Asia/Tehran\n---\n\nFrom the platform.\n";
+  p.workspaces.set("ads-desk", new Map([["AGENTS.md", "# ads\n"]]));
+  try {
+    fs.writeFileSync(path.join(root, "AGENTS.md"), "a local edit\n");
+    const refused = await foldrunAsync(root, "pull", "--url", p.url, "--token", "k");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stdout, /would be overwritten[\s\S]*AGENTS\.md/);
+    const r = await foldrunAsync(root, "pull", "--force", "--url", p.url, "--token", "k");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const got = read(root, "AGENTS.md");
+    assert.match(got, /From the platform\./);
+    assert.match(got, /BEGIN:foldrun-agent-rules/, "the coding-agent block is put back");
+    const quiet = await foldrunAsync(root, "pull", "--url", p.url, "--token", "k");
+    assert.equal(quiet.status, 0, "the block alone is not a clash: " + quiet.stdout);
+  } finally {
+    p.close();
+  }
+});
+
+test("an account AGENTS.md with CRLF line endings: a second pull is not a clash (Codex)", async () => {
+  const root = path.join(tmp(), "acme");
+  foldrun("init", root);
+  const p = await fakePlatform();
+  p.accountMd.route = true;
+  p.accountMd.content = "---\r\ntimezone: Asia/Tehran\r\n---\r\n\r\nWindows line endings.\r\n";
+  try {
+    const first = await foldrunAsync(root, "pull", "--force", "--url", p.url, "--token", "k");
+    assert.equal(first.status, 0, first.stdout + first.stderr);
+    const second = await foldrunAsync(root, "pull", "--url", p.url, "--token", "k");
+    assert.equal(second.status, 0, "only the managed block differs: " + second.stdout);
+  } finally {
+    p.close();
+  }
+});
+
+test("a change of blank lines alone is a change: deploy sends it (Codex)", async () => {
+  const root = account();
+  const p = await fakePlatform();
+  p.accountMd.route = true;
+  p.accountMd.content = "---\ntimezone: UTC\n---\n\nexample:\n\n    a\n    b\n";
+  fs.writeFileSync(path.join(root, "AGENTS.md"), "---\ntimezone: UTC\n---\n\nexample:\n\n    a\n\n\n    b\n");
+  try {
+    const r = await foldrunAsync(root, "deploy", "--url", p.url, "--token", "k");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /AGENTS\.md \(account\) sent/);
+    assert.equal(p.accountMd.content, fs.readFileSync(path.join(root, "AGENTS.md"), "utf8"));
+  } finally {
+    p.close();
+  }
+});
+
+test("frontmatter with no blank line, or several, before the prose: a second pull is not a clash (Codex)", async () => {
+  for (const remote of ["---\ntimezone: UTC\n---\nNo gap.\n", "---\ntimezone: UTC\n---\n\n\n\nThree gaps.\n"]) {
+    const root = path.join(tmp(), "acme");
+    foldrun("init", root);
+    const p = await fakePlatform();
+    p.accountMd.route = true;
+    p.accountMd.content = remote;
+    try {
+      const first = await foldrunAsync(root, "pull", "--force", "--url", p.url, "--token", "k");
+      assert.equal(first.status, 0, first.stdout + first.stderr);
+      const second = await foldrunAsync(root, "pull", "--url", p.url, "--token", "k");
+      assert.equal(second.status, 0, `${JSON.stringify(remote)}: ${second.stdout}`);
+    } finally {
+      p.close();
+    }
+  }
 });

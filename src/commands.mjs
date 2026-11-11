@@ -9,7 +9,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage } from "./guide.mjs";
+import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { createRequire } from "node:module";
 import { execFileSync, spawnSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
@@ -5352,16 +5352,71 @@ async function remoteWorkspaceNames(url, flags) {
 }
 
 /**
- * The account AGENTS.md has no write endpoint.
- *
- * `/api/account` reads and PATCHes a handful of known frontmatter keys — a
- * timezone, a notify target, a cap — and nothing reads or writes the file
- * itself. So a deploy cannot ship the account's prose, and a pull cannot
- * fetch it. Said out loud, once, rather than silently dropped: a scope that
- * vanishes without a word is the failure this codebase keeps producing.
+ * The account's own AGENTS.md — the shared context and defaults every agent
+ * in every workspace reads — through GET/PUT /api/account/agents-md (11 Nov
+ * 2026; cloudhost's CI copied it into every workspace for want of it). A
+ * platform older than that answers 404: said once, as the old gap was.
  */
 const NO_ACCOUNT_FILE_API =
-  "the platform has no account-file endpoint — /api/account only PATCHes known frontmatter keys, so AGENTS.md at account scope is not synced. Edit it in Settings, or on the box.";
+  "this platform has no /api/account/agents-md yet, so the account's AGENTS.md is not synced — edit it in Settings, or update the platform.";
+
+/** The managed coding-agent block (guide.mjs) is the CLI's, never a running
+ *  agent's (core withoutAgentRules): two copies that differ only there are the same. */
+function sameAccountMd(a, b) {
+  // Both as the CLI would leave them: exactly the change writeAgentFiles makes
+  // (its block, the gap after the frontmatter), and no other byte ignored —
+  // blank lines and line endings elsewhere are still a change (Codex review).
+  return withAgentRules(String(a ?? "")) === withAgentRules(String(b ?? ""));
+}
+
+/** { content, sha256, exists } on the platform; null on a platform without the
+ *  route (404); { refused } when this caller may not read it (403). */
+async function remoteAccountAgentsMd(url, flags) {
+  try {
+    return await remoteCall(url, flags, "/api/account/agents-md");
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return null;
+    if (err instanceof HttpError && err.status === 403) return { refused: err.message };
+    throw err;
+  }
+}
+
+/** Push the account AGENTS.md when it differs. 0 when sent, unchanged or not
+ *  this caller's to send (said); 1 when the platform refused the file. */
+async function deployAccountAgentsMd(url, flags, content, dry) {
+  const there = await remoteAccountAgentsMd(url, flags);
+  if (there === null) {
+    console.log(`  ${c.amber("·")} AGENTS.md ${c.dim(`not sent — ${NO_ACCOUNT_FILE_API}`)}`);
+    return 0;
+  }
+  if (there.refused) {
+    console.log(`  ${c.amber("·")} AGENTS.md ${c.dim("not sent — the account's AGENTS.md is every workspace's; an admin of every workspace sends it")}`);
+    return 0;
+  }
+  if (sameAccountMd(there.content, content)) {
+    console.log(`  ${c.green("✓")} AGENTS.md ${c.dim("(account) unchanged")}`);
+    return 0;
+  }
+  if (dry) {
+    console.log(`  ${c.dim("~")} AGENTS.md ${c.dim("(account) would be updated")}`);
+    return 0;
+  }
+  try {
+    const done = await remoteCall(url, flags, "/api/account/agents-md", { method: "PUT", body: JSON.stringify({ content, ifMatch: there.exists ? there.sha256 : null, message: "foldrun deploy" }) });
+    const warns = (done.issues ?? []).filter((i) => i.level !== "error").length;
+    console.log(`  ${c.green("✓")} AGENTS.md ${c.dim(`(account) sent — every workspace reads it${warns ? ` · ${warns} warning${warns === 1 ? "" : "s"}` : ""}`)}`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof HttpError)) throw err;
+    if (err.status === 403) {
+      console.log(`  ${c.amber("·")} AGENTS.md ${c.dim("not sent — the account's AGENTS.md is every workspace's; an admin of every workspace sends it")}`);
+      return 0;
+    }
+    console.log(`  ${c.red("✗")} AGENTS.md ${c.dim(`(account) not sent — ${err.message}`)}`);
+    for (const i of (err.body?.issues ?? []).filter((x) => x.level === "error").slice(0, 10)) console.log(`      ${c.red("·")} ${i.file}${i.line ? `:${i.line}` : ""}  ${i.message}`);
+    return 1;
+  }
+}
 
 /**
  * `foldrun deploy` — the whole account, or one workspace of it.
@@ -5416,7 +5471,7 @@ async function deployAccount(layout, flags, only) {
 
   if (tree.agentsMd !== null) {
     if (url) {
-      console.log(`  ${c.amber("·")} AGENTS.md ${c.dim(`not sent — ${NO_ACCOUNT_FILE_API}`)}`);
+      worst = Math.max(worst, await deployAccountAgentsMd(url, flags, tree.agentsMd, dry));
     } else if (!dry) {
       const { accountDir } = await core();
       fs.mkdirSync(accountDir(tenant), { recursive: true });
@@ -5832,7 +5887,13 @@ async function statusCmd(layout, flags, only) {
   if (gone.length) {
     console.log(`\n  ${c.dim(`on the platform but not here: ${gone.join(", ")} — \`foldrun pull\` brings them down`)}`);
   }
-  console.log(`\n  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
+  if (tree.agentsMd !== null) {
+    const there = await remoteAccountAgentsMd(url, flags);
+    if (there === null) console.log(`\n  ${c.dim(NO_ACCOUNT_FILE_API)}`);
+    else if (there.refused) console.log(`\n  ${c.dim("AGENTS.md (account): not readable with this key — an admin of every workspace sees it")}`);
+    else console.log(`\n  ${sameAccountMd(there.content, tree.agentsMd) ? `${c.green("✓")} AGENTS.md ${c.dim("(account) the same here and there")}` : `${c.dim("~")} AGENTS.md ${c.dim("(account) differs — `foldrun deploy` sends it")}`}`);
+  }
+  console.log();
   return 0;
 }
 
@@ -5857,7 +5918,7 @@ async function pullCmd(layout, flags, only) {
   const names = (await remoteWorkspaceNames(url, flags)).filter((n) => (only ? n === only : true));
   if (only && !names.length) throw new Error(`no workspace "${only}" on ${url}`);
 
-  /** @type {{file: string, content: string}[]} */
+  /** @type {{ file: string, content: string, same?: (before: string) => boolean }[]} */
   const incoming = [];
   for (const name of names) {
     if (!SAFE_NAME.test(name)) throw new Error(`the platform named a workspace "${name}", which is not a workspace name — refusing to write it`);
@@ -5869,9 +5930,18 @@ async function pullCmd(layout, flags, only) {
     incoming.push({ file: within(path.join(root, "library", f.kind), f.path), content: f.content });
   }
 
+  // The account's own AGENTS.md, when the platform serves it and this
+  // caller may read it. Compared without the CLI's managed block, which
+  // writeAgentFiles puts back below.
+  const accountMd = await remoteAccountAgentsMd(url, flags);
+  if (accountMd && !accountMd.refused && accountMd.exists) {
+    incoming.push({ file: path.join(root, "AGENTS.md"), content: accountMd.content, same: (before) => sameAccountMd(before, accountMd.content) });
+  }
+
   const clashes = incoming.filter((f) => {
     try {
-      return fs.readFileSync(f.file, "utf8") !== f.content;
+      const before = fs.readFileSync(f.file, "utf8");
+      return f.same ? !f.same(before) : before !== f.content;
     } catch {
       return false; // absent: nothing to clobber
     }
@@ -5893,7 +5963,7 @@ async function pullCmd(layout, flags, only) {
     } catch {
       /* new */
     }
-    if (before === f.content) continue;
+    if (before === f.content || (before !== null && f.same?.(before))) continue;
     fs.mkdirSync(path.dirname(f.file), { recursive: true });
     fs.writeFileSync(f.file, f.content);
     written++;
@@ -5907,7 +5977,9 @@ async function pullCmd(layout, flags, only) {
   for (const [file, what] of [["AGENTS.md", rules.agentsMd], ["CLAUDE.md", rules.claudeMd]]) {
     if (what === "created" || what === "updated") console.log(`  ${c.green("✓")} ${file} ${c.dim(`${what} — the coding-agent rules, pointing at \`foldrun docs\``)}`);
   }
-  console.log(`  ${c.dim(NO_ACCOUNT_FILE_API)}\n`);
+  if (accountMd === null) console.log(`  ${c.dim(NO_ACCOUNT_FILE_API)}`);
+  else if (accountMd.refused) console.log(`  ${c.dim("AGENTS.md (account): not pulled — an admin of every workspace reads it")}`);
+  console.log();
   return 0;
 }
 
