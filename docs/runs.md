@@ -283,7 +283,7 @@ read by all its steps, `50k`), **≥ secs** and **conversation** (a
 `foldrun runs --tool web --tool-error`, `--agent`, `--model`, `--min-tokens`,
 `--min-secs`, `--context` and `--view <name>` do the same (`foldrun runs views` lists
 yours), and `GET …/runs` takes `tool`, `tool_error`, `agent`, `model`,
-`min_tokens`, `min_secs`, `context`. Tools and models are searchable on runs from
+`min_tokens`, `min_secs`, `context`, `customer`. Tools and models are searchable on runs from
 19 Oct 2026; tokens and time on every run.
 
 ## Insights
@@ -619,6 +619,48 @@ takes `inputs: ["briefs/brief.pdf"]` on `POST …/agents/<agent>/run` and
   snapshot.
 - **Released with the run.** Deleting a run, or the retention window
   pruning it, lets its held copies go.
+
+## End customers
+
+When your account serves people of your own — a product built on foldrun,
+with many users behind one account — say which of them a run is for:
+**`customer`**, an id you choose (1–128 of letters, digits and `. _ : @ -`).
+It is opaque: you map it to a person, foldrun never does, and it must not be
+personal data (an email, a name).
+
+```sh
+foldrun agent run support --to helpdesk --task "summarise the ticket" --customer c-8812
+```
+
+The API takes `customer` on `POST …/agents/<agent>/run` and
+`POST …/flows/<flow>/run`, and so do MCP's `run_agent` and `run_flow`. A
+re-run is for the same customer.
+
+What follows from it:
+
+- **Held alone.** Each customer is held to its own limits, checked before the
+  account's own: by default **30 run starts a minute**. One customer past its
+  limit is refused (`429`, with `Retry-After` and code `customer_rate`) while
+  your other customers carry on. Runs that name no customer are held to the
+  account's limits alone, as before.
+- **Blocked.** An admin with every workspace can block a customer
+  (Settings → API keys → Customers, `foldrun customers block <id>`, or
+  `PUT /api/customers/<id>/block`). Its runs are refused at start (`403`,
+  code `customer_blocked`), and a run of it already going stops at its next
+  model call. Unblocking lets it through again.
+- **Told to the model provider.** On foldrun's models, the provider is sent
+  the customer as its end-user id — hashed with your account, so your id never
+  leaves foldrun and two accounts' `user-1` are never one identity there. A
+  provider that acts on abuse acts on that customer, not on everyone. Runs on
+  your own model keys are not changed.
+- **Found.** The run page shows **Customer**, linked to the runs list filtered
+  to it; `foldrun runs --customer c-8812` and `GET …/runs?customer=c-8812` list
+  them.
+
+The limits are the account's to change: `PATCH /api/customers` or
+`foldrun customers limits --starts-per-minute 60` (`default` puts one back).
+A customer is a grouping and a limit, not an access boundary: anyone who may
+start runs in the account may name any customer.
 
 ## What a run costs, and what stops it
 

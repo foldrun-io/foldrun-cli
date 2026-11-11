@@ -317,6 +317,7 @@ Signing in
   foldrun a2a card <flow> --to <ws>  the flow's agent card URL and endpoint, then the card (a private card needs an A2A key in $FOLDRUN_A2A_KEY or --key-env)
   foldrun a2a call <card-url> "<text>"  send one message to an A2A 1.0 agent — a published flow or anyone's — and wait for the task (--data <json|@file>, --context <id>, --no-wait or --return-immediately, --max-wait <s>, --json); the A2A key comes from $FOLDRUN_A2A_KEY or --key-env NAME, never this CLI's API key
   foldrun a2a status <task-id> --card <url>  the task as it stands now (--json) — cancel <task-id> --card <url> stops it (asks; --yes)
+  foldrun customers         your own users, by the id on their runs and gateway calls: the limits each is held to and who is blocked — block <id> [--reason], unblock <id>, limits --starts-per-minute N --gateway-rpm N --gateway-concurrency N (default puts one back), --json
   foldrun audit             the account's audit log, newest first: sign-ins, keys, invites, secrets by name, deploys, support views (--since 7d, --action, --actor, --to, --all, --csv)
   foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
   foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)
@@ -333,6 +334,8 @@ Options
   --task "<text>"           flow inputs save: the task the saved set holds (--file <path> reads it from a file)
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
   --file <path>             invoke, agent run: a file handed to the run (repeatable) — a storage path, or ./local-file uploaded to storage/inputs/ first; the first step finds them in inputs/ and can read images and PDFs (FOL-163)
+  --customer <id>           invoke, agent run: which of your own users the run is for (FOL-168) — limits and blocks follow it; runs: only that customer's runs
+  --reason "<text>"         customers block: why, kept on the block and the audit log
   --context <id>            invoke, agent run: a turn of that conversation — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters); runs: only that conversation's runs
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)

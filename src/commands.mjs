@@ -4001,6 +4001,8 @@ async function invoke(target, flags) {
         ...(typeof flags.context === "string" ? { context: flags.context } : {}),
         // --file (FOL-163): storage paths handed to the first step, in inputs/.
         ...(files.length ? { inputs: files } : {}),
+        // --customer (FOL-168): which of your own users this run is for.
+        ...(typeof flags.customer === "string" ? { customer: flags.customer } : {}),
       }),
     });
   } catch (err) {
@@ -7770,7 +7772,7 @@ async function runViewsCmd(flags) {
 
 /** The filter flags a saved view keeps, as the runs page's query names them
  *  (run-views-model.ts VIEW_KEYS) — the reverse of what --view reads. */
-const VIEW_FLAGS = [["status", "status"], ["flow", "flow"], ["to", "workspace"], ["since", "since"], ["q", "q"], ["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"], ["context", "context"]];
+const VIEW_FLAGS = [["status", "status"], ["flow", "flow"], ["to", "workspace"], ["since", "since"], ["q", "q"], ["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"], ["context", "context"], ["customer", "customer"]];
 
 /**
  * `foldrun runs views save <name> [filters]` and `runs views rm <name>` — the
@@ -8522,11 +8524,11 @@ async function runsCmd(flags, layout) {
   // Search (FOL-72 step 9): by what happened inside a run, filtered by the
   // platform; --view <name> starts from a saved search (the dashboard's).
   const search = new URLSearchParams();
-  for (const [flag, key] of [["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"], ["context", "context"]]) {
+  for (const [flag, key] of [["tool", "tool"], ["agent", "agent"], ["model", "model"], ["min-tokens", "min_tokens"], ["min-secs", "min_secs"], ["context", "context"], ["customer", "customer"]]) {
     if (flags[flag] !== undefined && flags[flag] !== true) search.set(key, String(flags[flag]));
   }
   if (flags["tool-error"] === true) search.set("tool_error", "1");
-  const searching = [...search.keys()].some((k) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs", "context"].includes(k));
+  const searching = [...search.keys()].some((k) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs", "context", "customer"].includes(k));
   // A view's flow or text filters here, after the fetch: ask for the ceiling
   // as for a status, or matches past the newest few go missing (Codex review).
   const localText = typeof flags.flow === "string" || typeof flags.q === "string";
@@ -8553,6 +8555,7 @@ async function runsCmd(flags, layout) {
     // --context (FOL-162): one conversation's runs. The platform filters too;
     // checked here as well, so a platform from before it lists none, not all.
     if (typeof flags.context === "string" && r.context?.id !== flags.context) return false;
+    if (typeof flags.customer === "string" && r.customer !== flags.customer) return false;
     // A view's flow and free text (the runs page's): "agent: x" is a direct run.
     // The dashboard names a run by what ran (whatRan): a direct agent run's
     // or an eval's own name, without adhoc:/eval: (Codex review).
@@ -8576,7 +8579,7 @@ async function runsCmd(flags, layout) {
   for (let round = 0; ; round++) {
     const answers = await pool(names, 8, async (ws) => {
       try {
-        const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs", "context"].includes(k)));
+        const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs", "context", "customer"].includes(k)));
         forApi.set("limit", String(perWorkspace));
         if (cursor) forApi.set("before", cursor);
         const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?${forApi}`);
@@ -9237,7 +9240,7 @@ async function agentRunCmd(positional, flags, layout) {
       // at the proxy, send-capable secrets withheld, state/ kept.
       // --context <id> (FOL-162): a turn of that conversation — the agent
       // reads the earlier runs started with the same context first.
-      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}), ...(typeof flags.context === "string" ? { context: flags.context } : {}), ...(files.length ? { inputs: files } : {}) }),
+      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}), ...(typeof flags.context === "string" ? { context: flags.context } : {}), ...(files.length ? { inputs: files } : {}), ...(typeof flags.customer === "string" ? { customer: flags.customer } : {}) }),
     }),
   );
   const runId = body?.runId;
@@ -14152,6 +14155,62 @@ async function preferencesCmd(positional, flags) {
   return 0;
 }
 
+/**
+ * `foldrun customers` (FOL-168) — your own users, by the id you put on runs
+ * (`--customer`) and gateway calls (x-foldrun-customer): the limits each is
+ * held to, and the block list. `ls` (or nothing) shows them; `block <id>
+ * [--reason "…"]`, `unblock <id>` (asks; --yes), `limits --starts-per-minute
+ * N --gateway-rpm N --gateway-concurrency N` (`default` puts one back).
+ */
+async function customersCmd(positional, flags) {
+  const url = platformFor(flags, "customers");
+  const [verb, id] = positional;
+  const enc = encodeURIComponent;
+  if (verb === "block" || verb === "unblock") {
+    if (!id) throw new Error(`\`foldrun customers ${verb} <customer-id>\` — the id you put on its runs`);
+    if (verb === "block") {
+      await remoteCall(url, flags, `/api/customers/${enc(id)}/block`, { method: "PUT", body: JSON.stringify(typeof flags.reason === "string" ? { reason: flags.reason } : {}) });
+      console.log(`\n  ${c.green("✓")} ${id} blocked ${c.dim("— its runs stop at their next model call, its gateway calls are refused")}\n`);
+      return 0;
+    }
+    if (!(await sureToDelete(flags, "customers unblock", `the block on ${id}`))) return 1;
+    await remoteCall(url, flags, `/api/customers/${enc(id)}/block`, { method: "DELETE" });
+    console.log(`\n  ${c.green("✓")} ${id} unblocked\n`);
+    return 0;
+  }
+  if (verb === "limits") {
+    const patch = {};
+    for (const [flag, key] of [["starts-per-minute", "startsPerMinute"], ["gateway-rpm", "gatewayRpm"], ["gateway-concurrency", "gatewayConcurrency"]]) {
+      if (flags[flag] === undefined) continue;
+      if (flags[flag] === "default") patch[key] = null;
+      else if (/^\d+$/.test(String(flags[flag]))) patch[key] = Number(flags[flag]);
+      else throw new Error(`--${flag} is a whole number, or default`);
+    }
+    if (!Object.keys(patch).length) throw new Error("`foldrun customers limits --starts-per-minute N --gateway-rpm N --gateway-concurrency N` (default puts one back)");
+    const r = await remoteCall(url, flags, "/api/customers", { method: "PATCH", body: JSON.stringify(patch) });
+    if (flags.json === true) console.log(JSON.stringify(r, null, 2));
+    else console.log(`\n  ${c.green("✓")} per customer: ${r.limits.startsPerMinute} run starts a minute · ${r.limits.gatewayRpm} gateway calls a minute · ${r.limits.gatewayConcurrency} at once\n`);
+    return 0;
+  }
+  if (verb !== undefined && verb !== "ls") throw new Error("`foldrun customers` — ls, block <id>, unblock <id>, limits");
+  const r = await remoteCall(url, flags, "/api/customers");
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  const L = r.limits, D = r.defaults;
+  const mark = (k) => (L[k] === D[k] ? "" : c.dim(` (default ${D[k]})`));
+  console.log(`\n  ${c.bold("per customer")}  ${L.startsPerMinute} run starts a minute${mark("startsPerMinute")} · ${L.gatewayRpm} gateway calls a minute${mark("gatewayRpm")} · ${L.gatewayConcurrency} at once${mark("gatewayConcurrency")}`);
+  console.log(`  ${c.dim("only for runs and gateway calls that name a customer")}`);
+  if (!r.blocked.length) console.log(`\n  ${c.dim("no customer is blocked")}`);
+  else {
+    console.log(`\n  ${c.bold("blocked")}`);
+    for (const b of r.blocked) console.log(`  ${c.red("■")} ${b.customer}${b.reason ? `  ${b.reason}` : ""}  ${c.dim(`${b.by} · ${when(b.at)}`)}`);
+  }
+  console.log(`\n  ${c.dim("foldrun customers block <id> --reason \"…\" · unblock <id> · limits --gateway-rpm N")}\n`);
+  return 0;
+}
+
 /** `foldrun changelog [--limit n]` — What's new: the API's versions, what each
  *  broke and what is deprecated, then each release and what it changed. */
 async function changelogCmd(flags) {
@@ -15249,6 +15308,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return a2aCmd(positional, flags, layout);
     case "audit":
       return auditCmd(positional, flags);
+    case "customers":
+      return customersCmd(positional, flags);
     case "accounts":
     case "profiles":
       return accountsCmd(positional, flags);
