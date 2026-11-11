@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.9.2] — 2026-11-11
+
+### docs
+
+- sync notifications.md (asking) ([1e2e5ad](https://github.com/foldrun-io/foldrun-cli/commit/1e2e5ad))
+
 ## [20.9.1] — 2026-11-11
 
 ### docs
