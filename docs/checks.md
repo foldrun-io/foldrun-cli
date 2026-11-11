@@ -248,12 +248,21 @@ or Unicode tag characters: invisible to a person reading the file, read as
 text by the model, and the standard way to hide an instruction from a
 reviewer. Tag characters are decoded in the message so you can read what
 they say. Delete them. A byte-order mark at the very start of a file is
-allowed, and so is a joiner that is spelling: a zero-width non-joiner or
-joiner (U+200C, U+200D) between two letters of a script written with them —
-the Persian half-space in «می‌شود», Arabic-script, Syriac, Indic and other
-Brahmic words — or a ZWJ inside an emoji sequence. The same joiner between
-Latin letters, at a word's edge or alone is still flagged, and so is every
-zero-width space, bidi control and tag character, whatever the script.
+allowed, and so is what is spelling:
+
+- a zero-width non-joiner or joiner (U+200C, U+200D) with a letter of a
+  script written with them on one side and a letter on the other — the
+  Persian half-space in «می‌شود» and after a Latin word («channel‌ها»),
+  Arabic-script, Syriac, Indic and other Brahmic words — or a ZWJ inside an
+  emoji sequence;
+- a bidi mark (LRM U+200E, RLM U+200F, ALM U+061C) on a line of
+  right-to-left text, as used to keep a Latin file name or code in order
+  inside Persian or Arabic — marks move nothing, unlike overrides.
+
+Still flagged: a joiner between Latin letters, before a space or alone; a
+mark on a line with no right-to-left text, or splitting a Latin word; and
+every zero-width space, bidi override or isolate (U+202A–202E,
+U+2066–2069) and tag character, whatever the script.
 
 ### content/injection-phrase
 
