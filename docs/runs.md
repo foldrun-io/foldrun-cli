@@ -592,6 +592,13 @@ the model as they are, where the model can be shown them (see
 [images and PDFs](providers#images-and-pdfs-an-agent-reads)). Scripts can read
 every file.
 
+Which model is shown an image or a PDF is the one the step runs on — Claude
+only when the step's provider is Anthropic (your key, or foldrun's models
+set to Anthropic); OpenAI, Gemini or another provider otherwise. Audio and
+video (a voice note, an `.mp3`, an `.mp4`) are never sent to a model: they
+stay files in the sandbox, for a script or tool to work on. A script that
+transcribes one with an outside API sends it to that API, and nowhere else.
+
 ```sh
 foldrun storage put brief.pdf --to sales --into briefs/
 foldrun agent run analyst --to sales --task "summarise the brief" --file briefs/brief.pdf
