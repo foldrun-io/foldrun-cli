@@ -195,6 +195,43 @@ those families on both wires and says so in the drop line. Every other id
 keeps it, because a gateway ignores a field it cannot use and an o-series,
 gpt-5, grok or deepseek-r model wants it.
 
+### Persian prompts, by tier (checked 11 Nov 2026)
+
+An eval of eight Persian tasks, compared on the three tiers with **Compare
+models** ([Evals](evals#comparing-models)). Each case pairs a deterministic
+check, where one fits, with a judge on `max` (Opus, low effort). The subject
+was a plain agent told to write natural Persian, keep code in Latin script
+and use Persian digits:
+
+| case | fast (Haiku) | default (Sonnet) | max (Opus) |
+|---|---|---|---|
+| half-spaces in a short paragraph | pass | pass | pass |
+| a formal notice to a customer | fail | pass | pass |
+| Persian digits and thousands separators | pass | pass | pass |
+| a command kept intact in Persian text | pass | pass | pass |
+| a one-sentence summary | pass | pass | pass |
+| a technical translation from English | pass | pass | pass |
+| exactly three numbered points | pass | fail | pass |
+| Persian when asked in English | fail | pass | pass |
+| **passed** | **6 / 8** | **7 / 8** | **8 / 8** |
+| cost per run · time | $0.013 · 6.7 s | $0.015 · 6.5 s | $0.024 · 8.4 s |
+
+Every tier wrote correct Persian: half-spaces where they belong, Persian
+digits when asked, code and commands left intact inside right-to-left text.
+The three failures were following the task, not the language:
+
+- `fast` opened the formal notice with a line about itself and invented a
+  Persian calendar date the task never gave;
+- `fast` made one grammatical slip («سامانه نام دامنه … رکوردهایی هستند»);
+- `default` added an introductory line and ran one list item past its
+  ten-word limit.
+
+So `default` is a sound default for Persian, and an agent whose output must
+follow a strict shape (a fixed format, an exact length) earns `max`, or a
+`verify:` that checks the shape. One run per case is a small sample — run
+the comparison on your own agent's cases with `repeat: 3` before moving a
+step to `fast`. The whole comparison cost $0.42 (runs and judges together).
+
 ## Why a turn stopped
 
 Every model reply ends with a stop reason, and the model loop acts on it: run
