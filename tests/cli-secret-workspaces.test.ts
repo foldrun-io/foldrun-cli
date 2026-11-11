@@ -117,7 +117,7 @@ test("--help shows the verb and its flag", () => {
   const r = spawnSync(process.execPath, [CLI, "secrets", "--help"], { encoding: "utf8", cwd, env: ENV });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /foldrun secrets workspaces NAME \[workspace…\]/);
-  assert.match(r.stdout, /--all\s+secrets workspaces/);
+  assert.match(r.stdout, /--all\s+[^\n]*secrets workspaces: every workspace/);
   assert.match(r.stdout, /--none\s+secrets workspaces, secrets set/);
   assert.match(r.stdout, /--workspaces <a,b>\s+secrets set/);
 });
