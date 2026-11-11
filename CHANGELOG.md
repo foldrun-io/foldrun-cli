@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.11.0] — 2026-11-11
+
+### New in the public API
+
+- `foldrun gateway status-line`
+- the `--cache` flag
+
+- feat(cli): --file hands a run files — storage paths, or ./local uploaded first (FOL-163) ([fd6018e](https://github.com/foldrun-io/foldrun-cli/commit/fd6018e))
+- feat(cli): gateway status-line — a gateway key's spend in Claude Code's status line ([5b28040](https://github.com/foldrun-io/foldrun-cli/commit/5b28040))
+
 ## [20.10.0] — 2026-11-11
 
 - feat(cli): --context on invoke, agent run and runs (FOL-162) ([81eae8f](https://github.com/foldrun-io/foldrun-cli/commit/81eae8f))
