@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.8.0] — 2026-11-11
+
+- feat(account): deploy sends the account's own AGENTS.md, pull fetches it (GET/PUT /api/account/agents-md) ([0da23ee](https://github.com/foldrun-io/foldrun-cli/commit/0da23ee))
+
+### docs
+
+- sync checks.md (bidi marks) ([b4da4f8](https://github.com/foldrun-io/foldrun-cli/commit/b4da4f8))
+
 ## [20.7.2] — 2026-11-11
 
 ### deps
