@@ -4742,7 +4742,8 @@ async function keysCmd(positional, flags) {
       // A key `foldrun login` minted lasts 90 days and renews itself while
       // that machine is in use; revoking it signs that machine out.
       const login = k.origin === "cli-login" && !k.revokedAt ? "  [CLI sign-in · renews itself]" : "";
-      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}${login}`);
+      const custReq = k.requireCustomer && !k.revokedAt ? `  ${c.yellow("[customer required]")}` : "";
+      console.log(`  ${state.padEnd(20)} ${k.id}  ${k.prefix}…  ${c.bold(k.label)}  ${c.dim(what)}${k.createdBy ? c.dim(`  by ${k.createdBy}`) : ""}${login}${custReq}`);
       // A rotated key in its grace: still live, but not to be rotated again.
       const next = k.replacedBy ? keys.find((n) => n.id === k.replacedBy) : null;
       if (k.replacedBy) console.log(`  ${" ".repeat(9)}${c.yellow(`rotated → ${k.replacedBy}${next ? ` (${next.prefix}…)` : ""}`)}${c.dim(" — rotate that one, not this")}`);
@@ -4755,6 +4756,9 @@ async function keysCmd(positional, flags) {
     if (!arg) throw new Error("what is the key for? foldrun keys create <label>");
     if (flags.a2a === true && flags.gateway === true) throw new Error("--a2a or --gateway, not both");
     if (flags["claude-code"] === true && flags.gateway !== true) throw new Error("--claude-code goes with --gateway: only a gateway key runs Claude Code");
+    // An A2A key's caller is one outside agent: requiring a customer is for
+    // API and gateway keys (Codex review: never silently dropped).
+    if (flags.a2a === true && flags["require-customer"] === true) throw new Error("--require-customer is for API and gateway keys, not --a2a");
     if (flags.a2a === true) return keysCreateA2a(url, arg, flags);
     if (flags.gateway === true) return keysCreateGateway(url, arg, flags);
     const body = { label: arg };
@@ -4768,6 +4772,8 @@ async function keysCmd(positional, flags) {
     // --workspaces a,b narrows the key to those; --workspaces all opens
     // every one you can. Unsaid, the key inherits your own scope.
     if (typeof flags.workspaces === "string") body.workspaces = flags.workspaces === "all" ? null : flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
+    // --require-customer (FOL-168): every run the key starts must name one.
+    if (flags["require-customer"] === true) body.requireCustomer = true;
     const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
     if (made.key == null) return lostSecret(made.id);
@@ -4805,6 +4811,16 @@ async function keysCmd(positional, flags) {
     console.log(`  ${made.key}\n`);
     const ends = made.replaced?.endsAt;
     console.log(`  ${c.dim(`Shown once. The old key ${grace === "0" ? "is revoked" : `keeps working until ${String(ends).slice(0, 16).replace("T", " ")} UTC`}.`)}\n`);
+    return 0;
+  }
+  if (verb === "set" && flags.customer !== undefined) {
+    // `keys set <id> --customer required|optional` (FOL-168): whether its
+    // runs and gateway calls must name an end customer.
+    if (!arg) throw new Error("which key? foldrun keys set <id> --customer required|optional");
+    if (["opus", "sonnet", "haiku"].some((t) => flags[t] !== undefined) || flags.clear === true) throw new Error("set the customer requirement and the model map in two commands: keys set <id> --customer …, then keys set <id> --sonnet …");
+    if (flags.customer !== "required" && flags.customer !== "optional") throw new Error("--customer is required or optional");
+    const r = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ requireCustomer: flags.customer === "required" }) });
+    console.log(`\n  ${c.green("✓")} ${arg}: a customer is ${r.requireCustomer ? "required on every run and gateway call" : "no longer required"}\n`);
     return 0;
   }
   if (verb === "set") return keysSetModels(url, arg, flags);
@@ -4921,6 +4937,8 @@ async function keysCreateGateway(url, label, flags) {
   const claude = flags["claude-code"] === true ? preflightClaudeSettings() : null;
   const body = { label, purpose: "gateway" };
   if (flags.login === true) body.credential = "login";
+  // --require-customer (FOL-168): every call must send x-foldrun-customer.
+  if (flags["require-customer"] === true) body.requireCustomer = true;
   if (capUsd !== undefined) body.capUsd = capUsd;
   if (dailyUsd !== undefined) body.dailyUsd = dailyUsd;
   if (flags.forever === true && flags.expires !== undefined) throw new Error("--forever or --expires <span>, not both");

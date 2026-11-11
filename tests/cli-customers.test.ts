@@ -87,3 +87,40 @@ test("customers usage lists spend per customer; limits takes --max-open-runs and
     s.close();
   }
 });
+
+test("keys create --require-customer sends it; keys set <id> --customer required|optional toggles it; ls marks it", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "fr_api_x", id: "k9", prefix: "fr_api_x", expiresAt: null }),
+    "PATCH /api/keys/k9": (body) => ({ ok: true, id: "k9", requireCustomer: JSON.parse(body).requireCustomer }),
+    "GET /api/keys": () => ({ keys: [{ id: "k9", prefix: "fr_api_x", label: "partner", role: "editor", workspaces: null, createdAt: "2026-11-11T00:00:00.000Z", revokedAt: null, requireCustomer: true }] }),
+  });
+  try {
+    assert.equal((await at(s.url, "keys", "create", "partner", "--require-customer")).code, 0);
+    assert.equal(JSON.parse(s.seen.find((x) => x.method === "POST")!.body).requireCustomer, true);
+    const on = await at(s.url, "keys", "set", "k9", "--customer", "required");
+    assert.equal(on.code, 0, on.out);
+    assert.match(on.out, /required on every run and gateway call/);
+    await at(s.url, "keys", "set", "k9", "--customer", "optional");
+    assert.deepEqual(JSON.parse(s.seen.filter((x) => x.method === "PATCH").at(-1)!.body), { requireCustomer: false });
+    assert.notEqual((await at(s.url, "keys", "set", "k9", "--customer", "maybe")).code, 0);
+    const ls = await at(s.url, "keys", "ls");
+    assert.match(ls.out, /\[customer required\]/);
+  } finally {
+    s.close();
+  }
+});
+
+test("--require-customer with --a2a and keys set --customer with model flags are refused, never half-applied (Codex review)", async () => {
+  const s = await serve({});
+  try {
+    const a = await at(s.url, "keys", "create", "x", "--a2a", "--to", "ws", "--flows", "f", "--require-customer");
+    assert.notEqual(a.code, 0);
+    assert.match(a.out, /not --a2a/);
+    const b = await at(s.url, "keys", "set", "k9", "--customer", "required", "--sonnet", "openai/gpt-6");
+    assert.notEqual(b.code, 0);
+    assert.match(b.out, /two commands/);
+    assert.equal(s.seen.filter((x) => x.method !== "GET").length, 0, "nothing was sent");
+  } finally {
+    s.close();
+  }
+});

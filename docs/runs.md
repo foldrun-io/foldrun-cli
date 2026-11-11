@@ -678,7 +678,12 @@ The limits are the account's to change, in Settings → API keys → Customers,
 with `PATCH /api/customers`, or `foldrun customers limits --max-open-runs 20
 --daily-model-usd 5` (`default`, or `none` for the spend, puts one back).
 A customer is a grouping and a limit, not an access boundary: anyone who may
-start runs in the account may name any customer.
+start runs in the account may name any customer. To make sure nothing slips
+past the limits by leaving the id out, mark the key your product uses
+**Require a customer id** (Settings → API keys, `foldrun keys create <label>
+--require-customer`, or `foldrun keys set <id> --customer required`): every
+run it starts must then name one, and one that does not is refused (`400`,
+code `customer_required`).
 
 ## What a run costs, and what stops it
 
