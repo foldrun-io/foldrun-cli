@@ -233,6 +233,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `--task "<text>"` | the instruction for a manual run |
 | `--no-task` | `agent run`: start it with no instruction — the agent works from its own prompt alone |
 | `--task "<text>"` | `flow inputs save`: the task the saved set holds |
+| `--file <path>` | `invoke`, `agent run`: a file handed to the run — repeatable; a storage path, or a local one (`./`, `../`, `/`, `~`) uploaded to `storage/inputs/<upload id>/` first. The first step finds them in `inputs/` ([inputs](runs#inputs)) |
 | `--context <id>` | `invoke`, `agent run`: a turn of that [conversation](runs#conversations) — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters, no spaces); `runs`: only that conversation's runs |
 | `--test` | `run`, `invoke`, `agent run`: a test run — every step runs, nothing outward happens, `state/` and `storage/` are left alone, and the run page lists what would have happened. See [Test runs](runs#test-runs) |
 | `--follow` | `logs`: keep tailing a live run — locally, or on the platform with `--url` |

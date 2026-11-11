@@ -141,3 +141,41 @@ test("--context sends the conversation (FOL-162); invoke carries it too, and run
     s.close();
   }
 });
+
+test("--file hands the run files (FOL-163): a storage path as it is; ./local is uploaded to storage/inputs/<id>/ first; a bare --file is refused", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-file-"));
+  fs.writeFileSync(path.join(dir, "brief.pdf"), "%PDF-1.7 brief");
+  const s = await serve({
+    [`POST ${RUN}`]: () => ({ ok: true, runId: "run-adhoc-1", test: false, inputs: ["reports/q4.pdf"] }),
+    "POST /api/workspaces/rank-desk/storage/upload-url": () => failing(404, { error: "older platform" }),
+    "PUT /api/workspaces/rank-desk/storage": () => ({ file: { path: "x" } }),
+    "POST /api/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-flow-1", steps: 1, test: false }),
+  });
+  try {
+    const r = await at(s.url, "agent", "run", "tracker", "--to", "rank-desk", "--task", "read", "--file", "reports/q4.pdf", "--file", "storage/img/a.png");
+    assert.equal(r.code, 0, r.out);
+    assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "POST" && x.url.includes("/agents/"))!.body).inputs, ["reports/q4.pdf", "img/a.png"], "a leading storage/ is the folder's name, not the path");
+
+    const local = path.join(dir, "brief.pdf");
+    const inv = await at(s.url, "invoke", "weekly", "--to", "rank-desk", "--task", "x", "--file", local);
+    assert.equal(inv.code, 0, inv.out);
+    const put = s.seen.find((x) => x.method === "PUT" && x.url.includes("/storage"))!;
+    const rel = put.query.get("path")!;
+    assert.match(rel, /^inputs\/\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\/brief\.pdf$/);
+    assert.equal(put.body, "%PDF-1.7 brief");
+    assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "POST" && x.url.includes("/flows/"))!.body).inputs, [rel]);
+
+    const bare = await at(s.url, "agent", "run", "tracker", "--to", "rank-desk", "--task", "x", "--file");
+    assert.notEqual(bare.code, 0);
+    assert.match(bare.out, /which file/);
+    const missing = await at(s.url, "agent", "run", "tracker", "--to", "rank-desk", "--task", "x", "--file", "./no-such-file.pdf");
+    assert.notEqual(missing.code, 0);
+    assert.match(missing.out, /no such file here/);
+  } finally {
+    s.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

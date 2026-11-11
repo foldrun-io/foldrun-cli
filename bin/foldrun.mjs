@@ -116,7 +116,7 @@ const HELP = `foldrun — agents are just folders
   foldrun check --security  only the security rules: hard-coded secrets, hidden text, agents that can leak, unpinned code — fails on a warning
   foldrun check --rules     every rule check knows: id, level, what it guards against (--json)
   foldrun check --to <ws> --online  also the network checks, run by the platform: known vulnerabilities for exact runtime pins (OSV) and remote MCP servers' tool text — and what could not be checked
-  foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test, --context <id>)
+  foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test, --context <id>, --file <path> repeatable)
   foldrun agent run <name> --no-task  run it with no instruction, on its own prompt alone — the dashboard's Run (--to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker> (--isolated: sandbox: own on the worker), --consult <agent> or --can-ask (--description for a worker with none)
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
@@ -332,6 +332,7 @@ Options
   --no-task                 agent run: start it with no instruction — the agent works from its own prompt alone
   --task "<text>"           flow inputs save: the task the saved set holds (--file <path> reads it from a file)
   --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
+  --file <path>             invoke, agent run: a file handed to the run (repeatable) — a storage path, or ./local-file uploaded to storage/inputs/ first; the first step finds them in inputs/ and can read images and PDFs (FOL-163)
   --context <id>            invoke, agent run: a turn of that conversation — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters); runs: only that conversation's runs
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
@@ -510,6 +511,8 @@ if (!command || command === "--help" || command === "-h") {
 const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "claude-code", "login", "unreachable", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example", "accept-risk"]);
+/** Flags that become a list only when given more than once (FOL-163 `--file`). */
+const LIST_WHEN_REPEATED = new Set(["file"]);
 // `--wait` is a switch everywhere but `flow add <flow> wait`, where it takes
 // a span: `--wait 30m`, `--wait event`. Only a value that reads as one is
 // taken, so `invoke x --wait` and friends are as they were.
@@ -528,6 +531,9 @@ for (let i = 0; i < rest.length; i++) {
   else if (BOOLEAN_FLAGS.has(name) || next === undefined || next.startsWith("--")) value = true;
   else value = rest[++i];
   if (REPEATABLE.has(name) && typeof value === "string") flags[name] = [...(Array.isArray(flags[name]) ? flags[name] : []), value];
+  // Given twice, a list; once, a string as ever — so `--file` stays one path
+  // for the commands that read one, and invoke / agent run take several.
+  else if (LIST_WHEN_REPEATED.has(name) && typeof value === "string" && flags[name] !== undefined && flags[name] !== true) flags[name] = [...(Array.isArray(flags[name]) ? flags[name] : [flags[name]]), value];
   else flags[name] = value;
 }
 

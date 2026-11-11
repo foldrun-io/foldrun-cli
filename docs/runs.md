@@ -582,6 +582,44 @@ The run page shows a run's **Conversation**, linked to the runs list filtered
 to it; `foldrun runs --context order-42` and `GET …/runs?context=order-42`
 list them.
 
+## Inputs
+
+A run may be handed **files**: storage paths, as the workspace's storage lists
+them. The step the task reaches finds them at `inputs/` in its working
+directory, under the same paths (`inputs/reports/q4.pdf`), and is told which
+they are. An agent reads them with its Read tool; images and PDFs are shown to
+the model as they are, where the model can be shown them (see
+[images and PDFs](providers#images-and-pdfs-an-agent-reads)). Scripts can read
+every file.
+
+```sh
+foldrun storage put brief.pdf --to sales --into briefs/
+foldrun agent run analyst --to sales --task "summarise the brief" --file briefs/brief.pdf
+foldrun agent run analyst --to sales --task "what changed?" --file ./local/v2.pdf
+```
+
+A `--file` written as a local path (`./`, `../`, `/` or `~`) is uploaded to
+`storage/inputs/<upload id>/` first; anything else is a storage path. The API
+takes `inputs: ["briefs/brief.pdf"]` on `POST …/agents/<agent>/run` and
+`POST …/flows/<flow>/run` (not with `from`), and so do MCP's `run_agent` and
+`run_flow`. In the dashboard, **Run with…** on a flow has a **Files** list.
+
+- **Fixed when the run is made.** The run holds the bytes each path named
+  then. Overwriting or deleting the storage file afterwards changes nothing
+  it reads, and a re-run reads the same files. The run page's **Inputs**
+  panel links to the copy the run held. Holding costs no extra space: the
+  same bytes are stored once.
+- **Never copied back.** Whatever the step writes inside `inputs/` stays in
+  its sandbox. Put results in `outputs/` or `workspace/storage/`.
+- **Limits:** at most 20 files and 100 MiB on one run — foldrun's limits.
+  What a model can be shown at once is the provider's: an image or a PDF
+  past its limits is still staged for scripts to read.
+- **Where:** the sandboxed executors stage inputs (k8s and `container`). An
+  install that runs steps in-process answers `409`, as it does for a
+  snapshot.
+- **Released with the run.** Deleting a run, or the retention window
+  pruning it, lets its held copies go.
+
 ## What a run costs, and what stops it
 
 Every step records what it cost. A flow's `budget:` is checked between

@@ -3977,6 +3977,7 @@ async function invoke(target, flags) {
   const task = typeof flags.inputs === "string" ? await savedInputs(url, flags, ws, target, flags.inputs) : typeof flags.task === "string" ? flags.task : "";
   if (flags.inputs !== undefined && typeof flags.inputs !== "string") throw new Error("which input set? `--inputs <name>`");
   if (flags.context !== undefined && typeof flags.context !== "string") throw new Error("which conversation? `--context <id>`");
+  const files = await runInputs(url, flags, ws);
   let body;
   try {
     body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
@@ -3998,6 +3999,8 @@ async function invoke(target, flags) {
         // --context <id> (FOL-162): a turn of that conversation — the first
         // step reads the earlier runs started with the same context.
         ...(typeof flags.context === "string" ? { context: flags.context } : {}),
+        // --file (FOL-163): storage paths handed to the first step, in inputs/.
+        ...(files.length ? { inputs: files } : {}),
       }),
     });
   } catch (err) {
@@ -6473,11 +6476,6 @@ async function storageCmd(positional, flags, layout) {
       jobs[0].rel = flags.as;
     }
     const token = await renewedToken(url, flags);
-    const base = `/api/workspaces/${encodeURIComponent(ws)}/storage`;
-    const said = async (res) => {
-      const text = await res.text();
-      try { return JSON.parse(text).error ?? text.slice(0, 200); } catch { return text.slice(0, 200); }
-    };
     let ok = 0, skipped = 0, bytesSent = 0;
     const failed = [];
     console.log();
@@ -6490,23 +6488,7 @@ async function storageCmd(positional, flags, layout) {
         continue;
       }
       try {
-        const sha = crypto.createHash("sha256").update(bytes).digest("hex");
-        // The length too: the platform checks the limits on it and signs it
-        // into the URL, so the bucket takes exactly these bytes (30 Oct 2026).
-        const ask = await remoteFetch(url, `${base}/upload-url`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha, size: bytes.length }) }, { token });
-        // A platform older than presigned uploads answers 404 here: it
-        // takes the bytes itself, the way one with no bucket does.
-        if (!ask.ok && ask.status !== 404) throw new HttpError(await said(ask), ask.status, {});
-        const { url: direct } = /** @type {{ url?: string | null }} */ (ask.ok ? await ask.json() : { url: null });
-        if (direct) {
-          const put = await fetch(direct, { method: "PUT", body: bytes, signal: AbortSignal.timeout(Math.max(120, bytes.length / 200_000) * 1000) });
-          if (!put.ok) throw new Error(`the storage service refused it (${put.status})`);
-          const done = await remoteFetch(url, base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha, size: bytes.length }) }, { token });
-          if (!done.ok) throw new HttpError(await said(done), done.status, {});
-        } else {
-          const put = await remoteFetch(url, `${base}?path=${encodeURIComponent(rel)}`, { method: "PUT", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token });
-          if (!put.ok) throw new HttpError(await said(put), put.status, {});
-        }
+        await uploadToStorage(url, token, ws, rel, bytes);
         ok++;
         bytesSent += bytes.length;
         console.log(`  ${c.green("✓")} ${ws}/storage/${rel}  ${c.dim(humanBytes(bytes.length))}`);
@@ -8426,6 +8408,68 @@ async function stopCmd(runId, flags, layout) {
  * carries each run's one-line summary — the sentence that says what it
  * found, not merely that it finished.
  */
+/**
+ * Put one file's bytes into a workspace's storage at `rel`: straight to the
+ * bucket when the platform hands out an upload URL (then registered), else
+ * through the platform — what `storage put` and `--input ./file` both do.
+ */
+async function uploadToStorage(url, token, ws, rel, bytes) {
+  const base = `/api/workspaces/${encodeURIComponent(ws)}/storage`;
+  const said = async (res) => {
+    const text = await res.text();
+    try { return JSON.parse(text).error ?? text.slice(0, 200); } catch { return text.slice(0, 200); }
+  };
+  const sha = crypto.createHash("sha256").update(bytes).digest("hex");
+  // The length too: the platform checks the limits on it and signs it
+  // into the URL, so the bucket takes exactly these bytes (30 Oct 2026).
+  const ask = await remoteFetch(url, `${base}/upload-url`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha, size: bytes.length }) }, { token });
+  // A platform older than presigned uploads answers 404 here: it
+  // takes the bytes itself, the way one with no bucket does.
+  if (!ask.ok && ask.status !== 404) throw new HttpError(await said(ask), ask.status, {});
+  const { url: direct } = /** @type {{ url?: string | null }} */ (ask.ok ? await ask.json() : { url: null });
+  if (direct) {
+    const put = await fetch(direct, { method: "PUT", body: bytes, signal: AbortSignal.timeout(Math.max(120, bytes.length / 200_000) * 1000) });
+    if (!put.ok) throw new Error(`the storage service refused it (${put.status})`);
+    const done = await remoteFetch(url, base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, sha, size: bytes.length }) }, { token });
+    if (!done.ok) throw new HttpError(await said(done), done.status, {});
+  } else {
+    const put = await remoteFetch(url, `${base}?path=${encodeURIComponent(rel)}`, { method: "PUT", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token });
+    if (!put.ok) throw new HttpError(await said(put), put.status, {});
+  }
+}
+
+/**
+ * `--file` (FOL-163, repeatable): the files a run is handed — the API's
+ * `inputs` (`--inputs <set>` is invoke's saved input set, a different thing). A path that
+ * starts with ./, ../, / or ~ is a file on this machine — uploaded first to
+ * storage/inputs/<upload id>/<name>; anything else is a storage path as
+ * `foldrun storage ls` prints it. Decided by how it is written, never by
+ * whether a local file happens to exist. Returns the storage paths.
+ */
+async function runInputs(url, flags, ws) {
+  if (flags.file !== undefined && typeof flags.file !== "string" && !Array.isArray(flags.file)) throw new Error("which file? `--file <storage path>` or `--file ./local-file`");
+  const given = many(flags.file);
+  if (!given.length) return [];
+  const local = (p) => /^(\.{1,2}\/|\/|~)/.test(p);
+  const out = [];
+  let token = null;
+  const id = `${new Date().toISOString().slice(0, 10)}-${crypto.randomBytes(4).toString("hex")}`;
+  for (const p of given) {
+    if (!local(p)) {
+      out.push(p.replace(/^storage\//, ""));
+      continue;
+    }
+    const abs = path.resolve(p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p);
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw new Error(`--file ${p}: no such file here`);
+    token ??= await renewedToken(url, flags);
+    const rel = `inputs/${id}/${path.basename(abs)}`;
+    await uploadToStorage(url, token, ws, rel, fs.readFileSync(abs));
+    console.log(`  ${c.green("↑")} ${p} ${c.dim(`→ storage/${rel}`)}`);
+    out.push(rel);
+  }
+  return out;
+}
+
 async function runsCmd(flags, layout) {
   const url = platformFor(flags, "runs");
   // --view <name>: a saved search (the dashboard's) read first, so every
@@ -9171,6 +9215,7 @@ async function agentRunCmd(positional, flags, layout) {
   const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
   const base = `/api/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
   if (flags.context !== undefined && typeof flags.context !== "string") throw new Error("which conversation? `--context <id>`");
+  const files = await runInputs(url, flags, ws);
 
   // A waited run that FAILS is the answer to the question, not a fault in
   // the call: 200 with its status since FOL-106, 500 with the same record
@@ -9192,7 +9237,7 @@ async function agentRunCmd(positional, flags, layout) {
       // at the proxy, send-capable secrets withheld, state/ kept.
       // --context <id> (FOL-162): a turn of that conversation — the agent
       // reads the earlier runs started with the same context first.
-      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}), ...(typeof flags.context === "string" ? { context: flags.context } : {}) }),
+      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}), ...(typeof flags.context === "string" ? { context: flags.context } : {}), ...(files.length ? { inputs: files } : {}) }),
     }),
   );
   const runId = body?.runId;

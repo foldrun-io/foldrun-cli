@@ -195,6 +195,26 @@ those families on both wires and says so in the drop line. Every other id
 keeps it, because a gateway ignores a field it cannot use and an o-series,
 gpt-5, grok or deepseek-r model wants it.
 
+### Images and PDFs an agent reads
+
+An agent that reads an image or a PDF with its Read tool — a run's
+[inputs](runs#inputs), a screenshot it took — gets it back as an image or a
+document block. On an Anthropic endpoint the model sees it as it is. Through
+the translator:
+
+| | Chat Completions (`format: openai`) | Responses (`format: responses`) |
+|---|---|---|
+| an image a tool returned | sent in a user message right after the tool results, labelled with the call it came from (a tool message carries text alone) | carried in the tool output |
+| a PDF a tool returned | not sent — no portable Chat part takes one | carried as an `input_file` |
+| an image or PDF in the message itself | images sent; PDFs not | both sent |
+
+Wherever a file is not sent, the model is told so in its place — "a PDF was
+here, but this model endpoint cannot be shown PDFs" — so it never answers as
+though it had seen it, and the run trace says what was left out. To give a
+model on Chat Completions a PDF's text, read it with a script. Whether a given
+model can see images at all is the provider's; one that cannot refuses or
+ignores the image.
+
 ### Persian prompts, by tier (checked 11 Nov 2026)
 
 An eval of eight Persian tasks, compared on the three tiers with **Compare

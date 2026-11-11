@@ -137,8 +137,8 @@ and that automatic disconnect are in the audit log (`mcp.connected`,
 | `get_run` | one run in full | `GET …/runs/<id>` |
 | `read_file` | one file of a workspace's source (with its `sha256`), or the tree | `GET …/source` |
 | `check_workspace` | what `foldrun check` says about a workspace: findings with rule ids (`security: true` for the security rules alone) | `GET …/check` |
-| `run_flow` | start a flow (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations)) | `POST …/flows/<flow>/run` |
-| `run_agent` | run one agent on a task of your own, in its own sandbox, no flow needed (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations)); answers a run id at once — read it with `get_run` | `POST …/agents/<agent>/run` |
+| `run_flow` | start a flow (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations), `inputs` for [files](runs#inputs)) | `POST …/flows/<flow>/run` |
+| `run_agent` | run one agent on a task of your own, in its own sandbox, no flow needed (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations), `inputs` for [files](runs#inputs)); answers a run id at once — read it with `get_run` | `POST …/agents/<agent>/run` |
 | `decide_approval` | approve or reject a gate (`note`, `step`) | `POST …/runs/<id>/approve` |
 | `answer_question` | answer an agent's question mid-step | `POST …/runs/<id>/answer` |
 | `message_run` | say something to a running agent | `POST …/runs/<id>/message` |
