@@ -12,6 +12,13 @@ edited by a person.
 
 <!-- releases -->
 
+## [20.9.3] — 2026-11-11
+
+### docs
+
+- sync providers.md (Persian by tier) ([dd7d45b](https://github.com/foldrun-io/foldrun-cli/commit/dd7d45b))
+- sync secrets.md, tools.md (MCP secrets) ([240b42b](https://github.com/foldrun-io/foldrun-cli/commit/240b42b))
+
 ## [20.9.2] — 2026-11-11
 
 ### docs
