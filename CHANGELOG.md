@@ -12,6 +12,22 @@ edited by a person.
 
 <!-- releases -->
 
+## [21.2.0] — 2026-11-11
+
+### New in the public API
+
+- `foldrun talk`
+- the `--lang` flag
+- the `--silence` flag
+- the `--mic` flag
+- the `--plain` flag
+
+- feat(cli): foldrun talk, and Claude Code's /talk — speak a prompt, foldrun transcribes it ([75df97c](https://github.com/foldrun-io/foldrun-cli/commit/75df97c))
+
+### deps
+
+- @foldrun/core ^19.1.0 ([0179345](https://github.com/foldrun-io/foldrun-cli/commit/0179345))
+
 ## [21.1.1] — 2026-11-11
 
 ### docs
