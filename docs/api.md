@@ -315,6 +315,30 @@ one; a body that does not match the length it declared is a `400`.
 Blobs go to object storage; the index of what exists stays local. Presigned
 URLs mean nothing in a run pod ever holds the bucket credential.
 
+## Files to text
+
+An image, a PDF, a Word, PowerPoint or Excel file, HTML, a recording or a
+video, turned into text on foldrun's own servers — OCR (Persian and English),
+text layers, and speech by Whisper ([Files to text](extract.md)). The text is
+kept as the account's own artifact: the same file with the same options comes
+back at once with `cached: true`, and is never shared with another account.
+
+A call waits up to `wait` seconds (0–60, default 50). Done in time, it answers
+`200` with the text; still working, `202 { id, status: "running", poll }` —
+GET the `poll` URL until `status` is `done` or `failed`. Refusals: `413` over
+the size limit (`FOLDRUN_EXTRACT_MAX_MB`, default 100 MB) or the parser's own
+limits (pages, length), `415` a type it does not read, `422` a file it cannot
+read, `429` with `Retry-After` past 20 extractions a minute per key or person
+or 3 running at once per account, `503` when the server has no extraction set
+up. Each refusal carries a `code` (`unsupported`, `too_large`, `unreadable`,
+`rate_limited`, `too_many_running`, `not_configured`, …).
+
+| Route | Methods | |
+|---|---|---|
+| `/api/extract?name&lang&ocr&engine&wait` | POST | a file to text, sent whole as the raw request body with a `Content-Length` (at most 10 MB, the API's per-request limit — a larger file goes to storage first and through `storage/extract`). `name` the file's name (a hint; the bytes decide), `lang` `fa`, `en` or `auto` (OCR `fas+eng` or `eng`; speech in that language or the one heard), `ocr` `auto` (only pages with no text layer), `always` or `never`, `engine` `docling` for a PDF read by Docling. Answers `{ sha256, kind, format, text, pages?, ocrPages?, seconds?, confidence?, language?, engine: { parser, speech? }, truncated, warnings, cached, ms }`; speech comes under `[audio · m:ss · transcript, fa]`, a video's as `[video · m:ss · speech]` then its on-screen text. The file is not stored. What starting a run needs (`run:start`). Idempotent |
+| `/api/extract/<id>` | GET | one extraction that answered `202`: `{ id, status, result?, error?, wrote?, createdAt, finishedAt }` — `status` `running`, `done` (with `result`) or `failed` (with `error: { status, code, message }`; `worker_stopped` when the server working on it stopped). The account's own; a member or key scoped to some workspaces reads the jobs of those and the account-level ones it started. Kept a day |
+| `/api/workspaces/<ws>/storage/extract` | POST | a stored file to text: `{ path, lang?, ocr?, engine?, write?, wait? }`. With `write` (the default, `workspace:write`) the text is written to `<path>.txt` beside the file once it is done — also when the caller stopped waiting — and the answer says `wrote: "<path>.txt"`; a `.txt` is refused. `write: false` only reads (`workspace:read`). Same answers as `/api/extract`, plus `wrote`. Idempotent |
+
 ## Shares — a public link to one file
 
 | Route | Methods | |

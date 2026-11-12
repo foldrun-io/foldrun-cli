@@ -6557,6 +6557,172 @@ function humanBytes(n) {
  * the ones this key may open (GET /api/workspaces), each listed by its own
  * storage route.
  */
+// ----------------------------------------------------------- files to text
+
+/** How long `text` and `storage text` keep polling a job before giving up. */
+const EXTRACT_POLL_LIMIT_MS = 60 * 60 * 1000;
+
+/**
+ * The options `foldrun text` and `foldrun storage text` share, checked:
+ * --lang, --ocr, --engine and --wait (seconds the platform may hold the
+ * request before it answers 202 with a job to poll).
+ * @param {Record<string, any>} flags
+ */
+function extractOptions(flags) {
+  const out = {};
+  if (flags.lang !== undefined) {
+    const lang = String(flags.lang).toLowerCase();
+    if (!["auto", "fa", "en"].includes(lang)) throw new Error("--lang is fa, en or auto");
+    out.lang = lang;
+  }
+  if (flags.ocr !== undefined) {
+    const ocr = String(flags.ocr).toLowerCase();
+    if (!["auto", "always", "never"].includes(ocr)) throw new Error("--ocr is auto, always or never");
+    out.ocr = ocr;
+  }
+  if (flags.engine !== undefined) {
+    if (typeof flags.engine !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(flags.engine)) throw new Error("--engine names a parser, such as docling");
+    out.engine = flags.engine;
+  }
+  // A bare --wait means nothing more here: the CLI polls until the job ends.
+  if (flags.wait !== undefined && flags.wait !== true) {
+    const m = /^(\d+(?:\.\d+)?)\s*(s|m)?$/i.exec(String(flags.wait).trim());
+    if (!m) throw new Error("--wait is the seconds the platform may hold the request before answering with a job to poll (30, 30s, 2m)");
+    out.wait = Number(m[1]) * (m[2]?.toLowerCase() === "m" ? 60 : 1);
+  }
+  return out;
+}
+
+/**
+ * A /api/extract answer as { status, body, retryAfterMs }, or the API's own
+ * message thrown. Read by hand rather than through remoteCall: the 202's
+ * Retry-After sets the next poll, and remoteCall keeps only the body.
+ * @param {Response} res @param {string} url @param {Record<string, any>} flags @param {string} apiPath
+ */
+async function extractAnswer(res, url, flags, apiPath) {
+  const text = await res.text();
+  /** @type {any} */
+  let body = {};
+  try {
+    body = text.trim() ? JSON.parse(text) : {};
+  } catch {
+    const type = (res.headers.get("content-type") ?? "unknown type").split(";")[0].trim();
+    throw new HttpError(`${apiPath} → HTTP ${res.status} (${type}) — not the platform's answer; is ${new URL(url).host} the right address, and is it up?`, res.status, {});
+  }
+  if (!res.ok) {
+    const said = typeof body.error === "string" ? body.error : typeof body.error?.message === "string" ? body.error.message : typeof body.message === "string" ? body.message : `${apiPath.split("?")[0]} → HTTP ${res.status}`;
+    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : res.status === 429 ? rateLimitHint(res, body) : "";
+    throw new HttpError(`${said}${hint}`, res.status, body);
+  }
+  const h = res.headers.get("retry-after");
+  const retryAfterMs = h && /^\d+(\.\d+)?$/.test(h.trim()) ? Number(h) * 1000 : h && !Number.isNaN(Date.parse(h)) ? Math.max(0, Date.parse(h) - Date.now()) : null;
+  return { status: res.status, body, retryAfterMs };
+}
+
+/**
+ * Follow a 202 to its end: GET the job every 2 s (or what Retry-After says)
+ * until it is done or failed. One line on stderr says it is waiting. A done
+ * job's result is its `result` when it carries one, else the body itself.
+ * @param {string} url @param {Record<string, any>} flags @param {{ body: any, retryAfterMs: number | null }} first @param {string} what
+ */
+async function followExtract(url, flags, first, what) {
+  let { body, retryAfterMs } = first;
+  if (body?.status !== "running" || !body.id) return body;
+  const pollPath = typeof body.poll === "string" && body.poll.startsWith("/api/") ? body.poll : `/api/extract/${enc(String(body.id))}`;
+  const started = Date.now();
+  if (flags.quiet !== true) console.error(`  ${c.dim(`reading ${what} on the platform (job ${body.id}) — this can take a while for a long scan or recording`)}`);
+  while (body?.status === "running") {
+    if (Date.now() - started > EXTRACT_POLL_LIMIT_MS) throw new Error(`job ${body.id} is still running after an hour — GET ${pollPath} reads it later`);
+    await sleep(Math.min(Math.max(retryAfterMs ?? 2000, 500), 60_000));
+    const token = await renewedToken(url, flags);
+    const res = await remoteFetch(url, pollPath, {}, { token, seconds: timeoutSeconds(flags) });
+    ({ body, retryAfterMs } = await extractAnswer(res, url, flags, pollPath));
+  }
+  if (body?.status === "failed") {
+    const why = typeof body.error === "string" ? body.error : typeof body.error?.message === "string" ? body.error.message : "the platform gave no reason";
+    throw new Error(`${what}: the extraction failed — ${why}`);
+  }
+  if (body?.status && body.status !== "done") throw new Error(`${what}: the job answered status ${body.status}, not done or failed`);
+  // A polled job carries `wrote` beside `result`, not inside it: keep it.
+  return body?.result && typeof body.result === "object" ? { ...body.result, ...(body.wrote ? { wrote: body.wrote } : {}) } : body;
+}
+
+/**
+ * What `text` and `storage text` print once there is a result: the text on
+ * stdout (or --out), --json the whole object, warnings on stderr.
+ * @param {any} result @param {Record<string, any>} flags
+ */
+function printExtracted(result, flags) {
+  const warnings = Array.isArray(result?.warnings) ? result.warnings.map(String) : [];
+  const text = typeof result?.text === "string" ? result.text : "";
+  const out = typeof flags.out === "string" && flags.out && flags.out !== "-" ? flags.out : null;
+  if (flags.json === true && !out) console.log(JSON.stringify(result, null, 2));
+  else if (out) {
+    if (fs.existsSync(out) && flags.force !== true) throw new Error(`${out} already exists — --force overwrites, --out <path> puts it somewhere else`);
+    fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    fs.writeFileSync(out, flags.json === true ? `${JSON.stringify(result, null, 2)}\n` : text.endsWith("\n") || !text ? text : `${text}\n`);
+    const pages = result?.pages ? ` · ${result.pages} page${result.pages === 1 ? "" : "s"}${result.ocrPages ? ` (${result.ocrPages} by OCR)` : ""}` : "";
+    const secs = result?.seconds ? ` · ${result.seconds} s of audio` : "";
+    console.error(`  ${c.green("✓")} wrote ${out}  ${c.dim(`${humanBytes(Buffer.byteLength(text))}${result?.kind ? ` · ${result.kind}` : ""}${result?.format ? ` ${result.format}` : ""}${pages}${secs}${result?.cached ? " · cached" : ""}`)}`);
+  } else writeExact(text.endsWith("\n") || !text ? text : `${text}\n`);
+  if (result?.truncated) console.error(`  ${c.yellow("!")} the text was cut at the platform's limit — the file holds more than this`);
+  for (const w of warnings) console.error(`  ${c.yellow("!")} ${w}`);
+}
+
+/**
+ * `foldrun text <file>` — a local file (a PDF, a scan, a document, a sheet,
+ * a recording) turned into text by the platform: POST /api/extract with the
+ * bytes, then the job polled when the platform answers 202.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function textCmd(positional, flags) {
+  const file = positional[0];
+  if (!file) throw new Error("which file? `foldrun text <file>` — a PDF, scan, document, sheet or recording on this machine (`foldrun storage text <path>` for one already in a workspace)");
+  if (positional.length > 1) throw new Error(`one file at a time — \`foldrun text ${file}\` (got ${positional.length})${flags.wait === true ? "; --wait takes seconds: --wait 30" : ""}`);
+  const opts = extractOptions(flags);
+  const url = platformFor(flags, "text");
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`${file} is not a file here`);
+  const bytes = fs.readFileSync(file);
+  if (!bytes.length) throw new Error(`${file} is empty`);
+  const q = new URLSearchParams({ name: path.basename(file) });
+  for (const k of ["lang", "ocr", "engine", "wait"]) if (opts[k] !== undefined) q.set(k, String(opts[k]));
+  // The request holds for --wait at most, plus the upload itself.
+  const seconds = explicitTimeout(flags) ?? Math.max(timeoutSeconds(flags), (opts.wait ?? 50) + 30, Math.ceil(bytes.length / 200_000));
+  const token = await renewedToken(url, flags);
+  const apiPath = `/api/extract?${q}`;
+  const res = await remoteFetch(url, apiPath, { method: "POST", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token, seconds });
+  const result = await followExtract(url, flags, await extractAnswer(res, url, flags, apiPath), path.basename(file));
+  printExtracted(result, flags);
+  return 0;
+}
+
+/**
+ * `foldrun storage text <path>` — a file already in a workspace's storage,
+ * as text: POST …/storage/extract. The platform also writes <path>.txt
+ * beside it unless --no-write.
+ * @param {string} url @param {string} ws @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function storageTextCmd(url, ws, positional, flags) {
+  const given = positional[1];
+  if (!given) throw new Error("`foldrun storage text <path>` — a path under storage/, as `foldrun storage ls` names it");
+  if (typeof flags.out === "string" && flags.out) throw new Error("--out is for `foldrun text <file>`; `storage text` writes <path>.txt in the workspace (--no-write: it does not)");
+  const rel = given.replace(/^storage\//, "");
+  const opts = extractOptions(flags);
+  const seconds = explicitTimeout(flags) ?? Math.max(timeoutSeconds(flags), (opts.wait ?? 50) + 30);
+  const token = await renewedToken(url, flags);
+  const apiPath = `/api/workspaces/${enc(ws)}/storage/extract`;
+  const res = await remoteFetch(
+    url,
+    apiPath,
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: rel, ...opts, write: flags["no-write"] !== true }) },
+    { token, seconds },
+  );
+  const result = await followExtract(url, flags, await extractAnswer(res, url, flags, apiPath), rel);
+  printExtracted(result, flags);
+  if (result?.wrote) console.error(`  ${c.green("✓")} wrote ${typeof result.wrote === "string" ? result.wrote : `${rel}.txt`}`);
+  return 0;
+}
+
 async function storageLsAll(url, prefix, flags) {
   const { workspaces = [] } = await remoteCall(url, flags, "/api/workspaces");
   const inPrefix = (f) => (prefix ? f.path === prefix || f.path.startsWith(prefix.replace(/\/*$/, "/")) : true);
@@ -6613,9 +6779,13 @@ async function storageCmd(positional, flags, layout) {
   // fall back to the directory's NAME, which from ~/Downloads asks the
   // platform for a workspace called "Downloads" and reports a 404 as though
   // the file were missing. --to is the answer from anywhere else.
-  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  // `storage text` also takes --workspace <name> — a name, not a folder.
+  const named = positional[0] === "text" && typeof flags.workspace === "string" && /^[^/\\.][^/\\]*$/.test(flags.workspace) ? flags.workspace : null;
+  const ws = typeof flags.to === "string" ? flags.to : named ?? (layout?.kind === "empty" ? null : takeWorkspace([], layout));
   if (!ws) throw new Error("which workspace? `foldrun storage ls --to <workspace>` — or run it inside one");
   const verb = positional[0] ?? "ls";
+
+  if (verb === "text") return storageTextCmd(url, ws, positional, flags);
 
   if (verb === "ls") {
     const body = await remoteCall(url, flags, `/api/workspaces/${ws}/storage`);
@@ -6760,7 +6930,7 @@ async function storageCmd(positional, flags, layout) {
   }
 
   if (verb !== "cat" && verb !== "get") {
-    throw new Error(`unknown storage verb "${verb}" — ls, cat, get, put, rm, share, shares or unshare`);
+    throw new Error(`unknown storage verb "${verb}" — ls, cat, text, get, put, rm, share, shares or unshare`);
   }
 
   const rel = positional[1];
@@ -15639,6 +15809,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return extract(workspace, flags);
     case "talk":
       return talkCmd(flags);
+    case "text":
+      return textCmd(positional, flags);
     case "deploy":
       return deploy(positional[0] ?? ".", flags, layout);
     case "run":

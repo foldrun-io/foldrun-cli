@@ -372,6 +372,28 @@ test("observe and triggers send their window as days", async () => {
   assert.equal(s.seen[0].query.get("since"), null);
 });
 
+// ------------------------------------------------------------ files to text
+
+test("text posts the file's bytes to /api/extract; storage text posts { path, write } to …/storage/extract", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cov-text-"));
+  const file = path.join(dir, "memo.docx");
+  fs.writeFileSync(file, "PK bytes");
+  const result = { sha256: "0".repeat(64), kind: "document", format: "docx", text: "the memo", engine: { parser: "docling" }, truncated: false, warnings: [], cached: true, ms: 3 };
+  const s = await serve({
+    "POST /api/extract": () => result,
+    "POST /api/workspaces/blog-desk/storage/extract": () => ({ ...result, wrote: "memo.docx.txt" }),
+  });
+  const t = await at(s.url, "text", file);
+  const st = await at(s.url, "storage", "text", "memo.docx", "--to", "blog-desk");
+  s.close();
+  assert.equal(t.code, 0, t.out);
+  assert.equal(st.code, 0, st.out);
+  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["POST /api/extract", "POST /api/workspaces/blog-desk/storage/extract"]);
+  assert.equal(s.seen[0].query.get("name"), "memo.docx");
+  assert.equal(s.seen[0].body, "PK bytes");
+  assert.deepEqual(JSON.parse(s.seen[1].body), { path: "memo.docx", write: true });
+});
+
 test("--help for each new verb names it and calls nothing", async () => {
   const s = await serve({});
   for (const [args, want] of [
@@ -386,6 +408,8 @@ test("--help for each new verb names it and calls nothing", async () => {
     [["status"], /status --platform --history/],
     [["billing"], /billing top-up <usd>.*checkout/],
     [["stop"], /--until/],
+    [["text"], /foldrun text <file>[\s\S]*--ocr <auto\|always\|never>/],
+    [["storage"], /storage text <path>[\s\S]*--no-write/],
   ] as const) {
     const r = await at(s.url, ...args, "--help");
     assert.equal(r.code, 0, r.out);

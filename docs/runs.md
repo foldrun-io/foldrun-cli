@@ -595,9 +595,13 @@ every file.
 Which model is shown an image or a PDF is the one the step runs on — Claude
 only when the step's provider is Anthropic (your key, or foldrun's models
 set to Anthropic); OpenAI, Gemini or another provider otherwise. Audio and
-video (a voice note, an `.mp3`, an `.mp4`) are never sent to a model: they
-stay files in the sandbox, for a script or tool to work on. A script that
-transcribes one with an outside API sends it to that API, and nowhere else.
+video (a voice note, an `.mp3`, an `.mp4`) are never sent to a model as sound
+or pictures; they reach it as text. An agent with `tools: [text]` turns any
+file into text on foldrun's own servers — speech by Whisper, a video's
+on-screen text by OCR, Persian included — and a file's text written to
+`<file>.txt` beside it (Storage → Extract text, `foldrun storage text`) is a
+file the agent reads like any other ([Files to text](extract.md)). Nothing of
+it goes to an outside service.
 
 ```sh
 foldrun storage put brief.pdf --to sales --into briefs/
@@ -626,6 +630,17 @@ takes `inputs: ["briefs/brief.pdf"]` on `POST …/agents/<agent>/run` and
   snapshot.
 - **Released with the run.** Deleting a run, or the retention window
   pruning it, lets its held copies go.
+- **Text beside media.** On an install with text extraction, each input
+  that is an image, PDF, office document (DOCX, PPTX, XLSX, ODT, RTF,
+  EPUB…), recording or video gets a `<file>.txt` beside it in `inputs/`
+  before the step starts — OCR (Persian and English), the document's text,
+  or a transcript — and the step's prompt says which files have one and to
+  read the text first. Limits: 120 seconds for all of a run's inputs
+  together, files of at most 50 MB, recordings of at most 10 minutes. Best
+  effort: a file that yields no text gets no `.txt` and one line in the
+  run's trail (`inputs: photo.jpg → no text (reason)`), and the run goes on.
+  A `.txt` never replaces an input of the same name; text, data and code
+  files are left as they are.
 
 ## End customers
 

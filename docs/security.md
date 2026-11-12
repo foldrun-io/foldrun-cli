@@ -193,16 +193,18 @@ its record.
 Your run's record — its prompts, replies, files, tool arguments and errors —
 is yours, in your workspace, and goes where you send it (`telemetry:` to your
 own OpenTelemetry collector, `notify:` to your webhook). The platform's own
-logs and metrics are a different thing: they leave the cluster for our
-operations stack, and they never carry your content.
+logs and metrics are a different thing: they go to our own operations store
+(in a bucket only it can read; the platform team reads it to see what happened
+to an account — a refused sign-in, a refused key or call, a failure), and they
+never carry your content.
 
 | Carries | Never carries |
 |---|---|
-| ids: account, run, job, task, lease, pod | prompts, replies, a step's output |
+| ids: account, member, API key (its id, never the key), request, run, job, task, lease, pod | prompts, replies, a step's output |
 | the names of your workspaces, flows, agents and evals | file names or contents, knowledge, memory |
 | counts, durations, bytes, dollars, HTTP status | tool or script arguments and results |
 | an error's class (`timeout`, `oom`, `disk_full`, `model_error`, `network_error`, `policy_denied`, `user_code_error`, `not_found`, `cancelled`, `platform_error`), its type, its errno or SQLSTATE, and where in **our** code it happened | an error's message or stack text, a model process's stderr, a query or its values |
-| a reason word from a fixed set (`paused`, `no_egress_url`) | URLs, email addresses, anything with a space in it |
+| a reason word from a fixed set (`paused`, `key_revoked`, `bad_credentials`) | URLs, email addresses, anything with a space in it |
 
 It holds by construction, not by care:
 
@@ -214,9 +216,10 @@ It holds by construction, not by care:
   replaces its console and its stdout/stderr at start. Anything else that
   prints — our older code, a dependency, Next.js — becomes "a line was
   printed here", never what it said.
-- **A second line at the collector.** The log shipper forwards a line only
-  if it is exactly such a line, and never reads the namespace where steps
-  run.
+- **A second line at the collector.** The log shipper keeps a line only if
+  it is such a line, and of it only those fields, each in its shape — a value
+  that does not fit is deleted, not stored. It never reads the namespace where
+  steps run.
 - **Tests.** A process inside the boundary tries every way to print a
   marker (an error's message, stack, name and code; a forged envelope; a
   raw write; an uncaught rejection) and the test reads the raw bytes; the
@@ -260,7 +263,7 @@ an install that sets neither keeps everything, as before 5 Nov 2026.
 | **Audit log** — security evidence | sign-ins and refusals, keys, roles, invites, secrets set or deleted (by name, never a value), deploys, exports, support access, the operator's own actions | **365 days** on the hosted platform (`audit.retention_days`; unset: kept) | the daily pass |
 | The ledger | what each run and pod session was charged | for good — a financial record | never |
 | A run's wide event | its funnel's timestamps, image, size, model, figures, cost and error class — metadata, never content | with run records (`runs.retention_days`) | the daily pass; closing the account |
-| The platform's own logs and metrics | ids, counts, classes — never your content ([above](#what-our-telemetry-carries)) | as the operations stack keeps them | the operations stack |
+| The platform's own logs and metrics | ids, counts, classes — never your content ([above](#what-our-telemetry-carries)) | 30 days | the operations store |
 
 Every period counts from when the record was written (a run: when it
 finished), and the daily pass deletes on its first round after the day. A

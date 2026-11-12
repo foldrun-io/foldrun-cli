@@ -32,7 +32,8 @@
 //   foldrun onboarding     the account's getting-started steps, the next one first
 //   foldrun billing        the balance, and what the money went on
 //   foldrun gallery        the tools the platform ships to every account — list, pull, upgrade <tool>
-//   foldrun storage <verb>  ls / cat / get / put / rm / share / shares / unshare — what the agents produced, and public links to it
+//   foldrun storage <verb>  ls / cat / text / get / put / rm / share / shares / unshare — what the agents produced, and public links to it
+//   foldrun text <file>     a PDF, scan, document, sheet or recording on this machine, as text — read by the platform
 //   foldrun runtimes        the environments a workspace's agents need, and whether each is built
 //   foldrun secrets <verb>  set / ls / rm — the vault, from the terminal
 //   foldrun new   <name>    another workspace in this account
@@ -212,6 +213,7 @@ const HELP = `foldrun — agents are just folders
   foldrun docs [page]       foldrun's docs, from the copy this CLI ships — what a coding agent should read (--path)
   foldrun triggers          why nothing ran: per flow, fired vs started and every reason, then the newest decisions and the deliveries at the hook and inbox URLs (--since <days>, --limit <n> of each, default 10, --to <workspace>, --json)
   foldrun storage <verb>    what a workspace produced: ls [prefix], cat <path> (--preview: a PDF, sheet, deck or zip as text), get <path>, put <file|folder>... (--into <folder/>, --as <path> for one file), rm <path> — and share <path> (--ttl <days>, --forever), shares (--all), unshare <token|id>
+  foldrun storage text <path>  a file in a workspace's storage as text, read by the platform (PDF, scan, document, sheet, recording) — printed, and written beside it as <path>.txt unless --no-write (--lang, --ocr, --engine, --wait, --json; --to or --workspace <ws>)
   foldrun storage ls --all  every workspace's storage, as the account's Storage page: a block per workspace, busiest first ([prefix], --json)
   foldrun runtimes          the environments a deployed workspace's agents need (python, pip and npm packages) and whether each is built — failed ones with the installer's error (--wait holds on while any is building)
   foldrun billing           the account's balance and its recent ledger entries (--limit <n>)
@@ -310,6 +312,7 @@ Signing in
   foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]  a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — it spends the account's credits on foldrun's models through the gateway, up to its own limits, and opens no /api route; an admin of every workspace; shown once
   foldrun keys create laptop --gateway --cap 20 --claude-code   the same, and Claude Code is set up on this machine: the URL and key go into its settings, and its status line shows the key's spend
   foldrun gateway status-line   one line for Claude Code's status line: what the gateway key in ANTHROPIC_AUTH_TOKEN has spent, of its limits (asks the gateway; kept 10 s, --cache <s>)
+  foldrun text <file>       a local file as text: uploads it to the platform, which reads it — a PDF or scan (OCR in Persian or English), a Word, sheet or slide file, a recording — and prints the text (--lang fa|en|auto, --ocr auto|always|never, --engine docling, --out <path> or -o <path>, --json, --wait <s>); a long job is polled until it ends
   foldrun talk              speak a prompt: records the microphone until you stop talking, foldrun's own Whisper turns it into text (Persian with the Persian model), prints the words — Claude Code's /talk runs it (--lang auto|fa|en…, --max <s> up to 120, --silence <s>, --file <audio or video> instead of the mic, --mic <name>, --plain, --json; the gateway key from ANTHROPIC_AUTH_TOKEN or --url/--key)
   foldrun a2a ls --to <ws>  what a workspace serves over A2A: each flow's a2a:, card and endpoint URLs, its A2A keys (admins), recent tasks and the key that asked (--json)
   foldrun a2a publish <flow>  set a2a: publish: true in the flow (--to <ws>: the deployed copy, an admin's) — --name, --description, --example "…" (repeatable), --public-card | --private-card; diff, checked, --dry-run
@@ -396,6 +399,11 @@ Options
   --tag <t>                 invoke, flow run: a label on the run — repeatable, sent as tags
   --inputs <set>            invoke, flow run: the task is a saved input set (evals/<flow>-inputs.md, or an eval case for the flow)
   --preview                 storage cat: the platform reads the file and prints what is in it
+  --lang <fa|en|auto>       text, storage text: the language to read it in (OCR and speech; default auto)
+  --ocr <auto|always|never>  text, storage text: read the page images too — auto does it where a page has no text layer
+  --wait <s>                text, storage text: seconds the platform may hold the request before answering with a job, which the CLI then polls (30, 30s, 2m)
+  --no-write                storage text: print the text only; the platform writes no <path>.txt beside the file
+  --json                    text, storage text: the whole result — text, kind, format, pages, OCR pages, engine, warnings, cached
   --ttl <days>              storage share: how long the link works (default 7); --forever: it never expires (keys create: the key never expires)
   --into <folder/>          storage put: upload under that folder of storage/
   --as <path>               storage put: the path one uploaded file lands at; agent import: the name the copy gets
@@ -408,6 +416,7 @@ Options
   --accept-risk <agent,…> / --clear-accept-risk  a2a publish: the agents accepted holding a secret while they can run code (a2a: accept_risk)
   --days <n>                usage: the window the charges cover (default 56); status --platform --history: 1-90 (default 90); observe: the same as --since
   --id <revision>           history: one revision in full, as diffs
+  --engine <e>              text, storage text: the parser that reads the file (docling)
   --engine <e>              login: (with a site) the browser to sign in with — chrome (default: real Google Chrome, Chromium when it is not installed), chromium, firefox or safari
   --new-client              connect: enter a new OAuth client even when one is saved for the secret
   --step <n>                approve, reject: decide only that step; default is every step that is waiting
@@ -436,7 +445,7 @@ Options
   --workspaces <a,b>        secrets set: store an account secret limited to those workspaces, in the same write (with --account); team invite, team access: the workspaces they may open
   --add <site>              agent network: add a site to its network: list (repeatable)
   --remove <site>           agent network: take a site off its network: list (repeatable)
-  --out <file>              api spec: where to write the OpenAPI document (default: stdout); check: where to write the JSON or SARIF report
+  --out <file>              api spec: where to write the OpenAPI document (default: stdout); check: where to write the JSON or SARIF report; text: where to write the text (-o <file> too; refused when it exists, --force overwrites)
   --file <path>             source put, library put, flow paste: the local file to send (default: stdin); secrets set --kind file|service-account: the file it holds; storage get, report get, report live, account export, export, billing statement: where to write it (- for stdout)
   --message "<why>"         source put: recorded on the file's revision
   --check                   source put: refuse the save when the file would not check out (422: the issues printed, nothing written)
@@ -490,7 +499,7 @@ Platform options (deploy, invoke, secrets, logs, keys)
   --dry-run                 source share: list what would move, move nothing
   --dry-run                 deploy: check and report, change nothing; flow add, flow set, flow trigger, flow compute, flow move-step, flow paste, flow draft, assistant, history restore, agent link, agent unlink: show the diff, write nothing; restore <ws>: the diff only, restore nothing; import: the preview only, write nothing; stop, rerun (bulk): list what matches, touch nothing
   --no-runtimes             deploy: do not wait for the workspace's environments to be built
-  --force                   deploy: deploy even while runs are in flight; pull, storage get: overwrite local files
+  --force                   deploy: deploy even while runs are in flight; pull, storage get, text: overwrite local files
   --yes                     deploy: allow deleting files this folder no longer has (asked otherwise; required with no terminal)
   --platform --yes          workspaces rm: delete it on the platform, deliberately
   --format <text|json|sarif>  check: how to print the findings (--json is --format json; sarif is for GitHub code scanning); --out <file> writes it there
@@ -514,7 +523,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "claude-code", "login", "unreachable", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty", "plain", "no-beep", "require-customer"]);
+const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "claude-code", "login", "unreachable", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty", "plain", "no-beep", "require-customer", "no-write"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example", "accept-risk"]);
 /** Flags that become a list only when given more than once (FOL-163 `--file`). */
@@ -523,9 +532,16 @@ const LIST_WHEN_REPEATED = new Set(["file"]);
 // a span: `--wait 30m`, `--wait event`. Only a value that reads as one is
 // taken, so `invoke x --wait` and friends are as they were.
 const WAIT_VALUE = /^(\d+(\.\d+)?\s*[smhd]|event)$/i;
+// `text` and `storage text` take --wait as plain seconds (`--wait 30`), and
+// `-o <file>` as --out.
+const textVerb = () => command === "text" || (command === "storage" && positional[0] === "text");
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
+  if (rest[i] === "-o" && rest[i + 1] !== undefined && textVerb()) {
+    flags.out = rest[++i];
+    continue;
+  }
   if (!rest[i].startsWith("--")) {
     positional.push(rest[i]);
     continue;
@@ -533,7 +549,7 @@ for (let i = 0; i < rest.length; i++) {
   const name = rest[i].slice(2);
   const next = rest[i + 1];
   let value;
-  if (name === "wait" && next !== undefined && WAIT_VALUE.test(next)) value = rest[++i];
+  if (name === "wait" && next !== undefined && (WAIT_VALUE.test(next) || (textVerb() && /^\d+(\.\d+)?$/.test(next)))) value = rest[++i];
   else if (BOOLEAN_FLAGS.has(name) || next === undefined || next.startsWith("--")) value = true;
   else value = rest[++i];
   if (REPEATABLE.has(name) && typeof value === "string") flags[name] = [...(Array.isArray(flags[name]) ? flags[name] : []), value];

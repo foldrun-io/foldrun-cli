@@ -215,10 +215,11 @@ model on Chat Completions a PDF's text, read it with a script. Whether a given
 model can see images at all is the provider's; one that cannot refuses or
 ignores the image.
 
-Audio and video are never model input: no endpoint above is sent a sound or
-a video, whatever its provider supports. A voice note stays a file in the
-sandbox; to use it, transcribe it with a script (`runtime:` packages, or an
-API the agent declares in `apis:`) and give the model the text.
+Audio and video are never sent as sound or video: no endpoint above is sent
+one, whatever its provider supports. They reach a model as text instead —
+foldrun transcribes the speech and reads a video's on-screen text on its own
+servers, with the `text` tool (`tools: [text]`) or as a `<file>.txt` beside
+the file ([Files to text](extract.md)), and the model is sent that text.
 
 ### Persian prompts, by tier (checked 11 Nov 2026)
 
