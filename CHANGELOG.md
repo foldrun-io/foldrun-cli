@@ -12,6 +12,25 @@ edited by a person.
 
 <!-- releases -->
 
+## [22.0.0] — 2026-11-12
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 20.0.0, a new major. (44df43c)
+
+### New in the public API
+
+- `foldrun storage text`
+- `foldrun text`
+- the `--no-write` flag
+- the `--ocr` flag
+
+- feat(cli): `foldrun text <file>` and `foldrun storage text <path>` — files to text ([c96c91c](https://github.com/foldrun-io/foldrun-cli/commit/c96c91c))
+
+### deps
+
+- @foldrun/core ^20.0.0 ([44df43c](https://github.com/foldrun-io/foldrun-cli/commit/44df43c))
+
 ## [21.3.1] — 2026-11-11
 
 ### deps
