@@ -103,6 +103,7 @@ runtime:
 | `outward` | `true` when the program makes something happen outside — sends, posts, orders. On a [test run](runs#test-runs) a step granting it is handed no real secret at all, whatever their names |
 | `test_mode` | `allow` for a reader that happens to use a send-capable secret (a Business Profile reader on the same token the poster uses): on a test run the step still gets the real values. An `outward` tool in the same step wins. Parsed as `testMode` |
 | `runtime` | interpreters and packages, merged into the step's environment |
+| `network` | the sites its program reaches, `[api.example.com, *.cdn.example.com]` — sites only, no scheme or path. Granting the tool adds them to the step's [network](network) list, the way an `apis:` base or a bound secret's site is added, so an agent on `trusted` or `none` reaches them without naming them — granting the tool is the declaration. The level (`open`, `trusted`, `none`) stays the agent's to set. `foldrun check` reports a value that is not a site, or a level written where a site goes |
 
 A folder tool may declare its dependencies the way its ecosystem does
 instead: a `requirements.txt` beside the program counts as
@@ -172,25 +173,27 @@ still shadow it by defining the same name locally.
 The Library page lists, for every shared file, which agents granted it and
 where a nearer copy overrides it. That list is the blast radius of changing it.
 
-## The gallery — platform-maintained tools
+## The gallery — platform-maintained tools and skills
 
-Every tool the platform ships — `web` — is **available in every account
-from the start**.
-An agent grants one the same way it grants anything: `tools: [web]`
-in its `agent.md`, and it runs, with nothing installed first. The gallery
-is a shelf beneath your account library, laid down on the box at boot, so
-a platform upgrade reaches every account at once.
+Every tool and skill the platform ships is **available in every account
+from the start**. An agent grants a tool the way it grants anything —
+`tools: [web]` in its `agent.md` — and a skill by naming it,
+`skills: [modern-website]`; it runs, with nothing installed first. The
+gallery is a shelf beneath your account library, laid down on the box at
+boot, so a platform upgrade reaches every account at once.
 
 **Installing** is still there, and it means something narrower now: it
-copies the tool into your account library (or one workspace), and your
-copy shadows the platform's by name. A copy you have **not edited** follows
-the gallery: every platform deploy brings it to the current version. A copy
-you **have** edited is yours and is never changed under you. The Library
-page marks each copy **gallery · current** or **gallery · differs**, with a
-one-click *update to gallery version* for an edited copy — it writes the
-current files through the revision log, so your version is one revision
-back. Nothing from the gallery is granted
-to any agent until its `agent.md` names it.
+copies the tool or skill into your account library (or one workspace), and
+your copy shadows the platform's by name. A copy you have **not edited**
+follows the gallery: every platform deploy brings it to the current
+version. A copy you **have** edited is yours and is never changed under
+you. The Library page marks each copy **gallery · current** or
+**gallery · differs**, with a one-click *update to gallery version* for an
+edited copy — it writes the current files through the revision log, so
+your version is one revision back. **New** on the Library page offers each
+gallery entry as a template to start your own from. Nothing from the
+gallery reaches an agent until its `agent.md` names it — a gallery skill is
+not one of the skills an agent with no `skills:` list inherits.
 
 **On a laptop** the shelf comes from the platform you are signed in to.
 `foldrun run` and `foldrun eval` fetch the gallery before they start and keep
@@ -198,8 +201,8 @@ a copy under `~/.foldrun/gallery/<host>/`, so an agent granting `web`
 runs locally exactly as it does on a deploy, with the same lookup order: the
 workspace's copy, then the account library's, then the shelf. Offline, the
 last copy is used and the run says so. `foldrun gallery` lists the shelf and
-marks which tools your account keeps its own copy of, `foldrun gallery pull`
-refreshes the copy by hand, and `foldrun gallery upgrade <tool>` is the
+marks which entries your account keeps its own copy of, `foldrun gallery pull`
+refreshes the copy by hand, and `foldrun gallery upgrade <name>` is the
 Library page's *update to gallery version*. A browser tool also needs
 Playwright on the laptop (`npm i -g playwright@1.63.0`, then `npx playwright
 install chromium`); `web action=browse` finds it globally, Homebrew's included, or
@@ -207,19 +210,82 @@ in the project, and says how to install it when it is missing.
 
 | tool | what it does | the key it needs |
 |---|---|---|
-| `web action=search` | searches the web on the account's own engine — titles, links, snippets | none |
-| `web action=fetch` | reads one URL, or up to twenty: the page itself, as markdown, text, html, meta or links | none |
-| `web action=browse` | a real browser: JavaScript runs, and it can click, fill, scroll, screenshot, download and extract | none |
+| `web` | the web, as eight actions: search, fetch, browse, crawl, map, extract, answer, monitor — [Reaching the web](#reaching-the-web) | none |
+| `docs` | a library's current documentation and code examples, pinned to a version, from Context7's index — [Library docs](#library-docs--docs) | none; your own `CONTEXT7_API_KEY` for a higher limit |
+| `video` | motion graphics and video written as React code with Remotion: start a project, render a frame, render the video — [Video](#video--video) | none (Remotion's own licence applies) |
 
-The gallery is deliberately just these three — the web capability that is
-hard to build from a plain HTTP call. **Everything else you integrate
-yourself**, as your own tool in the library: Slack, GitHub, Stripe, email, a
-CRM, your own service. An `apis:` block turns an OpenAPI or a base URL into a
-tool; a folder tool runs a script. Credentials come from your vault, declared
-under the agent's `secrets:`, and the value never appears in a file. The
-platform ships no third-party integrations, so it never carries their keys or
-versions — you own the tool, its scope and its blast radius. See
+| skill | what it is for |
+|---|---|
+| `modern-website` | building a modern, high-end website or app: Astro for content sites and Next.js for apps when nothing is named, the current stack, design, bundled assets, the launch checks |
+| `motion-video` | motion graphics and short videos with the `video` tool: scenes, easing, stills before renders, video on a website |
+| `cloudhost-deploy` | deploying to [cloudhost](https://cloudhost.ir) through its MCP tools: `cloudhost.toml`, bindings, previews first, production on approval |
+
+The gallery is deliberately small: capabilities that are hard to build from
+a plain HTTP call and that agents building things keep reaching for.
+**Everything else you integrate yourself**, as your own tool in the
+library: Slack, GitHub, Stripe, email, a CRM, your own service. An `apis:`
+block turns an OpenAPI or a base URL into a tool; a folder tool runs a
+script. Credentials come from your vault, declared under the agent's
+`secrets:`, and the value never appears in a file. A gallery tool that
+calls a third party carries no platform key: it works without one where the
+third party allows, and uses your own from the vault when you add one. See
 [HTTP — an API as a tool](#http--an-api-as-a-tool) and [Script — code as a tool](#script--code-as-a-tool).
+
+### Library docs — `docs`
+
+```yaml
+tools: [docs]
+```
+
+```
+docs action=search library=next.js query="metadata and Open Graph images"
+docs action=get library=/vercel/next.js version=16 query="generateMetadata and opengraph-image"
+```
+
+`search` turns a name into Context7 library ids, with the versions indexed
+and how well each is maintained; `get` returns the passages and code
+examples that answer `query`, from an id or a name (the best match is used,
+and the answer says which). `version=` pins one — the closest indexed
+version answers when the exact one is not. `max_output=` (2,000–60,000
+characters, default 15,000) and `save=` keep a long answer.
+
+Without a key Context7 serves a low rate shared by every keyless caller.
+For your own limit: `foldrun secrets set CONTEXT7_API_KEY`, then
+`foldrun secrets sites CONTEXT7_API_KEY context7.com` (the value never
+enters a sandbox), and `secrets: [CONTEXT7_API_KEY]` on the agent. The tool
+reaches `context7.com` only (`network: [context7.com]` in its definition).
+
+### Video — `video`
+
+```yaml
+tools: [video]
+size: large
+```
+
+```
+video action=new project=workspace/storage/video/launch
+video action=compositions project=workspace/storage/video/launch
+video action=still project=workspace/storage/video/launch frame=45
+video action=render project=workspace/storage/video/launch props={"title":"Launch day"} codec=vp9
+```
+
+A project is a small Remotion app the agent writes: `new` starts one from
+foldrun's template (one composition, 1920x1080 at 30 fps, Persian and
+English text in Vazirmatn); `compositions` lists what it defines; `still`
+renders one frame as a PNG — look at it before rendering the whole video;
+`render` writes MP4 (`h264`, default, or `h265`), WebM (`vp8`, `vp9`), GIF
+or ProRes, with `props=` as the composition's input, `frames=` for a range,
+`scale=` and `concurrency=`. Output goes to `out/` in the project unless
+`out=` names a file. The first call in a project installs its packages and
+Remotion's browser; the tool's definition declares the Debian libraries the
+browser needs and the sites it downloads from. Rendering is CPU-bound:
+give the agent `size: large`.
+
+**Remotion's licence.** Remotion is source-available, not open source: free
+for individuals and companies of up to three people; a company of four or
+more needs a [Remotion Company License](https://www.remotion.pro/license).
+The account whose agents render is the licensee. foldrun runs the code, it
+does not license Remotion to you.
 
 ## Reaching the web
 
@@ -1463,8 +1529,18 @@ is on the secret itself. `check` refuses `state` beside `cookies` without
 
 ### Where the browser runs
 
+On a cluster, a browsing step's browser is chosen in this order
+(`run-k8s.ts`, the worker's step services):
+
+| The step | Its browser |
+|---|---|
+| held to its `network:` list | Chromium inside its own run pod, walled to the egress proxy |
+| not held, with `FOLDRUN_BROWSE_SERVICE=1` | a [browse-service pod](network#the-browse-service) of its own, deleted with the step |
+| names a vendor (`web: {browse: browserbase}`) | the vendor's browser; no pod of ours |
+| anything else | the account's browser pods, below |
+
 Locally — the CLI, a compose install — Chromium launches inside the step,
-and always did. On a cluster it runs in **the account's own browser pods**:
+and always did. Otherwise, on a cluster, it runs in **the account's own browser pods**:
 Playwright servers on the runner image (Playwright pinned to an exact
 version, 1.63.0, in `run-container.ts` — the numbered snapshot needs 1.59
 or later, and a floating `@1` would move the pods and the tool under a
@@ -1847,7 +1923,10 @@ is the reason to move a procedure out of `agent.md` in the first place.
 Skills are discovered in the agent's own `skills/`, the workspace's, the
 account library, and the cross-client `.agents/skills/` convention that other
 tools read and write. A skill written here drops into them, and one they
-install is visible here.
+install is visible here. The platform's [gallery](#the-gallery--platform-maintained-tools-and-skills)
+adds a few more — `modern-website`, `motion-video`, `cloudhost-deploy` —
+that load only for an agent whose `skills:` names them; your own skill of
+the same name wins.
 
 **A tool is what an agent may call; a skill is how to do something well.** The
 test for moving text out of an agent body: is it procedure (not role), does it

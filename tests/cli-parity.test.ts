@@ -548,7 +548,7 @@ test("storage cat --preview prints a table and a deck as text", async () => {
   assert.ok(!s.seen.some((x) => x.url.endsWith("/download")), "the file itself was not fetched");
 });
 
-test("help: every flag the CLI reads is listed, --from once per context, gallery names only web", async () => {
+test("help: every flag the CLI reads is listed, --from once per context, gallery names what the shelf ships", async () => {
   const all = (await cli(["--help"])).out;
   for (const flag of ["--verdict", "--question", "--quiet", "--new-client", "--engine", "--tag", "--preview", "--expect"]) {
     assert.match(all, new RegExp(`^\\s+${flag}\\b`, "m"), `${flag} is in --help`);
@@ -567,7 +567,7 @@ test("help: every flag the CLI reads is listed, --from once per context, gallery
   assert.match((await cli(["approve", "--help"])).out, /--note "<text>"\s+approve, reject:/);
   assert.match((await cli(["billing", "--help"])).out, /--threshold \/ --amount/);
   const gallery = (await cli(["gallery", "--help"])).out;
-  assert.match(gallery, /built-in tools \(web\)/);
+  assert.match(gallery, /built-in tools \(web, docs, video\) and skills \(modern-website, motion-video, cloudhost-deploy\)/);
 });
 
 test("--help on the new platform verbs contacts nothing", async () => {

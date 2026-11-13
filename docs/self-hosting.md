@@ -262,6 +262,79 @@ The timings are `FOLDRUN_RECORDS_ROUTING_BEAT_MS` (1000),
 (120000, raise it for very large workspaces); keep them the same on every
 process.
 
+## Moving secrets into the database
+
+Each account's secrets, and each workspace's own, are a sealed `secrets.json`
+on the data volume. With a database configured they can be rows in Postgres
+instead, one row per account or workspace (`vault_scopes`), holding the same
+sealed records: nothing in the database ever holds a value in the clear, and
+nothing below opens one except `verify --open`, in memory.
+
+Two settings (Settings, owners only; the same names as the variables in
+[Environment](environment)):
+
+| Setting | Meaning |
+|---|---|
+| `secrets.store` | The rows are the vault. A scope moves from its file the first time it is used. |
+| `secrets.mirror` | On (the default): every change is also written to the scope's file, so switching the store off or rolling back reads current secrets. Off: only the rows are written; the files go stale and are retired. |
+
+`vault-fleet.ts` runs in the worker pod, which has the database, the data
+volume and the keys (`scripts/vault-fleet.ts` from `/app/foldrun-platform`):
+
+```
+node --experimental-strip-types scripts/vault-fleet.ts verify [--open] [--mirror-off] [--tenant a,b]
+node --experimental-strip-types scripts/vault-fleet.ts import [--tenant a,b]
+node --experimental-strip-types scripts/vault-fleet.ts export [--tenant a,b]
+```
+
+- `verify` is read-only. It prints counts and `account/workspace` names, never a
+  value: scopes that are only a file (never used since the switch, so never
+  moved), only a row, or differ from their file. `--open` also tries every
+  record with this process's keys and names those that do not open. Exit 0 when
+  clean, 1 when not. `--mirror-off` is for after the mirror stopped: files are
+  expected to be stale there, so a differing scope or one with no file is fine;
+  a scope with no row, or a record that does not open, still is not.
+- `import` copies each file-only scope into its row, as stored, under the
+  file's lock. A row that exists is never replaced by a file. It is safe to
+  repeat and to run while `secrets.store` is on.
+- `export` is the way back: it writes every row into its file as stored. A
+  workspace row whose folder is gone is skipped and named; the folder is never
+  brought back.
+
+**Moving, and then stopping the files:**
+
+1. Deploy this release on every process (web, worker, assistant, egress) and
+   wait until no process of an older release is left.
+2. Turn `secrets.store` on (it asks for a reason). Scopes move as they are used.
+3. `vault-fleet.ts import`, then `verify --open`. Clean means every scope is a
+   row that equals its file and every record opens. Fix what it names first: a
+   record that does not open here will not open from the row either.
+4. Soak with the mirror on for as long as you like; `verify` again before the
+   next step.
+5. Turn `secrets.mirror` off (it asks for a reason). From now on the files are
+   not written. Watch `vault-fleet.ts verify --open --mirror-off`.
+
+**The way back from the mirror being off.** The files are stale, so they must
+not be read until they are brought up to date:
+
+1. Turn `secrets.mirror` on: from then on every change also reaches its file.
+2. `vault-fleet.ts export`, then `verify`: export writes each row as it is
+   when the file's lock is held, so a change made during the export is not
+   lost; `verify` is clean when every file equals its row.
+3. Only then, if you want the files back as the vault, turn `secrets.store`
+   off.
+
+The platform holds you to this order. `secrets.store` cannot be turned off
+while `secrets.mirror` is off (the change is refused, naming the export), and a
+process whose setting says the store is off while the mirror is off still reads
+the rows as long as any row exists, and logs `vault.store_held_by_rows`. With the
+mirror on before the export, a change made while it runs reaches the file
+either way: through the mirror, or through the export reading the row again.
+
+Turning `secrets.store` off with the mirror on needs no copying: the files are
+current. A scope with a file and no row is read from the file again; one with a
+row is only ever read from the row while the store is on.
+
 ## Where the data is
 
 On your machine: in the folder. On the platform: your workspace's files and

@@ -104,3 +104,21 @@ test("an unreachable platform is a warning, and the tool is still reported missi
     fs.rmSync(path.dirname(ws), { recursive: true, force: true });
   }
 });
+
+test("the platform gallery's tools and skills are not missing — signed out they are a warning, not an error", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-check-"));
+  const ws = path.join(root, "desk");
+  fs.mkdirSync(path.join(ws, "agents/builder"), { recursive: true });
+  fs.writeFileSync(
+    path.join(ws, "agents/builder/agent.md"),
+    "---\nname: builder\ndescription: builds sites\ntools: [write, code, docs, video]\nskills: [modern-website, cloudhost-deploy]\n---\n\nBuild.\n",
+  );
+  try {
+    const r = foldrun("check", ws, "--local");
+    assert.doesNotMatch(r.stdout, /no tools\/docs|no tools\/video|no skill of that name/, r.stdout);
+    assert.match(r.stdout, /tools: \[docs\] — the platform's docs tool; sign in/);
+    assert.match(r.stdout, /skills: \[modern-website\] — the platform's modern-website skill; sign in/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

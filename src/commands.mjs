@@ -1306,11 +1306,11 @@ async function checkProblems(workspace, flags = {}) {
         note("info", `agents/${a.name}`, `tools: [${t}] — from the library on ${platform.url}`);
         continue;
       }
-      if (t === WEB_TOOL) {
+      if (GALLERY_TOOLS.has(t)) {
         // Built in: the platform's gallery grants it in every account
         // without an install, and a local run fetches the gallery when
         // signed in. Signed out there is nothing on disk to run.
-        if (!platform.url) note("warn", `agents/${a.name}`, `tools: [${t}] — the platform's web tool; sign in (\`foldrun login\`) to run it locally`);
+        if (!platform.url) note("warn", `agents/${a.name}`, `tools: [${t}] — the platform's ${t} tool; sign in (\`foldrun login\`) to run it locally`);
         continue;
       }
       const hint = platform.url
@@ -1369,6 +1369,12 @@ async function checkProblems(workspace, flags = {}) {
         note("warn", `agents/${a.name}`, "skills: [] withholds every skill — omit the field to inherit them");
       }
       for (const s of a.skills) {
+        if (!skillNames.has(s) && GALLERY_SKILLS.has(s)) {
+          // The platform's gallery ships it to every account; a local run
+          // loads it from the gallery copy `foldrun run` fetches.
+          if (!platform.url) note("warn", `agents/${a.name}`, `skills: [${s}] — the platform's ${s} skill; sign in (\`foldrun login\`) to load it locally`);
+          continue;
+        }
         if (!skillNames.has(s)) {
           note("error", `agents/${a.name}`, `skills: [${s}] — no skill of that name in this agent, the workspace or the library`);
         }
@@ -1575,6 +1581,13 @@ async function checkHooks(workspace, agents, libraryRoot, platform, note) {
  *  built-in that takes a provider. */
 const WEB_TOOL = "web";
 
+/** What the platform's gallery ships to every account (foldrun-platform
+ *  src/gallery.ts): granted by name with nothing installed — tools with
+ *  `tools:`, skills with `skills:`. Listed here so `check` on a laptop that
+ *  is signed out does not call them missing. */
+const GALLERY_TOOLS = new Set([WEB_TOOL, "docs", "video"]);
+const GALLERY_SKILLS = new Set(["modern-website", "motion-video", "cloudhost-deploy"]);
+
 /** Transports a pre-v0.1 tool could put in `type:`. */
 const TRANSPORTS = new Set(["http", "script", "mcp"]);
 
@@ -1706,9 +1719,9 @@ async function runTarget(target, flags) {
 // ---------------------------------------------------------------- gallery
 
 /**
- * The platform's gallery — `web`, the tool it ships to every account — is
- * a shelf every run on the platform reads beneath the account's own
- * library. A laptop had no shelf, so an agent granting a gallery tool ran
+ * The platform's gallery — the tools (`web`, `docs`, `video`) and skills it
+ * ships to every account — is a shelf every run on the platform reads
+ * beneath the account's own library. A laptop had no shelf, so an agent granting a gallery tool ran
  * fine on a deploy and had no program under `foldrun run`.
  * The CLI keeps a copy per platform here and points the local runner at it:
  * the same lookup order, the workspace first, then the account, then this.
@@ -1758,7 +1771,7 @@ async function galleryCmd(positional, flags) {
   const url = platformFor(flags, "gallery");
   const [verb, name] = positional;
   if (verb === "upgrade") {
-    if (!name) throw new Error("which tool? `foldrun gallery upgrade <tool>` — `foldrun gallery` lists them");
+    if (!name) throw new Error("which one? `foldrun gallery upgrade <tool or skill>` — `foldrun gallery` lists them");
     const body = await remoteCall(url, flags, "/api/library/gallery", { method: "POST", body: JSON.stringify({ tool: name }) });
     console.log(`\n  ${c.green("upgraded")} ${c.bold(name)} ${c.dim(`in the account library to the gallery's current version (${body.path}) — the previous copy is one revision back`)}\n`);
     return 0;
@@ -1768,19 +1781,28 @@ async function galleryCmd(positional, flags) {
   if (verb === "pull") {
     const dir = galleryCacheDir(url);
     const files = writeGalleryCache(dir, tools);
-    console.log(`\n  ${c.green("✓")} ${tools.length} gallery tools, ${files} files ${c.dim(`→ ${dir}`)}`);
+    const skills = tools.filter((t) => t.kind === "skills").length;
+    console.log(`\n  ${c.green("✓")} ${tools.length - skills} gallery tools and ${skills} skills, ${files} files ${c.dim(`→ ${dir}`)}`);
     console.log(`  ${c.dim("`foldrun run` refreshes this itself before each run; this is for offline work")}\n`);
     return 0;
   }
   if (verb) throw new Error(`\`foldrun gallery ${verb}\` — the verbs are \`pull\` and \`upgrade <tool>\`, or none to list`);
-  console.log("");
-  for (const t of tools) {
-    const own = t.installed === "current" ? c.dim("your copy, current")
-      : t.installed === "differs" ? c.amber("your copy differs — `foldrun gallery upgrade " + t.name + "`")
-      : c.dim("from the platform");
-    console.log(`  ${c.bold(t.name.padEnd(18))} ${t.title}  ${own}`);
+  if (flags.json) {
+    console.log(JSON.stringify(tools.map(({ name, kind, title, description, installed }) => ({ name, kind, title, description, installed })), null, 2));
+    return 0;
   }
-  console.log(`\n  ${c.dim(`${tools.length} tools on ${url} — grant one with \`tools: [name]\`; nothing to install`)}\n`);
+  for (const [kind, heading, grant] of [["tools", "tools", "tools: [name]"], ["skills", "skills", "skills: [name]"], ["scripts", "scripts", "scripts: [name]"]]) {
+    const shelf = tools.filter((t) => (t.kind ?? "tools") === kind);
+    if (!shelf.length) continue;
+    console.log(`\n  ${c.bold(heading)} ${c.dim(`— grant with \`${grant}\``)}`);
+    for (const t of shelf) {
+      const own = t.installed === "current" ? c.dim("your copy, current")
+        : t.installed === "differs" ? c.amber("your copy differs — `foldrun gallery upgrade " + t.name + "`")
+        : c.dim("from the platform");
+      console.log(`  ${c.bold(t.name.padEnd(18))} ${t.title}  ${own}`);
+    }
+  }
+  console.log(`\n  ${c.dim(`on ${url} — in every account, nothing to install`)}\n`);
   return 0;
 }
 

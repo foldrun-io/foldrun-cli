@@ -25,7 +25,9 @@ network: [api.hubapi.com]        # the trusted list, plus this
 **What the step declares** is always allowed, at every level: the hosts of
 its `apis:`, its remote MCP servers, its web providers (`web: {search: brave}`),
 the card of each outside agent in its `remotes:` (that card's own site — never
-one the card names), and the sites its [secrets are bound to](secrets#bound-to-sites).
+one the card names), the sites a granted script tool's own definition names
+(`network:` in its [tool.md](tools#script--code-as-a-tool) — the gallery's
+`docs` names `context7.com`), and the sites its [secrets are bound to](secrets#bound-to-sites).
 You never list those twice.
 
 No level is ever a way into private space: the cluster, the LAN and the
