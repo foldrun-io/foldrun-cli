@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [25.1.3] — 2026-11-13
+
+- build(deps): Bump @hono/node-server from 2.1.5 to 2.1.8 (#156) ([9c81ab2](https://github.com/foldrun-io/foldrun-cli/commit/9c81ab2))
+- build(deps): Bump hono from 4.13.13 to 4.13.18 (#158) ([1706197](https://github.com/foldrun-io/foldrun-cli/commit/1706197))
+
 ## [25.1.2] — 2026-11-13
 
 ### deps
