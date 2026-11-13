@@ -75,12 +75,12 @@ test("keys create --gateway --login posts credential: login, takes no limit, and
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(JSON.parse(s.seen[0].body), { label: "mine", purpose: "gateway", credential: "login", expires: "90d" });
-  assert.match(r.out, /the operator's Claude login · not metered/);
+  assert.match(r.out, /plan · not billed per call/);
   assert.doesNotMatch(r.out, /shows what it has spent/, "a login key has no spend to show");
-  assert.match(r.out, /shares that subscription's weekly cap/);
+  assert.match(r.out, /the plan's usage limits apply/);
   assert.equal(withCap.code, 1);
   assert.match(withCap.out, /--login takes no --cap or --daily/);
-  assert.match(ls.out, /gateway · Claude Code · the operator's Claude login · not metered/);
+  assert.match(ls.out, /gateway · Claude Code · plan · not billed per call/);
 });
 
 test("keys set changes the tiers named, keeps the rest, and clears with - or --clear", async () => {
@@ -272,12 +272,12 @@ test("gateway status-line prints the gateway's line, asked with the key as a Bea
 });
 
 test("gateway status-line: an API key works too; with --cache 0 it asks every time", async () => {
-  const g = await fakeGateway(() => [200, "foldrun · not metered (Claude login)\n"]);
+  const g = await fakeGateway(() => [200, "foldrun · included in your plan\n"]);
   const key = `fr_gw_api_${Date.now()}`;
   await line({ ANTHROPIC_BASE_URL: g.url, ANTHROPIC_API_KEY: key }, "--cache", "0");
   const r = await line({ ANTHROPIC_BASE_URL: g.url, ANTHROPIC_API_KEY: key }, "--cache", "0");
   g.close();
-  assert.equal(r.out.trim(), "foldrun · not metered (Claude login)");
+  assert.equal(r.out.trim(), "foldrun · included in your plan");
   assert.equal(g.seen.length, 2);
 });
 

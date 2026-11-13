@@ -4727,7 +4727,7 @@ async function doctor(flags) {
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
- *   keys create <label> --gateway --login   on the operator's Claude login (its own accounts): not metered
+ *   keys create <label> --gateway --login   on the account's plan (where it has one): not billed per call
  *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings (its status line too)
  *   keys set <id> --opus|--sonnet|--haiku <provider/model>  which model each Claude Code tier runs on (a gateway key; `-` clears one, --clear all)
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
@@ -4920,7 +4920,7 @@ function modelsLine(m) {
 function gatewayLine(g) {
   const map = modelsLine(g?.models);
   const tail = map ? ` · ${map}` : "";
-  if (g?.credential === "login") return `gateway · Claude Code · the operator's Claude login · not metered${tail}`;
+  if (g?.credential === "login") return `gateway · Claude Code · plan · not billed per call${tail}`;
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const parts = ["gateway · Claude Code"];
   if (g?.capUsd != null) parts.push(`${usd(g.spentUsd)} of ${usd(g.capUsd)}`);
@@ -4950,10 +4950,10 @@ async function keysCreateGateway(url, label, flags) {
   }
   // --login: the operator's own Claude login, for an account the operator
   // allows it (its desks' accounts) — not metered, so it takes no limit.
-  if (flags.login === true && (flags.cap !== undefined || flags.daily !== undefined)) throw new Error("--login takes no --cap or --daily — the operator's Claude login is not metered, so a dollar limit could not hold it");
+  if (flags.login === true && (flags.cap !== undefined || flags.daily !== undefined)) throw new Error("--login takes no --cap or --daily — a key on the account's plan is not billed per call, so a dollar limit could not hold it");
   const capUsd = flags.login === true ? undefined : usdFlag(flags.cap, "--cap");
   const dailyUsd = flags.login === true ? undefined : usdFlag(flags.daily, "--daily");
-  if (flags.login !== true && capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both) — or --login, on an account the operator's Claude login is for");
+  if (flags.login !== true && capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both) — or --login, on an account that has a plan");
   // --claude-code: read Claude Code's settings BEFORE minting, so a file we
   // could not safely rewrite stops here with nothing made.
   const claude = flags["claude-code"] === true ? preflightClaudeSettings() : null;
@@ -5001,7 +5001,7 @@ async function keysCreateGateway(url, label, flags) {
   }
   // A login key is not metered: there is no spend for `keys ls` to show.
   const after = made.credential === "login"
-    ? `It opens the gateway only and runs on the operator's Claude login, not metered — it shares that subscription's weekly cap with the desks. \`foldrun keys revoke ${made.id}\` ends it.`
+    ? `It opens the gateway only and runs on this account's plan: not billed per call, the plan's usage limits apply. \`foldrun keys revoke ${made.id}\` ends it.`
     : `It opens the gateway only. \`foldrun keys ls\` shows what it has spent; \`foldrun keys revoke ${made.id}\` ends it.`;
   console.log(`  ${c.dim(after)}\n`);
   return 0;
