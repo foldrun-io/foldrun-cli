@@ -7846,8 +7846,9 @@ async function accountCmd(positional, flags) {
   }
   if (verb === "model") return accountModelCmd(url, positional.slice(1), flags);
   if (verb === "export") return accountExportCmd(url, flags);
+  if (verb === "beta") return accountBetaCmd(url, positional.slice(1), flags);
   if (verb !== "set" && verb !== "clear") {
-    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one, \`model\` is the account's own model key, \`providers\` checks the model keys, \`export\` downloads everything, \`pause\`/\`resume\` the kill switch`);
+    throw new Error(`unknown account verb "${verb}" — \`foldrun account\` shows them, \`set\` and \`clear\` change one, \`model\` is the account's own model key, \`providers\` checks the model keys, \`export\` downloads everything, \`pause\`/\`resume\` the kill switch, \`beta on|off\` beta features first`);
   }
 
   // `governance.deploy_block` names the job; checked, then sent as the field.
@@ -13165,6 +13166,7 @@ async function notificationsCmd(positional, flags) {
 const FLAG_SOURCES = {
   account: "set for this account",
   global: "set for every account",
+  beta: "the beta",
   rollout: "staged rollout",
   default: "default",
 };
@@ -13178,6 +13180,36 @@ const FLAG_SOURCES = {
  * self-hosted install runs every flag at its default. So the CLI has no
  * verb for it.
  */
+/**
+ * `foldrun account beta [on|off]` — the account's beta (13 Nov 2026): in it,
+ * every flag marked beta is on for the account before its rollout reaches
+ * everyone. Bare: where it stands and the beta flags. on/off: join or leave
+ * (an admin of every workspace; GET/PUT /api/account/beta).
+ * @param {string} url
+ * @param {string[]} rest
+ * @param {Record<string, any>} flags
+ */
+async function accountBetaCmd(url, rest, flags) {
+  const want = rest[0];
+  if (want !== undefined && want !== "on" && want !== "off") throw new Error("`foldrun account beta` shows it, `foldrun account beta on` joins the beta, `foldrun account beta off` leaves it");
+  const r = want === undefined
+    ? await remoteCall(url, flags, "/api/account/beta")
+    : await remoteCall(url, flags, "/api/account/beta", { method: "PUT", body: JSON.stringify({ beta: want === "on" }) });
+  if (flags.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  console.log(`\n  beta features  ${r.beta ? c.green("on — this account gets them first") : c.dim("off")}${want !== undefined && r.changed === false ? c.dim(" (unchanged)") : ""}`);
+  const list = r.flags ?? [];
+  if (list.length) {
+    const w = Math.max(...list.map((f) => f.name.length));
+    console.log("");
+    for (const f of list) console.log(`  ${pad(f.name, w)}  ${f.on ? c.green("on ") : c.dim("off")}  ${f.description}`);
+  }
+  console.log(`\n  ${c.dim(r.beta ? "foldrun account beta off — leave it" : "foldrun account beta on — get new features before everyone")}\n`);
+  return 0;
+}
+
 async function flagsCmd(positional, flags) {
   const url = platformFor(flags, "flags");
   if (positional[0]) throw new Error("`foldrun flags` lists this account's feature flags — only the platform's operator changes them, not from here");
