@@ -4728,6 +4728,7 @@ async function doctor(flags) {
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
  *   keys create <label> --gateway --login   on the account's plan (where it has one): not billed per call
+ *   keys create <label> --gateway --login --plan max   five times a pro key's usage limits (pro is the default)
  *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings (its status line too)
  *   keys set <id> --opus|--sonnet|--haiku <provider/model>  which model each Claude Code tier runs on (a gateway key; `-` clears one, --clear all)
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
@@ -4920,7 +4921,7 @@ function modelsLine(m) {
 function gatewayLine(g) {
   const map = modelsLine(g?.models);
   const tail = map ? ` · ${map}` : "";
-  if (g?.credential === "login") return `gateway · Claude Code · plan · not billed per call${tail}`;
+  if (g?.credential === "login") return `gateway · Claude Code · ${g.plan === "max" ? "max" : "pro"} plan · not billed per call${tail}`;
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const parts = ["gateway · Claude Code"];
   if (g?.capUsd != null) parts.push(`${usd(g.spentUsd)} of ${usd(g.capUsd)}`);
@@ -4958,7 +4959,10 @@ async function keysCreateGateway(url, label, flags) {
   // could not safely rewrite stops here with nothing made.
   const claude = flags["claude-code"] === true ? preflightClaudeSettings() : null;
   const body = { label, purpose: "gateway" };
+  if (flags.plan !== undefined && flags.login !== true) throw new Error("--plan goes with --login: a key with --cap or --daily has those limits");
+  if (flags.plan !== undefined && flags.plan !== "pro" && flags.plan !== "max") throw new Error(`--plan is pro or max — got ${JSON.stringify(flags.plan)}`);
   if (flags.login === true) body.credential = "login";
+  if (flags.login === true && flags.plan !== undefined) body.plan = flags.plan;
   // --require-customer (FOL-168): every call must send x-foldrun-customer.
   if (flags["require-customer"] === true) body.requireCustomer = true;
   if (capUsd !== undefined) body.capUsd = capUsd;
@@ -4968,7 +4972,7 @@ async function keysCreateGateway(url, label, flags) {
   if (flags.expires !== undefined && typeof flags.expires !== "string") throw new Error("--expires needs a span: 30d, 90d, 365d or never");
   body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
   const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
-  console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+  console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential, plan: made.plan }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
   if (made.key == null) return lostSecret(made.id);
   console.log(`  ${made.key}\n`);
   const base = made.gatewayUrl ?? "<the gateway URL — not set on this platform yet>";

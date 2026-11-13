@@ -75,12 +75,30 @@ test("keys create --gateway --login posts credential: login, takes no limit, and
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(JSON.parse(s.seen[0].body), { label: "mine", purpose: "gateway", credential: "login", expires: "90d" });
-  assert.match(r.out, /plan · not billed per call/);
+  assert.match(r.out, /pro plan · not billed per call/);
   assert.doesNotMatch(r.out, /shows what it has spent/, "a login key has no spend to show");
   assert.match(r.out, /the plan's usage limits apply/);
   assert.equal(withCap.code, 1);
   assert.match(withCap.out, /--login takes no --cap or --daily/);
-  assert.match(ls.out, /gateway · Claude Code · plan · not billed per call/);
+  assert.match(ls.out, /gateway · Claude Code · pro plan · not billed per call/);
+});
+
+test("keys create --gateway --login --plan max posts the plan; --plan is pro or max and goes with --login", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "mda_max", id: "g4", purpose: "gateway", credential: "login", plan: "max", capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
+  });
+  const r = await at(s.url, "keys", "create", "big", "--gateway", "--login", "--plan", "max");
+  const odd = await at(s.url, "keys", "create", "big", "--gateway", "--login", "--plan", "ultra");
+  const noLogin = await at(s.url, "keys", "create", "big", "--gateway", "--cap", "5", "--plan", "max");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(s.seen[0].body), { label: "big", purpose: "gateway", credential: "login", plan: "max", expires: "90d" });
+  assert.match(r.out, /max plan · not billed per call/);
+  assert.equal(odd.code, 1);
+  assert.match(odd.out, /--plan is pro or max/);
+  assert.equal(noLogin.code, 1);
+  assert.match(noLogin.out, /--plan goes with --login/);
+  assert.equal(s.seen.length, 1, "nothing else was sent");
 });
 
 test("keys set changes the tiers named, keeps the rest, and clears with - or --clear", async () => {
