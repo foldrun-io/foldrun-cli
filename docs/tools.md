@@ -1874,11 +1874,19 @@ Values are whole numbers, 1 or more; to withhold a tool, leave it out of
   check.
 - **A refused call counts toward nothing**, and neither does one another
   check refused (a path outside the workspace, a tool not granted).
-- **Nearest wins, per key.** The account's `AGENTS.md`, then the
-  workspace's, then the agent's own, then a flow step's
+- **Every step has two by default: `calls: 1000` and `repeat: 25`** (since
+  13 Nov 2026). A model that keeps calling — the same call, or anything at
+  all — is refused, not paid for until the step's `timeout:`. Set either key
+  at any level below to raise or lower it.
+- **A stuck step is stopped.** After 20 refused calls in one step the step
+  ends as failed: *stopped: 20 calls were refused by this step's limits and
+  the model kept calling — it is stuck*. A model told "no" that often is not
+  going to stop by itself.
+- **Nearest wins, per key.** The platform's defaults, then the account's
+  `AGENTS.md`, then the workspace's, then the agent's own, then a flow step's
   `limits: {web.search: 10}` option. A key set nearer replaces that key;
   the others stand.
-- **On the trace.** The step lists its limits when it starts, each refusal
+- **On the trace.** The step lists its limits (the defaults included) when it starts, each refusal
   as it happens, and at the end what it used: `limits: web.search 40/40, crm 3/20 — 2 calls refused`.
 
 **With a search API, the cost is capped exactly.** A capped call never
