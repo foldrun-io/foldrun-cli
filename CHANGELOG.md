@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [25.1.1] — 2026-11-13
+
+### deps
+
+- @foldrun/core ^23.0.3 ([3d66589](https://github.com/foldrun-io/foldrun-cli/commit/3d66589))
+
 ## [25.1.0] — 2026-11-13
 
 - feat(keys): keys create --gateway --login --plan pro|max (FOL-173) ([2323306](https://github.com/foldrun-io/foldrun-cli/commit/2323306))
