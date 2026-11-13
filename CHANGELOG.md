@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [25.1.0] — 2026-11-13
+
+- feat(keys): keys create --gateway --login --plan pro|max (FOL-173) ([2323306](https://github.com/foldrun-io/foldrun-cli/commit/2323306))
+
 ## [25.0.2] — 2026-11-13
 
 - fix(keys): a login gateway key is described as the account's plan, not billed per call (FOL-173) ([ad079fa](https://github.com/foldrun-io/foldrun-cli/commit/ad079fa))
