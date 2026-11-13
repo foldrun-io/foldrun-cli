@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [24.0.5] — 2026-11-13
+
+### docs
+
+- gallery skills listed without cloudhost-deploy ([372273c](https://github.com/foldrun-io/foldrun-cli/commit/372273c))
+
 ## [24.0.4] — 2026-11-13
 
 ### docs
