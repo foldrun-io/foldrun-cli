@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [24.0.4] — 2026-11-13
+
+### docs
+
+- sync — default step limits (calls 1000, repeat 25) ([016f6b2](https://github.com/foldrun-io/foldrun-cli/commit/016f6b2))
+
 ## [24.0.3] — 2026-11-13
 
 ### deps
