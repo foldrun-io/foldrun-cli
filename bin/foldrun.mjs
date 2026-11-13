@@ -227,7 +227,7 @@ const HELP = `foldrun — agents are just folders
   foldrun billing plans     the plans, which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
   foldrun billing top-up <usd>  Stripe's checkout page for adding credit (owner only; --no-browser prints it)
   foldrun billing card      Stripe's page for saving a card for auto top-up (owner only)
-  foldrun gallery           the platform's built-in tools (web, docs, video) and skills (modern-website, motion-video, cloudhost-deploy), and whether you keep your own copy — also pull (a copy for offline runs), upgrade <name>, --json
+  foldrun gallery           the platform's built-in tools (web, docs, video) and skills (modern-website, motion-video), and whether you keep your own copy — also pull (a copy for offline runs), upgrade <name>, --json
   foldrun identity          what your cloud must trust for keyless identities: the issuer and each agent's subject (--to <workspace>, --json)
   foldrun jobs              the four jobs — governance, guardrail, observability, evaluation — and what each has set (--to <workspace>, --json)
   foldrun account           the account's defaults — also set <key> <value>, clear <key> (timezone, notify, budget, concurrency, compute vcpu <n> memory <GiB> disk <GiB>, deploy_block none|secrets|security, network_enforce on|off, owner, alerts <threshold> <value>, judge model|effort <value>; or <job>.<field>, e.g. governance.owner), pause [--reason] [--stop] / resume (the kill switch), telemetry [set <url> --header name=\${SECRET} (others kept; name= drops one) | clear | test] (runs as OpenTelemetry traces), providers (--check) (singular; accounts lists logins)

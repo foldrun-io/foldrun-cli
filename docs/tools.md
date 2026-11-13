@@ -218,7 +218,6 @@ in the project, and says how to install it when it is missing.
 |---|---|
 | `modern-website` | building a modern, high-end website or app: Astro for content sites and Next.js for apps when nothing is named, the current stack, design, bundled assets, the launch checks |
 | `motion-video` | motion graphics and short videos with the `video` tool: scenes, easing, stills before renders, video on a website |
-| `cloudhost-deploy` | deploying to [cloudhost](https://cloudhost.ir) through its MCP tools: `cloudhost.toml`, bindings, previews first, production on approval |
 
 The gallery is deliberately small: capabilities that are hard to build from
 a plain HTTP call and that agents building things keep reaching for.
@@ -1932,7 +1931,7 @@ Skills are discovered in the agent's own `skills/`, the workspace's, the
 account library, and the cross-client `.agents/skills/` convention that other
 tools read and write. A skill written here drops into them, and one they
 install is visible here. The platform's [gallery](#the-gallery--platform-maintained-tools-and-skills)
-adds a few more — `modern-website`, `motion-video`, `cloudhost-deploy` —
+adds a few more — `modern-website` and `motion-video` —
 that load only for an agent whose `skills:` names them; your own skill of
 the same name wins.
 

@@ -89,7 +89,7 @@ the point of the week; a step that weighs two arguments and picks one is not.
 |---|---|
 | `tools` | the one grant list — built-in groups, exact SDK names, and your own tools |
 | `disallowedTools` | subtract from what it would otherwise have |
-| `skills` | an allowlist. **Absent inherits every skill in scope**; `[]` withholds all of them. The platform's [gallery skills](tools#the-gallery--platform-maintained-tools-and-skills) (`modern-website`, `motion-video`, `cloudhost-deploy`) come only by name |
+| `skills` | an allowlist. **Absent inherits every skill in scope**; `[]` withholds all of them. The platform's [gallery skills](tools#the-gallery--platform-maintained-tools-and-skills) (`modern-website`, `motion-video`) come only by name |
 | `agents` | colleagues it may consult mid-run — an answer, no tools |
 | `subagents` | colleagues it may delegate a whole job to — own context, own tools, never more than its own ([below](#delegating-to-a-sub-agent)) |
 | `sandbox` | `own` \| `parent` (default) — delegated to as a sub-agent, run each job in a sandbox of its own, with its own tools, secrets and network ([below](#isolated-sub-agents-sandbox-own)) |

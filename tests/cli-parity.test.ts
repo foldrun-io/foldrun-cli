@@ -567,7 +567,7 @@ test("help: every flag the CLI reads is listed, --from once per context, gallery
   assert.match((await cli(["approve", "--help"])).out, /--note "<text>"\s+approve, reject:/);
   assert.match((await cli(["billing", "--help"])).out, /--threshold \/ --amount/);
   const gallery = (await cli(["gallery", "--help"])).out;
-  assert.match(gallery, /built-in tools \(web, docs, video\) and skills \(modern-website, motion-video, cloudhost-deploy\)/);
+  assert.match(gallery, /built-in tools \(web, docs, video\) and skills \(modern-website, motion-video\), and/);
 });
 
 test("--help on the new platform verbs contacts nothing", async () => {
