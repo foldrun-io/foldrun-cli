@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [25.0.2] — 2026-11-13
+
+- fix(keys): a login gateway key is described as the account's plan, not billed per call (FOL-173) ([ad079fa](https://github.com/foldrun-io/foldrun-cli/commit/ad079fa))
+
 ## [25.0.1] — 2026-11-13
 
 ### deps
