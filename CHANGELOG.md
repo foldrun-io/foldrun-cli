@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [25.2.0] — 2026-11-14
+
+### New in the public API
+
+- `foldrun usage meters`
+- `foldrun usage rates`
+
+- feat(usage): foldrun usage meters — the period's meters, credit pots and tokens by model (FOL-125) ([63e3dbf](https://github.com/foldrun-io/foldrun-cli/commit/63e3dbf))
+
 ## [25.1.3] — 2026-11-13
 
 - build(deps): Bump @hono/node-server from 2.1.5 to 2.1.8 (#156) ([9c81ab2](https://github.com/foldrun-io/foldrun-cli/commit/9c81ab2))
