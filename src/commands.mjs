@@ -12614,6 +12614,121 @@ function computeText(p, none) {
   return parts.length ? parts.join(" · ") : none;
 }
 
+/** A credit figure: whole when large, two places when small. */
+const creditsText = (n) => {
+  const v = Math.abs(Number(n)) >= 100 ? Math.round(Number(n)) : Math.round(Number(n) * 100) / 100;
+  return v.toLocaleString("en-US");
+};
+
+/** `--since <day>` and `--until <day>` are the API's `from` and `to` (`--to` already names a workspace here). */
+function usagePeriodQuery(flags) {
+  const q = new URLSearchParams();
+  for (const [flag, key] of [["since", "from"], ["until", "to"]]) {
+    if (flags[flag] === undefined) continue;
+    if (typeof flags[flag] !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(flags[flag])) throw new Error(`--${flag} is a UTC day, YYYY-MM-DD`);
+    q.set(key, flags[flag]);
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+/**
+ * `foldrun usage meters [--since <day>] [--until <day>]` — what the period
+ * used by meter: the two credit pots, compute and storage and network with
+ * quantity, rate and credits, the plan fee, each step size, and tokens by
+ * provider and model with your own key at 0 billed (the Usage page's
+ * Compute and Tokens tabs; GET /api/usage?from&to).
+ */
+async function usageMetersCmd(flags) {
+  const url = platformFor(flags, "usage meters");
+  const u = await remoteCall(url, flags, `/api/usage${usagePeriodQuery(flags)}`);
+  if (flags.json === true) {
+    const { period, credits, tokens, compute, billed } = u;
+    console.log(JSON.stringify({ period, credits, tokens, compute, billed }, null, 2));
+    return 0;
+  }
+  const names = { vcpu: "vCPU", ram: "RAM", disk: "step disk", storage: "storage", network: "network", search: "search pods", browser: "browser pods", warm: "warm builds" };
+  console.log(`\n  ${c.bold("meters")}  ${c.dim(`${u.period?.from} to ${u.period?.to}, at today's rates`)}`);
+  const cr = u.credits;
+  if (cr) {
+    console.log(`  ${c.dim("plan credits")} ${creditsText(cr.pots.planUsd / cr.usdPerCredit)}  ${c.dim("bought credits")} ${creditsText(cr.pots.boughtUsd / cr.usdPerCredit)}${cr.plan ? `  ${c.dim(`on ${cr.plan.name}${cr.plan.resetsAt ? `, next ${String(cr.plan.resetsAt).slice(0, 10)}` : ""}`)}` : ""}`);
+  }
+  const meters = u.compute?.meters ?? [];
+  console.log(`\n  ${c.bold("compute, storage, network and pods")}`);
+  for (const m of meters) {
+    const q = m.quantity == null ? "—" : `${creditsText(m.quantity)} ${m.unit}`;
+    const rate = m.rateCreditsPerUnit == null ? "" : `at ${creditsText(m.rateCreditsPerUnit)} credits per ${m.meter === "storage" ? "GB-month" : m.unit}`;
+    const storageNote = m.meter === "storage" ? c.dim(m.includedGb !== undefined ? ` (${m.includedGb} GB included, ${m.overGb} over)` : "") : "";
+    // The pods are charged for the vCPU and GiB they hold while they live
+    // and the bytes they move; their sessions and GB moved read beside them.
+    const podNote = m.sessions !== undefined ? c.dim(` (${m.sessions} ${m.sessions === 1 ? "session" : "sessions"}, ${creditsText(m.networkGb ?? 0)} GB moved)`) : "";
+    const over = storageNote + podNote;
+    console.log(`  ${pad(names[m.meter] ?? m.meter, 26)} ${pad(q, 18)} ${pad(rate, 34)} ${c.bold(creditsText(m.credits))} credits${over}`);
+  }
+  const fee = u.compute?.planFee;
+  if (fee) console.log(`  ${pad("plan fee", 26)} ${c.dim(fee.label)}  $${Number(fee.usd).toFixed(2)} for ${creditsText(fee.includedCredits)} credits`);
+  const sizes = u.compute?.bySize ?? [];
+  if (sizes.length) {
+    console.log(`\n  ${c.bold("by step size")}`);
+    for (const z of sizes) console.log(`  ${pad(z.size, 11)} ${pad(`${z.steps} steps`, 11)} ${pad(`${z.hours} h`, 9)} ${pad(`${z.vcpu} vCPU · ${z.memGiB} GiB · ${z.diskGiB} GiB disk`, 34)} ${z.creditsPerHour == null ? "" : `${creditsText(z.creditsPerHour)} credits an hour`}`);
+  }
+  const rows = u.tokens?.byModel ?? [];
+  console.log(`\n  ${c.bold("tokens")}  ${c.dim("by provider and model; your own key is billed by your provider, 0 credits here")}`);
+  if (!rows.length) console.log(`  ${c.dim("no model calls in this period")}`);
+  for (const r of rows) {
+    const own = r.supply === "own";
+    console.log(`  ${pad(r.provider, 11)} ${pad(r.model, 28)} ${pad(`${r.calls} calls`, 10)} ${pad(`${creditsText(r.inputTokens)} in / ${creditsText(r.outputTokens)} out`, 24)} ${own ? c.dim("your key · 0 credits") : `${c.bold(creditsText(r.billedCredits))} credits`}`);
+  }
+  if (u.billed) console.log(`\n  ${c.dim(`the ledger charged ${creditsText(u.billed.totalCredits)} credits over the period${u.billed.waived?.length ? ` · waived: ${u.billed.waived.join(", ")}` : ""}`)}`);
+  console.log(`\n  ${c.dim("--since <day> --until <day> choose the period · `foldrun usage rates` has the rates")}\n`);
+  return 0;
+}
+
+/**
+ * `foldrun usage rates` — what each meter costs this account, its plan and
+ * the plans on offer, and the price list for foldrun's models (the Usage
+ * page's Rates tab; GET /api/usage/rates).
+ */
+async function usageRatesCmd(flags) {
+  const url = platformFor(flags, "usage rates");
+  const d = await remoteCall(url, flags, "/api/usage/rates");
+  if (flags.json === true) {
+    console.log(JSON.stringify(d, null, 2));
+    return 0;
+  }
+  const r = d.rates;
+  const cat = d.catalogue;
+  if (!r && !cat) {
+    console.log(`\n  ${c.dim("nothing is billed on this platform, so there are no rates")}\n`);
+    return 0;
+  }
+  const cu = r?.creditUsd ?? cat?.creditUsd ?? 0.01;
+  const credits = (usdAmount) => creditsText(usdAmount / cu);
+  console.log(`\n  ${c.bold("rates")}  ${c.dim(`one credit is $${cu}`)}`);
+  if (r) {
+    for (const [name, rate, per] of [["vCPU", r.vcpuUsdPerHour, "vCPU-hour"], ["RAM", r.ramUsdPerGibHour, "GiB-hour"], ["step disk", r.diskUsdPerGibMonth, "GiB-month"], ["storage over the plan", r.storageUsdPerGbMonth, "GB-month"], ["network", r.networkUsdPerGb, "GB, in and out"]]) {
+      console.log(`  ${pad(name, 22)} $${rate} per ${pad(per, 16)} ${c.dim(`${credits(rate)} credits`)}`);
+    }
+    console.log(`  ${c.dim(`tokens on foldrun's models: the provider's price × ${r.margin}, from bought credits only`)}`);
+  }
+  if (d.plan) console.log(`\n  ${c.bold("your plan")}  ${d.plan.name}${d.plan.status ? c.dim(` (${d.plan.status})`) : ""} · ${creditsText(d.plan.creditsPerMonth)} credits a month · ${d.plan.storageGb} GB stored · ${d.plan.computeAtOnce.vcpu} vCPU · ${d.plan.computeAtOnce.memGiB} GiB at once${d.plan.rollover ? ` · unused credits roll over up to ${creditsText(d.plan.rolloverCapCredits)}` : " · unused credits are lost at month end"}`);
+  if (cat) {
+    console.log(`\n  ${c.bold("plans")}`);
+    for (const p of cat.plans ?? []) {
+      console.log(`  ${d.plan?.id === p.id ? c.green("●") : c.dim("○")} ${pad(p.name, 8)} ${pad(p.feeUsd ? `$${p.feeUsd}/mo` : "free", 9)} ${pad(`${creditsText(p.creditsPerMonth)} credits`, 16)} ${pad(`${p.storageGb} GB`, 8)} ${pad(`${p.computeAtOnce.vcpu} vCPU · ${p.computeAtOnce.memGiB} GiB`, 16)} ${p.lane === "fast" ? "fast lane" : ""}`);
+    }
+    if (cat.example) console.log(`\n  ${c.dim(`a default step (${cat.example.vcpu} vCPU, ${cat.example.memGiB} GiB) costs about ${creditsText(cat.example.creditsPerHour)} credits an hour`)}`);
+    const prices = cat.models?.prices ?? [];
+    if (prices.length) {
+      console.log(`\n  ${c.bold("foldrun's models")}  ${c.dim(`per million tokens, provider price × ${cat.models.margin}`)}`);
+      for (const m of prices) console.log(`  ${pad(m.provider, 11)} ${pad(m.model, 28)} in $${m.inputPerMTok}  out $${m.outputPerMTok}${m.cacheReadPerMTok == null ? "" : `  cache read $${m.cacheReadPerMTok}`}`);
+    }
+    if (cat.models?.soon?.length) console.log(`  ${c.dim(`coming: ${cat.models.soon.join(", ")}`)}`);
+  }
+  console.log();
+  return 0;
+}
+
 /**
  * `foldrun usage compute` — the cores and GiB the account's running steps
  * may hold together and in one step, what they hold now, and the steps
@@ -14471,10 +14586,10 @@ async function billingPlansCmd(verb, sub, flags) {
   if (verb === "plans") {
     const p = await remoteCall(url, flags, "/api/billing/plans");
     const cur = p.current;
-    console.log(`\n  ${c.bold("plans")}  ${c.dim(`one credit is ${usd(p.creditUsd)}${cur?.plan ? ` · on ${cur.plan} (${cur.status})` : " · no plan — pay as you go"}`)}`);
+    console.log(`\n  ${c.bold("plans")}  ${c.dim(`one credit is ${usd(p.creditUsd)}${cur?.plan ? ` · on ${cur.plan} (${cur.status})` : " · Free: 300 credits a month, bought credits on top"}`)}`);
     for (const x of p.plans ?? []) {
       const mark = cur?.plan === x.id ? c.green("●") : c.dim("○");
-      console.log(`  ${mark} ${c.bold(pad(x.id, 8))} ${pad(`$${x.monthlyUsd}/mo`, 9)} ${pad(`${Number(x.credits).toLocaleString()} credits`, 16)} ${pad(`${x.concurrency} at once`, 10)} ${pad(x.workspaces == null ? "any workspaces" : `${x.workspaces} workspaces`, 15)} ${c.dim(x.pitch ?? "")}`);
+      console.log(`  ${mark} ${c.bold(pad(x.id, 8))} ${pad(`$${x.monthlyUsd}/mo`, 9)} ${pad(`${Number(x.credits).toLocaleString()} credits`, 16)} ${pad(`${x.storageGb ?? "?"} GB`, 8)} ${pad(`${x.vcpu ?? "?"} vCPU · ${x.memGiB ?? "?"} GiB`, 16)} ${pad(x.workspaces == null ? "any workspaces" : `${x.workspaces} workspaces`, 15)} ${c.dim(x.pitch ?? "")}`);
     }
     if (cur?.plan) console.log(`\n  ${c.dim(`this cycle: ${cur.cycleRemainingCredits ?? "?"} of ${cur.cycleCredits ?? "?"} credits left${cur.resetsAt ? `, resets ${String(cur.resetsAt).slice(0, 10)}` : ""}`)}`);
     console.log(`  ${c.dim(`balance ${usd(p.balanceUsd)}${p.cards ? "" : " · card payments are not configured on this install"}`)}`);
@@ -14482,7 +14597,7 @@ async function billingPlansCmd(verb, sub, flags) {
     return 0;
   }
   if (verb === "plan") {
-    if (!sub) throw new Error("`foldrun billing plan <starter|creator|pro|scale>`, `plan cancel` or `plan resume` — `billing plans` lists them");
+    if (!sub) throw new Error("`foldrun billing plan <starter|pro|scale>`, `plan cancel` or `plan resume` — `billing plans` lists them");
     if (sub === "cancel") {
       if (!(await confirmed(flags, "billing plan cancel", "Cancel the plan at the end of this cycle? [y/N] "))) {
         console.log(`\n  ${c.dim("nothing changed")}\n`);
@@ -15874,6 +15989,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return observeCmd(flags, layout);
     case "usage":
       if (positional[0] === "compute") return usageComputeCmd(flags);
+      if (positional[0] === "meters") return usageMetersCmd(flags);
+      if (positional[0] === "rates") return usageRatesCmd(flags);
       if (positional[0] === "budget") return usageBudgetCmd(flags);
       return usageCmd(flags);
     case "workspace":

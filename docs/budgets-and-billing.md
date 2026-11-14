@@ -25,7 +25,7 @@ mistake the editor names rather than a cap it quietly keeps.
 When an agent's cap and the flow's both apply to one step, the tighter one
 wins, and the step's error says which line set it: `budget: in the flow
 file` or `budget: on the writer agent`.
-| **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Policies → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`) or plan number (`FOLDRUN_PLAN_CONCURRENCY`, which applies only where billing is on), or no cap. Your own number can lower that, never raise it; a higher number comes with a plan |
+| **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Policies → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`), or no cap. Your own number can lower that, never raise it. Plans are not sold on runs at once but on [compute at once](#compute-at-four-levels): paid by the second, it is the real limit. On foldrun's hosted platform a ceiling on runs driven together guards against a loop gone wrong; it is not something a plan sells |
 | **the queue lane** | the plan's lane (`high` \| `normal` \| `low`); `priority: low` in the account's `AGENTS.md` lowers it, and `high` there counts only with a plan that gives it | when slots are short, accounts take turns, weighted by lane — high 3, normal 2, low 1: every account's first run goes before anyone's second, a fast lane takes three turns to a slow lane's one and never all of them, an account with runs going waits behind one with none, and a run that has waited ten minutes moves up a turn. A flow's own `priority:` orders runs within that. The cap above still holds |
 | **compute at once** | the plan's cores, GiB and disk (below); `compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }` in the account's `AGENTS.md`, or Settings → Policies → Governance, lowers it — and a workspace's and a flow's `compute:` narrow it further ([four levels](#compute-at-four-levels)) | what all the account's running steps may hold together — each step's cores, memory and disk, its `size:` class's or its own `resources:` ([agents](agents#resources--your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB` / `FOLDRUN_ACCOUNT_DISK_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
 | **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB`, `FOLDRUN_RUN_DISK_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed and has no time limit; the run page's start-up chip shows it as `room` ([waiting for room](#waiting-for-room)) |
@@ -139,10 +139,12 @@ or a `wait:` and waiting for a worker. A run asleep on its own `wait:` timer,
 at an approval gate or waiting for an event does not count, nor does a run
 that is running.
 
-- **The limit.** 20 for each run the account may drive at once (its plan's
-  runs at once, its own `concurrency:`, or the install's), and never fewer
-  than 50: Starter 50, Creator 50, Pro 80, Scale 160. An install sets one
-  number for every account with `FOLDRUN_MAX_WAITING_RUNS` (`0`: no limit).
+- **The limit.** On the hosted platform each plan sets its own number:
+  **Free 10, Starter 100, Pro 400, Scale 1,000**. Without a plan figure it is 20 for each run
+  the account may drive at once (its own `concurrency:`, or the install's),
+  and never fewer than 50. The refusal below names the number and where it
+  comes from. An install sets one number for every account with
+  `FOLDRUN_MAX_WAITING_RUNS` (`0`: no limit), which wins over the plan.
 - **Past it, a new run is refused at once** — never lined up and dropped
   later. A person or a key gets `409` with `code: "waiting_cap"`, `limit`
   and `waiting`, and the sentence: *this account already has 50 runs
@@ -217,12 +219,19 @@ none — are **1¢ each**; the falling figure below is what a plan's bundle
 works out to, and it is the reason to pick a bigger plan rather than buy
 more credits.
 
-| plan | a month | credits a month | works out to, a credit | runs at once | compute at once | one step, at most | workspaces | queue lane |
-|---|---|---|---|---|---|---|---|---|
-| **Starter** | $29 | 2,900 | 1.00¢ | 1 | 4 vCPU · 8 GiB · 40 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 3 | standard |
-| **Creator** | $79 | 8,800 | 0.90¢ | 2 | 8 vCPU · 16 GiB · 80 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 10 | standard |
-| **Pro** | $249 | 29,000 | 0.86¢ | 4 | 16 vCPU · 32 GiB · 160 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
-| **Scale** | $799 | 100,000 | 0.80¢ | 8 | 32 vCPU · 64 GiB · 320 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
+| plan | a month | credits a month | storage included | compute at once | one step, at most | workspaces | queue lane |
+|---|---|---|---|---|---|---|---|
+| **Free** | $0 | 300 | 2 GB | 2 vCPU · 4 GiB · 20 GiB disk | 2 vCPU · 4 GiB · 10 GiB disk | 2 | normal |
+| **Starter** | $29 | 3,000 | 10 GB | 4 vCPU · 8 GiB · 40 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 5 | normal |
+| **Pro** | $99 | 11,000 | 100 GB | 16 vCPU · 32 GiB · 160 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
+| **Scale** | $499 | 60,000 | 1 TB | 64 vCPU · 128 GiB · 640 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
+
+Bigger than Scale: contact us for a custom plan.
+
+Plans are sold on **compute at once**, not on runs at once: a run is one
+flow execution, compute is paid by the second, and a step that does not fit
+waits its turn. Free is a plan like the others, granted to every verified
+account rather than bought.
 
 **Compute at once** is what all of an account's running steps may hold
 together, counted by the cores, memory and disk each step's sandbox is
@@ -232,8 +241,27 @@ single step the plan runs: `heavy` (4 vCPU · 8 GiB · 20 GiB disk) on every
 plan, and up to 8 vCPU · 16 GiB · 40 GiB disk with `resources:` on Pro and
 Scale.
 
-**How long a credit lasts.** A plan's credits land when its invoice is paid,
-and what is unused **rolls over** into the next cycle up to **twice** the
+**Two kinds of credit, kept apart.** One balance, two pots:
+
+- **Plan credits** are the plan's monthly grant. They pay for compute,
+  storage and network, and **never for tokens on foldrun's models**.
+- **Bought credits** (a top-up by card, or in Toman on foldrun.ir) pay for
+  anything, tokens on foldrun's models included.
+
+Compute, storage and network draw on plan credits first, then bought
+credits. Tokens on foldrun's models draw on bought credits only, so an
+account that wants them buys credits. The Usage page and
+`GET /api/usage` show the two pots separately.
+
+**Free: 300 credits every month.** Free credits are plan credits, so they
+never pay for tokens on foldrun's models. They **do not roll over**: what is
+unused is lost at the end of the month (UTC), so an account cannot stockpile
+them. The grant for a new month is made when the account has run something
+since the last one, and an account gets it once a month however it is
+opened or closed.
+
+**How long a credit lasts.** On a paid plan, credits land when the invoice is
+paid, and what is unused **rolls over** into the next cycle up to **twice** the
 plan's monthly quota — so a balance of plan credits reaches at most three
 times it: this cycle's, plus at most two carried. Anything above the cap
 expires, and the statement line says how much rolled and how much did not.
@@ -247,11 +275,10 @@ Australian consumers can attract gift-card rules, which are three years.
 
 Which credit a run spends is the order that favours the customer: the
 plan's granted credits first, then bought credit oldest-first — so the
-credit closest to expiring is always the credit being used. Spend draws on the cycle's credits first, then
-on the balance. A new account starts with **300 trial credits**, no card
-asked. Without a plan, credit costs 1¢ each, one run at a time, up to 3
-workspaces, standard lane — a plan is cheaper from the first month you would have spent its fee
-anyway. Changing plan is charged at once, prorated by Stripe; the new plan
+credit closest to expiring is always the credit being used. An account
+without a paid plan is on Free: no card asked, credit bought on top costs
+1¢ each. A paid plan is cheaper from the first month you would have spent
+its fee anyway. Changing plan is charged at once, prorated by Stripe; the new plan
 and its bundle land when that invoice is paid — a change whose payment
 fails leaves you on the plan you had, with Stripe's page to pay it; paid
 within 23 hours it goes through, otherwise Stripe drops it and voids the
@@ -290,7 +317,7 @@ partners whose compute is absorbed by arrangement.
 
 ## What a credit buys
 
-Three meters, at the platform's rates. Every charge is recorded in **two
+Six meters, at the platform's rates. Every charge is recorded in **two
 halves** — what the models cost and what the platform under them cost — and
 the Usage page, the statement and its CSV all show them apart. They are
 different questions: a customer on their own model key pays no model half
@@ -302,8 +329,23 @@ provider's own invoice.
 | meter | what it counts |
 |---|---|
 | **tokens** | model usage at cost, times a margin. **Bring your own key and the margin does not apply** — a BYOK step is billed nothing for tokens. On foldrun's models, each call at foldrun's price list, times the margin ([below](#foldruns-models)) |
-| **compute** | sandbox seconds: what a step reserved (cores, memory and disk, while it ran) and what it actually burned. Disk is billed by the GiB a step is allowed to write, per second, like memory (since 27 Oct 2026) |
-| **storage and network** | GB-months in the file store, accrued daily; GB the sandbox moved, both directions |
+| **vCPU** | per second, the cores a step reserves while it runs |
+| **RAM** | per second, the GiB a step reserves while it runs |
+| **step disk** | per second, the GiB of disk the step may write; deleted when the step ends |
+| **storage** | per GB-month, the files you keep between runs **over your plan's allowance**, accrued daily. Only the GB above what your plan includes are charged (Free 2 GB, Starter 10, Pro 100, Scale 1 TB). It counts your workspaces' files and your run history, as they are now; a GB is 2^30 bytes |
+| **network** | per GB the sandbox moves, both directions |
+| **search and browser pods** | an account's search engine and its browser run as pods of their own. Each is charged like a step: the vCPU and GiB it holds, for the seconds it lives (idle time included, until it is let go), at the same vCPU and RAM rates, plus the GB it moves at the network rate. A search pod holds 0.25 vCPU and 0.75 GiB and a browser pod 1 vCPU, 3 GiB and 4 GiB of disk by default; the platform's operator sets these sizes, so the size shown is the one in force. Each pod's requests equal its limits, so you are charged for exactly what is reserved for it, at the size the pod was made with. A pod session is not a run, so no minimum run charge applies |
+| **warm builds** | when you deploy, your workspace's environments (the packages an agent declares) are built ahead of its first step, in a short pod. **You pay for it**, because it is the work the first step would otherwise have done in its own sandbox: a small sandbox's vCPU and RAM for the seconds it ran, and the GB it downloaded. It is bounded (one build at a time, ten minutes at most) and shown as its own line, so it is never hidden in another |
+
+The rates are on the Usage page's **Rates** tab, in `foldrun usage rates`,
+in `GET /api/usage/rates` and, for anyone, in the public
+`GET /api/pricing`. They are the rates charging uses, read when you look.
+A default step (2 vCPU, 2 GiB) costs about 16 credits an hour. The Usage
+page's **Compute** tab shows each meter with its quantity, rate and credits,
+the plan fee as its own line, and what each step size costs per hour;
+`foldrun usage meters` prints the same. The search pods, browser pods and
+warm builds each have a line with their pod-hours, sessions and the GB they
+moved; storage shows the GB held now against what your plan includes.
 
 There is deliberately **no per-step fee**. Steps are sandbox-seconds, so a
 step fee would charge compute twice and punish a well-factored flow for
@@ -330,7 +372,15 @@ Settings → Models shows the list as you pay it, and so does
 - **A daily cap** per account (UTC), in what you pay. Before each call the
   gateway reserves its estimate against the cap, so twenty calls at once
   cannot all pass it; one past it is refused until the next day.
-- **The balance must be above zero** for a call to start, like a run.
+- **Bought credits pay for it, and only bought credits.** A call starts only
+  while the account has bought credit above zero; plan credits, a Free
+  grant included, are not spent on tokens.
+- **A run that has started finishes.** A run already using foldrun's models
+  may go a little past zero bought credit to end (up to
+  `models.supply.finish_grace_usd`, $1 a run by default); a new run, or a new
+  call from an account not already in one, is refused at zero.
+- **Your own key costs no credits.** The Usage page's Tokens tab lists those
+  calls at 0 credits so you can still see what was used.
 
 ## Prompt caching
 
