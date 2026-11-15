@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.2.1] — 2026-11-15
+
+### deps
+
+- @foldrun/core ^24.1.0 ([3465ec0](https://github.com/foldrun-io/foldrun-cli/commit/3465ec0))
+
 ## [26.2.0] — 2026-11-15
 
 - feat(account model): show when the account runs on its Claude subscription ([52e5a22](https://github.com/foldrun-io/foldrun-cli/commit/52e5a22))
