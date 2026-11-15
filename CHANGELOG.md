@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.1.0] — 2026-11-15
+
+- feat(account): foldrun account beta [on|off] — beta features first ([11eb176](https://github.com/foldrun-io/foldrun-cli/commit/11eb176))
+
+### docs
+
+- sync from foldrun-docs (beta features, account beta) ([7b8b497](https://github.com/foldrun-io/foldrun-cli/commit/7b8b497))
+
 ## [26.0.0] — 2026-11-15
 
 ### Breaking changes
