@@ -133,3 +133,13 @@ test("on your own key where foldrun's models are offered, the hint says how to c
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /use foldrun --provider <p>/);
 });
+
+test("on a Claude Code plan (16 Nov 2026): the account runs on its Claude subscription, said so, exit 0", async () => {
+  const s = await serve({ "GET /api/account/model": () => ({ ...none, runsOn: "subscription" }) });
+  const r = await at(s.url, "account", "model");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /Claude subscription/);
+  assert.match(r.out, /monthly and weekly limits/);
+  assert.doesNotMatch(r.out, /refused|billed in credits/);
+});

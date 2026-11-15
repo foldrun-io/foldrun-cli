@@ -7324,6 +7324,8 @@ async function accountModelCmd(url, positional, flags) {
         : `${c.green("✓")} foldrun's models — ${c.bold(p?.title ?? r.supply)} ${c.dim("· billed in credits at foldrun's price list")}`;
     } else if (r.runsOn === "account") {
       runs = `${c.green("✓")} your own key — ${c.bold(r.provider ?? "custom")} ${c.dim(`${r.keyHint ?? ""} · ${r.baseUrl ?? ""} · ${r.format ?? ""}`)}`;
+    } else if (r.runsOn === "subscription") {
+      runs = `${c.green("✓")} ${c.bold("Claude subscription")} ${c.dim("· Claude, on your Claude Code plan — counted in its monthly and weekly limits, like your Claude Code (Billing → Plan)")}`;
     } else if (r.runsOn === "platform") {
       runs = `${c.yellow("·")} the platform's credential ${c.dim("(this account is allowed it)")}`;
     } else {
