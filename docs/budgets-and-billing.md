@@ -237,9 +237,16 @@ account rather than bought.
 together, counted by the cores, memory and disk each step's sandbox is
 capped at (disk is what a step may write: its `size:` class's — 2, 8 or 20
 GiB — or its own `resources: { disk }`). **One step, at most** is the largest
-single step the plan runs: `heavy` (4 vCPU · 8 GiB · 20 GiB disk) on every
-plan, and up to 8 vCPU · 16 GiB · 40 GiB disk with `resources:` on Pro and
-Scale.
+single step the plan runs: `heavy` (4 vCPU · 8 GiB · 20 GiB disk) on Starter,
+and up to 8 vCPU · 16 GiB · 40 GiB disk with `resources:` on Pro and Scale.
+A step asking for more than its plan's figure fails at once, before it
+starts.
+
+**Free's limits hold on every account with no paid plan.** Its steps may
+hold 2 vCPU · 4 GiB · 10 GiB disk each and 2 vCPU · 4 GiB between them. A
+step at the default size on foldrun.io (3 vCPU · 6 GiB) is bigger than
+that, so on Free give each agent `size: small` (or `resources:` within the
+figures); a paid plan runs the default size.
 
 **Two kinds of credit, kept apart.** One balance, two pots:
 
@@ -254,11 +261,11 @@ account that wants them buys credits. The Usage page and
 `GET /api/usage` show the two pots separately.
 
 **Free: 300 credits every month.** Free credits are plan credits, so they
-never pay for tokens on foldrun's models. They **do not roll over**: what is
-unused is lost at the end of the month (UTC), so an account cannot stockpile
-them. The grant for a new month is made when the account has run something
-since the last one, and an account gets it once a month however it is
-opened or closed.
+never pay for tokens on foldrun's models. They **do not roll over**: a month after
+the last grant, what is unused is lost and a new 300 land, so an account
+cannot stockpile them. A month the account did not use renews the same way,
+and an account that was idle for months gets one new month, not the ones it
+missed. An account whose paid plan ends goes back to Free's month.
 
 **How long a credit lasts.** On a paid plan, credits land when the invoice is
 paid, and what is unused **rolls over** into the next cycle up to **twice** the
@@ -571,6 +578,16 @@ account filled in, wherever foldrun.ir is selling.
    the 30 minutes, or after the customer pressed back, is still credited —
    within a day of the order; later than that the platform team credits it
    by hand (Zarinpal returns a payment nobody verified within 72 hours).
+
+No account yet? When the address typed has no foldrun account, foldrun.ir
+offers to make one: foldrun (not foldrun.ir) mails that address a sign-up
+link. Opening it shows foldrun's own sign-up page with the address filled in
+— choose an account name and a password — and the account starts with the
+address already confirmed. It works even while sign-up is otherwise closed,
+for that one address, for seven days. Then foldrun sends the person back to
+foldrun.ir's charge page with the address filled in, to pay. foldrun.ir never
+sees the password or a session: signing in, API keys and everything else
+happen here.
 
 The credit is bought credit like any other: it expires 12 months after
 purchase if unused. The platform operator sets, in the console's Settings

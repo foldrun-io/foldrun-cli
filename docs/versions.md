@@ -94,7 +94,7 @@ ALTER TABLE "api_keys" DROP COLUMN "label";
 | The sidebar's foot | `foldrun v2026.10.01.3`, linking to What's new |
 | **What's new** (`/dashboard/whats-new`) | every recent release, newest first, with what changed in each — grouped Features, Fixes, Docs and Other |
 | **Settings → About** | the version, when it was released, the API version, and each component's commit |
-| `GET /api/version` | the same as JSON, no key needed — see the [API reference](api#versions) |
+| `GET /api/version` | the same as JSON; without a key it names only the version and the API date, the rest needs a key or a session — see the [API reference](api#versions) |
 | `GET /api/changelog` | the release notes as JSON, with a key |
 | Any `/api` response | the `X-Foldrun-Version`, `X-Foldrun-Api` and `X-Foldrun-Cli` headers |
 | `foldrun version` | this CLI, its core, and the platform it talks to |
