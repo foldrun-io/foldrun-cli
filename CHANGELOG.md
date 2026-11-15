@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.2.0] — 2026-11-15
+
+- feat(account model): show when the account runs on its Claude subscription ([52e5a22](https://github.com/foldrun-io/foldrun-cli/commit/52e5a22))
+
 ## [26.1.0] — 2026-11-15
 
 - feat(account): foldrun account beta [on|off] — beta features first ([11eb176](https://github.com/foldrun-io/foldrun-cli/commit/11eb176))
