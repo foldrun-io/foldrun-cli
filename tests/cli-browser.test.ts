@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { serve, cli } from "./fake-platform.ts";
 import { findChrome, playwrightVersion, callEnv, humanise, shapeOutput, TOOLS, browserPaths } from "../src/browser.mjs";
 
@@ -40,6 +41,7 @@ test("a call gets a minimal environment: never the foldrun token or any other se
   assert.equal(env.FOLDRUN_BROWSER_HEADLESS, "0", "a window the person can take over");
   assert.equal(env.FOLDRUN_BROWSER_LIVE_ROOT, path.join("/h/.foldrun", "browser", "chrome"), "sign-ins in a profile that lasts");
   assert.equal(env.FOLDRUN_BROWSER_LIVE_IDLE_MS, "0", "never closed while the person is away");
+  assert.equal(env.FOLDRUN_BROWSER_MODULES, path.join("/h/.foldrun", "browser"), "the Playwright setup installed, not a global one");
 });
 
 test("pointer moves are a person's unless a step says otherwise", () => {
@@ -104,7 +106,7 @@ test("browser mcp: initialize, list, and each tool call is one browse.mjs call w
   const open = said(3);
   assert.deepEqual(open.argv.slice(0, 7), ["--browser", "chrome", "--live", "true", "--url", "https://example.com", "--mode"]);
   assert.equal(fs.realpathSync(open.cwd), fs.realpathSync(path.join(dir, "browser", "work")), "calls run in the browser's own folder");
-  assert.deepEqual(open.env, ["FOLDRUN_BROWSER_DESKTOP", "FOLDRUN_BROWSER_HEADLESS", "FOLDRUN_BROWSER_LIVE_IDLE_MS", "FOLDRUN_BROWSER_LIVE_ROOT"], "no token, no key reaches a call");
+  assert.deepEqual(open.env, ["FOLDRUN_BROWSER_DESKTOP", "FOLDRUN_BROWSER_HEADLESS", "FOLDRUN_BROWSER_LIVE_IDLE_MS", "FOLDRUN_BROWSER_LIVE_ROOT", "FOLDRUN_BROWSER_MODULES"], "no token, no key reaches a call");
   assert.ok(fs.existsSync(path.join(dir, "browser", "work", "AGENTS.md")), "uploads are confined to work/, whatever the folders above hold");
 
   const act = said(4);
@@ -134,4 +136,25 @@ test("browser doctor, signed out: says what is missing and exits 1", async () =>
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /browser program\s+not signed in — `foldrun login` first/);
   assert.match(r.out, /Playwright\s+not installed/);
+});
+
+test("browser reset never removes a profile a running Chrome still holds, and never stops a process that is not ours", { skip: process.platform === "win32" }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-browser-"));
+  const live = path.join(dir, "browser", "chrome", "live-live");
+  fs.mkdirSync(path.join(live, "profile"), { recursive: true });
+  // An old live.json whose pid now belongs to something else.
+  const other = spawn("sleep", ["30"], { stdio: "ignore" });
+  fs.writeFileSync(path.join(live, "live.json"), JSON.stringify({ pid: other.pid, endpoint: "http://127.0.0.1:9" }));
+  const r = await cli(["browser", "reset", "--yes"], { env: { FOLDRUN_HOME: dir } });
+  const stillRunning = other.exitCode === null && other.signalCode === null;
+  other.kill("SIGKILL");
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /still open .* nothing was removed/);
+  assert.ok(stillRunning, "a process that is not the foldrun window's Chrome is left alone");
+  assert.ok(fs.existsSync(path.join(live, "profile")), "the profile stays");
+
+  fs.rmSync(path.join(live, "live.json"));
+  const ok = await cli(["browser", "reset", "--yes"], { env: { FOLDRUN_HOME: dir } });
+  assert.equal(ok.code, 0, ok.out);
+  assert.ok(!fs.existsSync(path.join(dir, "browser", "chrome")), "no Chrome running: the profile goes");
 });

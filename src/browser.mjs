@@ -87,6 +87,7 @@ export function callEnv(paths, from = process.env) {
   out.FOLDRUN_BROWSER_HEADLESS = "0";           // a window on this screen, so a person can take over
   out.FOLDRUN_BROWSER_LIVE_ROOT = paths.chrome; // one profile that outlives sessions and reboots
   out.FOLDRUN_BROWSER_LIVE_IDLE_MS = "0";       // never closed for idleness: the person may be away
+  out.FOLDRUN_BROWSER_MODULES = paths.home;     // the Playwright setup installed, ahead of any global one
   return out;
 }
 
@@ -121,6 +122,29 @@ function liveRecord(paths) {
   return null;
 }
 const pidAlive = (pid) => { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
+
+/** Whether a running process is the foldrun window's Chrome: its command line
+ *  names this profile. A pid in an old live.json may since belong to anything. */
+function isOurChrome(pid, profileRoot) {
+  if (process.platform === "win32") return false; // unverifiable without WMI: the person closes it
+  const r = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" });
+  return r.status === 0 && r.stdout.includes(`--user-data-dir=${profileRoot}`);
+}
+
+/** Stop the window's Chrome before its profile goes: closed through the program
+ *  when it can be, else asked to quit, else killed — and only when it really is
+ *  ours. True when nothing of it runs any more. */
+async function stopLive(paths, ctx) {
+  if (ctx) await runBrowse(ctx, ["--live", "end"], { timeoutMs: 30_000 });
+  const live = liveRecord(paths);
+  if (!live?.alive) return true;
+  if (!isOurChrome(live.pid, live.root)) return false;
+  const wait = async () => { for (let i = 0; i < 50 && pidAlive(live.pid); i++) await new Promise((r) => setTimeout(r, 100)); };
+  try { process.kill(live.pid, "SIGTERM"); } catch {}
+  await wait();
+  if (pidAlive(live.pid)) { try { process.kill(live.pid, "SIGKILL"); } catch {} await wait(); }
+  return !pidAlive(live.pid);
+}
 
 /**
  * One call of browse.mjs. Never throws: the answer says what happened.
@@ -521,8 +545,13 @@ export async function browserCmd(positional, flags, deps) {
     case "reset": {
       if (!(await deps.sureToDelete(flags, "browser reset", `the foldrun browser's profile at ${paths.chrome} — every site signed in there is signed out`))) return 1;
       const ctx = await ready({ refresh: false });
-      if (!("error" in ctx)) await runBrowse(ctx, ["--live", "end"], { timeoutMs: 30_000 });
       const live = liveRecord(paths);
+      // A Chrome still running on the profile keeps its sign-ins and writes
+      // them back: it stops first, or nothing is removed.
+      if (!(await stopLive(paths, "error" in ctx ? null : ctx))) {
+        console.log(`\n  ${c.red("✗")} the foldrun Chrome window is still open${live?.pid ? ` (pid ${live.pid})` : ""} — close it, then run \`foldrun browser reset\` again; nothing was removed\n`);
+        return 1;
+      }
       fs.rmSync(paths.chrome, { recursive: true, force: true });
       if (live && live.root !== paths.chrome) fs.rmSync(live.root, { recursive: true, force: true });
       console.log(`\n  ${c.green("✓")} profile removed — the next window starts signed out\n`);
