@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.3.2] — 2026-11-16
+
+- fix(browser): reset signals only the Chrome it checked, re-asking before each signal ([cbbd689](https://github.com/foldrun-io/foldrun-cli/commit/cbbd689))
+
 ## [26.3.1] — 2026-11-16
 
 - fix(browser): a stale live record is no running Chrome — reset never stops another program ([151ae1d](https://github.com/foldrun-io/foldrun-cli/commit/151ae1d))
