@@ -307,6 +307,17 @@ Signing in, in particular:
   over many addresses meets a ceiling for the account, and you are mailed
   when it is reached (this needs `FOLDRUN_TRUST_PROXY`, so callers can be
   told apart — without it the count is per account, from anyone);
+- the sign-in page also offers an emailed code in place of the password. It
+  is a six-digit code, kept only as a keyed hash, good for ten minutes and
+  once, and it works only in the browser that asked for it. Five wrong
+  guesses spend that code; a hundred wrong in a row pause code sign-in for
+  fifteen minutes (the password still works). Asking for a code answers the
+  same for every address, so it cannot be used to find out who has an
+  account, and at most six codes an hour are mailed to one address. Only an
+  address already confirmed can use it, and signing in this way never
+  confirms an address. The code replaces the password, not the second
+  factor: with two-step sign-in on, you are still asked for that code.
+  Profile → Sessions shows which way each session signed in;
 - a password reset mails at most three links an hour to one address, and
   one caller can use at most a small share of the install's hourly reset
   mail, so nobody can spend everyone else's;

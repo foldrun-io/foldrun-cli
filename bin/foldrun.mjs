@@ -31,6 +31,7 @@
 //   foldrun restore <ws>   a workspace's source back to a point in its history (shows the change, asks)
 //   foldrun onboarding     the account's getting-started steps, the next one first
 //   foldrun billing        the balance, and what the money went on
+//   foldrun browser        a real Chrome on this computer for an AI app, over MCP — setup, open, close, reset, doctor, mcp
 //   foldrun gallery        the tools and skills the platform ships to every account — list, pull, upgrade <name>
 //   foldrun storage <verb>  ls / cat / text / get / put / rm / share / shares / unshare — what the agents produced, and public links to it
 //   foldrun text <file>     a PDF, scan, document, sheet or recording on this machine, as text — read by the platform
@@ -229,6 +230,7 @@ const HELP = `foldrun — agents are just folders
   foldrun billing plans     the plans (credits, storage, compute at once), which one the account is on and this cycle's credits — also plan <id>, plan cancel, plan resume (asks first)
   foldrun billing top-up <usd>  Stripe's checkout page for adding credit (owner only; --no-browser prints it)
   foldrun billing card      Stripe's page for saving a card for auto top-up (owner only)
+  foldrun browser           a real Google Chrome on this computer for an AI app (Claude Code, Cursor, Codex), driven by the gallery's own browser program: setup (checks Chrome, installs Playwright once), open [url] (sign in to sites yourself — logins stay in its own profile), close, reset (signs out of everything, asks), doctor, mcp (the MCP server: \`claude mcp add --scope user foldrun-browser -- foldrun browser mcp\`)
   foldrun gallery           the platform's built-in tools (web, docs, video) and skills (modern-website, motion-video), and whether you keep your own copy — also pull (a copy for offline runs), upgrade <name>, --json
   foldrun identity          what your cloud must trust for keyless identities: the issuer and each agent's subject (--to <workspace>, --json)
   foldrun jobs              the four jobs — governance, guardrail, observability, evaluation — and what each has set (--to <workspace>, --json)

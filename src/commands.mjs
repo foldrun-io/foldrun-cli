@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
+import { browserCmd } from "./browser.mjs";
 import { createRequire } from "node:module";
 import { execFileSync, spawnSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
@@ -16147,6 +16148,12 @@ export async function run(command, positional, flags, workspace, layout) {
       return findCmd(positional, flags);
     case "gallery":
       return galleryCmd(positional, flags);
+    case "browser":
+      // A real Chrome on this computer, driven by the gallery's own browser
+      // program, for an AI app over MCP (src/browser.mjs).
+      return browserCmd(positional, flags, {
+        c, credentialsDir, remoteUrl, remoteCall, galleryCacheDir, writeGalleryCache, sureToDelete, explain, version: CLI_VERSION,
+      });
     case "storage":
       return storageCmd(positional, flags, layout);
     case "runtimes":
