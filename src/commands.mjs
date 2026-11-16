@@ -4723,7 +4723,7 @@ async function doctor(flags) {
  *
  *   keys ls                          every key, live and revoked
  *   keys create <label> [--role r]   an account key (editor unless said)
- *   keys create <label> --workspaces <ws>  one that opens that workspace alone
+ *   keys create <label> --to <ws>  (or --workspaces a,b) one that opens those workspaces alone
  *   keys revoke <id>
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
@@ -4795,10 +4795,26 @@ async function keysCmd(positional, flags) {
     body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
     // --workspaces a,b narrows the key to those; --workspaces all opens
     // every one you can. Unsaid, the key inherits your own scope.
-    if (typeof flags.workspaces === "string") body.workspaces = flags.workspaces === "all" ? null : flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
+    // --to <ws[,ws]> says the same (every other verb's --to names a workspace):
+    // it scopes the key, it is never dropped — a key the person believes is
+    // scoped but isn't is the worst way to be wrong.
+    if (flags.to !== undefined && (typeof flags.to !== "string" || !flags.to.trim())) throw new Error("--to needs a workspace: `foldrun keys create <label> --to <workspace>`");
+    if (flags.to !== undefined && flags.workspaces !== undefined) throw new Error("--to or --workspaces, not both (they say the same thing)");
+    const scope = flags.workspaces !== undefined ? flags.workspaces : flags.to;
+    if (scope !== undefined && typeof scope !== "string") throw new Error("--workspaces needs names: a,b — or all");
+    if (typeof scope === "string") {
+      const names = scope.split(",").map((w) => w.trim()).filter(Boolean);
+      if (scope !== "all" && !names.length) throw new Error("no workspace named — `--to <workspace>` or `--workspaces a,b`");
+      body.workspaces = scope === "all" ? null : names;
+    }
     // --require-customer (FOL-168): every run the key starts must name one.
     if (flags["require-customer"] === true) body.requireCustomer = true;
     const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+    // Asked to scope it, told it is not scoped: never hand that key out.
+    if (Array.isArray(body.workspaces) && made.workspaces === null) {
+      await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
+      throw new Error(`the platform made ${made.id} for every workspace, not ${body.workspaces.join(",")} — it was revoked; this platform cannot scope a key`);
+    }
     console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
     if (made.key == null) return lostSecret(made.id);
     console.log(`  ${made.key}\n`);

@@ -103,6 +103,41 @@ test("keys create with no --expires asks for 90 days, as the dashboard does; --f
   assert.equal(s.seen.length, 2, "refused before anything is sent");
 });
 
+test("keys create --to <ws> sends the scope, as --workspaces does (never an all-workspaces key)", async () => {
+  const s = await serve({ "POST /api/keys": (b) => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: JSON.parse(b).workspaces, expiresAt: null }) });
+  const one = await at(s.url, "keys", "create", "ci", "--to", "leads");
+  assert.equal(one.code, 0, one.out);
+  assert.deepEqual(JSON.parse(s.seen[0].body).workspaces, ["leads"]);
+  assert.equal((await at(s.url, "keys", "create", "ci", "--to", "leads, blog")).code, 0);
+  assert.deepEqual(JSON.parse(s.seen[1].body).workspaces, ["leads", "blog"]);
+  assert.equal((await at(s.url, "keys", "create", "ci", "--workspaces", "leads")).code, 0);
+  assert.deepEqual(JSON.parse(s.seen[2].body).workspaces, ["leads"]);
+  s.close();
+});
+
+test("keys create --to refuses, before any request, when the scope is empty, bare or doubled", async () => {
+  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", workspaces: null }) });
+  for (const args of [["--to"], ["--to", ","], ["--to", "a", "--workspaces", "b"]]) {
+    const r = await at(s.url, "keys", "create", "ci", ...args);
+    assert.notEqual(r.code, 0, args.join(" "));
+  }
+  s.close();
+  assert.equal(s.seen.length, 0, "nothing was sent");
+});
+
+test("keys create --to: a platform that answers with an all-workspaces key has it revoked, and no key is printed", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "fr_api_secret_all", id: "k9", prefix: "fr_api_secr", role: "editor", workspaces: null, expiresAt: null }),
+    "DELETE /api/keys": () => ({ ok: true }),
+  });
+  const r = await at(s.url, "keys", "create", "ci", "--to", "leads");
+  s.close();
+  assert.notEqual(r.code, 0);
+  assert.ok(!r.out.includes("fr_api_secret_all"), "the key is never shown");
+  assert.match(r.out, /every workspace/);
+  assert.deepEqual(JSON.parse(s.seen[1].body), { id: "k9" });
+});
+
 test("keys rotate --grace 1h posts to the rotate route and prints the new key once", async () => {
   const s = await serve({
     "POST /api/keys/k1/rotate": () => ({ ok: true, key: "fr_api_fresh", id: "k2", prefix: "fr_api_fresh", expiresAt: null, replaced: { id: "k1", endsAt: "2026-10-01T03:00:00.000Z" } }),
