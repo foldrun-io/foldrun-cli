@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { serve, cli } from "./fake-platform.ts";
-import { findChrome, playwrightVersion, callEnv, humanise, shapeOutput, TOOLS, browserPaths } from "../src/browser.mjs";
+import { findChrome, playwrightVersion, callEnv, humanise, shapeOutput, TOOLS, browserPaths, windowOpen } from "../src/browser.mjs";
 
 test("Chrome is found where each system installs it, and nowhere else", () => {
   const only = (want: string) => (p: string) => p === want;
@@ -168,4 +168,17 @@ test("browser reset stops the window's Chrome first, and never a process that is
   assert.equal(r2.code, 0, r2.out);
   assert.ok(!alive(ours), "the window's Chrome is stopped");
   assert.ok(!fs.existsSync(chrome), "then the profile goes");
+});
+
+test("the window is open only while Chrome shows a page: on macOS a closed window leaves Chrome running with none", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-browser-"));
+  const paths = browserPaths(() => dir);
+  const live = path.join(paths.chrome, "live-live");
+  fs.mkdirSync(live, { recursive: true });
+  const listing = (list: unknown) => (async () => ({ json: async () => list })) as unknown as typeof fetch;
+  assert.equal(await windowOpen(paths, listing([{ type: "page" }])), false, "no live session: closed");
+  fs.writeFileSync(path.join(live, "live.json"), JSON.stringify({ pid: process.pid, endpoint: "http://127.0.0.1:9" }));
+  assert.equal(await windowOpen(paths, listing([{ type: "page", url: "https://a/" }])), true);
+  assert.equal(await windowOpen(paths, listing([{ type: "service_worker" }])), false, "Chrome running, no window");
+  assert.equal(await windowOpen(paths, (async () => { throw new Error("refused"); }) as unknown as typeof fetch), true, "not answering is no proof of closed");
 });

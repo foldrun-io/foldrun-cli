@@ -123,6 +123,20 @@ function liveRecord(paths) {
 }
 const pidAlive = (pid) => { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
 
+/** Whether the foldrun window is open: its Chrome running AND showing a page.
+ *  On macOS, closing the last window leaves Chrome running with none, and a
+ *  call would start a new window in front of the person who just closed it. */
+export async function windowOpen(paths, fetcher = fetch) {
+  const live = liveRecord(paths);
+  if (!live?.alive) return false;
+  try {
+    const list = await (await fetcher(`${live.endpoint}/json/list`, { signal: AbortSignal.timeout(2_000) })).json();
+    return Array.isArray(list) && list.some((t) => t?.type === "page");
+  } catch {
+    return true; // not answering is no proof it is closed: the call says what happened
+  }
+}
+
 /** Whether a running process is the foldrun window's Chrome — its command line
  *  names this profile — false when it is something else (a pid in an old
  *  live.json may since be anything's), null when that cannot be told. */
@@ -359,8 +373,11 @@ async function probe(ctx, args) {
   }
 }
 
+const CLOSED = "the person closed the Chrome window — ask them whether they finished, then browser_open the page again (logins they made are kept)";
+
 async function waitForPerson(ctx, args, { sleep, now }) {
   const timeout = Math.min(900, Math.max(15, Number(args.timeout_seconds) || 300)) * 1000;
+  if (!(await windowOpen(ctx.paths))) return textResult("the Chrome window is not open — browser_open the page to hand over first", true);
   const first = await probe(ctx, args);
   if (!first) return textResult("could not read the page to watch it — is the window open? browser_open a page first", true);
   const start = first.url;
@@ -376,8 +393,7 @@ async function waitForPerson(ctx, args, { sleep, now }) {
   const deadline = now() + timeout;
   while (now() < deadline) {
     await sleep(3_000);
-    const live = liveRecord(ctx.paths);
-    if (live && !live.alive) return textResult("the person closed the Chrome window — ask them whether they finished, then browser_open the page again (logins they made are kept)", true);
+    if (!(await windowOpen(ctx.paths))) return textResult(CLOSED, true);
     const p = await probe(ctx, args);
     if (p && done(p)) return finish(ctx, `the person is done (${args.reason ?? "their part"}) — now on ${p.url}`);
   }
@@ -588,7 +604,8 @@ export async function browserCmd(positional, flags, deps) {
       console.log(`  ${ok(p.browse)} browser program    ${p.browse ? `${new URL(/** @type {string} */ (p.url)).host} ${c.dim(p.browse)}` : (p.note ?? "not fetched — foldrun browser setup")}`);
       console.log(`  ${ok(have && have === want)} Playwright         ${have ?? "not installed"}${want && have !== want ? c.amber(` (the program wants ${want} — foldrun browser setup)`) : ""}`);
       console.log(`  ${c.dim("·")} profile            ${live?.root ?? paths.chrome}${live && live.root !== paths.chrome ? c.amber("  (temp folder: this platform's browser program predates a fixed profile)") : ""}`);
-      console.log(`  ${c.dim("·")} window             ${live?.alive ? `open ${c.dim(`(pid ${live.pid})`)}` : "closed"}`);
+      const open = await windowOpen(paths);
+      console.log(`  ${c.dim("·")} window             ${open ? `open ${c.dim(`(pid ${live?.pid})`)}` : live?.alive ? `closed ${c.dim("(Chrome still running with no window; the next call opens one)")}` : "closed"}`);
       console.log(`\n  ${c.dim("verbs: setup, open [url], close, reset, mcp — `foldrun browser --help`")}\n`);
       return chrome && p.browse && have === want ? 0 : 1;
     }
