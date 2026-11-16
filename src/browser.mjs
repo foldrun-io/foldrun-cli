@@ -138,19 +138,28 @@ function ourChrome(pid, profileRoot) {
  *  when it can be, else asked to quit, else killed — and only when it really is
  *  ours. True when it no longer runs. */
 async function stopLive(paths, ctx) {
-  let live = liveRecord(paths);
+  const live = liveRecord(paths);
   if (!live?.alive) return true;
-  const ours = ourChrome(live.pid, live.root);
-  if (ours === false) return true; // a stale record: our Chrome is not running, and the pid is left alone
+  // The one process checked here is the one signalled: its pid and profile
+  // are held, and ownership asked again right before each signal.
+  const { pid, root } = live;
+  const ours = () => ourChrome(pid, root);
+  const first = ours();
+  if (first === false) return true; // a stale record: our Chrome is not running, and the pid is left alone
   if (ctx) await runBrowse(ctx, ["--live", "end"], { timeoutMs: 30_000 });
-  live = liveRecord(paths);
-  if (!live?.alive) return true;
-  if (ours === null) return false; // cannot tell it is ours: the person closes it
-  const wait = async () => { for (let i = 0; i < 50 && pidAlive(live.pid); i++) await new Promise((r) => setTimeout(r, 100)); };
-  try { process.kill(live.pid, "SIGTERM"); } catch {}
-  await wait();
-  if (pidAlive(live.pid)) { try { process.kill(live.pid, "SIGKILL"); } catch {} await wait(); }
-  return !pidAlive(live.pid);
+  const wait = async () => { for (let i = 0; i < 50 && pidAlive(pid); i++) await new Promise((r) => setTimeout(r, 100)); };
+  for (const sig of /** @type {const} */ (["SIGTERM", "SIGKILL"])) {
+    if (!pidAlive(pid)) break;
+    const now = ours();
+    if (now === false) break;   // it went, and the pid is another program's now
+    if (now === null) return false; // cannot tell it is ours: the person closes it
+    try { process.kill(pid, sig); } catch {}
+    await wait();
+  }
+  if (pidAlive(pid) && ours() !== false) return false;
+  // A window opened on the profile meanwhile (another call) holds it too.
+  const after = liveRecord(paths);
+  return !(after?.alive && after.pid !== pid && ourChrome(after.pid, after.root) !== false);
 }
 
 /**
