@@ -66,7 +66,7 @@ data centre. Clicks move the pointer the way a person's does.
 | `browser_open` | open a page (the current tab or a new one) and read it |
 | `browser_read` | read the current page again: the accessibility tree with a `[ref=eN]` on everything that can be acted on, or its text, markdown, links, tables, head |
 | `browser_act` | steps in order — click, fill, type, press, choose, scroll, wait, go back, switch tabs, upload, download, read a value — then read the page; an element is named by its ref (`@e13`), a CSS selector or `text=…` |
-| `browser_screenshot` | a picture of the page or one element |
+| `browser_screenshot` | a picture of what is in view, the whole page (`full_page`) or one element; one too big to send (a very long page) is refused with what to take instead |
 | `browser_wait_for_person` | hand the page to you; returns when the address changes, or the condition given (`until_url_contains`, `until_gone`, `until_visible`) |
 | `browser_close` | close the window; the sign-ins stay |
 

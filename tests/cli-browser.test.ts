@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { serve, cli } from "./fake-platform.ts";
-import { findChrome, playwrightVersion, callEnv, humanise, shapeOutput, TOOLS, browserPaths, windowOpen } from "../src/browser.mjs";
+import { findChrome, playwrightVersion, callEnv, humanise, shapeOutput, TOOLS, browserPaths, windowOpen, callTool, MAX_SHOT_BYTES } from "../src/browser.mjs";
 
 test("Chrome is found where each system installs it, and nowhere else", () => {
   const only = (want: string) => (p: string) => p === want;
@@ -181,4 +181,35 @@ test("the window is open only while Chrome shows a page: on macOS a closed windo
   assert.equal(await windowOpen(paths, listing([{ type: "page", url: "https://a/" }])), true);
   assert.equal(await windowOpen(paths, listing([{ type: "service_worker" }])), false, "Chrome running, no window");
   assert.equal(await windowOpen(paths, (async () => { throw new Error("refused"); }) as unknown as typeof fetch), true, "not answering is no proof of closed");
+});
+
+test("browser_screenshot takes what is in view unless asked for the whole page, and refuses a picture too big to send", async () => {
+  // 17 Nov 2026: a screenshot of a 450-comment thread, asked without
+  // full_page, came back as the whole page — 23 MB — and closed Claude
+  // Code's MCP connection ("Connection closed").
+  const dir = home();
+  const paths = browserPaths(() => dir);
+  fs.mkdirSync(paths.work, { recursive: true });
+  const fake = path.join(dir, "fake-browse.mjs");
+  fs.writeFileSync(fake, `import fs from "node:fs"; import path from "node:path";
+const a = process.argv.slice(2); const steps = JSON.parse(a[a.indexOf("--actions") + 1]);
+const shot = steps.find((s) => s.screenshot);
+fs.mkdirSync(path.dirname(shot.screenshot), { recursive: true });
+fs.writeFileSync(shot.screenshot, Buffer.alloc(shot.full ? ${MAX_SHOT_BYTES + 1} : 1000));
+fs.writeFileSync("last-steps.json", JSON.stringify(steps));
+console.log('{"get":"url","value":"https://example.com/"}');
+`);
+  const ctx = { browse: fake, paths };
+  const steps = () => JSON.parse(fs.readFileSync(path.join(paths.work, "last-steps.json"), "utf8"));
+
+  const view = await callTool(ctx, "browser_screenshot", {});
+  assert.equal(view.isError, undefined, JSON.stringify(view));
+  assert.equal(steps()[0].full, false, "the viewport, said out loud: the program's own default is the whole page");
+  assert.equal(view.content[0].type, "image");
+
+  const whole = await callTool(ctx, "browser_screenshot", { full_page: true });
+  assert.equal(steps()[0].full, true);
+  assert.equal(whole.isError, true);
+  assert.match(whole.content[0].text, /too big to send.*no full_page/);
+  assert.deepEqual(fs.readdirSync(path.join(paths.work, "outputs")), [], "the picture is not left behind");
 });

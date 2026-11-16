@@ -274,7 +274,7 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        full_page: { type: "boolean", description: "the whole scrolling page, not just what is in view" },
+        full_page: { type: "boolean", description: "the whole scrolling page; without it, only what is in view. A long page can be too big to send" },
         selector: { type: "string", description: "only this element" },
       },
       additionalProperties: false,
@@ -339,10 +339,18 @@ export async function callTool(ctx, name, args = {}, { sleep = (ms) => new Promi
     }
     case "browser_screenshot": {
       const file = `outputs/screenshot-${Date.now()}.png`;
-      const step = { screenshot: file, ...(args.full_page === true ? { full: true } : {}), ...(typeof args.selector === "string" && args.selector ? { selector: args.selector } : {}) };
+      // The program photographs the whole page unless told otherwise; say
+      // which, every time. A long page (a 450-comment thread) made a 23 MB
+      // picture that closed the app's MCP connection.
+      const step = { screenshot: file, full: args.full_page === true, ...(typeof args.selector === "string" && args.selector ? { selector: args.selector } : {}) };
       const r = await runBrowse(ctx, [...live, "--actions", JSON.stringify([step, { get: "url" }])]);
       const abs = path.join(ctx.paths.work, file);
       if (r.code !== 0 || !fs.existsSync(abs)) return textResult(shapeOutput(r), true);
+      const bytes = fs.statSync(abs).size;
+      if (bytes > MAX_SHOT_BYTES) {
+        fs.rmSync(abs, { force: true });
+        return textResult(`the picture is ${(bytes / 1e6).toFixed(1)} MB, too big to send (limit ${(MAX_SHOT_BYTES / 1e6).toFixed(1)} MB). Take what is in view (no full_page), one element (selector), or read the page as text with browser_read.`, true);
+      }
       const data = fs.readFileSync(abs).toString("base64");
       fs.rmSync(abs, { force: true });
       const url = /"value":\s*"([^"]+)"/.exec(r.stdout)?.[1];
@@ -358,6 +366,11 @@ export async function callTool(ctx, name, args = {}, { sleep = (ms) => new Promi
       return textResult(`no tool ${name}`, true);
   }
 }
+
+/** The largest picture browser_screenshot sends: model APIs refuse an image
+ *  over 5 MB as base64 (about 3.7 MB of file), and a bigger MCP message can
+ *  close the app's connection. */
+export const MAX_SHOT_BYTES = 3_700_000;
 
 /** Ask the page where it is, without changing it. */
 async function probe(ctx, args) {
