@@ -12,6 +12,22 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.3.0] — 2026-11-16
+
+### New in the public API
+
+- `foldrun browser`
+- the `--scope` flag
+
+- ci(security): ask the registry again when it leaves out a signing key ([1058978](https://github.com/foldrun-io/foldrun-cli/commit/1058978))
+- fix(keys): keys create --to scopes the key to that workspace; an unscoped answer is revoked, never shown ([d372d77](https://github.com/foldrun-io/foldrun-cli/commit/d372d77))
+- feat(browser): `foldrun browser` — a real Chrome on this computer for an AI app ([1ec42a0](https://github.com/foldrun-io/foldrun-cli/commit/1ec42a0))
+
+### deps
+
+- @foldrun/core ^24.2.1 ([56b0673](https://github.com/foldrun-io/foldrun-cli/commit/56b0673))
+- @foldrun/core ^24.2.0 ([82f59a4](https://github.com/foldrun-io/foldrun-cli/commit/82f59a4))
+
 ## [26.2.2] — 2026-11-16
 
 ### deps
