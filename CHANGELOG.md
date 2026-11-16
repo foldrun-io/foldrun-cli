@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.3.1] — 2026-11-16
+
+- fix(browser): a stale live record is no running Chrome — reset never stops another program ([151ae1d](https://github.com/foldrun-io/foldrun-cli/commit/151ae1d))
+- fix(browser): reset stops Chrome before removing its profile; calls load setup's Playwright ([871365f](https://github.com/foldrun-io/foldrun-cli/commit/871365f))
+
 ## [26.3.0] — 2026-11-16
 
 ### New in the public API
