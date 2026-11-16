@@ -138,23 +138,34 @@ test("browser doctor, signed out: says what is missing and exits 1", async () =>
   assert.match(r.out, /Playwright\s+not installed/);
 });
 
-test("browser reset never removes a profile a running Chrome still holds, and never stops a process that is not ours", { skip: process.platform === "win32" }, async () => {
+test("browser reset stops the window's Chrome first, and never a process that is not ours", { skip: process.platform === "win32" }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-browser-"));
-  const live = path.join(dir, "browser", "chrome", "live-live");
+  const chrome = path.join(dir, "browser", "chrome");
+  const live = path.join(chrome, "live-live");
   fs.mkdirSync(path.join(live, "profile"), { recursive: true });
-  // An old live.json whose pid now belongs to something else.
-  const other = spawn("sleep", ["30"], { stdio: "ignore" });
-  fs.writeFileSync(path.join(live, "live.json"), JSON.stringify({ pid: other.pid, endpoint: "http://127.0.0.1:9" }));
-  const r = await cli(["browser", "reset", "--yes"], { env: { FOLDRUN_HOME: dir } });
-  const stillRunning = other.exitCode === null && other.signalCode === null;
-  other.kill("SIGKILL");
-  assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /still open .* nothing was removed/);
-  assert.ok(stillRunning, "a process that is not the foldrun window's Chrome is left alone");
-  assert.ok(fs.existsSync(path.join(live, "profile")), "the profile stays");
+  const hold = (...args: string[]) => spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)", "--", ...args], { stdio: "ignore" });
+  const alive = (p: ReturnType<typeof hold>) => p.exitCode === null && p.signalCode === null;
 
-  fs.rmSync(path.join(live, "live.json"));
-  const ok = await cli(["browser", "reset", "--yes"], { env: { FOLDRUN_HOME: dir } });
-  assert.equal(ok.code, 0, ok.out);
-  assert.ok(!fs.existsSync(path.join(dir, "browser", "chrome")), "no Chrome running: the profile goes");
+  // An old live.json whose pid now belongs to another program: our Chrome is
+  // not running, so the profile goes and the other program is left alone.
+  const stranger = hold("--not-a-browser");
+  fs.writeFileSync(path.join(live, "live.json"), JSON.stringify({ pid: stranger.pid, endpoint: "http://127.0.0.1:9" }));
+  await new Promise((r) => setTimeout(r, 300));
+  const r1 = await cli(["browser", "reset", "--yes"], { env: { FOLDRUN_HOME: dir } });
+  assert.equal(r1.code, 0, r1.out);
+  assert.ok(alive(stranger), "a process that is not the foldrun window's Chrome is left alone");
+  assert.ok(!fs.existsSync(chrome), "the profile goes");
+  stranger.kill("SIGKILL");
+
+  // A Chrome that is ours (its command line names the profile), signed out so
+  // the program cannot close it: it is stopped before the profile goes.
+  fs.mkdirSync(path.join(live, "profile"), { recursive: true });
+  const ours = hold(`--user-data-dir=${path.join(live, "profile")}`);
+  fs.writeFileSync(path.join(live, "live.json"), JSON.stringify({ pid: ours.pid, endpoint: "http://127.0.0.1:9" }));
+  await new Promise((r) => setTimeout(r, 300));
+  const r2 = await cli(["browser", "reset", "--yes"], { env: { FOLDRUN_HOME: dir } });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(r2.code, 0, r2.out);
+  assert.ok(!alive(ours), "the window's Chrome is stopped");
+  assert.ok(!fs.existsSync(chrome), "then the profile goes");
 });

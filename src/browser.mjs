@@ -123,22 +123,29 @@ function liveRecord(paths) {
 }
 const pidAlive = (pid) => { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
 
-/** Whether a running process is the foldrun window's Chrome: its command line
- *  names this profile. A pid in an old live.json may since belong to anything. */
-function isOurChrome(pid, profileRoot) {
-  if (process.platform === "win32") return false; // unverifiable without WMI: the person closes it
-  const r = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" });
-  return r.status === 0 && r.stdout.includes(`--user-data-dir=${profileRoot}`);
+/** Whether a running process is the foldrun window's Chrome — its command line
+ *  names this profile — false when it is something else (a pid in an old
+ *  live.json may since be anything's), null when that cannot be told. */
+function ourChrome(pid, profileRoot) {
+  const r = process.platform === "win32"
+    ? spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}').CommandLine`], { encoding: "utf8", timeout: 15_000 })
+    : spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 });
+  if (r.status !== 0 || r.error) return null;
+  return r.stdout.includes(`--user-data-dir=${profileRoot}`);
 }
 
 /** Stop the window's Chrome before its profile goes: closed through the program
  *  when it can be, else asked to quit, else killed — and only when it really is
- *  ours. True when nothing of it runs any more. */
+ *  ours. True when it no longer runs. */
 async function stopLive(paths, ctx) {
-  if (ctx) await runBrowse(ctx, ["--live", "end"], { timeoutMs: 30_000 });
-  const live = liveRecord(paths);
+  let live = liveRecord(paths);
   if (!live?.alive) return true;
-  if (!isOurChrome(live.pid, live.root)) return false;
+  const ours = ourChrome(live.pid, live.root);
+  if (ours === false) return true; // a stale record: our Chrome is not running, and the pid is left alone
+  if (ctx) await runBrowse(ctx, ["--live", "end"], { timeoutMs: 30_000 });
+  live = liveRecord(paths);
+  if (!live?.alive) return true;
+  if (ours === null) return false; // cannot tell it is ours: the person closes it
   const wait = async () => { for (let i = 0; i < 50 && pidAlive(live.pid); i++) await new Promise((r) => setTimeout(r, 100)); };
   try { process.kill(live.pid, "SIGTERM"); } catch {}
   await wait();
