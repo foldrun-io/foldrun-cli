@@ -202,12 +202,12 @@ console.log('{"get":"url","value":"https://example.com/"}');
   const ctx = { browse: fake, paths };
   const steps = () => JSON.parse(fs.readFileSync(path.join(paths.work, "last-steps.json"), "utf8"));
 
-  const view = await callTool(ctx, "browser_screenshot", {});
+  const view: any = await callTool(ctx, "browser_screenshot", {});
   assert.equal(view.isError, undefined, JSON.stringify(view));
   assert.equal(steps()[0].full, false, "the viewport, said out loud: the program's own default is the whole page");
   assert.equal(view.content[0].type, "image");
 
-  const whole = await callTool(ctx, "browser_screenshot", { full_page: true });
+  const whole: any = await callTool(ctx, "browser_screenshot", { full_page: true });
   assert.equal(steps()[0].full, true);
   assert.equal(whole.isError, true);
   assert.match(whole.content[0].text, /too big to send.*no full_page/);
