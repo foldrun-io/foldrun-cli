@@ -5682,46 +5682,55 @@ const digest = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(
 async function remoteWorkspaceFiles(url, flags, ws, isSourcePath) {
   const { files } = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/source`);
   const wanted = (files ?? []).filter(isSourcePath);
-  const out = new Map();
-  for (const rel of wanted) {
+  // The API has no "every file with its text" read, so it is one request per
+  // file — asked READ_WIDTH at a time rather than one after another (a
+  // 60-file project took 60 round trips in a row).
+  const bodies = await pool(wanted, READ_WIDTH, async (rel) => {
     const { content } = await remoteCall(
       url,
       flags,
       `/api/workspaces/${encodeURIComponent(ws)}/source?path=${encodeURIComponent(rel)}`,
     );
-    out.set(rel, content);
-  }
-  return out;
+    return content;
+  });
+  return new Map(wanted.map((rel, i) => [rel, bodies[i]]));
 }
+
+/** How many reads of one listing go out at once: well under the API's per-credential window. */
+const READ_WIDTH = 8;
 
 /** Every library file on the platform, as {kind, path, content}. */
 async function remoteLibrary(url, flags, kinds) {
-  const out = [];
-  for (const kind of kinds) {
-    let entries;
-    try {
-      ({ entries } = await remoteCall(url, flags, `/api/library/${kind}`));
-    } catch {
-      continue; // an older platform without this kind
-    }
-    for (const e of entries ?? []) {
-      const rel = e.path ?? (e.name ? `${e.name}.md` : null);
-      if (!rel) continue;
-      // The listing is a catalogue of tools and skills, not of files: a
-      // folder tool is deliberately one row, so its code is not a row of its
-      // own. `files` is what that row is actually made of. Without it a pull
-      // brought down tool.md and left run.mjs behind, and the next deploy
-      // would have shipped a library whose every script tool had lost its
-      // program. Older platforms do not send it — then the entry is its own
-      // whole, which is true for every single-file entry anyway.
-      const wanted = Array.isArray(e.files) && e.files.length ? e.files : [rel];
-      for (const one of wanted) {
-        const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${encodeURIComponent(one)}`);
-        out.push({ kind, path: one, content });
+  const perKind = await Promise.all(
+    kinds.map(async (kind) => {
+      let entries;
+      try {
+        ({ entries } = await remoteCall(url, flags, `/api/library/${kind}`));
+      } catch {
+        return []; // an older platform without this kind
       }
-    }
-  }
-  return out;
+      /** @type {{ kind: string, path: string }[]} */
+      const todo = [];
+      for (const e of entries ?? []) {
+        const rel = e.path ?? (e.name ? `${e.name}.md` : null);
+        if (!rel) continue;
+        // The listing is a catalogue of tools and skills, not of files: a
+        // folder tool is deliberately one row, so its code is not a row of its
+        // own. `files` is what that row is actually made of. Without it a pull
+        // brought down tool.md and left run.mjs behind, and the next deploy
+        // would have shipped a library whose every script tool had lost its
+        // program. Older platforms do not send it — then the entry is its own
+        // whole, which is true for every single-file entry anyway.
+        const wanted = Array.isArray(e.files) && e.files.length ? e.files : [rel];
+        for (const one of wanted) todo.push({ kind, path: one });
+      }
+      return pool(todo, READ_WIDTH, async ({ kind, path: one }) => {
+        const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${encodeURIComponent(one)}`);
+        return { kind, path: one, content };
+      });
+    }),
+  );
+  return perKind.flat();
 }
 
 /** The workspaces the platform holds, by name. */
@@ -6221,15 +6230,23 @@ async function statusCmd(layout, flags, only) {
   if (!url) throw new Error("status compares this folder with a platform — pass --url, or `foldrun login` first");
   // The platform's own state first, one line: a diff read during an
   // incident should say so before it says anything else.
+  // Asked together: the platform's own state, and the list of projects.
+  const [{ report, error }, liveNames] = await Promise.all([fetchPlatformStatus(url, flags), remoteWorkspaceNames(url, flags)]);
   {
-    const { report, error } = await fetchPlatformStatus(url, flags);
     const paint = report ? (LEVEL_PAINT[report.status] ?? LEVEL_PAINT.unknown) : c.red;
     console.log(`\n  ${paint("●")} ${report ? `platform: ${report.description}` : `platform status unavailable (${error})`}${report && report.status !== "operational" ? c.dim("  — foldrun status --platform") : ""}`);
     if (report) printIncidents(report);
   }
   const { tree } = accountTreeFrom(layout.kind === "account" ? layout.accountRoot : layout.workspaceDir, only);
-  const live = new Set(await remoteWorkspaceNames(url, flags));
+  const live = new Set(liveNames);
   const stamps = readStamps(layout)[url] ?? {};
+  // Every project's files are read before the first line prints, together —
+  // not one project's after another's. Failures surface in the loop below,
+  // in the order the projects print, as before.
+  const reading = new Map(tree.workspaces.filter((w) => live.has(w.name)).map((w) => [w.name, remoteWorkspaceFiles(url, flags, w.name, isSourcePath)]));
+  for (const p of reading.values()) p.catch(() => {});
+  const accountMdReading = tree.agentsMd !== null ? remoteAccountAgentsMd(url, flags) : null;
+  accountMdReading?.catch(() => {});
 
   console.log(`\n  ${c.bold(url)} ${c.dim(`← ${tree.root}`)}\n`);
   for (const ws of tree.workspaces) {
@@ -6237,7 +6254,7 @@ async function statusCmd(layout, flags, only) {
       console.log(`  ${c.green("+")} ${c.bold(ws.name)}  ${c.dim(`${ws.files.length} files · not on the platform yet`)}`);
       continue;
     }
-    const there = await remoteWorkspaceFiles(url, flags, ws.name, isSourcePath);
+    const there = /** @type {Map<string, string>} */ (await reading.get(ws.name));
     const here = new Map(ws.files.map((f) => [f.path, f.content]));
     const added = [...here.keys()].filter((p) => !there.has(p));
     const updated = [...here.keys()].filter((p) => there.has(p) && there.get(p) !== here.get(p));
@@ -6267,7 +6284,7 @@ async function statusCmd(layout, flags, only) {
     console.log(`\n  ${c.dim(`on the platform but not here: ${gone.join(", ")} — \`foldrun pull\` brings them down`)}`);
   }
   if (tree.agentsMd !== null) {
-    const there = await remoteAccountAgentsMd(url, flags);
+    const there = await accountMdReading;
     if (there === null) console.log(`\n  ${c.dim(NO_ACCOUNT_FILE_API)}`);
     else if (there.refused) console.log(`\n  ${c.dim("AGENTS.md (account): not readable with this key — an admin of every project sees it")}`);
     else console.log(`\n  ${sameAccountMd(there.content, tree.agentsMd) ? `${c.green("✓")} AGENTS.md ${c.dim("(account) the same here and there")}` : `${c.dim("~")} AGENTS.md ${c.dim("(account) differs — `foldrun deploy` sends it")}`}`);
@@ -6301,9 +6318,11 @@ async function pullCmd(layout, flags, only) {
   const incoming = [];
   for (const name of names) {
     if (!SAFE_NAME.test(name)) throw new Error(`the platform named a project "${name}", which is not a project name — refusing to write it`);
-    const there = await remoteWorkspaceFiles(url, flags, name, isSourcePath);
-    for (const [rel, content] of there) incoming.push({ file: within(path.join(wsRoot, name), rel), content });
   }
+  const fetched = await Promise.all(names.map((name) => remoteWorkspaceFiles(url, flags, name, isSourcePath)));
+  names.forEach((name, i) => {
+    for (const [rel, content] of fetched[i]) incoming.push({ file: within(path.join(wsRoot, name), rel), content });
+  });
   for (const f of await remoteLibrary(url, flags, LIBRARY_KINDS)) {
     if (!LIBRARY_KINDS.includes(f.kind)) throw new Error(`the platform sent a library kind "${f.kind}" this CLI does not know — refusing to write it`);
     incoming.push({ file: within(path.join(root, "library", f.kind), f.path), content: f.content });
@@ -7857,9 +7876,12 @@ async function accountCmd(positional, flags) {
   const verb = positional[0];
 
   if (!verb) {
+    // Both asked at once; the pause answer is read after the defaults print.
+    const pausing = pauseState(remoteCall(url, flags, "/api/account/pause"));
+    pausing.catch(() => {});
     const { defaults } = await remoteCall(url, flags, "/api/account");
     printDefaults(defaults ?? {});
-    const halt = await pauseState(remoteCall(url, flags, "/api/account/pause"));
+    const halt = await pausing;
     const own = Object.keys(halt?.workspaces ?? {});
     if (halt) console.log(`  paused       ${halt.account ? c.red(pauseLine(halt.account)) : c.dim("no")}${own.length ? c.dim(` · on their own: ${own.join(", ")}`) : ""}`);
     console.log(`\n  ${c.dim("foldrun account set timezone Australia/Sydney · set notify email you@example.com · set budget 60/month · clear budget")}\n`);
