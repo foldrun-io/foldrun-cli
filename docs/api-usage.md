@@ -139,10 +139,15 @@ Idempotency-Key: <a UUID you generate, one per operation>
   response — same status, same body — and `Idempotent-Replayed: true`. No
   second run, no second charge.
 - The **same key with a different body** is a `422`: a key names one request.
+  `?wait` and `?timeout` do not count: a start retried with or without
+  `?wait=true`, or with another timeout, is the same request and gets the
+  first answer back (the run's id is in it, waited or not).
 - The same key while the first request is still being answered is a `409`
   with `Retry-After: 1`.
 - A `5xx` is not remembered, so a retry after a server failure is a real
   second attempt.
+- A `503` with `Retry-After: 2` means the store that keeps keys is not
+  answering: nothing ran, and the same key is safe to send again.
 - A request that never finished (the server restarted mid-answer) holds its
   key for at most two minutes, then the key is free for a real retry.
 - Minting or rotating a key: a replay says what was done but its `key` is
