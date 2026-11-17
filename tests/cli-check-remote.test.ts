@@ -73,7 +73,8 @@ trigger: manual
   const r = await at(s.url, "check", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /error\s+flows\/weekly\.md:\d+\s+\[\[ghost\]\] is not an agent in this workspace/);
+  // core says "project" from 24.2.3 (c96f122), "workspace" before it.
+  assert.match(r.out, /error\s+flows\/weekly\.md:\d+\s+\[\[ghost\]\] is not an agent in this (project|workspace)/);
   assert.match(r.out, /1 error/);
 });
 
