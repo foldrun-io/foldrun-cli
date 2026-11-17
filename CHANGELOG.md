@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.3.3] — 2026-11-16
+
+- test(browser): type the screenshot results so the typecheck passes ([dc25f80](https://github.com/foldrun-io/foldrun-cli/commit/dc25f80))
+- fix(browser): screenshot takes the viewport unless full_page; refuse one too big to send ([e2ea8d6](https://github.com/foldrun-io/foldrun-cli/commit/e2ea8d6))
+- fix(browser): a closed window is closed even while Chrome still runs (macOS) ([b7052e6](https://github.com/foldrun-io/foldrun-cli/commit/b7052e6))
+
 ## [26.3.2] — 2026-11-16
 
 - fix(browser): reset signals only the Chrome it checked, re-asking before each signal ([cbbd689](https://github.com/foldrun-io/foldrun-cli/commit/cbbd689))
