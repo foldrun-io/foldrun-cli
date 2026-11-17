@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.5.0] — 2026-11-17
+
+### perf
+
+- read a project's files, library and status together ([6355296](https://github.com/foldrun-io/foldrun-cli/commit/6355296))
+
 ## [26.4.0] — 2026-11-17
 
 - feat(keys): foldrun keys delete <id> ([19d8c35](https://github.com/foldrun-io/foldrun-cli/commit/19d8c35))
