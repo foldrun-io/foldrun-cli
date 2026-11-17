@@ -10,7 +10,7 @@ and cannot do, and why.
 Every step executes in its own sandbox, created for it and destroyed after
 it: a hardened container on a single box, a **gVisor** pod on a cluster.
 The sandbox holds a copy of the agent's folder and nothing else — not the
-platform's filesystem, not the vault, not another workspace. When the step
+platform's filesystem, not the vault, not another project. When the step
 ends, its files copy back through a filter, and the sandbox is gone.
 
 Startup is under a second warm, so this is not the latency it sounds like;
@@ -39,7 +39,7 @@ internet and its own account's search and browser pods; nothing else. An
 agent that is `trusted` or `none` (the default for one that does not read
 the web) reaches the internet only through the egress proxy, which holds
 its list of sites per connection; where it is enforced
-(`network_enforce: true` in the account's or workspace's `AGENTS.md`, or
+(`network_enforce: true` in the account's or project's `AGENTS.md`, or
 `FOLDRUN_NETWORK_ENFORCE=1` on the install) its pod has no other route, and no way to the
 account's browser or search pods. A step that browses is held the same way where the
 install sets `FOLDRUN_BROWSE_ENFORCE=1`: its browser runs inside that walled pod
@@ -50,7 +50,7 @@ the browser only: the step's other programs, and the calls the service does not
 serve, still reach sites directly.) The policy denies every private range (RFC1918) and the
 cloud metadata endpoint — the address that, on a cloud host, hands out the
 machine's own credentials. It cannot reach the platform's API, its
-database, its object store, or another account's pods. Workspace files
+database, its object store, or another account's pods. Project files
 come and go through presigned URLs, so no bucket credential is ever in a
 pod. A [test run](runs#test-runs) is denied the internet and the browser
 pod as well, at the network, so an outward call from a script fails closed
@@ -71,9 +71,9 @@ about the platform.
 ## What the file tools allow
 
 An agent's built-in Read, Write, Edit, Glob and Grep are confined to its
-workspace: its own folder, the workspace's shared directories, and the
+workspace: its own folder, the project's shared directories, and the
 account library read-only. A path outside — an invented `/tmp/…`, an
-absolute path, a directory a tool cloned outside the workspace — is refused
+absolute path, a directory a tool cloned outside the project — is refused
 with a message naming the path the agent probably meant. Three more things
 stay off limits inside the workspace: the secrets file, the run journal,
 and the generated index of a knowledge bundle.
@@ -83,7 +83,7 @@ wasted turn; a prompt that names the exact path brings the count to zero.
 
 **A run does not change its own configuration or code.** What a step
 writes to `AGENTS.md`, `agents/`, `flows/`, `tools/`, `hooks/`, `skills/`,
-`evals/` or `scripts/` is not kept: the workspace keeps its own copy, and
+`evals/` or `scripts/` is not kept: the project keeps its own copy, and
 the run page lists each such path under "Not kept". A prompt injection
 cannot widen what later runs may do. Data comes back as before — `state/`,
 `storage/`, `memory/`, `knowledge/`. The one exception is a step a person
@@ -95,7 +95,7 @@ on the trail as "kept with approval". That is how an approved fix lands.
 
 An agent names a secret in `secrets:`; the model never sees the value — it
 sees that a tool exists and calls it. Secrets are never written into a
-workspace, never in git, and reads of the vault return names, not values.
+project, never in git, and reads of the vault return names, not values.
 
 On a cluster the value does not enter the sandbox either. The worker keeps
 it and the step sends its API and model requests through a per-step
@@ -123,7 +123,7 @@ when that step presents its token — and a lease nobody but the worker could
 have signed is refused.
 
 Backups are encrypted before they leave the server. The nightly archive —
-every workspace, run record and the database — and the server's key file
+every project, run record and the database — and the server's key file
 are encrypted with age to a public key whose private half is not on the
 server, so a copy of the backup bucket opens nothing; the job refuses to run
 rather than ship anything unencrypted. See [Backups and restore](backups-and-restore).
@@ -183,7 +183,7 @@ a forwarded link cannot walk past `approvers:`. Only a digest of a used
 token is kept, and a key rotation kills every old link. Share links are 24 random
 bytes; every failed fetch is the same 404.
 
-Every write to a workspace is a revision with an author; every sign-in, key
+Every write to a project is a revision with an author; every sign-in, key
 use and role change is in the audit log; every step's tool calls, script
 runs and refusals are in the run's events. A run can be reconstructed from
 its record.
@@ -191,7 +191,7 @@ its record.
 ## What our telemetry carries
 
 Your run's record — its prompts, replies, files, tool arguments and errors —
-is yours, in your workspace, and goes where you send it (`telemetry:` to your
+is yours, in your project, and goes where you send it (`telemetry:` to your
 own OpenTelemetry collector, `notify:` to your webhook). The platform's own
 logs and metrics are a different thing: they go to our own operations store
 (in a bucket only it can read; the platform team reads it to see what happened
@@ -201,7 +201,7 @@ never carry your content.
 | Carries | Never carries |
 |---|---|
 | ids: account, member, API key (its id, never the key), request, run, job, task, lease, pod | prompts, replies, a step's output |
-| the names of your workspaces, flows, agents and evals | file names or contents, knowledge, memory |
+| the names of your projects, flows, agents and evals | file names or contents, knowledge, memory |
 | counts, durations, bytes, dollars, HTTP status | tool or script arguments and results |
 | an error's class (`timeout`, `oom`, `disk_full`, `model_error`, `network_error`, `policy_denied`, `user_code_error`, `not_found`, `cancelled`, `platform_error`), its type, its errno or SQLSTATE, and where in **our** code it happened | an error's message or stack text, a model process's stderr, a query or its values |
 | a reason word from a fixed set (`paused`, `key_revoked`, `bad_credentials`) | URLs, email addresses, anything with a space in it |
@@ -346,10 +346,10 @@ Signing in, in particular:
   leaked laptop key cannot repoint the reset mail and take the account;
 - a key rotated by a caller that is no person (a key known only by its
   label) acts as nobody, never as the rotated key's owner;
-- a member or key limited to some workspaces cannot change what every
-  workspace shares — the library, the account's AGENTS.md defaults, its
+- a member or key limited to some projects cannot change what every
+  project shares — the library, the account's AGENTS.md defaults, its
   model provider, its OAuth apps, the API version pin — nor people who work
-  outside its workspaces, and does not read the other workspaces' provider
+  outside its projects, and does not read the other projects' provider
   blocks or charges, nor the account's billing details.
 
 Frontmatter is YAML only: a file opened with `---js` (which some parsers
@@ -388,7 +388,7 @@ screen. `--json` is exact too: JSON writes control characters as escapes.
   is a write. Scope the credential to what the tool must do.
 - Bring-your-own-key credentials are yours; the platform stores them sealed
   and hands them to your steps, and never sees the bill.
-- The CLI on your machine runs steps as you, in your workspace, unless
+- The CLI on your machine runs steps as you, in your project, unless
   `FOLDRUN_RUN_ISOLATION=container` is set. That is your laptop and your
   call. See [Running it yourself](self-hosting).
 

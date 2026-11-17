@@ -14,7 +14,7 @@ frontmatter.
 | `webhook` | an HTTP POST reaches the flow's hook URL | the request body |
 | `email` | a message arrives at the flow's inbox URL | from, to, subject, text |
 | `flow` | the flow in `after:` settles the way `on:` says | that run's id, status, summary, result |
-| `storage` | a file lands under `path:` in this workspace's storage | the paths and who wrote them |
+| `storage` | a file lands under `path:` in this project's storage | the paths and who wrote them |
 | `watch` | the content at `url:` changes (polled every `every:`, default 15m) | the new content |
 
 A flow may not chain on itself. `watch` records its first sighting without

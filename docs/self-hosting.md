@@ -1,13 +1,13 @@
 # Running it yourself
 
-There are three places a workspace runs, and the same folder moves between
+There are three places a project runs, and the same folder moves between
 them unchanged.
 
 | shape | for | what is yours |
 |---|---|---|
 | **your machine** | one person, no server — the foldrun CLI and runtime, free from npm | everything: the files, the runs, the model bill |
 | **your own server** | you or your organisation on one machine: the dashboard, schedules, sandboxes, gates, a vault and a team, with Docker Compose | everything, and the machine |
-| **the hosted platform** | a team that would rather not run anything | your workspaces and their records; we run the machines |
+| **the hosted platform** | a team that would rather not run anything | your projects and their records; we run the machines |
 
 foldrun is **source-available** under the Functional Source License 1.1
 (FSL-1.1-ALv2): the format, the runner, the checks, the CLI, the engine and
@@ -182,7 +182,7 @@ cd my-desk && foldrun check && foldrun run publish
 
 Everything the format defines works here: agents, flows with groups and
 gates, tools in any language, skills, knowledge bundles, evals, `verify:`,
-`each:`, `budget:`. Runs are recorded under `.foldrun/` beside the workspace;
+`each:`, `budget:`. Runs are recorded under `.foldrun/` beside the project;
 secrets set with `foldrun secrets set` are encrypted there under a key the
 CLI makes on first use.
 
@@ -190,10 +190,10 @@ What is different from the platform, and why:
 
 - **No schedules.** Nothing is running when your laptop is closed. `foldrun
   run` is the trigger; cron on your own machine works if you want one.
-- **No sandbox by default.** Steps run as your user, in your workspace. Set
+- **No sandbox by default.** Steps run as your user, in your project. Set
   `FOLDRUN_RUN_ISOLATION=container` with Docker installed to get one hardened
   container per step, the same executor the platform's single-box shape uses.
-  Without one, a step's file tools may not write the workspace's configuration
+  Without one, a step's file tools may not write the project's configuration
   or code (`AGENTS.md`, agents, flows, tools, skills, evals, scripts), but its
   shell is not confined: only a sandbox keeps those files out of a step's reach.
 - **Gates wait in the terminal.** A `!` step parks the run; `foldrun run`
@@ -217,10 +217,10 @@ Nothing about the folder changes. What the platform adds is the operating around
 ## Moving records into the database
 
 Runs, the trigger log and the storage file index used to be files on the data
-volume. With a database configured they move into Postgres, one workspace at a
+volume. With a database configured they move into Postgres, one project at a
 time, while the other processes keep running.
 
-A row per workspace in `records_routing` says where its records are, and every
+A row per project in `records_routing` says where its records are, and every
 process with a database reads the same rows:
 
 | State | Meaning |
@@ -229,13 +229,13 @@ process with a database reads the same rows:
 | `moving` | An import is making the rows match the files. A record call waits up to 5 s, then is refused as busy. |
 | `database` | The rows are the records, for good. There is no way back to files. |
 
-A workspace with no row follows `('*', '*')`, the install's default, which
+A project with no row follows `('*', '*')`, the install's default, which
 stays `files` until a move has taken everything. `FOLDRUN_RECORDS=files` means
-only "this process never starts a move": a workspace another process moved is
+only "this process never starts a move": a project another process moved is
 read and written as rows there too, and a process that cannot read the routing
 for 10 s refuses record calls rather than guess.
 
-A move copies the files into rows, holds the workspaces at `moving` until every
+A move copies the files into rows, holds the projects at `moving` until every
 process seen in the last 30 s has acknowledged it, makes the rows exactly what
 the files say, flips them to `database`, and only then sets the files aside as
 `.imported-<date>`.
@@ -248,25 +248,25 @@ the files say, flips them to `database`, and only then sets the files aside as
    routing, so a move while one runs would hide what it reads.
 2. Remove `FOLDRUN_RECORDS=files`. A rolling restart is fine: the first process
    to boot in database mode moves everything. Pick a quiet moment — a run
-   saving while its workspace is held can fail as busy.
-3. Watch the ops log: `records.on_files` (workspaces still on files, with the
+   saving while its project is held can fail as busy.
+3. Watch the ops log: `records.on_files` (projects still on files, with the
    `records.import_failed` that says why; the next boot tries again),
    `records.move_abandoned` (`reason=not_acknowledged`: an old or stuck process
    did not answer within 60 s) and `records.stray_set_aside` (a record file
-   found in a workspace already in the database; kept as `.stray-<date>`, never
+   found in a project already in the database; kept as `.stray-<date>`, never
    merged in).
 
 The timings are `FOLDRUN_RECORDS_ROUTING_BEAT_MS` (1000),
 `FOLDRUN_RECORDS_ROUTING_LEASE_MS` (10000), `FOLDRUN_RECORDS_MOVING_WAIT_MS`
 (5000), `FOLDRUN_RECORDS_ACK_WAIT_MS` (60000) and `FOLDRUN_RECORDS_SETTLE_MS`
-(120000, raise it for very large workspaces); keep them the same on every
+(120000, raise it for very large projects); keep them the same on every
 process.
 
 ## Moving secrets into the database
 
-Each account's secrets, and each workspace's own, are a sealed `secrets.json`
+Each account's secrets, and each project's own, are a sealed `secrets.json`
 on the data volume. With a database configured they can be rows in Postgres
-instead, one row per account or workspace (`vault_scopes`), holding the same
+instead, one row per account or project (`vault_scopes`), holding the same
 sealed records: nothing in the database ever holds a value in the clear, and
 nothing below opens one except `verify --open`, in memory.
 
@@ -298,7 +298,7 @@ node --experimental-strip-types scripts/vault-fleet.ts export [--tenant a,b]
   file's lock. A row that exists is never replaced by a file. It is safe to
   repeat and to run while `secrets.store` is on.
 - `export` is the way back: it writes every row into its file as stored. A
-  workspace row whose folder is gone is skipped and named; the folder is never
+  project row whose folder is gone is skipped and named; the folder is never
   brought back.
 
 **Moving, and then stopping the files:**
@@ -337,7 +337,7 @@ row is only ever read from the row while the store is on.
 
 ## Where the data is
 
-On your machine: in the folder. On the platform: your workspace's files and
+On your machine: in the folder. On the platform: your project's files and
 every run's record, on our data volume and in the file store, readable
 through the dashboard and the API, exportable as a .zip (`foldrun export`). A deploy never
 touches what an agent learned or a run recorded. See [Storage and

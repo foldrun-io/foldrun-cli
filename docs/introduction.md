@@ -35,15 +35,15 @@ The design bets on three things:
 | **Your own server** | Docker and the public repositories | the whole platform on one machine of yours, for you or your organisation |
 | **Hosted** | an account | ours: schedules, sandboxes, a vault, a team — nothing to run |
 
-The same workspace moves between them with `foldrun deploy`.
-Start locally; that is where every workspace should be born. foldrun is
+The same project moves between them with `foldrun deploy`.
+Start locally; that is where every project should be born. foldrun is
 source-available under the Functional Source License: free for your own
 use and your organisation's, not for offering it to others as a service —
 see [Running it yourself](self-hosting).
 
 ## Where to go
 
-- [Getting started](getting-started) — install, make a workspace, run it.
+- [Getting started](getting-started) — install, make a project, run it.
 - [How it works](how-it-works) — the eight nouns and the flow grammar, in one read.
-- [Workspaces](workspaces), [Agents](agents), [Flows](flows), [Tools](tools) — the format, field by field.
+- [Projects](workspaces), [Agents](agents), [Flows](flows), [Tools](tools) — the format, field by field.
 - [Runs](runs), [Budgets and billing](budgets-and-billing), [Security](security) — what happens when it runs.

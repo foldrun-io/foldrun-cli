@@ -5,7 +5,7 @@ different things:
 
 | | What it brings back | Who does it | How far back |
 |---|---|---|---|
-| **A workspace's history** | its agents, flows, knowledge, skills, tools, scripts — the markdown | you, from Settings → Backups, `foldrun restore` or the API | every change it ever had |
+| **A project's history** | its agents, flows, knowledge, skills, tools, scripts — the markdown | you, from Settings → Backups, `foldrun restore` or the API | every change it ever had |
 | **A database dump before a migration** | the database: people, API keys, the ledger and every balance, the queue, the audit log | the platform team, when you ask | the last 10 deploys that changed the schema |
 
 You do not need to switch either on.
@@ -28,8 +28,8 @@ It holds the database only, not the data volume.
 
 ### What it does not hold
 
-- Workspace files, run records, `state/`, `memory/`, the vault and each
-  workspace's history: the data volume is not backed up. A workspace's
+- Project files, run records, `state/`, `memory/`, the vault and each
+  project's history: the data volume is not backed up. A project's
   source can still be restored from its own history (below).
 - **Storage file bytes.** These live in object storage (R2), not on the data
   volume. *Unverified:* whether a storage file deleted by mistake can still
@@ -61,11 +61,11 @@ entry in `accounts`. Each record says `encrypted` and names the key it was
 encrypted to by fingerprint (`recipient`, `sha256:` and 16 hex digits of the
 public key).
 
-## Restoring a workspace yourself
+## Restoring a project yourself
 
-Every change to a workspace — a dashboard save, a deploy, an import — is a
+Every change to a project — a dashboard save, a deploy, an import — is a
 revision, and every revision keeps a snapshot of the whole source as it
-stood right after it. Restoring puts the workspace's source back as it was
+stood right after it. Restoring puts the project's source back as it was
 at one of them — the platform's own deploy history, so it works the same
 whether or not you keep the source in git:
 
@@ -80,13 +80,13 @@ or before it — a time without a zone is read in the server's timezone, so
 add `Z` or an offset to be exact), or an age: `90m`, `12h`, `3d`, `2w`.
 A revision's diff is that one change; its snapshot is the whole source as
 it stood on disk just after it, so two people saving at once each see the
-other's change in their snapshot. History holds snapshots from 17 October 2026: each workspace's starts with
+other's change in their snapshot. History holds snapshots from 17 October 2026: each project's starts with
 a "history starts here" revision, its source as it stood then, and nothing
 before it can be restored this way.
 
 - **Preview first.** The dry run lists every file that would change, come
   back, or go, with a line diff. Nothing is written.
-- **Confirm by name.** The restore itself needs the workspace's name typed
+- **Confirm by name.** The restore itself needs the project's name typed
   back (`confirm` in the API). The CLI sends the removals you were shown, and
   if anything else would now be removed — a file added in between — the
   restore is refused and you are asked to look again.
@@ -108,7 +108,7 @@ POST /api/workspaces/<ws>/restore
 { "to": "<to.id from the dry run>", "confirm": "<ws>", "expectRemoved": [ … ] }
 ```
 
-The workspace's History page lists every revision; open one and **Roll back
+The project's History page lists every revision; open one and **Roll back
 to this** does the same restore, by revision instead of by time, with its
 preview first.
 
@@ -122,11 +122,11 @@ sealed half of the archive is deliberately not on the server, so it is done
 by the platform team rather than by a button.
 
 Settings → Backups → **Request a restore**: what (run records, `state/`,
-storage, or everything), which workspace (or all), the time you want back,
+storage, or everything), which project (or all), the time you want back,
 optionally the snapshot, and a note. The request is recorded, mailed to the
 platform team and written to the audit log (`backup.restore_requested`); the
 page lists your earlier requests. Asking needs the admin role and access to
-every workspace.
+every project.
 
 ```sh
 foldrun backups request --what runs --at "2026-09-28 14:00" --to sales --note "a run record was deleted"

@@ -23,7 +23,7 @@ write.
 |---|---|---|
 | **knowledge/** | nobody | given to it; reading is denied to nothing, writing to everything |
 | **memory/** | the agent | what it learned, one fact per file, indexed |
-| **state/** | the workspace | the bookmark between runs |
+| **state/** | the project | the bookmark between runs |
 | **storage/** | anyone | bytes, not source — PDFs, CSVs, images |
 
 The line between the last two is worth learning early: a value **regenerated**

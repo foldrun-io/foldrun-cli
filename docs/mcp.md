@@ -35,8 +35,8 @@ you choose:
 
 - **what it may do** — read only (inbox, runs, flows, files), or read and act
   (also start and stop runs, approve gates, answer and message agents, and
-  create workspaces and write or delete their files);
-- **which workspaces** — every one you may open, or the ones you tick.
+  create projects and write or delete their files);
+- **which projects** — every one you may open, or the ones you tick.
 
 **Connect** sends you back to claude.ai, connected; **Deny** sends it a no.
 It is the same in the Claude apps on a phone, which share claude.ai's
@@ -82,7 +82,7 @@ address and the same lines.
 
 Every app connected over OAuth is listed in Settings → API keys → **Connected
 AI apps**: the app, where its answers went, whose approval, what access and
-which workspaces, when it was connected and last used. **Disconnect** ends it —
+which projects, when it was connected and last used. **Disconnect** ends it —
 every token it holds stops at once — and the person can connect it again. You
 see your own; an admin sees everyone's and may disconnect any.
 
@@ -93,7 +93,7 @@ foldrun mcp disconnect <id>        # asks first; --yes on a pipe
 
 What a connection may do is decided at every call, not only when it was
 approved: it acts as the person who approved it, at the lower of the role
-they chose then and the role they hold now, in the workspaces both allow. A
+they chose then and the role they hold now, in the projects both allow. A
 person who leaves the account, or is made a viewer, takes their apps with
 them. The access token lasts an hour and opens `/api/mcp` only — sent to any
 other route it is refused. Refresh tokens rotate on every use, and one used
@@ -101,11 +101,11 @@ twice disconnects the app: someone else has a copy. **Machine clients.** A progr
 nightly job, a CI step or another service, can sign in with client
 credentials. An admin registers it in Settings → API keys → Connected AI apps
 (**Add a machine client**), or with `foldrun mcp clients add <name>`, choosing
-its role, its workspaces, and whether it may act or only read. It gets a
+its role, its projects, and whether it may act or only read. It gets a
 client id and a secret, shown once, or it registers public keys and signs
 assertions (`private_key_jwt`). It asks the token endpoint with
 `grant_type=client_credentials` and gets an access token for an hour, with no
-refresh token: it simply asks again. It acts within the role and workspaces of
+refresh token: it simply asks again. It acts within the role and projects of
 the admin who registered it, and stops if that admin loses them. It is listed
 with the connected apps, and disconnecting it ends it at once: its next token
 request is refused with `invalid_client`.
@@ -127,15 +127,15 @@ and that automatic disconnect are in the audit log (`mcp.connected`,
 
 | tool | does | route |
 |---|---|---|
-| `whoami` | the account, role and workspaces this key acts for | `GET /api/me` |
-| `list_workspaces` | the workspaces it may open | `GET /api/workspaces` |
+| `whoami` | the account, role and projects this key acts for | `GET /api/me` |
+| `list_workspaces` | the projects it may open | `GET /api/workspaces` |
 | `inbox` | what waits on you: approvals, questions, issues, proposed fixes, your failed runs (`bucket`, `kind`, `workspace`) | `GET /api/me/inbox` |
 | `list_approvals` | every gate waiting on a person, and every question an agent is asking | `GET /api/approvals` |
-| `list_flows` | a workspace's flows | `GET …/flows` |
-| `list_agents` | a workspace's agents: what each is for and when it last ran | `GET …/agents` |
+| `list_flows` | a project's flows | `GET …/flows` |
+| `list_agents` | a project's agents: what each is for and when it last ran | `GET …/agents` |
 | `list_runs` | recent runs, with outcome, summary and failure (`limit` up to 100, default 20; `flow` keeps that flow's among the newest 500) | `GET …/runs` |
 | `get_run` | one run in full | `GET …/runs/<id>` |
-| `read_file` | one file of a workspace's source (with its `sha256`), or the tree | `GET …/source` |
+| `read_file` | one file of a project's source (with its `sha256`), or the tree | `GET …/source` |
 | `check_workspace` | what `foldrun check` says about a workspace: findings with rule ids (`security: true` for the security rules alone) | `GET …/check` |
 | `run_flow` | start a flow (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations), `inputs` for [files](runs#inputs)) | `POST …/flows/<flow>/run` |
 | `run_agent` | run one agent on a task of your own, in its own sandbox, no flow needed (`task`, `test: true` for a [test run](runs#test-runs), `context` for a turn of a [conversation](runs#conversations), `inputs` for [files](runs#inputs)); answers a run id at once — read it with `get_run` | `POST …/agents/<agent>/run` |
@@ -143,7 +143,7 @@ and that automatic disconnect are in the audit log (`mcp.connected`,
 | `answer_question` | answer an agent's question mid-step | `POST …/runs/<id>/answer` |
 | `message_run` | say something to a running agent | `POST …/runs/<id>/message` |
 | `stop_run` | stop a run | `POST …/runs/<id>/stop` |
-| `create_workspace` | a new, blank workspace — an `AGENTS.md` and nothing else; refused when the name is taken | `POST /api/workspaces` |
+| `create_workspace` | a new, blank project — an `AGENTS.md` and nothing else; refused when the name is taken | `POST /api/workspaces` |
 | `write_file` | create or replace one file — an agent, a flow, knowledge, a skill, `AGENTS.md` (`message` for the revision, `if_match` below) | `PUT …/source` |
 | `delete_file` | delete one file or folder | `DELETE …/source` |
 
@@ -161,7 +161,7 @@ build an automation, not only drive one: `create_workspace`, then
 `test: true`.
 
 - **A file written is live at once.** The next run reads it; there is no
-  separate deploy. Each write is a revision in the workspace's
+  separate deploy. Each write is a revision in the project's
   [History](deploying#history-and-rollback), so a mistake is undone from there.
 - **It is checked as a deploy checks it.** A file with an error (a flow
   naming an agent that is not there, frontmatter YAML cannot read) is
@@ -179,10 +179,10 @@ folder and `foldrun deploy` it ([CLI](cli)); both reach the same files.
 
 Nothing a key could not. Each tool is a call to the route in the table, made
 with the same key — so a viewer's key cannot start, approve or stop; a key
-scoped to some workspaces sees and touches only those; an
+scoped to some projects sees and touches only those; an
 [A2A key](a2a#a2a-keys) is refused (it opens `/a2a` and nothing else); and
 every check, limit and refusal is the route's own. A tool whose route refused
-answers `isError: true` with the route's words: `HTTP 403: this workspace is
+answers `isError: true` with the route's words: `HTTP 403: this project is
 not one you were given access to`.
 
 `inbox` is a person's: a key minted by a person (every key from Settings, and

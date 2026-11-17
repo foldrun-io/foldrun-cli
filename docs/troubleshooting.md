@@ -61,9 +61,9 @@ A cap over time, reached. New runs refuse until the window turns — tomorrow,
 next week, the new month — in the account's own `timezone:`. Raise it in
 Settings or in the file, or remove the line.
 
-## "was denied: … is outside this workspace"
+## "was denied: … is outside this project"
 
-The agent reached for a path outside its workspace — `/tmp/something`, an
+The agent reached for a path outside its project — `/tmp/something`, an
 absolute path, a checkout a tool made — and was refused. The message names
 the path it probably meant. It costs a turn, nothing more; if one step
 collects many, name the exact path in its prompt (`workspace/storage/x.md`).
@@ -82,9 +82,9 @@ until it is there.
 
 ## The run is parked and nobody knows
 
-Check the account's `notify:` — a workspace that declared its own block
+Check the account's `notify:` — a project that declared its own block
 replaced the account's whole, and may have dropped `awaiting-approval`. The
-dashboard banner shows every parked run across workspaces regardless.
+dashboard banner shows every parked run across projects regardless.
 
 ## It ran on the wrong model
 

@@ -434,7 +434,7 @@ test("workspace set timezone PATCHes it; set notify merges with the file; rename
     { budget: null },
   ]);
   assert.equal(piped.code, 1);
-  assert.match(piped.out, /renaming a workspace needs a person/);
+  assert.match(piped.out, /renaming a project needs a person/);
   assert.match(rename.out, /renamed to blog/);
   assert.match(rename.out, /webhook URLs changed for inbound/);
   assert.match(clear.out, /budget cleared/);
@@ -514,7 +514,7 @@ test("account export writes the file and counts what is in it; a 403 says owner 
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(fs.readFileSync(file, "utf8"), body);
-  assert.match(r.out, /1 workspaces · 3 runs · 2 members · 0 ledger lines/);
+  assert.match(r.out, /1 projects · 3 runs · 2 members · 0 ledger lines/);
   assert.match(no.out, /account export is the account owner's alone/);
 });
 

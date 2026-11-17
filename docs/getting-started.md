@@ -16,8 +16,8 @@ foldrun check                            # free: no model is called
 foldrun run publish --task "write about rain"
 ```
 
-`init` scaffolds an **account folder** with one workspace in it, and that
-workspace already works: two agents, a flow that names them, an eval, and
+`init` scaffolds an **account folder** with one project in it, and that
+project already works: two agents, a flow that names them, an eval, and
 knowledge they share. `check` validates all of it offline —
 run it after edits the way you would run a typecheck. It is the cheapest
 feedback in the system and it catches a broken flow before a schedule fires it
@@ -42,7 +42,7 @@ my-account/
 ```
 
 That is the shape the platform keeps, so the folder you edit is the folder that
-runs. `--workspace <name>` names the first workspace (default `main`) and
+runs. `--workspace <name>` names the first project (default `main`) and
 `foldrun new <name>` adds another. `foldrun init --flat` makes the older
 single-folder shape instead, and every command still reads it.
 
@@ -114,21 +114,21 @@ foldrun secrets set STRIPE_KEY          # prompted, never echoed, never in a fil
 ```
 
 Agents name them in `secrets:` and receive the value at run time. They are never
-written into the workspace, so a workspace is always safe to commit.
+written into the project, so a project is always safe to commit.
 
 ## The checklist on the dashboard
 
-The first time you open an account that has no workspace, the dashboard
+The first time you open an account that has no project, the dashboard
 starts you in the **welcome flow** (`/dashboard/welcome`): add your model key
 (on a hosted platform, where the account brings its own — every run is
 refused until it has one), choose what to start with — the demo pipeline, a
-blank workspace, an imported .zip, the CLI, or connecting your AI app over
+blank project, an imported .zip, the CLI, or connecting your AI app over
 MCP — then run it once and watch each step live, ending on the run's page or,
 if it stops, the reason and the Doctor. Every screen can be skipped, and the
 flow picks up wherever the account really is, however you did the work.
 
 After that the home page shows a **Getting started** card: add your model
-key, create a workspace, write or deploy an agent, run a flow, get a run to
+key, create a project, write or deploy an agent, run a flow, get a run to
 finish, add a secret, schedule a flow or give it a webhook, invite a
 teammate, set up billing (where the plan asks for it) and install the CLI —
 "4 of 8", with the next step opened up and a link to where to do it, and
@@ -143,10 +143,10 @@ models, billed in credits). A step's **…** menu hides that step for you; the
 card's hides the whole card, and the line at the foot of the page brings it
 back. It goes away by itself once every step is done.
 
-Each workspace's overview has a **Workspace checklist** of what a desk needs
+Each project's overview has a **Project checklist** of what a desk needs
 before it can be left to run on its own: a flow that ran to the end, a
 schedule or webhook, an owner, an eval, and `notify:` so someone is told
-when a run fails — each ticked from the workspace itself (the owner and
+when a run fails — each ticked from the project itself (the owner and
 `notify:` count when the account's AGENTS.md sets them), each a link to
 where it is done. Hide an item, or the card, for yourself.
 
@@ -162,5 +162,5 @@ a key.
 ## Where to go next
 
 - **The grammar** — every field an agent or flow can carry: Help
-- **The API** — driving a deployed workspace over HTTP: the API reference
+- **The API** — driving a deployed project over HTTP: the API reference
 - **The CLI** — every command and flag: the CLI reference

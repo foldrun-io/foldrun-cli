@@ -9,9 +9,9 @@ whose supervisors cannot see what the agents did is not supervised.
 
 | role | may |
 |---|---|
-| **viewer** | read everything — workspaces, runs and their output, files, history, usage |
-| **editor** | + edit files, upload, deploy (to a workspace that exists — a deploy that makes one is an admin's), push; run, stop, re-run, approve and promote runs; test tools |
-| **admin** | + create and delete workspaces; delete a run from history; write secrets and connect credentials; mint keys; invite, re-role and remove editors and viewers |
+| **viewer** | read everything — projects, runs and their output, files, history, usage |
+| **editor** | + edit files, upload, deploy (to a project that exists — a deploy that makes one is an admin's), push; run, stop, re-run, approve and promote runs; test tools |
+| **admin** | + create and delete projects; delete a run from history; write secrets and connect credentials; mint keys; invite, re-role and remove editors and viewers |
 | **owner** | + billing; make and unmake admins; transfer the account |
 
 There is exactly one owner: the account's creator until they transfer it.
@@ -23,15 +23,15 @@ promote peers is an owner with extra steps.
 
 A refused call answers `403` with the role that was needed.
 
-### A workspace's policy is an admin's
+### A project's policy is an admin's
 
-The keys in a workspace's `AGENTS.md` that set policy for the whole
-workspace — `budget`, `compute`, `notify`, `network_enforce`, `telemetry`,
+The keys in a project's `AGENTS.md` that set policy for the whole
+project — `budget`, `compute`, `notify`, `network_enforce`, `telemetry`,
 `alerts`, `owner`, `judge` and `timezone` (also when written under a
 `governance:`, `guardrail:`, `observability:` or `evaluation:` block) — and a
 flow's `a2a:`, which decides whether outside agents may call it ([A2A](a2a)) — need
 the **admin** role to change, whichever way the file is written: the
-workspace's settings, a save in the editor (`PUT …/source`), `foldrun deploy`,
+project's settings, a save in the editor (`PUT …/source`), `foldrun deploy`,
 an import, or a restore to an older point. An editor still edits the rest of
 `AGENTS.md` — its prose and every other key — and may deploy, import or
 restore anything that leaves those keys as they are; a change to one of them
@@ -41,23 +41,23 @@ it counts as a change too. A dry run (deploy, import, restore) is not
 refused.
 
 The account's own `AGENTS.md` is written only through the account's settings
-(`PATCH /api/account`), which needs an admin with access to every workspace.
+(`PATCH /api/account`), which needs an admin with access to every project.
 
 ## Scoped members
 
-A member can be limited to some workspaces. The customer whose desk lives in
-one workspace sees that workspace's runs and files and nothing else; the
+A member can be limited to some projects. The customer whose desk lives in
+one project sees that project's runs and files and nothing else; the
 sidebar, Find, the runs list and the approvals banner all filter to their
 scope. Scope is set on the invite and changed per member later.
 
 Secrets and OAuth connections follow the scope too. A scoped member or key
-sees and changes only its own workspaces' secrets and connections: not
-another workspace's, and not the account-level ones, which belong to
-everyone's workspaces at once.
+sees and changes only its own projects' secrets and connections: not
+another project's, and not the account-level ones, which belong to
+everyone's projects at once.
 
 ## Invites
 
-An invite carries a role, a workspace scope, and usually an email address it
+An invite carries a role, a project scope, and usually an email address it
 is bound to — only that address can accept it. It is sent through the
 account's email connection, or returned as a link to pass on yourself; an
 invite with no address is a link for one person, whoever opens it first.
@@ -66,7 +66,7 @@ invite with no address is a link for one person, whoever opens it first.
   creates the member; a second person, or the same person again, is refused.
   It lasts seven days.
 - **Pending invites are listed.** Settings → Team shows the links still out —
-  the address or "anyone with the link", role, workspaces, who made it, when
+  the address or "anyone with the link", role, projects, who made it, when
   it expires — with **Revoke** on each. The same list is
   `GET /api/team/invites` (`?all=1` adds accepted, revoked and expired ones)
   and `foldrun team invites`. The link itself is never listed: it is shown
@@ -74,12 +74,12 @@ invite with no address is a link for one person, whoever opens it first.
 - **Revoke one** with that button, `DELETE /api/team/invites/<id>` or
   `foldrun team invites revoke <id>`; its link stops working at once. An
   admin invite is the owner's to revoke, and a member scoped to some
-  workspaces sees and revokes only the invites inside its scope.
+  projects sees and revokes only the invites inside its scope.
 - **Other things revoke them too.** A new invite to an address revokes the
   older ones still pending to it. Removing a member revokes every pending
   invite they made and any pending invite to their address — a removed
   member cannot rejoin with an old link. Lowering a member's role or
-  narrowing their workspaces revokes the invites they made that they could
+  narrowing their projects revokes the invites they made that they could
   no longer make. An invite is also checked against its maker when it is
   accepted: if they have left or can no longer grant it, it is refused.
 - **Old links are refused.** Invite links made before 29 October 2026 were
@@ -94,8 +94,8 @@ Each revocation is in the audit log as `member.invite_revoked`;
 
 A key is minted with a role (`editor` unless you say otherwise) and acts as
 the account with that role. It can never be wider than the person who made
-it: not a higher role, and not a workspace they cannot open — a key minted
-by someone scoped to two workspaces is scoped to those two. Two things a key cannot do: act against a named
+it: not a higher role, and not a project they cannot open — a key minted
+by someone scoped to two projects is scoped to those two. Two things a key cannot do: act against a named
 member — inviting, re-roling, removing, transferring need a person,
 because a key names an account and never a who — and exceed its role.
 
@@ -103,7 +103,7 @@ One key is a person: the one your own `foldrun login` minted on your
 machine. From it you can manage the team — `foldrun team invite`, `team
 role`, `team access`, `team remove` — and set your own name and timezone
 (`foldrun me name`, `foldrun me timezone`). It acts at the lower of its role
-and yours now, in the workspaces both allow; a key is never an owner, so an
+and yours now, in the projects both allow; a key is never an owner, so an
 owner's sign-in here is an admin, and inviting, changing or removing an admin
 stays in Settings → Team. The audit log marks each such act `via: foldrun
 login`. Transferring the account, your password, email, two-step sign-in and
@@ -115,23 +115,23 @@ than that, the owner's included, is not in its list.
 A key stays no wider than its maker **after** it is made, too. Remove a
 member and every key they minted in the account stops working at once —
 the one `foldrun login` made included. Lower their role, or narrow their
-workspaces, and each of their keys that would now reach more than they can
+projects, and each of their keys that would now reach more than they can
 stops; they mint a new one at their new standing. Each such revocation is
 in the audit log (`apikey.revoked`, and `keysRevoked` on `member.removed`).
 
-A CI job or a contractor should hold a key that opens one workspace —
+A CI job or a contractor should hold a key that opens one project —
 `foldrun keys create ci --workspaces leads`, or Settings → API keys. (Deploy
 keys, for the platform's own git, went with it on 17 October 2026; one
 minted before opens nothing.)
 
 A key **is** its account: the platform reads the account off the key, so one
-account's key can never reach another's workspaces. Someone who looks after
+account's key can never reach another's projects. Someone who looks after
 several accounts — an agency, a reseller — holds one key per account and
 switches between them; the CLI stores each as a named profile. See
 [More than one account](cli#more-than-one-account).
 
 An **A2A key** is a key of its own kind, for an outside agent calling your
-published flows over [A2A](a2a): one workspace, the flows it names, and how
+published flows over [A2A](a2a): one project, the flows it names, and how
 many tasks it may have open (`foldrun keys create partner --a2a --to leads
 --flows lead-finder`, or Settings → API keys). It opens only `/a2a/…` — every `/api`
 route refuses it — so it can never read runs, change files, approve a step or
@@ -151,7 +151,7 @@ from where — the address cut to its /24 (or /48 for IPv6), never the whole
 of it. Last use is written at most once a minute per key, so a busy CI key
 does not turn every request into a write.
 
-**Rotate** mints a new key with the old one's label, role, workspaces and
+**Rotate** mints a new key with the old one's label, role, projects and
 deploy scope — and, if the old one had an end, the same lifetime from today —
 and ends the old key: at once, or after a grace of an hour or a day so a CI
 job can be moved across first. In the dashboard it is the Rotate button on
@@ -170,13 +170,13 @@ Settings → Audit log is the account's record of what people did: sign-ins
 (and refused ones), sign-outs and session revokes, password and email
 changes, MFA turned on or off, keys minted, rotated and revoked, invites,
 joins, role and scope changes, removals and ownership transfers, secrets
-set and deleted — **by name, never the value** — deploys, workspace deletes,
+set and deleted — **by name, never the value** — deploys, project deletes,
 plan and billing changes, the account export and a close request, and every
 time support viewed the account. Filter by time, action, person or
-workspace, page back, and download it as CSV for an auditor.
+project, page back, and download it as CSV for an auditor.
 
-The owner and admins who can open every workspace read it — people, or an
-`admin` key. A member or key scoped to some workspaces cannot: the log is
+The owner and admins who can open every project read it — people, or an
+`admin` key. A member or key scoped to some projects cannot: the log is
 the whole account's. It is the caller's own account, always; another
 account's entries are never in it. Entries are kept 365 days on the hosted platform (an install sets its own) — security
 evidence, [how long we keep what](security#what-we-keep-and-for-how-long) —

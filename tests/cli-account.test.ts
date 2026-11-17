@@ -113,7 +113,7 @@ test("new in a flat workspace says what a flat workspace is, and makes nothing",
   foldrun("init", dir, "--flat");
   const r = foldrunIn(dir, "new", "second");
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /single workspace/);
+  assert.match(r.stderr, /single project/);
   assert.ok(!exists(dir, "workspaces"));
 });
 
@@ -463,7 +463,7 @@ test("workspaces rm refuses anything that is not one of this account's workspace
     for (const name of ["..", ".", "ads-desk/..", "../ads-desk", "a/b", "nope"]) {
       const r = await foldrunAsync(root, "workspaces", "rm", name, "--yes", "--url", p.url, "--token", "k");
       assert.notEqual(r.status, 0, `rm ${name} refused`);
-      assert.match(r.stderr, /no workspace|not a workspace name/, r.stderr);
+      assert.match(r.stderr, /no project|not a project name/, r.stderr);
     }
     assert.ok(exists(root, "workspaces", "ads-desk"));
     assert.ok(fs.existsSync(root), "the account folder is still there");
@@ -509,7 +509,7 @@ test("with several workspaces and none named, it asks which — it does not pick
   const root = account();
   const r = foldrunIn(root, "secrets", "ls", "--local");
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /which workspace\?.*ads-desk, main/s);
+  assert.match(r.stderr, /which project\?.*ads-desk, main/s);
 });
 
 test("with exactly one workspace there is nothing to say", () => {

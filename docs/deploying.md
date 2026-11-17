@@ -1,6 +1,6 @@
 # Deploying
 
-A workspace deploys by sending its files: `foldrun deploy` from a folder,
+A project deploys by sending its files: `foldrun deploy` from a folder,
 from your laptop or from CI. Every deploy is checked before anything goes
 live, refuses to swap files under a run in flight, and never touches what
 the platform owns.
@@ -16,18 +16,18 @@ foldrun deploy --to leads --commit $(git rev-parse HEAD)
 
 In CI there is no browser: set `FOLDRUN_URL` and `FOLDRUN_TOKEN` (a key from
 Settings → API keys, or `foldrun keys create`) and the same commands run. A
-key for CI should open the one workspace it deploys:
+key for CI should open the one project it deploys:
 `foldrun keys create ci --workspaces leads`.
 
 `--commit` records which commit of your own repository the files came from;
-the workspace page and its History show it.
+the project page and its History show it.
 
 ## Your own GitHub or GitLab
 
 Keep the folder in your own repository and deploy it from CI with the
 commands above. A connected app — a push to your main branch deploys,
 other branches become previews, a check on every commit — is coming, for
-GitHub first, then GitLab. Until 17 October 2026 every workspace was also a
+GitHub first, then GitLab. Until 17 October 2026 every project was also a
 git remote on the platform, with deploy keys, branch previews, a mirror and
 a GitHub push webhook; those went, and history moved to the platform's own
 snapshots (below).
@@ -37,7 +37,7 @@ snapshots (below).
 The tree is validated the way `foldrun check` validates it — a step naming an
 agent that does not exist, a tool that resolves to nothing, a knowledge
 concept with no `type:` — and a deploy with issues is refused with the list.
-The workspace on disk is unchanged.
+The project on disk is unchanged.
 
 ## What a deploy never touches
 
@@ -55,8 +55,8 @@ overrides that when you mean it.
 
 ## History and rollback
 
-Every change to a workspace is a revision — a deploy, a dashboard edit, an
-import — with who, when and a diff, on the workspace's History page and at
+Every change to a project is a revision — a deploy, a dashboard edit, an
+import — with who, when and a diff, on the project's History page and at
 `/api/workspaces/<ws>/history`. Every revision also keeps a snapshot of the
 whole source as it stood just after it: the platform's own deploy history,
 so rolling back never needs a repository.

@@ -88,7 +88,7 @@ test("in an account with two workspaces it asks which, and --to answers", () => 
   const root = account("blog-desk", "ads-desk");
   const asked = run(root, "agent", "new", "checker");
   assert.equal(asked.status, 1);
-  assert.match(asked.stderr, /which workspace\? --to <name> — this account has ads-desk, blog-desk/);
+  assert.match(asked.stderr, /which project\? --to <name> — this account has ads-desk, blog-desk/);
 
   const r = run(root, "agent", "new", "checker", "--to", "ads-desk");
   assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -97,7 +97,7 @@ test("in an account with two workspaces it asks which, and --to answers", () => 
 
   const wrong = run(root, "agent", "new", "other", "--to", "nowhere-desk");
   assert.equal(wrong.status, 1);
-  assert.match(wrong.stderr, /no workspace called "nowhere-desk" here/);
+  assert.match(wrong.stderr, /no project called "nowhere-desk" here/);
 });
 
 test("standing inside a workspace of an account needs no --to", () => {
@@ -121,7 +121,7 @@ test("a folder that is not a workspace is told what it is", () => {
   const dir = tmp();
   const r = run(dir, "agent", "new", "checker");
   assert.equal(r.status, 1, r.stdout);
-  assert.match(r.stderr, /not a workspace/);
+  assert.match(r.stderr, /not a project/);
 });
 
 test("it refuses to overwrite one that exists, and the name must be kebab-case", () => {

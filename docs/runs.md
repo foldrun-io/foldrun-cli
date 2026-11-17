@@ -19,7 +19,7 @@ Each run holds its steps in group order. A step carries:
 | `turns`, `systemPromptChars`, `stopReason` | model turns, summed across attempts; the system prompt's length in characters (it rides on every turn); why the last turn ended. With the events' `bytes`, these say where a step's input tokens went. From 18 Oct 2026 |
 | `promptLayers` | the system prompt's layers, stable ones first: `name` (`persona`, `agents.md`, `skills`, `knowledge`, `rules`, … then `memory`, `state`, `clock`), `chars`, `hash` (12 hex characters of its SHA-256) and `stable: false` on the ones that change between runs. Two steps of one agent compared layer by layer say why the [prompt cache](budgets-and-billing#prompt-caching) missed; the run page and `foldrun report` do the comparison. From 20 Oct 2026 |
 | `costUsd`, `tokens`, `computeSecs`, `startupSecs` | what it cost and how long the sandbox lived — **summed across its attempts**. `tokens` is `{ input, output, cacheRead, cacheWrite }`: `input` is all input, and `cacheRead` and `cacheWrite` the part of it the [prompt cache](budgets-and-billing#prompt-caching) served and stored. Steps recorded before 18 Oct 2026 have only `input` and `output` |
-| `startup` | where the step's first seconds went: when each start-up phase ended, in seconds since the step started — `services` (the account's search/browser pods up), `room` (room on the cluster to start — see [Budgets and billing](budgets-and-billing)), `applied` (sandbox created), `ready`, `files` (workspace copied in), `go` (step released), `shim`, `system` (system packages restored), `driver`, `imports`, `tools` (runtime and tools built) and `model` (the model's first text or tool call). `services` can end after `ready` and `files`: the search and browser pods boot beside the step pod, and `go` waits for them. Only the phases the step went through; `null` for a step that ran in-process, absent before 17 Oct 2026. The last attempt's |
+| `startup` | where the step's first seconds went: when each start-up phase ended, in seconds since the step started — `services` (the account's search/browser pods up), `room` (room on the cluster to start — see [Budgets and billing](budgets-and-billing)), `applied` (sandbox created), `ready`, `files` (project copied in), `go` (step released), `shim`, `system` (system packages restored), `driver`, `imports`, `tools` (runtime and tools built) and `model` (the model's first text or tool call). `services` can end after `ready` and `files`: the search and browser pods boot beside the step pod, and `go` waits for them. Only the phases the step went through; `null` for a step that ran in-process, absent before 17 Oct 2026. The last attempt's |
 | `image` | which runner image the step's sandbox ran (isolated runs on a cluster): `variant` `full` or `slim`, `why`, and `pod: true` when a browsing step ran slim and browsed through the account's browser pod ([slim steps and a lost pod](tools#slim-steps-and-a-lost-pod)) |
 | `browserPod` | on a step that browsed through the pod from slim: `reconnects` (tries), `reconnected` (how many got through: the call went on after it) and `closedAgain` (how many reached the pod only for the call to drop again at once, when any did); when the pod was lost, `lost` (`cause` `lost` or `needs-full`, and `detail`) and `writes` (what the step had written by then, worded); then `fallback: "browser pod lost; re-ran on full"` when it had only read and ran again on the full image, or `failure` — `browser pod died after the step had written <what>` — when it had written and was not re-run |
 | `tries` | one row per attempt, oldest first (and a `status: "lost"` row, `image: "slim"`, before the full re-run when the browser pod was lost under a slim step that had only read — see [tools](tools#slim-steps-and-a-lost-pod)): `n` (the try, numbered in the order they ran), `attempt` (the step's attempt it belongs to, only when that is not `n` — the full re-run after a lost slim try 1 is `n: 2, attempt: 1`), `status`, `costUsd`, `tokens`, `turns`, `computeSecs`, `startedAt`, `finishedAt`, the attempt's `image` and its `browserPod` line when it had one, and the attempt's last `error` when it failed. A `retry: 2` step that failed twice and then passed has three rows, and its `costUsd` is all three — the run's spend, the flow's `budget:` and the bill read the step's figure, so the figure is the total. A retry is handed what is left of the budget after the failed attempt spent, and nothing left means no retry, said on the record |
@@ -55,7 +55,7 @@ reach the model's first word; hover it for each phase's share. When the
 account's search or browser pod was still booting as the step pod came up,
 `services` reads as its own lane (`services 8.00s alongside the pod`), the
 pod's phases keep their own shares, and `go` says how long it was held for
-the services (`go +0.10s (held 4.00s for services)`). The workspace's
+the services (`go +0.10s (held 4.00s for services)`). The project's
 **Observe** page and `foldrun observe --to` roll the same breakdown up over
 every step.
 
@@ -93,7 +93,7 @@ desk's **last 24 runs** as a strip of cells beside how many of them
 completed and what went wrong (`20/22 · 2 failed`), runs today and the
 credits charged this week. Every row and every cell opens its run.
 
-Money on the overviews — Home, the desks list, a workspace's flows and
+Money on the overviews — Home, the desks list, a project's flows and
 agents, Observe, the runs list and a run's own page — is **credits charged**:
 the ledger's line for the run, one credit to a cent. A run the ledger has not
 settled yet shows its list price, marked estimated (`~` in the runs list,
@@ -129,7 +129,7 @@ What each says:
   `resources:`, or a plan that allows more. *The step ran out of memory.
   Memory limit: 4 GiB; last recorded peak: 3.9 GiB* — a larger `size:` or
   `resources: { memory: … }`. The same for cores, disk and `timeout:`. A
-  step bigger than its flow's or workspace's `compute:` names that
+  step bigger than its flow's or project's `compute:` names that
   `compute:`; only a limit a plan sets mentions a plan. A machine running
   short and the cluster evicting the step is said as that — not as the
   step over its own limit.
@@ -172,15 +172,15 @@ Every step keeps, beside its events:
   content, line by line — then anything shaped like a key, and any private
   key block. The input is what the agent asked for; a [hook](hooks) that
   rewrote it before it ran is in the trace beside it. The content is kept
-  beside the run, not in it, counts toward the workspace's storage, and goes
+  beside the run, not in it, counts toward the project's storage, and goes
   when the run is deleted or ages out.
 
-And the run itself says **which files it ran** — the workspace's latest
+And the run itself says **which files it ran** — the project's latest
 revision when a worker first picked it up ("ran on abc1234"; a deploy's is
 its commit) — and **how long it queued** before that. A step that runs after
 an approval, or after a deploy mid-run, may run newer files than that.
 
-A workspace that should keep no content writes `capture: metadata` in its
+A project that should keep no content writes `capture: metadata` in its
 `AGENTS.md` (or the account's): model calls, tool names, sizes and timings
 are still recorded, inputs and outputs are not.
 
@@ -215,9 +215,9 @@ telemetry:
 
 In the account's `AGENTS.md` (Settings → Policies → Observability → *Send runs to your
 tracing*, or `foldrun account telemetry set <url> --header
-authorization='${OTEL_TOKEN}'`), or a workspace's, which replaces the
+authorization='${OTEL_TOKEN}'`), or a project's, which replaces the
 account's whole. Every run that finishes is sent as one trace. Resource
-attributes name the account, workspace, flow and run. Ids come from the
+attributes name the account, project, flow and run. Ids come from the
 run's, so a run sent twice is one trace. Test runs are not sent.
 
 The spans follow the [OpenTelemetry GenAI semantic
@@ -351,8 +351,8 @@ the revision its new run ran ("regressed since abc1234"). Besides **Snooze
 known flake (`snooze` with `times` on the API, `--times` in the CLI).
 
 **Doctor** on an issue opens the [run doctor](assistant#the-run-doctor) on
-its newest run, in the workspace that run is in, wherever the card is shown
-(Home, a workspace's home, the Issues page): the assistant says why and
+its newest run, in the project that run is in, wherever the card is shown
+(Home, a project's home, the Issues page): the assistant says why and
 proposes the fix as files to save. Nothing changes until you save it; then
 resolve the issue, or rerun and let it show "fine since". A missed schedule
 has no run, so it has no Doctor. From a terminal: `foldrun issues doctor <id>`.
@@ -369,10 +369,10 @@ failures, BLOCKED and BAD (marked "auto"); one going wrong after that opens a
 new episode. Unset (`stay-open`) a person resolves them. Platform causes and
 missed schedules never close on their own.
 
-The **Issues** page lists them (Open, Snoozed, Resolved, All; a workspace's
+The **Issues** page lists them (Open, Snoozed, Resolved, All; a project's
 own from its home), Home lists the open ones under Needs attention, and
 `foldrun issues` and `GET /api/issues` are the same list. A platform issue
-belongs to the account: closing it needs access to every workspace.
+belongs to the account: closing it needs access to every project.
 
 Each agent also has an **Activity** page: every step it has ever run, across
 flows and direct runs, with that step's own headline. It is where "how has
@@ -381,7 +381,7 @@ this agent been going" is answered without opening runs one at a time.
 ## Your inbox
 
 **Inbox**, top right and under View in the account's sidebar, is what waits
-on *you*, across every workspace you may see, in one list: gates to approve,
+on *you*, across every project you may see, in one list: gates to approve,
 questions agents are asking, open [issues](#issues), [proposed
 fixes](evals#proposed-fixes) to review, and your own runs that went wrong.
 
@@ -389,9 +389,9 @@ Three tabs that never mix:
 
 | tab | what is in it |
 |---|---|
-| **For me** | assigned to you: you are named in the flow's `approvers:`, you own the flow or agent (`owner:`, down to the workspace's and the account's), or you asked for the proposal |
+| **For me** | assigned to you: you are named in the flow's `approvers:`, you own the flow or agent (`owner:`, down to the project's and the account's), or you asked for the proposal |
 | **Started by me** | runs you started: one that failed or ended BLOCKED or BAD in the last week, a gate on one (someone else must decide it — your own approval is refused), a question one is asking |
-| **Team** | everything else waiting in your workspaces, for whoever picks it up — a gate anyone may decide, an issue nobody owns |
+| **Team** | everything else waiting in your projects, for whoever picks it up — a gate anyone may decide, an issue nobody owns |
 
 Nothing is kept in it: each item is read from where it lives and leaves on
 its own when it is done there — the gate decided, the issue resolved, the
@@ -403,7 +403,7 @@ so an issue that happens again after you set it aside comes back. The count
 on the top bar is what is unread in For me and Started by me.
 
 `foldrun inbox` prints the same (`--team`, `--all`, `--kind approval`); a key
-reads the inbox of the person who minted it, within the key's own workspaces.
+reads the inbox of the person who minted it, within the key's own projects.
 The API is `GET /api/me/inbox`.
 
 ## Gates
@@ -429,7 +429,7 @@ but skip the third one" is an instruction the publisher reads.
 
 **Who may answer.** A flow's `approvers:` names the addresses that may decide
 its gates, or `admins` for anyone at admin or above; unset, anyone who can
-run the workspace can answer. On top of that, and whatever the list says,
+run the project can answer. On top of that, and whatever the list says,
 **nobody approves a run they started themselves** — a gate exists so a second
 person looks. Rejecting your own run is always allowed. An API key carries a
 role but no address, so a key is not caught by the self-approval rule and
@@ -466,7 +466,7 @@ What the platform does on a test run, in the order a step meets it:
 | the egress proxy | any `POST`, `PUT`, `PATCH` or `DELETE` to a host that is not a model provider or a read-only service is **refused** with `403` and a JSON body `{ "test_mode": true, "would_have": { method, host, path, to, body } }`. A Resend `POST /emails` is instead **redirected**: the recipients become `delivered@resend.dev` (Resend's sink), the subject is prefixed `[TEST] `, and the call goes through — so a desk still gets a real message id. Reads (`GET`, `HEAD`, `OPTIONS`) pass. A host with no granted secret is refused as always |
 | the sandbox | secrets whose name says they can send — `RESEND_API_KEY`, `TWILIO_*`, `GETREACH_API_KEY`, `GITHUB_TOKEN`, `MONDAY_API_TOKEN`, `OI_CRM_API_KEY`, `CLOUDFLARE_*`, `LINKEDIN_*`, `MEDIUM_COOKIES`, `TIKTOK_*` — are **withheld**: the env var reads `TEST_MODE_WITHHELD`, so a script that never checked fails at the provider with an auth error rather than sending. A step granting a script tool marked `outward: true` gets no real secret at all; one granting a tool marked `test_mode: allow` gets them all. The sandbox also has `FOLDRUN_TEST_MODE=1` and `FOLDRUN_RUN_TEST=1`, for scripts that branch on it. The http tools still go through the proxy, where the table above applies |
 | the browser | the step is handed no account [browser pod](tools#where-the-browser-runs): the tool launches Chromium inside the run pod, which the run namespace's policy denies the internet, so a `web action=browse` call fails closed rather than fetching the world through a pod the policy does not select |
-| the write-back | `state/` and `storage/` go into the sandbox as they are; what the step wrote there comes out under `runs/<id>/test-writes/state/…` and `…/storage/…`, and the workspace's copies are untouched. Each later step of the run gets those writes laid over its copy, times kept, so a flow that hands work on through `storage/` is tested as it runs live — the step's log says how many files it sees. Nothing is harvested to the file store and nothing under `storage/public/` is published |
+| the write-back | `state/` and `storage/` go into the sandbox as they are; what the step wrote there comes out under `runs/<id>/test-writes/state/…` and `…/storage/…`, and the project's copies are untouched. Each later step of the run gets those writes laid over its copy, times kept, so a flow that hands work on through `storage/` is tested as it runs live — the step's log says how many files it sees. Nothing is harvested to the file store and nothing under `storage/public/` is published |
 | the record | `test: true`; the summary opens with `[test]`; a **TEST** badge beside the status in the runs list and on the run page; every refusal, redirect, diversion and withheld secret is an event carrying an `effect`, and the run page's **Test run** panel lists them — "would have written state/sends.md, +3 lines" |
 | the rest | gates still park, and the approve page says it is a test run; notifications go out only for `failed`; a `trigger: flow` chained on a test run starts as a test run |
 
@@ -497,7 +497,7 @@ morning when one broken thing failed seventy runs. A call naming no filter is
 refused rather than treated as everything, `dryRun: true` shows what would be
 touched, and each run is its own outcome so one that cannot be stopped does
 not abort the rest. On the runs pages, tick runs and choose **Stop** or
-**Rerun**: the bar makes this call, once per workspace in the selection.
+**Rerun**: the bar makes this call, once per project in the selection.
 
 **Re-run from a group** (`from: N`) starts a new run at group N with the
 earlier groups recorded as skipped, not invented — the step reads what earlier
@@ -517,7 +517,7 @@ waited out, a throttled trigger, a flow switched off after a bad week, an
 already had its most runs waiting (*too many runs waiting* —
 [how many runs may wait](budgets-and-billing#how-many-runs-may-wait)).
 
-The Triggers page on each workspace records all of it: one row per flow
+The Triggers page on each project records all of it: one row per flow
 saying how often its trigger fired, how often that became a run, and what
 the difference was, with the key in the flow file that decided each one. Its
 last section is the delivery log, which answers the separate and earlier
@@ -553,7 +553,7 @@ The API takes the same field: `context` on `POST …/agents/<agent>/run` and
 `POST …/flows/<flow>/run` (not with `from`), and on MCP's `run_agent` and
 `run_flow`. Over [A2A](a2a), a task's `contextId` is its context.
 
-**What counts as an earlier turn:** a run of the same workspace and context,
+**What counts as an earlier turn:** a run of the same project and context,
 completed or failed, that had finished before this run was started. A test
 run reads only test runs, and a real run only real ones. The cutoff is fixed
 when the run is made, so a retry, a park at a gate or a rescue reads the same
@@ -572,7 +572,7 @@ that do not fit are left out. The step's trail says what it was given:
 `conversation order-42: given 3 earlier runs (4,210 characters)`.
 
 **Who shares a context:** runs started through the API, the dashboard, the
-CLI or MCP share the workspace's contexts, so anyone who can start runs there
+CLI or MCP share the project's contexts, so anyone who can start runs there
 can continue one — and could read those runs anyway. A context is a way to
 group runs, not a lock. Each outside caller over A2A has its own: two A2A keys
 that send the same `contextId` never see each other's turns, and an A2A
@@ -584,7 +584,7 @@ list them.
 
 ## Inputs
 
-A run may be handed **files**: storage paths, as the workspace's storage lists
+A run may be handed **files**: storage paths, as the project's storage lists
 them. The step the task reaches finds them at `inputs/` in its working
 directory, under the same paths (`inputs/reports/q4.pdf`), and is told which
 they are. An agent reads them with its Read tool; images and PDFs are shown to
@@ -662,7 +662,7 @@ What follows from it:
 
 - **Held alone.** Each customer is held to its own limits, checked before the
   account's own: by default **30 run starts a minute** and **10 runs open at
-  once** (queued, running or waiting at a gate, across every workspace). One
+  once** (queued, running or waiting at a gate, across every project). One
   customer past a limit is refused while your other customers carry on: too
   many starts is `429` with `Retry-After` and code `customer_rate`; too many
   open is `429` with code `customer_open_runs` — one must finish first. Open
@@ -675,7 +675,7 @@ What follows from it:
   so calls at once cannot pass it together. A run past it is refused at its
   next model call. None is set by default. `GET /api/customers/usage?days=7`
   and `foldrun customers usage` show what each customer was charged.
-- **Blocked.** An admin with every workspace can block a customer
+- **Blocked.** An admin with every project can block a customer
   (Settings → API keys → Customers, `foldrun customers block <id>`, or
   `PUT /api/customers/<id>/block`). Its runs are refused at start (`403`,
   code `customer_blocked`), and a run of it already going stops at its next
@@ -704,7 +704,7 @@ code `customer_required`).
 
 Every step records what it cost. A flow's `budget:` is checked between
 groups: the group that crosses it is the last that runs, and the run fails
-saying so. The workspace's and the account's `budget:` over time sit above
+saying so. The project's and the account's `budget:` over time sit above
 that. See [Budgets and billing](budgets-and-billing).
 
 ## How long a run is kept
@@ -752,7 +752,7 @@ live is read whole; a finished run's reply and trace are opened by id.
 The list pages by position, not by number: `GET …/runs` answers `next`, a
 cursor for the runs older than the last one it sent, and `before=<next>`
 asks for that page, so runs that start meanwhile shift nothing. One cursor
-pages every workspace, which is how `foldrun runs` pages the account:
+pages every project, which is how `foldrun runs` pages the account:
 `--limit` sets the page, `--page 3` or `--before <cursor>` picks one (the
 command prints the next one's cursor), and `--all` reads every run that
 matches.

@@ -30,9 +30,9 @@ foldrun deploy             # push the account (or `deploy <workspace>`) to the p
 
 | Path | What |
 |---|---|
-| `AGENTS.md` | the account's shared context and defaults — every agent in every workspace reads it (except the managed coding-agent block, which the runtime strips) |
+| `AGENTS.md` | the account's shared context and defaults — every agent in every project reads it (except the managed coding-agent block, which the runtime strips) |
 | `workspaces/<name>/` | one workspace: a desk, a pipeline, a product |
-| `workspaces/<name>/AGENTS.md` | that workspace's context and settings |
+| `workspaces/<name>/AGENTS.md` | that project's context and settings |
 | `workspaces/<name>/agents/<name>/agent.md` | one role: its persona, model, tools |
 | `workspaces/<name>/flows/<name>.md` | steps, in order, naming the agents that run them |
 | `workspaces/<name>/knowledge/` | reference material agents read |
@@ -42,7 +42,7 @@ foldrun deploy             # push the account (or `deploy <workspace>`) to the p
 | `workspaces/<name>/tools/` | a folder tool: its definition and its code together |
 | `workspaces/<name>/scripts/` | code the agents call, referenced by `scripts:` |
 | `workspaces/<name>/state/` | what runs accumulate. Yours to read, never deployed over |
-| `library/` | skills, tools, scripts and knowledge shared by every workspace here |
+| `library/` | skills, tools, scripts and knowledge shared by every project here |
 | `.claude/agents/<name>.md` | a Claude Code subagent — deploys AS an agent |
 
 `knowledge/` is what you tell the agents; `memory/` is what they worked out.
@@ -78,26 +78,26 @@ api workspaces/$WS/flows/<flow>/run -X POST   # start one
 
 | Route (`/api/workspaces/<ws>` unless noted) | Methods | For |
 |---|---|---|
-| `/` | GET DELETE PATCH | the workspace itself |
+| `/` | GET DELETE PATCH | the project itself |
 | `/deploy` | POST | what `foldrun deploy` calls |
 | `/source` | GET PUT PATCH DELETE | read and write single files |
 | `/runs` · `/runs/<id>` | GET · GET DELETE | list runs; one run, every step |
 | `/runs/<id>/stream` | GET | live events, server-sent |
 | `/runs/<id>/stop` · `/rerun` · `/approve` | POST | kill it; again from a step; release a gate |
 | `/flows` · `/flows/<f>` · `/flows/<f>/run` | GET POST · POST DELETE PATCH · POST | list, create, edit, start |
-| `/agents` · `/agents/<a>/run` · `/agents/import` | GET POST · POST · GET POST | list agents, run one, copy one in from another workspace |
+| `/agents` · `/agents/<a>/run` · `/agents/import` | GET POST · POST · GET POST | list agents, run one, copy one in from another project |
 | `/evals` · `/evals/<e>/run` | GET POST · POST | list evals, run one |
 | `/tools/<t>/test` | POST | exercise one tool alone |
 | `/storage` · `/storage/download` · `/storage/upload-url` · `/storage/preview` · `/shares` | GET POST PUT DELETE · GET · POST · GET · POST GET DELETE | files agents produced and people uploaded, any type; a file parsed for reading; public links to them |
 | `/triggers?since=` | GET | why nothing ran: fired vs started per flow, with reasons |
 | `/hooks/<f>/rotate` | POST | new webhook token for a flow |
-| `/export` · `/import` | GET · POST | the workspace, a flow (`?kind=flow&name=`) or an agent as a .zip; take one in (`?dryRun=1` first, `?overwrite=1` to replace) |
-| `/restore` | POST | the workspace's source back to a point in its history — `dryRun` first, then `confirm` |
+| `/export` · `/import` | GET · POST | the project, a flow (`?kind=flow&name=`) or an agent as a .zip; take one in (`?dryRun=1` first, `?overwrite=1` to replace) |
+| `/restore` | POST | the project's source back to a point in its history — `dryRun` first, then `confirm` |
 | `/notify/deliveries` · `/notify/deliveries/<id>/redeliver` | GET · POST | every notify: webhook sent and each attempt; send one again |
 | `/api/secrets` · `/api/schedule` · `/api/account` · `/api/keys` | account-level | the vault, the clock, defaults, API keys |
 | `/api/me/notifications` | GET PATCH | what mail you get, per category; a key acts for whoever minted it |
 
-A key carries a role (viewer, editor, admin) and a workspace scope no wider
+A key carries a role (viewer, editor, admin) and a project scope no wider
 than the person who minted it. Team, profile and MFA routes are a person's
 alone and refuse a key. The full reference with request and response shapes
 is the platform's `docs/api.md`.

@@ -6,8 +6,8 @@ The simplest way to bring a key: **Settings → Models**, or
 `foldrun account model set <provider> --key <api key>`, or
 `PUT /api/account/model`. Pick a name from the table below (or `custom`
 with a base URL and a format), paste an **API key**, and every step in
-every workspace runs on it. No `provider:` block is needed; one written in
-an agent, a workspace or the account's AGENTS.md still wins over it.
+every project runs on it. No `provider:` block is needed; one written in
+an agent, a project or the account's AGENTS.md still wins over it.
 
 The key is stored in the account's vault, encrypted under the account's own
 key, as `FOLDRUN_MODEL_PROVIDER`, `FOLDRUN_MODEL_API_KEY` and, for a custom
@@ -48,7 +48,7 @@ billed in credits at **foldrun's price list**
   shows; `ifVersion` on the PUT) makes either refused (409) when someone
   chose since you read it, as the Settings page does.
 - **The order** a step's model is found in is unchanged but for one rung: a
-  `provider:` block in the agent, the workspace or the account's AGENTS.md
+  `provider:` block in the agent, the project or the account's AGENTS.md
   first; then foldrun's models, when chosen; then the account's own key.
 - **Which model a tier runs** is the platform's map for that provider
   (`model: fast | default | max`), shown on the page and by
@@ -325,7 +325,7 @@ and the platform used to find that out the way you would: a desk failing at
 five in the morning.
 
 Once a day, every provider block this account's files actually use — the
-account's, each workspace's, each agent's — is asked one minimal question:
+account's, each project's, each agent's — is asked one minimal question:
 a single request, one token of output, at the endpoint a run would use, with
 the key a run would send. It costs a fraction of a cent, and a year of it
 costs less than one ordinary run. Blocks sharing an endpoint and a key are
@@ -383,7 +383,7 @@ supply is configured
 ```
 
 Reset times are told in the step's own timezone, resolved by the usual
-cascade (agent → flow → workspace → account → `FOLDRUN_TIMEZONE` → UTC), so
+cascade (agent → flow → project → account → `FOLDRUN_TIMEZONE` → UTC), so
 a run scheduled in Sydney is not told when its quota returns in UTC.
 
 Three things the line is careful about:
@@ -408,7 +408,7 @@ implying a wait nobody promised.
 **Where the step can go next is part of the sentence.** Every refusal line
 ends with one of three states: `trying the second supply`, `the second
 supply refused it too`, or `no second supply is configured`. The last is a
-deliberate arrangement, not a gap — a workspace with one provider and no
+deliberate arrangement, not a gap — a project with one provider and no
 fallback is a normal thing to run — and it is said out loud so a step never
 ends in silence over it.
 

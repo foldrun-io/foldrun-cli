@@ -218,7 +218,7 @@ test("mcp connections lists the AI apps connected over OAuth; mcp disconnect end
   try {
     const ls = await at(s.url, "mcp", "connections");
     assert.equal(ls.code, 0, ls.out);
-    assert.match(ls.out, /Claude .*claude\.ai .*read and act .*all workspaces/);
+    assert.match(ls.out, /Claude .*claude\.ai .*read and act .*all projects/);
     assert.match(ls.out, /g1 · ana@acme\.test/);
     const all = await at(s.url, "mcp", "connections", "--all", "--json");
     assert.equal(JSON.parse(all.out.slice(all.out.indexOf("{"))).connections[0].id, "g1");

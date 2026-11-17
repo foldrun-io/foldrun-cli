@@ -44,7 +44,7 @@ test("usage budget --to <ws>: that workspace alone; one the key cannot open is s
   assert.doesNotMatch(one.out, /\$500|\$61/, "not the account, not another workspace");
   assert.deepEqual(json(asJson.out), { workspaces: [BUDGET.workspaces[1]] });
   assert.notEqual(none.code, 0);
-  assert.match(none.out, /no workspace "nope" among the ones this credential may open/);
+  assert.match(none.out, /no project "nope" among the ones this credential may open/);
 });
 
 test("usage budget for a scoped key: the account's figure is hidden, and why", async () => {
@@ -53,7 +53,7 @@ test("usage budget for a scoped key: the account's figure is hidden, and why", a
   const j = await at(s.url, "usage", "budget", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /account +shown only to a member or key with every workspace/);
+  assert.match(r.out, /account +shown only to a member or key with every project/);
   assert.equal(json(j.out).accountHidden, true);
 });
 
@@ -107,7 +107,7 @@ test("billing invoices with a scoped key (403): needs every workspace", async ()
   const r = await at(s.url, "billing", "invoices");
   s.close();
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /invoices need a member or key with every workspace — invoices and receipts are the whole account's/);
+  assert.match(r.out, /invoices need a member or key with every project — invoices and receipts are the whole account's/);
 });
 
 test("usage budget: $995 of $1,000 shows 100% but is not at the cap", async () => {

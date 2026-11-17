@@ -61,7 +61,7 @@ test("limits, shows and lifts an account secret's workspaces on the platform", a
   try {
     let r = await run("secrets", "workspaces", "STRIPE_KEY", "--url", p.url, "--token", "k");
     assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /STRIPE_KEY may be used in every workspace/);
+    assert.match(r.stdout, /STRIPE_KEY may be used in every project/);
 
     r = await run("secrets", "workspaces", "STRIPE_KEY", "sales", "ops,blog", "--url", p.url, "--token", "k");
     assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -69,12 +69,12 @@ test("limits, shows and lifts an account secret's workspaces on the platform", a
     assert.match(r.stdout, /only in blog, ops, sales/);
 
     r = await run("secrets", "workspaces", "STRIPE_KEY", "--url", p.url, "--token", "k");
-    assert.match(r.stdout, /only in blog, ops, sales — every other workspace finds it not set/);
+    assert.match(r.stdout, /only in blog, ops, sales — every other project finds it not set/);
 
     r = await run("secrets", "workspaces", "STRIPE_KEY", "--all", "--url", p.url, "--token", "k");
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(p.patches.at(-1), { name: "STRIPE_KEY", workspaces: null });
-    assert.match(r.stdout, /every workspace/);
+    assert.match(r.stdout, /every project/);
 
     r = await run("secrets", "workspaces", "STRIPE_KEY", "--none", "--url", p.url, "--token", "k");
     assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -117,7 +117,7 @@ test("--help shows the verb and its flag", () => {
   const r = spawnSync(process.execPath, [CLI, "secrets", "--help"], { encoding: "utf8", cwd, env: ENV });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /foldrun secrets workspaces NAME \[workspace…\]/);
-  assert.match(r.stdout, /--all\s+[^\n]*secrets workspaces: every workspace/);
+  assert.match(r.stdout, /--all\s+[^\n]*secrets workspaces: every project/);
   assert.match(r.stdout, /--none\s+secrets workspaces, secrets set/);
   assert.match(r.stdout, /--workspaces <a,b>\s+secrets set/);
 });

@@ -2,15 +2,15 @@
 
 The assistant is a panel on every page of the dashboard. Ask it how
 foldrun works, or describe what you want built. It writes agents, flows,
-tools and skills for a workspace and shows each one as a diff, checked, for
+tools and skills for a project and shows each one as a diff, checked, for
 you to save.
 
 Open it with **Ask AI** at the bottom right. **Draft with AI** on the Flows
 page opens it too, with "Draft a flow that" ready to finish.
 
-Inside a workspace it works in that workspace. Anywhere else, such as the
+Inside a project it works in that project. Anywhere else, such as the
 account home, Billing or the docs, it works in the one chosen in its header;
-your browser remembers the choice. Each workspace keeps its own conversation.
+your browser remembers the choice. Each project keeps its own conversation.
 
 ## What it knows
 
@@ -20,11 +20,11 @@ Only three things:
   it needs before it answers, and it cites what it used as
   `[doc › section]`, which links to the heading. Under each reply,
   **Read N doc sections** lists them.
-- **This workspace's files**: its `AGENTS.md`, agents, flows, skills,
+- **This project's files**: its `AGENTS.md`, agents, flows, skills,
   tools, hooks, knowledge, evals and scripts, plus the account library and
   the account's `AGENTS.md`. It never reads `state/`, `storage/` or
   secrets.
-- **This workspace's runs**, when you ask about one: each step's status,
+- **This project's runs**, when you ask about one: each step's status,
   verify, errors and result, and one step in full. Run records are
   redacted as they are written, so no secret value is in them.
 
@@ -38,7 +38,7 @@ treated as data, never as instructions to it.
 A run that failed, or ended BAD or BLOCKED, has a **Doctor** button on its
 page, and so does each [issue](runs#issues) under Needs attention and on the
 Issues page, for the issue's newest run. It opens the assistant with "Doctor:
-why did run <id> fail, and how do I fix it?" ready to send, in the workspace
+why did run <id> fail, and how do I fix it?" ready to send, in the project
 that run is in — from the account home too. The assistant reads the run, then the
 failing step in full and the files it names, and answers in this order:
 
@@ -74,22 +74,22 @@ Only these paths:
 When something else needs to change, such as `AGENTS.md`, a secret or a
 setting, it tells you what and where, and you make that change.
 
-## New workspaces
+## New projects
 
-When you ask for a new workspace, or describe a separate desk or pipeline,
-it proposes one: a name and what it is for, with a **Create workspace**
-button. Creating it needs `workspace:manage` (admin or owner). The workspace
+When you ask for a new project, or describe a separate desk or pipeline,
+it proposes one: a name and what it is for, with a **Create project**
+button. Creating it needs `workspace:manage` (admin or owner). The project
 starts blank, with only its `AGENTS.md`. The dashboard then opens it, and the
-conversation carries on there: the assistant writes the new workspace's
+conversation carries on there: the assistant writes the new project's
 agents, flows, tools and skills for you to save.
 
-It never proposes a name that is taken. An account with no workspace yet
+It never proposes a name that is taken. An account with no project yet
 gets a box to name its first one.
 
 Every file it proposes is checked as it writes it, and the model sees the
 result and fixes errors before it finishes:
 
-- the [deploy's own checks](deploying) and the flow lint, over the workspace
+- the [deploy's own checks](deploying) and the flow lint, over the project
   as it would be with the file in it;
 - a frontmatter key that appears nowhere in these docs is an error, because
   foldrun would not read it;
@@ -109,16 +109,16 @@ the note "written with the assistant: …", which you can restore from
 save is refused and nothing is overwritten; ask the assistant to propose it
 again.
 
-Saving is not deploying. On the platform, the saved file is the workspace's
+Saving is not deploying. On the platform, the saved file is the project's
 source, the same as an edit in the dashboard.
 
 ## History
 
 Every reply is kept. **History** in the panel's header lists your
-conversations, newest first and grouped by day, across every workspace you
+conversations, newest first and grouped by day, across every project you
 can see; type to search them, by title or by anything said in them. Open one
 to carry it on: the files it proposed and you did not save come back with
-it, and the panel moves to its workspace. **New chat** starts another.
+it, and the panel moves to its project. **New chat** starts another.
 
 Conversations are yours alone. Nobody else in the account, owners included,
 can list or read them; an API key's conversations belong to that key. Each
@@ -131,20 +131,20 @@ assistant workers, a pool of its own that grows with the queue, so a burst
 of questions never slows the dashboard or takes a turn from your runs. At
 most three replies of one account run at once; more wait their turn, and the
 panel says so. The model only ever reads through the assistant's own tools,
-on the server, scoped to your account and workspace; it runs no code and has
+on the server, scoped to your account and project; it runs no code and has
 no network or shell of its own.
 
 The workers themselves reach the internet at the model API and nowhere
-else. A workspace whose `provider:` points at another address gets a reply
-saying so, not a timeout; that provider still serves the workspace's runs.
+else. A project whose `provider:` points at another address gets a reply
+saying so, not a timeout; that provider still serves the project's runs.
 
 ## Who can use it, and what it costs
 
-You need to be able to edit the workspace (`workspace:write`: editor,
+You need to be able to edit the project (`workspace:write`: editor,
 admin or owner). Viewers do not see the button enabled.
 
 Each reply is one model call that may use several tools, on the same models
-your runs use: the workspace's or account's own [provider](providers) or
+your runs use: the project's or account's own [provider](providers) or
 key when there is one, otherwise the platform's. On the platform's models
 the balance is checked first, and the reply is charged at the same price as
 a run's tokens, as one line on [usage](budgets-and-billing), flow

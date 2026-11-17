@@ -61,14 +61,14 @@ headers:
 | `timeout` | seconds a call may take; without one the call runs until it finishes |
 | `rate` | calls per second from one step — `5/s`, `100/m`; a call over the limit waits, it does not fail |
 | `openapi` | a URL or file; turns one generic tool into typed ones, one per operation |
-| `operations` | only these operations, by `operationId` or `METHOD /path`; the generic tool is withheld. It fails closed: if the document does not load or none of them resolve, the API has no tools that run, never the generic one. Keep an allowlisted document in the workspace, so a vendor renaming an operation cannot empty it |
+| `operations` | only these operations, by `operationId` or `METHOD /path`; the generic tool is withheld. It fails closed: if the document does not load or none of them resolve, the API has no tools that run, never the generic one. Keep an allowlisted document in the project, so a vendor renaming an operation cannot empty it |
 
 **The body is the manual.** Everything under a `tool.md`'s frontmatter goes
 to the model with the tool, after `description:` — how to call it, what it
 refuses, what its output means, examples of a call (up to 6,000 characters;
 a longer body is cut there and says so). A single-file tool's fenced program
 is code, not guidance, and stays out. This holds for script and HTTP tools
-alike, workspace or library.
+alike, project or library.
 
 The model never sees a credential — the host substitutes it as the request
 goes out. The method allowlist protects against the agent; the key's own scopes
@@ -167,7 +167,7 @@ holds its value — bind a key you would not hand the agent.
 
 Resolution is **nearest wins**: an agent's own beats its project's, which beats
 the account library. So a shared integration is defined once for the whole
-account and rotating its credential is a single edit — and a workspace can
+account and rotating its credential is a single edit — and a project can
 still shadow it by defining the same name locally.
 
 The Library page lists, for every shared file, which agents granted it and
@@ -183,7 +183,7 @@ gallery is a shelf beneath your account library, laid down on the box at
 boot, so a platform upgrade reaches every account at once.
 
 **Installing** is still there, and it means something narrower now: it
-copies the tool or skill into your account library (or one workspace), and
+copies the tool or skill into your account library (or one project), and
 your copy shadows the platform's by name. A copy you have **not edited**
 follows the gallery: every platform deploy brings it to the current
 version. A copy you **have** edited is yours and is never changed under
@@ -199,7 +199,7 @@ not one of the skills an agent with no `skills:` list inherits.
 `foldrun run` and `foldrun eval` fetch the gallery before they start and keep
 a copy under `~/.foldrun/gallery/<host>/`, so an agent granting `web`
 runs locally exactly as it does on a deploy, with the same lookup order: the
-workspace's copy, then the account library's, then the shelf. Offline, the
+project's copy, then the account library's, then the shelf. Offline, the
 last copy is used and the run says so. `foldrun gallery` lists the shelf and
 marks which entries your account keeps its own copy of, `foldrun gallery pull`
 refreshes the copy by hand, and `foldrun gallery upgrade <name>` is the
@@ -465,7 +465,7 @@ None of the actions hardcodes a country. `web action=search` asks the engine in 
 agent's `language:` — and for its region when the tag carries one, as
 `en-AU` or `pt-BR` — `web action=browse` reports it as the page's locale, and
 `web action=fetch` sends it as `Accept-Language`. The value cascades from the agent
-to its workspace to the account, and is English when nobody set it; see
+to its project to the account, and is English when nobody set it; see
 [`language:`](agents#language--the-language-this-agent-works-in). A
 country the tag does not carry comes from
 [`region:`](agents#region--the-country-this-agent-works-for) — `language: en`
@@ -856,7 +856,7 @@ web:
 
 A setting the vendor has no option for fails `foldrun check`, naming the
 vendors that do — the same rule as an action. `keep` stores the vendor's
-context or profile id in the workspace's `state/web-browse/`, so the next run
+context or profile id in the project's `state/web-browse/`, so the next run
 signs in as the last one left off; it uses the vendor's own browser context
 as it stands, so `user_agent`, `device`, `locale`, `timezone` and
 `identities` beside it are refused. ZenRows' browser refuses a changed user
@@ -922,11 +922,11 @@ exactly as it always did.
 | `delta` | with `mode=aria`: `true` returns only what changed since the last snapshot of the same page in this session, or one line saying nothing did |
 | `annotate` | with `mode=screenshot`: `true` draws a box and its number on every element that can be acted on, and lists them — the numbers are `"@e4"` |
 | `visual` | with `mode=diff`: `true` compares pixels, not words — what share changed, where, and `outputs/diff.png` with the changes in red |
-| `init` | workspace paths of scripts run in every page before its own |
+| `init` | project paths of scripts run in every page before its own |
 | `allowed_domains` | the only domains the browser may reach — pages, scripts, fetches, sockets. From the block, a call may narrow it, never widen it |
 | `boundaries` | `true` wraps the page's words in markers with a fresh nonce |
 | `webgpu` | `true` gives the page WebGPU, on a software GPU where there is none |
-| `extensions` | workspace paths of unpacked Chrome extensions; the browser then runs in the step, in Chromium |
+| `extensions` | project paths of unpacked Chrome extensions; the browser then runs in the step, in Chromium |
 | `ignore_https_errors` | `true` opens a page whose certificate does not check out |
 | `cpu_profile` | a `.cpuprofile` path — where the page's JavaScript spent its time, for DevTools |
 | `state_key` | the NAME of a secret whose value encrypts the `state` login at rest (AES-256-GCM) |
@@ -1233,7 +1233,7 @@ page it opened the session that belongs to one site. A `cookies=` on the call
 is the caller's own decision and is used as given.
 
 `web: {browse: browserbase}` still means exactly what it did, so no file needs
-changing. A block may sit on the agent, the workspace's `AGENTS.md` or the
+changing. A block may sit on the agent, the project's `AGENTS.md` or the
 account's; the nearest one wins and replaces the others whole. **A call
 argument beats the file** — `browser=`, `user_agent=`, `device=`, `locale=`,
 `timezone=` — so the block is a default. The exceptions are what the agent
@@ -1347,14 +1347,14 @@ follows it.
 the page cannot know, so words a site wrote to look like instructions stay
 labelled as the site's. It is a label, not a wall.
 
-`init:` runs workspace scripts in every page before the page's own — a
+`init:` runs project scripts in every page before the page's own — a
 stub for an analytics call, a polyfill. `extensions:` loads unpacked Chrome
-extensions from the workspace; the browser then runs in the step rather than
+extensions from the project; the browser then runs in the step rather than
 the account's pod, in Chromium (branded Chrome no longer loads them).
 `webgpu: true` and `ignore_https_errors: true` do what they say. `state_key:`
 names a secret whose value encrypts the `state=` login at rest with
 AES-256-GCM, so a session cookie in `state/` is not a login anyone who can
-read the workspace can use; declare the secret under `secrets:`. An
+read the project can use; declare the secret under `secrets:`. An
 encrypted state without its key is refused rather than started signed out.
 
 **A sign-in the model never sees.** A `login` step takes a credential
@@ -1498,7 +1498,7 @@ names it, in this run or a run next month. It is the agent's own login,
 made with `actions` from credentials it can see — or a login a cookie secret
 seeded, when `state_key` encrypts it (below). Without a key `state` refuses
 `cookies=` and a session they seeded, and it always refuses `storage=`,
-because `state/` is a workspace file every later step can read, and a vault
+because `state/` is a project file every later step can read, and a vault
 secret written there in the clear would stop being one. `mode=diff` keeps its
 baselines in the same place, under `state/browser/diff/`, for the same
 reason: they must outlive the run.
@@ -1646,7 +1646,7 @@ included. Reads: `Read`/`Glob`/`Grep`, `web` search, fetch, crawl, map,
 extract and answer, a browse that only looks (navigates, scrolls, waits,
 screenshots, extracts, hovers), a GET or HEAD to an API, the `search`,
 `history` and `desks` tools and a consult. Writes: any file written or
-edited (`state/`, `memory/`, the workspace), Bash, every script tool, an
+edited (`state/`, `memory/`, the project), Bash, every script tool, an
 API call that is not a GET, a web action a paid provider answers, `web
 action=monitor` (it keeps state), a browse that clicks, fills, types,
 presses, selects, uploads, signs in, accepts a dialog, solves a captcha or
@@ -1872,7 +1872,7 @@ Values are whole numbers, 1 or more; to withhold a tool, leave it out of
   sub-agents count toward the step that delegated: their calls pass the same
   check.
 - **A refused call counts toward nothing**, and neither does one another
-  check refused (a path outside the workspace, a tool not granted).
+  check refused (a path outside the project, a tool not granted).
 - **Every step has two by default: `calls: 1000` and `repeat: 25`** (since
   13 Nov 2026). A model that keeps calling — the same call, or anything at
   all — is refused, not paid for until the step's `timeout:`. Set either key
@@ -1882,7 +1882,7 @@ Values are whole numbers, 1 or more; to withhold a tool, leave it out of
   the model kept calling — it is stuck*. A model told "no" that often is not
   going to stop by itself.
 - **Nearest wins, per key.** The platform's defaults, then the account's
-  `AGENTS.md`, then the workspace's, then the agent's own, then a flow step's
+  `AGENTS.md`, then the project's, then the agent's own, then a flow step's
   `limits: {web.search: 10}` option. A key set nearer replaces that key;
   the others stand.
 - **On the trace.** The step lists its limits (the defaults included) when it starts, each refusal
@@ -1927,7 +1927,7 @@ Only names and descriptions sit in context; the agent reads the full file when
 a task matches. So an agent can carry many skills for a few tokens each — which
 is the reason to move a procedure out of `agent.md` in the first place.
 
-Skills are discovered in the agent's own `skills/`, the workspace's, the
+Skills are discovered in the agent's own `skills/`, the project's, the
 account library, and the cross-client `.agents/skills/` convention that other
 tools read and write. A skill written here drops into them, and one they
 install is visible here. The platform's [gallery](#the-gallery--platform-maintained-tools-and-skills)
@@ -1946,8 +1946,8 @@ credential** — the vault stores the refresh recipe (`token_url`, `client_id`,
 `client_secret`, `refresh_token`) and the host exchanges it for a live access
 token immediately before every use, cached until near expiry.
 
-Resolution is nearest-wins across the workspace and account vaults, and the run
-log says which store each one came from — a workspace quietly falling back to
+Resolution is nearest-wins across the project and account vaults, and the run
+log says which store each one came from — a project quietly falling back to
 an account credential is the kind of thing you want to see rather than infer.
 
 ### Connecting a provider

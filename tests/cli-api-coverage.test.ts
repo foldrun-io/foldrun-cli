@@ -45,7 +45,7 @@ test("workspaces show <name> reads GET /api/workspaces/<name>: agents, flows, fi
   assert.match(r.out, /agents\/ 2\s+flows\/ 2/);
   assert.deepEqual(json(j.out), doc);
   assert.equal(none.code, 1);
-  assert.match(none.out, /which workspace\?/);
+  assert.match(none.out, /which project\?/);
 });
 
 test("agent ls / flow ls read GET …/agents and …/flows of the workspace --to names", async () => {
@@ -155,7 +155,7 @@ test("without --platform, agent new --to still names a workspace of this folder"
   const r = await cli(["agent", "new", "checker", "--to", "nowhere", "--url", s.url, "--token", "k"], { cwd });
   s.close();
   assert.equal(r.code, 1);
-  assert.match(r.out, /no workspace called "nowhere" here.*--platform makes it in the deployed one/);
+  assert.match(r.out, /no project called "nowhere" here.*--platform makes it in the deployed one/);
   assert.equal(s.seen.length, 0);
 });
 
@@ -277,7 +277,7 @@ test("team lists members, roles and scopes from GET /api/team — and refuses a 
   const invite = await at(s.url, "team", "promote", "a@b.com");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /owner@x\.com\s+owner\s+every workspace\s+joined 2026-01-02/);
+  assert.match(r.out, /owner@x\.com\s+owner\s+every project\s+joined 2026-01-02/);
   assert.match(r.out, /ed@x\.com\s+editor\s+blog-desk/);
   assert.match(r.out, /foldrun team invite \| role \| access \| remove/);
   assert.deepEqual(json(j.out), members);
@@ -307,7 +307,7 @@ test("team invites lists GET /api/team/invites (--all asks for every one) and re
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /new@x\.com\s+editor\s+blog-desk\s+by owner@x\.com · expires/);
-  assert.match(r.out, /anyone with the link\s+viewer\s+every workspace/);
+  assert.match(r.out, /anyone with the link\s+viewer\s+every project/);
   assert.match(r.out, /2 invites · each works once/);
   assert.doesNotMatch(r.out, /signup\?invite=/, "never a link");
   assert.equal(s.seen[0].query.get("all"), null);

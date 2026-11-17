@@ -2,11 +2,11 @@
 
 **Is this a framework?** No. There is nothing to import. An agent is a folder,
 a flow is a numbered list in a markdown file, and the CLI or the platform
-reads them. You can write a working workspace in an editor with no
+reads them. You can write a working project in an editor with no
 dependency installed.
 
 **Do I need an account to try it?** No. `npm install -g foldrun`, a model key,
-and `foldrun init` gives you a workspace that runs on your machine. The
+and `foldrun init` gives you a project that runs on your machine. The
 account is for running it somewhere that is not your laptop, on a schedule,
 with a team.
 
@@ -14,7 +14,7 @@ with a team.
 tier — `fast`, `default`, `max` — and the platform resolves the tier to a
 model. Bring your own key for any provider that speaks the Anthropic or the
 Chat Completions API — once for the whole account in Settings → Models
-(`foldrun account model set`), or per workspace or agent with a `provider:`
+(`foldrun account model set`), or per project or agent with a `provider:`
 block — and the platform bills you nothing for those tokens. On a hosted
 platform every account brings its own API key — Claude login tokens are not
 accepted — or, on foldrun's own platform, chooses **foldrun's models**:
@@ -31,7 +31,7 @@ file names a tool that can, and the reference pattern is to give that tool
 only to the step after a human gate. An agent with no tool that writes cannot
 write, whatever it is told.
 
-**What stops a runaway?** Three caps — per run, per workspace per month, per
+**What stops a runaway?** Three caps — per run, per project per month, per
 account per month — and the stop button, which destroys the sandbox. A
 step with no `timeout:` runs until it finishes; that is deliberate, and the
 caps are the ceiling.
@@ -49,7 +49,7 @@ other with `trigger: flow`.
 `.claude/agents/<name>.md` deploys as a foldrun agent with no conversion.
 The scaffolded `CLAUDE.md` tells your editor the layout.
 
-**Where is my data?** In your workspace's folder, as files — on your machine,
+**Where is my data?** In your project's folder, as files — on your machine,
 or on the hosted platform's data volume — and its blobs in the
 file store. Nothing is hidden in a database only the platform can read, and
 a deploy never touches what an agent learned or a run recorded.

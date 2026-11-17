@@ -157,7 +157,7 @@ test("in a workspace folder the workspace needs no naming, and elsewhere it does
   const nowhere = await cli(["storage", "ls", "--url", s.url, "--token", "k"], { cwd: os.tmpdir() });
   s.close();
   assert.equal(nowhere.code, 1, nowhere.out);
-  assert.match(nowhere.out, /which workspace\?/);
+  assert.match(nowhere.out, /which project\?/);
 });
 
 test("an unknown verb names the verbs there are", async () => {

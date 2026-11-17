@@ -10,7 +10,7 @@ and no ceiling can spend in an hour what a month was meant to.
 |---|---|---|
 | **an agent, per run** | `budget: 2` in the agent's `agent.md` | the most that agent may spend in one run, across every step it takes in it — its step stops itself mid-turn at what is left, and a later step of its own in the same run is refused before it starts. Its steps running at once share what is left, as a group shares the run's: the copies of a fan-out split the cap, they are not each handed the whole of it |
 | **a run** | `budget: 6` in a flow's frontmatter | a hard cap: between groups the next group does not start; within a group each step gets an equal share of the remainder and stops itself mid-turn when it is spent — the run cannot end over the cap |
-| **a workspace, over time** | `budget: 60` in the workspace's `AGENTS.md`, or Settings | new runs refuse until the window turns |
+| **a project, over time** | `budget: 60` in the project's `AGENTS.md`, or Settings | new runs refuse until the window turns |
 | **the account, over time** | `budget: 500` in the account's `AGENTS.md`, or Settings | the same, for everything |
 
 **Unset means no limit.** No file, no key, `budget: unlimited` — all the
@@ -27,7 +27,7 @@ wins, and the step's error says which line set it: `budget: in the flow
 file` or `budget: on the writer agent`.
 | **runs at once** | `concurrency: 3` in the account's `AGENTS.md`, or Settings → Policies → Governance | the fourth run waits its turn in the queue — never refused, only later. Empty means the install's share (`FOLDRUN_ACCOUNT_CONCURRENCY`), or no cap. Your own number can lower that, never raise it. Plans are not sold on runs at once but on [compute at once](#compute-at-four-levels): paid by the second, it is the real limit. On foldrun's hosted platform a ceiling on runs driven together guards against a loop gone wrong; it is not something a plan sells |
 | **the queue lane** | the plan's lane (`high` \| `normal` \| `low`); `priority: low` in the account's `AGENTS.md` lowers it, and `high` there counts only with a plan that gives it | when slots are short, accounts take turns, weighted by lane — high 3, normal 2, low 1: every account's first run goes before anyone's second, a fast lane takes three turns to a slow lane's one and never all of them, an account with runs going waits behind one with none, and a run that has waited ten minutes moves up a turn. A flow's own `priority:` orders runs within that. The cap above still holds |
-| **compute at once** | the plan's cores, GiB and disk (below); `compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }` in the account's `AGENTS.md`, or Settings → Policies → Governance, lowers it — and a workspace's and a flow's `compute:` narrow it further ([four levels](#compute-at-four-levels)) | what all the account's running steps may hold together — each step's cores, memory and disk, its `size:` class's or its own `resources:` ([agents](agents#resources--your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB` / `FOLDRUN_ACCOUNT_DISK_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
+| **compute at once** | the plan's cores, GiB and disk (below); `compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }` in the account's `AGENTS.md`, or Settings → Policies → Governance, lowers it — and a project's and a flow's `compute:` narrow it further ([four levels](#compute-at-four-levels)) | what all the account's running steps may hold together — each step's cores, memory and disk, its `size:` class's or its own `resources:` ([agents](agents#resources--your-own-numbers)). A step that would pass it waits to start, like a full node — `room: waiting to start — 6 of this account's 8 GiB is held by its running steps…` — and starts in turn when one of the account's steps ends ([waiting for room](#waiting-for-room)). A step that **alone** is bigger than the pool, or than the plan's most for one step, fails at once with that message: no step finishing would make room. Without a plan, the install's `FOLDRUN_ACCOUNT_VCPU` / `FOLDRUN_ACCOUNT_MEMORY_GIB` / `FOLDRUN_ACCOUNT_DISK_GIB`, or no cap. Your own number can lower it, never raise it. `foldrun usage compute` shows the pool and what is held now. Enforced on the hosted platform and any k8s install; a self-hosted Docker install caps each step at its class but not the pool |
 | **room to start** | the install's `FOLDRUN_RUN_MEMORY_GIB`, `FOLDRUN_RUN_DISK_GIB` and `FOLDRUN_ACCOUNT_PODS` | a step whose sandbox would not fit, or whose account already has its most sandboxes running, waits to start — `room: waiting to start — …` on its trail — instead of failing. The wait is not billed and has no time limit; the run page's start-up chip shows it as `room` ([waiting for room](#waiting-for-room)) |
 
 A cap is a literal, never an expression, so it is readable off the file. The
@@ -43,11 +43,11 @@ by nothing at all, while the sandbox billed by the second. The platform sets
 no clock of its own by design, so the cap is the only backstop there is, and
 it counts everything.
 
-The account's cap and a workspace's are checked separately and both apply:
-the workspace one stops that desk, the account one stops everything.
+The account's cap and a project's are checked separately and both apply:
+the project one stops that desk, the account one stops everything.
 
 **A cap over time warns before it refuses.** At 80% and again at 95% of a
-workspace's `budget:`, the workspace's notification destination is told what
+project's `budget:`, the project's notification destination is told what
 has been spent and what happens at the cap. Each mark is sent once per
 window — today, this week, this month, whichever the cap is over — and
 resets when the cap does. Without it the way a customer learns about the
@@ -56,7 +56,7 @@ cap is a desk failing to start on a Tuesday.
 Size the run cap from the run records, at two or three times the median — real
 work never trips it, a runaway is stopped where it went wrong, and the
 failure notification says why. The dashboard's Usage page shows spend by
-workspace and by meter.
+project and by meter.
 
 ### Compute at four levels
 
@@ -66,7 +66,7 @@ level only narrows the one above it; a step must fit all of them.
 | level | where | what it caps |
 |---|---|---|
 | **account** | the plan (or the install's `FOLDRUN_ACCOUNT_*`); `compute:` in the account's `AGENTS.md`, Settings → Policies → Governance or `foldrun account set compute` lowers it | everything the account's running steps hold together |
-| **workspace** | `compute:` in the workspace's `AGENTS.md`, its Settings → Policies → Governance, or `foldrun workspace set compute … --to <ws>` | what that workspace's running steps hold together |
+| **project** | `compute:` in the project's `AGENTS.md`, its Settings → Policies → Governance, or `foldrun workspace set compute … --to <ws>` | what that project's running steps hold together |
 | **run** | `compute:` in the flow, the flow's card, or `foldrun flow compute <flow> …` | what one run of the flow holds at once across its parallel steps — each run has its own |
 | **step** | the agent's `size:` or `resources: { cpu, memory, disk }`; the plan's (or install's `FOLDRUN_STEP_MAX_*`) most for one step — on foldrun's hosted platform an account without a plan, or whose plan sets none, gets the entry plan's | one step's sandbox |
 
@@ -78,16 +78,16 @@ compute: { vcpu: 4, memory: 8Gi, disk: 40Gi }
 Any of the three may be left out. A step that would pass a cap waits, in
 turn, and its trail says which level holds it — `room: waiting to start —
 3 of this run's 4 vCPU is held by its running steps…`. A step that **alone**
-is bigger than a level's whole cap fails at once, naming it. A workspace's
+is bigger than a level's whole cap fails at once, naming it. A project's
 figure above the account's grants nothing: the account's still applies.
 `foldrun usage compute` and `GET /api/usage/compute` show every level — the
-account, each workspace and each live run — with what it holds. Before
-27 Oct 2026 a workspace's `compute:` was read nowhere; it now caps that
-workspace.
+account, each project and each live run — with what it holds. Before
+27 Oct 2026 a project's `compute:` was read nowhere; it now caps that
+project.
 
 ### Waiting for room
 
-A step that finds no room — its run's, workspace's or account's pool, its
+A step that finds no room — its run's, project's or account's pool, its
 account's most sandboxes at once, or the node's memory or disk —
 **waits; a wait never fails a step**. There
 is no time limit (until 27 Oct 2026 a step failed after 30 minutes). Only a
@@ -109,13 +109,13 @@ fails, at once, because nothing finishing would make room.
 - **Seen.** The run page says *Waiting for room to start*, why, and since
   when; Settings → Policies → Governance and `foldrun usage compute` list every
   waiting step, oldest first (`waiting` in `GET /api/usage/compute`).
-- **Told.** After an hour (`FOLDRUN_ROOM_ALERT_MIN`) the workspace's
+- **Told.** After an hour (`FOLDRUN_ROOM_ALERT_MIN`) the project's
   `notify:` hears of it once, as event `room`, with what to change: ask for
   less (`size:`, `resources:`) or allow the account more compute.
 
 - **In turn, by scope.** An older step goes first among the steps of the
   scope that holds it back: its run's own pool among that run's steps, its
-  workspace's among that workspace's, otherwise among all its account's —
+  project's among that project's, otherwise among all its account's —
   so a step stuck behind a narrow pool of its own never holds back the rest.
 
 Nothing is charged while a step waits — the meter starts when its sandbox
@@ -155,7 +155,7 @@ that is running.
   over A2A is told the agent is busy.
 - **A trigger that fires into it is skipped, not delayed.** A schedule's
   fire, a watched page's change, a debounced burst, a chained or storage
-  trigger: each is written on the workspace's Triggers page as
+  trigger: each is written on the project's Triggers page as
   *too many runs waiting*, with the sentence, and the flow waits for its
   next fire. (A webhook's sender retries; nothing else does.)
 - **A threshold, not a ceiling.** The limit is checked when a new run is
@@ -219,7 +219,7 @@ none — are **1¢ each**; the falling figure below is what a plan's bundle
 works out to, and it is the reason to pick a bigger plan rather than buy
 more credits.
 
-| plan | a month | credits a month | storage included | compute at once | one step, at most | workspaces | queue lane |
+| plan | a month | credits a month | storage included | compute at once | one step, at most | projects | queue lane |
 |---|---|---|---|---|---|---|---|
 | **Free** | $0 | 300 | 2 GB | 2 vCPU · 4 GiB · 20 GiB disk | 2 vCPU · 4 GiB · 10 GiB disk | 2 | normal |
 | **Starter** | $29 | 3,000 | 10 GB | 4 vCPU · 8 GiB · 40 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 5 | normal |
@@ -339,10 +339,10 @@ provider's own invoice.
 | **vCPU** | per second, the cores a step reserves while it runs |
 | **RAM** | per second, the GiB a step reserves while it runs |
 | **step disk** | per second, the GiB of disk the step may write; deleted when the step ends |
-| **storage** | per GB-month, the files you keep between runs **over your plan's allowance**, accrued daily. Only the GB above what your plan includes are charged (Free 2 GB, Starter 10, Pro 100, Scale 1 TB). It counts your workspaces' files and your run history, as they are now; a GB is 2^30 bytes |
+| **storage** | per GB-month, the files you keep between runs **over your plan's allowance**, accrued daily. Only the GB above what your plan includes are charged (Free 2 GB, Starter 10, Pro 100, Scale 1 TB). It counts your projects' files and your run history, as they are now; a GB is 2^30 bytes |
 | **network** | per GB the sandbox moves, both directions |
 | **search and browser pods** | an account's search engine and its browser run as pods of their own. Each is charged like a step: the vCPU and GiB it holds, for the seconds it lives (idle time included, until it is let go), at the same vCPU and RAM rates, plus the GB it moves at the network rate. A search pod holds 0.25 vCPU and 0.75 GiB and a browser pod 1 vCPU, 3 GiB and 4 GiB of disk by default; the platform's operator sets these sizes, so the size shown is the one in force. Each pod's requests equal its limits, so you are charged for exactly what is reserved for it, at the size the pod was made with. A pod session is not a run, so no minimum run charge applies |
-| **warm builds** | when you deploy, your workspace's environments (the packages an agent declares) are built ahead of its first step, in a short pod. **You pay for it**, because it is the work the first step would otherwise have done in its own sandbox: a small sandbox's vCPU and RAM for the seconds it ran, and the GB it downloaded. It is bounded (one build at a time, ten minutes at most) and shown as its own line, so it is never hidden in another |
+| **warm builds** | when you deploy, your project's environments (the packages an agent declares) are built ahead of its first step, in a short pod. **You pay for it**, because it is the work the first step would otherwise have done in its own sandbox: a small sandbox's vCPU and RAM for the seconds it ran, and the GB it downloaded. It is bounded (one build at a time, ten minutes at most) and shown as its own line, so it is never hidden in another |
 
 The rates are on the Usage page's **Rates** tab, in `foldrun usage rates`,
 in `GET /api/usage/rates` and, for anyone, in the public
@@ -494,7 +494,7 @@ avatar, with eight tabs:
 | **Invoices** | a tax invoice for every card payment — the plan's fee and each top-up — hosted by Stripe, and a statement for every month; `foldrun billing invoices` lists the invoices and receipts in a terminal |
 | **Payment** | the saved card and the auto top-up rule, with defaults derived from the burn |
 | **Details** | who the invoices are made out to: legal name, ABN, address and the invoice email |
-| **Spend limits** | the account's cap and each workspace's — over a day, a week or a month — as bars with the warning marks drawn where they fire, editable in place; `foldrun usage budget` shows the same standing in a terminal |
+| **Spend limits** | the account's cap and each project's — over a day, a week or a month — as bars with the warning marks drawn where they fire, editable in place; `foldrun usage budget` shows the same standing in a terminal |
 
 The balance also sits in the header of every page, tinted by runway, and a
 banner appears across the dashboard when the balance is under a week's cover
@@ -542,7 +542,7 @@ the platform's operator suspended for another reason stays suspended. The
 operator sees where it stands on the customer's overview.
 
 **Your data, and leaving.** Settings → Your data gives the owner one JSON
-file with the account's workspaces, members, an index of every run and the
+file with the account's projects, members, an index of every run and the
 whole ledger (`GET /api/account/export`). The same place holds **Close
 account**: type the account's name and it is suspended at once — no new
 runs, schedules stop firing — while the platform team settles the last
@@ -701,7 +701,7 @@ that was handled changes nothing.
 ## Plan gates
 
 Two more limits come with the plan rather than the wallet: how many
-workspaces an account may create (beyond it, creation refuses with `402`),
+projects an account may create (beyond it, creation refuses with `402`),
 and how many runs may execute in parallel (beyond it, runs **wait** — they
 are never refused, because a queued run is work that will happen and a
 refused one is work that will not).

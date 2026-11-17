@@ -24,7 +24,7 @@ notify:
 
 A bare string is whichever destination it looks like: `notify: ops@example.com`.
 
-`${NAME}` is filled from the vault, the workspace's first and then the
+`${NAME}` is filled from the vault, the project's first and then the
 account's, as for an agent. A secret [bound to sites](secrets#bound-to-sites)
 is filled only when the URL's host is one of them — bind `SLACK_WEBHOOK_URL`
 to `hooks.slack.com` and it goes there and nowhere else; named in a URL to
@@ -95,7 +95,7 @@ which is the class of failure that otherwise reaches nobody:
 |---|---|
 | `quarantined` | a flow's `disable_after:` tripped and it has stopped firing |
 | `sla` | a run has passed its flow's `sla:` and is still going |
-| `budget` | a workspace has spent 80%, then 95%, of its `budget:` for the window — today, this week or this month |
+| `budget` | a project has spent 80%, then 95%, of its `budget:` for the window — today, this week or this month |
 | `security` | the daily rescan found a security finding that was not there before — see [Checks](checks#online-checks-and-the-daily-rescan) |
 | `room` | a run has waited an hour for room to start (`FOLDRUN_ROOM_ALERT_MIN`) — it keeps its place and starts when there is room; see [waiting for room](budgets-and-billing#waiting-for-room) |
 
@@ -112,7 +112,7 @@ of them, leave `failed` out of the list.
 
 ## Thresholds: `alerts:`
 
-A failure is told when it happens. A workspace can also ask to hear when a
+A failure is told when it happens. A project can also ask to hear when a
 pattern crosses a line, with `alerts:` in its `AGENTS.md` (or the account's):
 
 ```yaml
@@ -127,9 +127,9 @@ alerts:
   new_host: true      # an agent reached a site it never reached before
 ```
 
-A workspace's `alerts:` replaces the account's whole: once it has its own,
+A project's `alerts:` replaces the account's whole: once it has its own,
 the account's thresholds no longer apply there, and `alerts: {}` means none
-for that workspace (`new_host: false` turns off one the account has on).
+for that project (`new_host: false` turns off one the account has on).
 Without an `alerts:` of its own it takes the account's.
 
 Each comes to `notify:` as event `alert` — like the three above it follows
@@ -176,19 +176,19 @@ has checked, through a mail domain nobody has verified — and on 2026-09-06
 every run email had been going to a bin for weeks, with silence as the only
 symptom. Silence looks exactly like nothing having gone wrong.
 
-Workspace settings has a button that sends one real message to the saved
+Project settings has a button that sends one real message to the saved
 destination and reports what came back, including the provider's own words
 on a failure. Those words are the value: "domain not verified" and "you can
 only send to your own address" send you to two different pages, and a status
 code sends you to neither. `POST /api/workspaces/<ws>/notify/test` is the
-same thing. A workspace gets 10 test sends an hour; past that the button
+same thing. A project gets 10 test sends an hour; past that the button
 says to wait.
 
 ## Where it is set, and the rule that bites
 
-`notify:` lives in the account's `AGENTS.md` and every workspace inherits it.
-A workspace may declare its own — and when it does, its block **replaces**
-the account's whole, it does not merge. A workspace that wants the account's
+`notify:` lives in the account's `AGENTS.md` and every project inherits it.
+A project may declare its own — and when it does, its block **replaces**
+the account's whole, it does not merge. A project that wants the account's
 destination and events simply says nothing.
 
 ## What arrives
@@ -254,7 +254,7 @@ The URL is read from `notify:` at each attempt, so fixing a typo in it is
 picked up by the next retry. The body is kept as first sent, so a retry is
 the same bytes.
 
-**Where to see it.** The workspace's Triggers page ends with *Outbound
+**Where to see it.** The project's Triggers page ends with *Outbound
 webhook deliveries*: every delivery, its status, its attempts, and a
 **Redeliver** button. From a terminal, `foldrun webhooks deliveries --to
 <ws>` (`--failed` for the ones that gave up) and `foldrun webhooks
@@ -266,7 +266,7 @@ reject links as `[redacted]`: they decide without a login, and every role
 can read the log. The receiver still gets them, on a redelivery too.
 
 **An endpoint that stays down is switched off.** When every attempt to a
-workspace's URL has failed for **3 days running** (the operator's
+project's URL has failed for **3 days running** (the operator's
 `FOLDRUN_WEBHOOK_DISABLE_DAYS`), the next delivery to give up after all
 six attempts switches it off, and the platform emails the account's owner
 once. A first attempt that fails does not switch it off on its own, however
@@ -372,15 +372,15 @@ sending, so it holds for every mail, from every part of the platform.
 | `invites` | an invitation to join an account | no |
 | `billing` | a payment failed, and the grace before runs stop | no |
 | `account` | a notification webhook switched off after days of failures; a close request; an API route the account still calls that is being switched off | no |
-| `run-alerts` | a workspace's `notify:` email: failed, completed, blocked, quarantined, `sla`, `budget` | yes — per workspace |
-| `approvals` | a run waiting for you, with approve and reject links | yes — per workspace |
+| `run-alerts` | a project's `notify:` email: failed, completed, blocked, quarantined, `sla`, `budget` | yes — per project |
+| `approvals` | a run waiting for you, with approve and reject links | yes — per project |
 | `low-balance` | credits below the warning level | yes |
 | `product-updates` | what changed in foldrun | yes |
 
 The four that cannot be turned off are how you get back into the account
 and how you hear that something you rely on has stopped; the page shows
 them, switched on and locked, with that reason. `run-alerts` and
-`approvals` can be off for one workspace and on for the rest (`foldrun
+`approvals` can be off for one project and on for the rest (`foldrun
 notifications set run-alerts off --to seo-desk`).
 
 **Unsubscribing from a mail.** Every mail in an optional category carries a
@@ -390,7 +390,7 @@ List-Unsubscribe=One-Click`, so the mail client's own Unsubscribe button
 works, plus a "Stop …" link at the bottom that opens a page asking first
 (opening a link never unsubscribes — inbox scanners open links). The token
 is signed by the install, names one address, one category and — for run
-alerts and approvals — one workspace, and works for 180 days. No login is
+alerts and approvals — one project, and works for 180 days. No login is
 needed, and the address need not belong to anyone with one: a `notify:
 email` that reaches a shared inbox can be unsubscribed by whoever reads it.
 A choice made this way shows on that person's Profile → Notifications, and

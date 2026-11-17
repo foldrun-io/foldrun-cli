@@ -33,7 +33,7 @@ satisfy. The heading is the case's name, so make it the thing being checked.
 |---|---|
 | `name` | the eval's identity |
 | `agent` **or** `flow` | what runs. A flow eval runs the whole flow per case |
-| `model` | the **judge's** tier, not the subject's — cases run the agent on its own model. Unset, the workspace's `judge:` in `AGENTS.md` (see [The four jobs](four-jobs#judge--the-evaluation-default)), else the fast tier |
+| `model` | the **judge's** tier, not the subject's — cases run the agent on its own model. Unset, the project's `judge:` in `AGENTS.md` (see [The four jobs](four-jobs#judge--the-evaluation-default)), else the fast tier |
 | `effort` | the judge's effort. PASS/FAIL against one sentence is not deep work |
 | `trigger` | `deploy` (default), `manual`, or `runs` — grade real finished runs instead of running cases (see [Grading live runs](#grading-live-runs)) |
 | `sample` | `trigger: runs` — the percent of finished runs graded, 0 to 100 (default 25) |
@@ -60,12 +60,12 @@ wrong. The same vocabulary is a step's `verify:`, so a flow and an eval say
 ## When they run
 
 `trigger: deploy` — the default — runs the eval on every deploy of the
-workspace, which is what makes it a regression test rather than a thing someone
+project, which is what makes it a regression test rather than a thing someone
 remembers to click. Results land in `evals/.results/`, and a dated line goes to
 `history.jsonl` so movement is visible across weeks.
 
-Each line is stamped with the commit the workspace was running (a git sha, or
-a revision id `r-…` when it was edited on the platform), and the workspace's
+Each line is stamped with the commit the project was running (a git sha, or
+a revision id `r-…` when it was edited on the platform), and the project's
 **Observe** page reads them as **Evals by change**: each eval's latest score
 against its most recent run on a *different* commit, the biggest drop first.
 Not the run before — two runs on one commit differ only by the model, and a
@@ -115,7 +115,7 @@ expect:
   hash of the run id, so the same run is always in or out.
 - **When.** The platform grades a few runs every five minutes, at most four
   per account a pass, so a backlog drains steadily rather than spending at
-  once. A paused account or workspace is not graded.
+  once. A paused account or project is not graded.
 - **The checks.** `contains:`, `not-contains:` and `judge:`, cheap ones
   first; the judge only runs when they pass. `file:` and `run:` are refused
   (`foldrun check` and the deploy say so): a finished run's sandbox is gone,
@@ -128,7 +128,7 @@ expect:
   after an hour, three times at most.
 - **What it costs.** One judge call per `judge:` line per graded run — at
   most five lines in a grader — on the account's own model key like any
-  eval judge. A paused account or workspace is not graded, by the pass or
+  eval judge. A paused account or project is not graded, by the pass or
   by **Grade a run**. The card shows what the
   judges cost; the runs' own cost is on the runs.
 

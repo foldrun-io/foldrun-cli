@@ -64,7 +64,7 @@ as `verify:` and `limits:` under a step, stay where they are.
   other document, `governance:` and the rest are that document's own words
   and are left as written.
 - **The cascade is unchanged.** The account's `AGENTS.md`, then the
-  workspace's, then the agent, then the step: a block at one level and a flat
+  project's, then the agent, then the step: a block at one level and a flat
   key at another combine exactly as two flat keys would.
 
 ## `judge:` — the evaluation default
@@ -72,8 +72,8 @@ as `verify:` and `limits:` under a step, stay where they are.
 `judge: {model, effort}` in `AGENTS.md` is the model, and how hard it
 thinks, for every grader in the workspace: each eval's `judge:` checks and
 every flow step's `verify: judge:`. An eval that names its own `model:` keeps
-it. Unset, judges run on the fast tier. Field by field, the workspace's wins:
-a workspace that sets only `effort` keeps the account's `model`.
+it. Unset, judges run on the fast tier. Field by field, the project's wins:
+a project that sets only `effort` keeps the account's `model`.
 
 ## Where each job shows
 
@@ -86,10 +86,10 @@ a workspace that sets only `effort` keeps the account's `model`.
 
 `foldrun jobs` prints all four; with `--to <workspace>`, each field's value
 there, the account's, and how the two combine. They do not all simply
-override: `network_enforce` is on when either turns it on, a workspace's
+override: `network_enforce` is on when either turns it on, a project's
 `budget` and the account's both apply, `hooks` run from both, `network`
 takes its level from the nearest setting and its sites from every level, `limits` merge key by key, `judge`
 field by field, and `priority` and `concurrency` are read from the account
 alone. The rest — `owner`, `notify`, `alerts`, `telemetry` and others — the
-workspace's replaces the account's whole. Fields the CLI cannot set (`limits`,
+project's replaces the account's whole. Fields the CLI cannot set (`limits`,
 `network`, `hooks`, `capture`, …) are written in `AGENTS.md`.

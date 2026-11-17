@@ -134,7 +134,7 @@ test("keys create --to: a platform that answers with an all-workspaces key has i
   s.close();
   assert.notEqual(r.code, 0);
   assert.ok(!r.out.includes("fr_api_secret_all"), "the key is never shown");
-  assert.match(r.out, /every workspace/);
+  assert.match(r.out, /every project/);
   assert.deepEqual(JSON.parse(s.seen[1].body), { id: "k9" });
 });
 

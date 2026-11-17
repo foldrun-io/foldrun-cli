@@ -135,7 +135,7 @@ The answer:
 
 Every route, field and refusal is in [api](api.md#files-to-text). Starting
 an extraction of a file you send takes what starting a run takes; reading a
-stored file takes read access to its workspace, writing its `.txt` beside it
+stored file takes read access to its project, writing its `.txt` beside it
 takes write access.
 
 ## Engines and their licences

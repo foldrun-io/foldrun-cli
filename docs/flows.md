@@ -103,7 +103,7 @@ begins.
 | `loop:` | send the flow back one group up to N times (capped at 5) |
 | `until:` | the marker that ends the loop |
 | `output:` | `json` — the reply must end with one ```json block, parsed and passed on losslessly |
-| `schema:` | with `output: json` — the JSON Schema the value must satisfy: one-line JSON, a YAML block under the key, or a file under the workspace |
+| `schema:` | with `output: json` — the JSON Schema the value must satisfy: one-line JSON, a YAML block under the key, or a file under the project |
 | `model:` | override the tier for this step |
 | `effort:` | override how hard it thinks for this step |
 | `max_output_tokens:` | the longest one model reply may be for this step, in tokens — over the flow's and the agent's |
@@ -111,12 +111,12 @@ begins.
 | `timeout:` | seconds, or `90s` / `15m` / `4h` / `3d` — **the only clock there is** |
 | `max_turns:` | the most model turns before the step is stopped (1 to 500) — the third bound beside `budget:` and `timeout:` |
 | `limits:` | this step's call limits, on one line — `limits: {web.search: 10, calls: 50}` — over the agent's, key by key. A call past one is refused, never run ([Tools](tools#limits--how-many-calls-a-step-may-make)) |
-| `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`). The shell runs in the agent's folder and gets the step's final turn in the file `$FOLDRUN_REPLY_FILE`; `workspace/…` reaches the workspace root there, and in `file: workspace/storage/x.md`; `node workspace/tools/x/check.mjs` runs as its own main module, so a check it makes counts ([Agents](agents#where-files-live-from-the-agents-point-of-view)). The check runs on what is left of the step's `timeout:` (at least 30 s of it); with no `timeout:` it has no clock either. A stop ends it |
+| `verify:` | a shell command, or an assertion (`contains:`, `matches:`, `file:`, `judge:`). The shell runs in the agent's folder and gets the step's final turn in the file `$FOLDRUN_REPLY_FILE`; `workspace/…` reaches the project root there, and in `file: workspace/storage/x.md`; `node workspace/tools/x/check.mjs` runs as its own main module, so a check it makes counts ([Agents](agents#where-files-live-from-the-agents-point-of-view)). The check runs on what is left of the step's `timeout:` (at least 30 s of it); with no `timeout:` it has no clock either. A stop ends it |
 | `approve:` | park until a person releases it |
 | `ask:` | the same gate carrying a question; the typed answer reaches the prompt (a plain approval with no note reaches it as "approved with no note") |
 | `preview:` | what the gate shows: paths under `storage/` (a `workspace/storage/` prefix is accepted), comma-separated, globs allowed — `draft/*.mdx, draft/images/*.webp`; at most 12 files |
 | `wait:` | `3d` (`s`/`m`/`h`/`d`, capped at 30 days) or `event` — the run page shows the event URL and can release it with a payload, recorded as released by you (approve with `payload`) |
-| `on-fail:` | another agent takes the step over, with the failure as context — and, for a gated step, the person's approval and answer, which it acts within. The rescuer owes what the step owed: its `verify:`, its `output:`, and a `loop:` step's `until:` marker (a loop that runs out of cycles goes to its rescuer too). A `verify:` that accepts `BLOCKED` never fails, so it never reaches the rescuer. A step refused by the model supply itself — a spent usage window, a credential refused — is not handed to a rescuer on the same supply (the same `provider:`, or both on the workspace's): it would be refused the same way, and the issue is filed as the cap or the credential |
+| `on-fail:` | another agent takes the step over, with the failure as context — and, for a gated step, the person's approval and answer, which it acts within. The rescuer owes what the step owed: its `verify:`, its `output:`, and a `loop:` step's `until:` marker (a loop that runs out of cycles goes to its rescuer too). A `verify:` that accepts `BLOCKED` never fails, so it never reaches the rescuer. A step refused by the model supply itself — a spent usage window, a credential refused — is not handed to a rescuer on the same supply (the same `provider:`, or both on the project's): it would be refused the same way, and the issue is filed as the cap or the credential |
 | `delegate:` | the step's agent picks who runs next, from this set |
 
 ### What is retried without a `retry:`
@@ -132,7 +132,7 @@ tried again whoever wrote the flow:
 | a `web` provider timed out or answered busy | tried three times, about 2 s and 6 s apart (see the web tool) |
 
 None of the step-level ones runs again once a tool that can act outside the
-workspace has run in that attempt: the post may already be up. When a step
+project has run in that attempt: the post may already be up. When a step
 still fails, the run says so — `notify:` sends `failed` (and `blocked`, for a
 run that finished but refused), and the run page's **Re-run from here**,
 `foldrun rerun <run-id> --from <n>` or `POST …/runs/<id>/rerun` start it
@@ -192,7 +192,7 @@ On a day with nothing in the queue the writer skips itself, and without the
 `when:` the sheet and the gate would still run — a skipped fan-out leaves no
 result, so there is no marker to read, and a person is asked to approve
 nothing. With it, the run ends after the scan. A missing file, a header on
-its own, or a path outside the workspace all skip, and the step says which.
+its own, or a path outside the project all skip, and the step says which.
 
 For `case:` it matters more, because routing is exclusive. A label picked
 out of a sentence does not merely run an extra step: "this is not a
@@ -270,7 +270,7 @@ rides the run record as `data`. A shell `verify:` receives it on stdin.
 ```
 
 One-line JSON works too (`schema: {"type": "array"}`), and so does a file
-under the workspace (`schema: workspace/schemas/lead.json`, JSON or YAML). The
+under the project (`schema: workspace/schemas/lead.json`, JSON or YAML). The
 schema is quoted whole in the step's prompt, so the model is told what it
 must produce rather than left to guess from field names, and the value is
 checked where it is parsed. One that does not fit fails the step with the
@@ -322,7 +322,7 @@ normal outcome, recorded as one.
 |---|---|
 | `name` | the flow's identity |
 | `description` | what it is for |
-| `owner` | the person who answers for it — an email or a name; unset, the workspace's `owner:`, then the account's |
+| `owner` | the person who answers for it — an email or a name; unset, the project's `owner:`, then the account's |
 | `trigger` | how it starts — see below |
 | `schedule` / `timezone` | 5-field cron, and the zone it fires in — which is also the calendar every step in this flow works to (see below) |
 | `at` | ISO 8601 instant, for `trigger: once` |
@@ -334,7 +334,7 @@ normal outcome, recorded as one.
 | `model` / `effort` | defaults for every step |
 | `max_output_tokens` | every step's longest reply, in tokens, unless the step says (over the agent's) |
 | `budget` | the most one run may spend, in USD — a number, or `unlimited`; unset is no limit |
-| `compute` | what one run's steps may hold together at once — `{ vcpu: 2, memory: 4Gi, disk: 20Gi }`, any of them. Each run has its own; it only narrows the workspace's and account's. A step past it waits for one of its run's steps to finish; one bigger than it fails at once ([four levels](budgets-and-billing#compute-at-four-levels)) |
+| `compute` | what one run's steps may hold together at once — `{ vcpu: 2, memory: 4Gi, disk: 20Gi }`, any of them. Each run has its own; it only narrows the project's and account's. A step past it waits for one of its run's steps to finish; one bigger than it fails at once ([four levels](budgets-and-billing#compute-at-four-levels)) |
 | `overlap` | `skip` or `queue` when a run is already live |
 | `issues` | `stay-open` (the default: a person resolves this flow's [issues](runs#issues)) or `auto-close` (a run that goes fine closes them) |
 | `priority` | `high`, `normal` or `low` — where this flow's runs stand in the queue against everyone else's |
@@ -455,7 +455,7 @@ The rules, all of them:
 
 A filtered delivery counts toward nothing: not `idempotency:`, not
 `throttle:`, not `debounce:`, not `disable_after:`. A paused account or
-workspace is still told it is paused first. `filter:` on a `schedule`,
+project is still told it is paused first. `filter:` on a `schedule`,
 `once`, `watch` or `manual` flow does nothing, and `foldrun check` says so.
 
 Try a delivery without sending one: the Triggers page has a **Test filter**
@@ -510,7 +510,7 @@ and a slow run may still be doing the work. What to do about it is yours.
 
 `approvers:` is the list of email addresses that may decide this flow's
 gates, or the single word `admins` for anyone at admin or above. Unset, the
-existing rule applies: anyone who can run the workspace can answer.
+existing rule applies: anyone who can run the project can answer.
 
 Whatever the list says, **nobody approves a run they started themselves**. A
 gate exists so a second person looks, and a run someone kicked off and then
@@ -542,7 +542,7 @@ a literal, never an expression, so the cap is readable off the file. An
 agent's own `budget:` — the most it may spend in one run — applies to its
 steps too, and the tighter of the two wins. It is shared the same way: the
 agent's steps running at once split what is left of it, so a fan-out of
-twenty copies cannot spend the agent's cap twenty times. The workspace's and the
+twenty copies cannot spend the agent's cap twenty times. The project's and the
 account's caps over time still apply on top.
 
 `overlap:` decides what a new fire does while a run of the same flow is live.
@@ -732,14 +732,14 @@ inputs file — in this folder, or the deployed copy with `--to <workspace>`.
 
 **Draft with AI** (beside New flow) and **Redraft with AI** (on a card) take
 a description in words and propose the flow file, plus an `agent.md` for each
-agent it needs that the workspace does not have — existing agents are used by
+agent it needs that the project does not have — existing agents are used by
 name. The proposal is checked with the deploy's own checks and the flow lint
 `foldrun check` runs; if they find errors the model is shown them and
 repairs once, and anything still wrong is listed beside the files. Each file
 is shown as a diff against what is there. **Nothing is written** until you
 press Save and confirm; then each file is saved as an ordinary revision.
 
-The model is the workspace's own Anthropic-format `provider:` when it has
+The model is the project's own Anthropic-format `provider:` when it has
 one (a Chat-Completions provider is refused), else the platform's models,
 billed to the account like a run (one ledger line, flow `ai-draft`). A
 description is at most 4,000 characters and an answer at most 8,000 tokens.
@@ -766,5 +766,5 @@ abc`, `retry: 9`, `loop: 0`, `each: columns`, `output: yaml` each fail
 second.
 
 A required step failing fails the flow, and the remaining groups are skipped. A
-workspace with one agent and no flows is normal — `foldrun run <agent>` runs it
+project with one agent and no flows is normal — `foldrun run <agent>` runs it
 as a one-step flow, so there is a single execution path either way.

@@ -49,7 +49,7 @@ a2a:
 | `accept_risk` | a list of this flow's agents that an admin accepts **holding a secret while they can run code** ([below](#secret-and-code-accept_risk)). Up to 50 names |
 
 A block `foldrun check` cannot read publishes nothing — a typo never opens a
-flow nobody meant to open. Whether a flow is published is the workspace's
+flow nobody meant to open. Whether a flow is published is the project's
 policy, so changing `a2a:` needs the **admin** role (`workspace:manage`) by
 every door: the editor, a deploy, `PATCH /flows/<f>`, `PUT /source`. An
 editor's change that leaves `a2a:` as it was goes through.
@@ -67,9 +67,9 @@ foldrun a2a ls --to sales                    # what the workspace serves, and it
 foldrun a2a unpublish lead-finder --to sales
 ```
 
-The workspace's **Triggers** page, section **Outside agents (A2A)** (and
+The project's **Triggers** page, section **Outside agents (A2A)** (and
 `GET /api/workspaces/<ws>/a2a`), lists every
-flow that says `a2a:`, its card and endpoint URLs, the workspace's A2A keys and
+flow that says `a2a:`, its card and endpoint URLs, the project's A2A keys and
 the newest tasks with the key that asked.
 
 `foldrun check` warns on a published flow that is risky to open
@@ -134,9 +134,9 @@ or delete, a deploy, an import, a restore, a proposed fix:
 - a new tool (a `{Bash: ask}` turned into a plain grant counts), secret, API,
   MCP server, outside agent (`remotes:`), script or sub-agent; a changed API,
   MCP or remote spec;
-- a wider network — the agent's, or the workspace's `network:` in AGENTS.md
+- a wider network — the agent's, or the project's `network:` in AGENTS.md
   (a higher level, or a new site);
-- a hook gone (the agent's own, or the workspace's `hooks:`),
+- a hook gone (the agent's own, or the project's `hooks:`),
   `permissionMode: plan` dropped, `sandbox: own` added;
 - a new agent behind the flow — a step, rescuer, delegate, sub-agent or
   subflow that was not there.
@@ -158,13 +158,13 @@ secret-and-code agent it creates.
 ## A2A keys
 
 A caller needs an **A2A key**: a key of its own kind, minted by an admin of
-the workspace, for one workspace and the flows it names.
+the project, for one project and the flows it names.
 
 ```sh
 foldrun keys create "Partner CRM" --a2a --to sales --flows lead-finder,quote --max-tasks 5
 ```
 
-or **Settings → API keys**, kind **A2A key**: the workspace, the published
+or **Settings → API keys**, kind **A2A key**: the project, the published
 flows it may call, and how many tasks it may have open at once. The key is
 shown once.
 
@@ -326,7 +326,7 @@ request foldrun cannot take **now** is `-32000` with a foldrun reason:
 | reason | |
 |---|---|
 | `BUSY` | the flow is `overlap: skip` and a run is live — send the same message later |
-| `PAUSED` | the workspace or account is paused |
+| `PAUSED` | the project or account is paused |
 | `UNAVAILABLE` | out of budget or funds, or otherwise not taking work |
 | `RATE_LIMITED` | the key's rate limit (`429` from the proxy carries `Retry-After`) |
 | `TOO_MANY_TASKS` | the key has `maxTasks` open |
@@ -335,7 +335,7 @@ request foldrun cannot take **now** is `-32000` with a foldrun reason:
 | `PERMISSION_DENIED` | a key that is not an A2A key (HTTP `403`) |
 | `AGENT_NOT_FOUND` | the flow is not published, not named by the key, or not there — all alike (HTTP `404`) |
 
-A task of another key, flow or workspace is `TaskNotFoundError` (`-32001`),
+A task of another key, flow or project is `TaskNotFoundError` (`-32001`),
 never "not yours".
 
 A run started over A2A goes through the same admission as one started from
@@ -412,14 +412,14 @@ Ended tasks are kept 90 days.
   [`security/published-flow-secret-code`](checks#security-published-flow-secret-code)
   — one that holds a secret and can run code (info once accepted); and
   [`security/published-flow-ungated`](checks#security-published-flow-ungated)
-  — a step that acts outside the workspace with no approval or `ask:` before
+  — a step that acts outside the project with no approval or `ask:` before
   it, which any key holder starts. Put a gate (`2!.`) on it, or take a leg
   away.
 - **Left as they are** (FOL-112 N7, N8): one key can hold up to its
   `maxTasks` runs waiting in the approvals queue — `maxTasks` bounds it; give
-  a partner's key a small one. A card URL carries the account and workspace
+  a partner's key a small one. A card URL carries the account and project
   names (`/a2a/<account>/<ws>/…`) — treat them as disclosed to every key
-  holder, and to everyone when `public_card: true`; name a workspace you
+  holder, and to everyone when `public_card: true`; name a project you
   publish from accordingly.
 - **A public card is metadata only**: the name, description and examples you
   wrote, the endpoint and the auth scheme — never steps, agents or files.

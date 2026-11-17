@@ -131,7 +131,7 @@ test("standing in a workspace folder is enough; standing nowhere asks", async ()
   fs.rmSync(desk, { recursive: true, force: true });
   fs.rmSync(nowhere, { recursive: true, force: true });
   assert.equal(away.code, 1, away.out);
-  assert.match(away.out, /which workspace/);
+  assert.match(away.out, /which project/);
 });
 
 test("tool new still works, and an unknown verb names both", async () => {

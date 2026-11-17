@@ -8,14 +8,14 @@ one that repeats itself.
 |---|---|---|
 | **knowledge/** | people | what you tell the agents: reference material, standards, the price list |
 | **memory/** | the agent | what it worked out: one fact per file, indexed |
-| **state/** | the workspace | the bookmark between runs: a cursor, an append-only history |
+| **state/** | the project | the bookmark between runs: a cursor, an append-only history |
 | **storage/** | anyone | bytes a person reads — see [Storage and sharing](storage-and-sharing) |
 
 ## Knowledge is given, not learned
 
-`knowledge/` at the workspace is read by every agent there; `knowledge/`
+`knowledge/` at the project is read by every agent there; `knowledge/`
 inside an agent's folder by that agent alone; the account library's by
-every workspace. Writing to any of them is denied outright — through the
+every project. Writing to any of them is denied outright — through the
 file tools and through a script. An agent that rewrites the price list it was
 handed has corrupted its own source of truth; what it discovers goes to
 `memory/`.
@@ -47,7 +47,7 @@ writes it there and finds it next run — and a deploy never overwrites memory
 a push does not mention, so what was learned survives the next edit to the
 prompt.
 
-Memory is per agent by default; the workspace's `memory/` is shared by the
+Memory is per agent by default; the project's `memory/` is shared by the
 desk, and the library's by the account.
 
 ## Finding it: search and history
@@ -55,7 +55,7 @@ desk, and the library's by the account.
 Two tool groups give an agent its own past at scale:
 
 - **`tools: [search]`** — `search_files(query)`: ranked full-text search over
-  knowledge, memory, state and storage, at the agent's, the workspace's and
+  knowledge, memory, state and storage, at the agent's, the project's and
   the library's scope. Lexical (BM25), not embeddings — nothing leaves the
   box, and the queries an agent makes are rare exact tokens where that
   wins. Behind it is an inverted index built inside the step on the first
@@ -64,7 +64,7 @@ Two tool groups give an agent its own past at scale:
   re-read, and nothing is persisted, so the index can never be stale across
   a deploy or a hand edit. Search first, then read the hit.
 - **`tools: [history]`** — `recall_runs()` and `read_run(id)`: what this
-  workspace's earlier runs concluded and what their steps said. A reporter
+  project's earlier runs concluded and what their steps said. A reporter
   that wants "what did last week's run find" asks, rather than being handed
   every prior run.
 

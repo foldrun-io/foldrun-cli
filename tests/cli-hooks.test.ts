@@ -121,7 +121,7 @@ test("check: a hooks: name in an agent or AGENTS.md that is in neither hooks/ no
   await run(root, "hook", "add", "shared", "--on", "step.start", "--library");
   const r = await run(root, "check");
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /error\s+agents\/a\s+hooks: \[ghost\] — no hooks\/ghost\/hook\.md in this workspace or the account library/);
+  assert.match(r.out, /error\s+agents\/a\s+hooks: \[ghost\] — no hooks\/ghost\/hook\.md in this project or the account library/);
   assert.match(r.out, /error\s+AGENTS\.md\s+hooks: \[phantom\]/);
   assert.doesNotMatch(r.out, /hooks: \[guard\]|hooks: \[shared\]/, "a workspace hook and a library hook both resolve");
   fs.rmSync(root, { recursive: true, force: true });

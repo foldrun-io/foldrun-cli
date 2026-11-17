@@ -164,7 +164,7 @@ test("account pause sends the reason; --stop asks, and with --yes sends stop: tr
   const resumed = await at(s.url, "account", "resume");
   s.close();
   assert.equal(paused.code, 0, paused.out);
-  assert.match(paused.out, /paused every workspace in the account/);
+  assert.match(paused.out, /paused every project in the account/);
   assert.equal(stopNoYes.code, 1, "stopping runs needs a person, or --yes");
   assert.match(stopNoYes.out, /pass --yes/);
   assert.equal(stopped.code, 0, stopped.out);
@@ -366,9 +366,9 @@ test("a scoped key sees the account's webhook, telemetry and API use as set, not
   s.close();
   assert.equal(acct.code, 0, acct.out);
   assert.match(acct.out, /ops@acme\.test, a webhook/);
-  assert.match(acct.out, /every workspace/);
+  assert.match(acct.out, /every project/);
   assert.equal(tel.code, 0, tel.out);
   assert.match(tel.out, /telemetry\s+set/);
   assert.match(jobs.out, /telemetry\s+set/);
-  assert.match(api.out, /your use\s+shown only to a member or key with every workspace/);
+  assert.match(api.out, /your use\s+shown only to a member or key with every project/);
 });

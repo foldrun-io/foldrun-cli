@@ -1,6 +1,6 @@
 # Checks
 
-`foldrun check` answers two questions about a workspace before anything
+`foldrun check` answers two questions about a project before anything
 runs: **will it run?** (a tool that exists, a step that names a real agent,
 an option the parser can read) and **is it safe to run?** (a key pasted into
 a prompt, a knowledge file carrying hidden instructions, an agent that reads
@@ -19,12 +19,12 @@ foldrun check --rules              # every rule, its level, what it guards again
 The same findings appear in four other places, from the same rules in
 `@foldrun/core`:
 
-- **The dashboard**: the workspace's **Checks** page lists every finding on
+- **The dashboard**: the project's **Checks** page lists every finding on
   the deployed copy, grouped by rule, each linking to its file. The editor
   shows a file's own findings above it.
 - **The API**: `GET /api/workspaces/<ws>/check` answers with the same
   findings as JSON (`?security=1`, `?rule=`). See [api](api).
-- **A save**: saving a file in the dashboard editor checks the workspace as
+- **A save**: saving a file in the dashboard editor checks the project as
   it would be with that file. An error a deploy would refuse is refused
   there too and nothing is written, because a saved file goes live at once;
   **Save anyway** writes it. Warnings never stop a save. A History restore
@@ -52,7 +52,7 @@ are enough to find it, and too few to use it.
 | `warn` | it works, and something about it should change | with `--fail-on warn` or `--security` |
 | `info` | worth knowing; often a judgement call | with `--fail-on info` |
 
-Every rule added with the scanner is a warning for now, so a workspace that
+Every rule added with the scanner is a warning for now, so a project that
 passed yesterday still passes. To fail a build on them, use `--security` (which
 fails on a warning) or `--fail-on warn`.
 
@@ -80,8 +80,8 @@ listed with it. `deploy_block:` in `AGENTS.md` turns them into refusals:
 | `secrets` | a key or password written into a file (`secret/hardcoded`) |
 | `security` | any security finding: `secret/*`, `content/*`, `security/*`, `supply-chain/*`, and `flow/outward-ungated` (a step that acts outside with no check or approval) |
 
-Set it in the account's `AGENTS.md` for every workspace, or in one
-workspace's `AGENTS.md`, which wins. Settings → Policies → Governance → **Refuse a
+Set it in the account's `AGENTS.md` for every project, or in one
+project's `AGENTS.md`, which wins. Settings → Policies → Governance → **Refuse a
 deploy on**, or `foldrun account set deploy_block secrets`. A refused
 deploy names each finding and its rule; a `foldrun-ignore` with a reason
 (below) still accepts one.
@@ -98,11 +98,11 @@ and the tool text of MCP servers reached by URL
   --online`, or `GET /api/workspaces/<ws>/check?online=1` — editor and
   above, since it sends the platform out to OSV and your MCP servers. The
   answer is kept for 10 minutes while the files are unchanged, and a
-  workspace gets six fresh online passes per 10 minutes.
-- **Every day by itself:** the platform rescans every workspace, offline and
+  project gets six fresh online passes per 10 minutes.
+- **Every day by itself:** the platform rescans every project, offline and
   online. The first rescan of each source records what is there. After
   that, a security finding that was not there before goes to the
-  workspace's `notify:` as the `security` event, once. A finding that goes
+  project's `notify:` as the `security` event, once. A finding that goes
   away and comes back is new again.
 - **What is never done:** a server started as a command is never run to
   check it, and no credential is sent. A server that needs one is reported
@@ -141,9 +141,9 @@ Ignores in `memory/` are not honoured. Agents write their memory
 themselves, so an ignore there could have been written by whatever an agent
 read: an injection that silences its own finding.
 
-## Adopting it on an existing workspace
+## Adopting it on an existing project
 
-A workspace with years of history will have findings on day one. Do not fix
+A project with years of history will have findings on day one. Do not fix
 them all before the check can be useful:
 
 ```sh
@@ -200,7 +200,7 @@ Hugging Face, Linear, DigitalOcean, Shopify, Resend or foldrun key (`fr_api_`, `
 `fr_a2a_`, `fr_dep_`, and the older `mda_`/`mdk_`), a JSON web token,
 a private key, a webhook URL that carries its own secret, a password inside a
 URL, or a field named like a credential (`api_key:`, `token:`, `password=`)
-holding a literal value that looks random. Everything in a workspace is
+holding a literal value that looks random. Everything in a project is
 deployed, versioned, readable by every agent and shown to the model.
 
 Move it to the vault (`foldrun secrets set NAME`), write `${NAME}` where it
@@ -300,7 +300,7 @@ Take a leg away:
   [api.example.com] }`, or `network: trusted` ([Network](network)). A bare
   list of sites only adds to a level, so an agent that reads the web stays
   `open` with one. The level is resolved the way a run resolves it: the
-  agent's, then the workspace's `AGENTS.md`, then the account's;
+  agent's, then the project's `AGENTS.md`, then the account's;
 - split it into a reader with no secrets and a sender that reads nothing
   untrusted;
 - guard its calls with a `hooks:` gate ([Hooks](hooks)).
@@ -356,7 +356,7 @@ platform does not count one that is bound.
 ### security/published-flow-ungated
 
 *warn · ASI02, ASI09.* A flow published over A2A has a step that acts outside
-the workspace — an `outward: true` tool, an API it may write to, or a message
+the project — an `outward: true` tool, an API it may write to, or a message
 to an outside agent (`remotes:`) — with no approval (`!`) and no `ask:` on it,
 on a step beside it in its group (a gate there holds the whole group), or on a
 step before it. Anyone holding a key for the flow can start it as
@@ -375,7 +375,7 @@ again. An error in `foldrun check`, a warning at deploy.
 
 *warn · ASI04, ASI05.* `curl … | sh` (or `wget`, `bash`, `zsh`) runs whatever
 the server returns today, unreviewed, in the sandbox that holds the
-workspace. Declare the package under `runtime: system:` or `packages:`, or
+project. Declare the package under `runtime: system:` or `packages:`, or
 download it, verify a checksum, then run it.
 
 ### supply-chain/unpinned-mcp
@@ -483,7 +483,7 @@ changes provider. Write a level the model has, or choose a provider whose
 model has the one you want (Settings → Models). Checked on the
 platform (the Checks page, a save, a deploy) when the account runs on
 foldrun's models; `foldrun check` offline does not know the account's
-choice, and an agent or workspace with its own `provider:` is not checked.
+choice, and an agent or project with its own `provider:` is not checked.
 
 ### config/conflict
 
@@ -513,7 +513,7 @@ value and trying again. But the dashboard editor and the source API refuse
 to save it, and other tools that read skills may not load it. When even the
 second read fails, the skill has no name or description and is never loaded.
 For the account library's agents, tools and hooks, the runtime cannot read
-the file at all. A workspace's own agent, flow, tool, eval, hook or
+the file at all. A project's own agent, flow, tool, eval, hook or
 `AGENTS.md` with broken YAML is not this warning: a deploy refuses it, under
 that file's own rule (`agent/config`, `flow/config` …).
 
@@ -551,10 +551,10 @@ URL is fetched.
 
 On the platform (the Checks page, the editor, `GET …/check` and the daily
 rescan) the checks read a bounded amount. In `state/` and `memory/` (the
-workspace's, or one agent's), which is what agents write as they run, a file
+project's, or one agent's), which is what agents write as they run, a file
 over 5 MiB is not read, and nor is anything past 32 MiB or 5,000 files in all.
 The rescan lists what it left out, and keeps what it found in those files
-before. If everything else in the workspace is over 64 MiB, the workspace is
+before. If everything else in the project is over 64 MiB, the project is
 not checked at all, and the check says so (`GET …/check` answers 413).
 `foldrun check` on your own machine reads everything.
 

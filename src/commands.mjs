@@ -130,7 +130,7 @@ function writeFiles(dir, files, what) {
 /** kebab-case, the same rule the platform applies to a workspace name. */
 function assertName(name) {
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
-    throw new Error(`"${name}" is not a workspace name — kebab-case only, e.g. blog-desk`);
+    throw new Error(`"${name}" is not a project name — kebab-case only, e.g. blog-desk`);
   }
   return name;
 }
@@ -209,7 +209,7 @@ function report(where, written, outside, wsDir, files) {
   // nobody reads. A developer who ran `foldrun init ~/projects/desk --flat`
   // finds an AGENTS.md in ~/projects and should know it was this, and why.
   for (const rel of outside) {
-    console.log(`    ${c.dim(rel)}  ${c.dim("← account scope, shared by every workspace beside this one")}`);
+    console.log(`    ${c.dim(rel)}  ${c.dim("← account scope, shared by every project beside this one")}`);
   }
   const flow = files.map((f) => f.path.match(/^flows\/(.+)\.md$/)?.[1]).find(Boolean);
   const rel = path.relative(process.cwd(), where) || ".";
@@ -234,12 +234,12 @@ function report(where, written, outside, wsDir, files) {
  */
 async function newWorkspace(name, flags, layout) {
   const { syncWorkspaceBundles } = await core();
-  if (!name) throw new Error("which workspace? `foldrun new <name>`");
+  if (!name) throw new Error("which project? `foldrun new <name>`");
   assertName(name);
   if (!layout.workspacesDir) {
     throw new Error(
       layout.kind === "flat"
-        ? `${layout.workspaceDir} is a single workspace, not an account — \`foldrun init <dir>\` makes an account folder that can hold several`
+        ? `${layout.workspaceDir} is a single project, not an account — \`foldrun init <dir>\` makes an account folder that can hold several`
         : "not in an account folder — `foldrun init <dir>` makes one",
     );
   }
@@ -269,7 +269,7 @@ function workspaceDirFor(flags, layout) {
   if (typeof flags.to === "string") {
     if (!layout.workspacesDir || !layout.workspaces.includes(flags.to)) {
       throw new Error(
-        `no workspace called "${flags.to}" here — this ${layout.kind === "flat" ? "is a single workspace" : `account has ${layout.workspaces.join(", ") || "none"}`} (--platform makes it in the deployed one)`,
+        `no project called "${flags.to}" here — this ${layout.kind === "flat" ? "is a single project" : `account has ${layout.workspaces.join(", ") || "none"}`} (--platform makes it in the deployed one)`,
       );
     }
     return path.join(layout.workspacesDir, flags.to);
@@ -277,9 +277,9 @@ function workspaceDirFor(flags, layout) {
   if (layout.workspaceDir && layout.kind !== "empty") return layout.workspaceDir;
   if (layout.workspacesDir && layout.workspaces.length === 1) return path.join(layout.workspacesDir, layout.workspaces[0]);
   if (layout.kind === "account") {
-    throw new Error(`which workspace? --to <name> — this account has ${layout.workspaces.join(", ") || "none"}`);
+    throw new Error(`which project? --to <name> — this account has ${layout.workspaces.join(", ") || "none"}`);
   }
-  throw new Error("this is not a workspace — `foldrun init <dir>` makes one, or cd into an existing one");
+  throw new Error("this is not a project — `foldrun init <dir>` makes one, or cd into an existing one");
 }
 
 /**
@@ -777,7 +777,7 @@ async function checkAccount(layout, flags) {
   const opts = checkOptions(flags);
   const text = opts.format === "text";
   if (!layout.workspaces.length) {
-    console.log(`\n  ${c.amber("!")} no workspaces in ${layout.accountRoot} — \`foldrun new <name>\` makes one\n`);
+    console.log(`\n  ${c.amber("!")} no projects in ${layout.accountRoot} — \`foldrun new <name>\` makes one\n`);
     return 1;
   }
   const all = [];
@@ -830,7 +830,7 @@ async function checkAccount(layout, flags) {
     console.log();
   }
   all.push(...libResult.findings);
-  if (!text) emitCheck(all, opts, { root: layout.accountRoot, summary: `${layout.workspaces.length} workspaces and the library`, baselined });
+  if (!text) emitCheck(all, opts, { root: layout.accountRoot, summary: `${layout.workspaces.length} projects and the library`, baselined });
   return checkExit(all, opts);
 }
 
@@ -1079,7 +1079,7 @@ function changedFiles(root, base, label) {
     return new Set([...diff.split("\0"), ...untracked.split("\0")].filter(Boolean));
   } catch (err) {
     const why = String(/** @type {any} */ (err).stderr ?? err).trim().split("\n")[0];
-    throw new Error(`--changed needs ${label === "library" ? "the account" : "this workspace"} in a git repository and a ref git knows (${base}) — ${why}`);
+    throw new Error(`--changed needs ${label === "library" ? "the account" : "this project"} in a git repository and a ref git knows (${base}) — ${why}`);
   }
 }
 
@@ -1315,8 +1315,8 @@ async function checkProblems(workspace, flags = {}) {
         continue;
       }
       const hint = platform.url
-        ? `in this workspace, the local account library, or the library on ${platform.url}`
-        : "in this workspace or the account library (a library on a platform is seen when signed in: `foldrun login`, or --url)";
+        ? `in this project, the local account library, or the library on ${platform.url}`
+        : "in this project or the account library (a library on a platform is seen when signed in: `foldrun login`, or --url)";
       note("error", `agents/${a.name}`, `tools: [${t}] — no tools/${t}/tool.md or tools/${t}.md ${hint}`);
     }
     // A colleague that does not exist is not a consult tool the agent is
@@ -1324,7 +1324,7 @@ async function checkProblems(workspace, flags = {}) {
     // fine. Same shape as a tool that names nothing.
     for (const c of a.consults) {
       if (!agentNames.has(c)) {
-        note("error", `agents/${a.name}`, `agents: [${c}] — no such agent in this workspace`);
+        note("error", `agents/${a.name}`, `agents: [${c}] — no such agent in this project`);
       } else if (c === a.name) {
         note("warn", `agents/${a.name}`, `agents: [${c}] — an agent consulting itself; the call is refused at run time`);
       }
@@ -1339,7 +1339,7 @@ async function checkProblems(workspace, flags = {}) {
       for (const s of a.subagents) {
         const sub = byName.get(s);
         if (!sub) {
-          note("error", `agents/${a.name}`, `subagents: [${s}] — no such agent in this workspace`);
+          note("error", `agents/${a.name}`, `subagents: [${s}] — no such agent in this project`);
         } else if (s === a.name) {
           note("warn", `agents/${a.name}`, `subagents: [${s}] — an agent delegating to itself; it is skipped at run time`);
         } else if (!sub.description?.trim()) {
@@ -1377,7 +1377,7 @@ async function checkProblems(workspace, flags = {}) {
           continue;
         }
         if (!skillNames.has(s)) {
-          note("error", `agents/${a.name}`, `skills: [${s}] — no skill of that name in this agent, the workspace or the library`);
+          note("error", `agents/${a.name}`, `skills: [${s}] — no skill of that name in this agent, the project or the library`);
         }
       }
     }
@@ -1542,7 +1542,7 @@ async function checkHooks(workspace, agents, libraryRoot, platform, note) {
     fs.existsSync(path.join(workspace, "hooks", n)) || fs.existsSync(path.join(libraryRoot, "hooks", n)) || platform.hooks?.has(n);
   const missing = (where, names) => {
     for (const n of names) {
-      if (!exists(n)) note("error", where, `hooks: [${n}] — no hooks/${n}/hook.md in this workspace or the account library`);
+      if (!exists(n)) note("error", where, `hooks: [${n}] — no hooks/${n}/hook.md in this project or the account library`);
     }
   };
   const accountNames = h.hookNames(front(path.join(path.dirname(libraryRoot), "AGENTS.md")).hooks);
@@ -2918,7 +2918,7 @@ function takeWorkspace(positional, layout) {
 function needsOne(layout, what) {
   if (layout.kind === "account" && !layout.workspaceDir && layout.workspaces.length !== 1) {
     throw new Error(
-      `which workspace? \`foldrun ${what} <target> --workspace <name>\` — this account has ${layout.workspaces.join(", ") || "none"}`,
+      `which project? \`foldrun ${what} <target> --workspace <name>\` — this account has ${layout.workspaces.join(", ") || "none"}`,
     );
   }
 }
@@ -2926,7 +2926,7 @@ function needsOne(layout, what) {
 /** …and the error when there are several and none was named. */
 function whichWorkspace(layout, what) {
   return new Error(
-    `which workspace? ${layout.workspaces.length ? `\`foldrun ${what} <workspace> …\` — this account has ${layout.workspaces.join(", ")}` : "there are none here"}`,
+    `which project? ${layout.workspaces.length ? `\`foldrun ${what} <workspace> …\` — this account has ${layout.workspaces.join(", ")}` : "there are none here"}`,
   );
 }
 
@@ -3319,7 +3319,7 @@ function localWorkspaceNames(layout) {
 async function limitingCore() {
   /** @type {any} */
   const k = await core();
-  if (typeof k.setSecretWorkspaces !== "function") throw new Error("limiting a secret to workspaces needs a newer @foldrun/core — update foldrun");
+  if (typeof k.setSecretWorkspaces !== "function") throw new Error("limiting a secret to projects needs a newer @foldrun/core — update foldrun");
   return k;
 }
 
@@ -3338,7 +3338,7 @@ function workspacesFlag(flags) {
   if (flags.workspaces === undefined) return undefined;
   if (typeof flags.workspaces !== "string") throw new Error("--workspaces takes the names: --workspaces sales,ops");
   const list = flags.workspaces.split(",").map((v) => v.trim()).filter(Boolean);
-  if (!list.length) throw new Error("--workspaces takes the names: --workspaces sales,ops (--none for no workspace)");
+  if (!list.length) throw new Error("--workspaces takes the names: --workspaces sales,ops (--none for no project)");
   return list;
 }
 
@@ -3353,21 +3353,21 @@ function workspacesFlag(flags) {
  */
 async function secretWorkspacesCmd(args, flags, url, layout) {
   const [name, ...rest] = args;
-  if (!name) throw new Error("which secret? `foldrun secrets workspaces NAME [workspace …]`, `--all` for every workspace, `--none` for none");
+  if (!name) throw new Error("which secret? `foldrun secrets workspaces NAME [workspace …]`, `--all` for every project, `--none` for none");
   const named = rest.flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
   if ([flags.all === true, flags.none === true, named.length > 0].filter(Boolean).length > 1) {
-    throw new Error("one of: workspace names, --all, or --none");
+    throw new Error("one of: project names, --all, or --none");
   }
   const describe = (list) =>
     list === null || list === undefined
-      ? `${c.bold(name)} may be used in every workspace`
+      ? `${c.bold(name)} may be used in every project`
       : list.length
-        ? `${c.bold(name)} may be used only in ${list.join(", ")} — every other workspace finds it not set`
-        : `${c.bold(name)} may be used in no workspace`;
+        ? `${c.bold(name)} may be used only in ${list.join(", ")} — every other project finds it not set`
+        : `${c.bold(name)} may be used in no project`;
   if (!named.length && flags.all !== true && flags.none !== true) {
     const entries = url ? (await remoteCall(url, flags, "/api/secrets")).secrets : (await core()).listSecrets("default");
     const hit = entries.find((s) => s.name === name && s.scope === "account");
-    if (!hit) throw new Error(`no secret ${name} in the account — this limits an account secret; a workspace's own is that workspace's already`);
+    if (!hit) throw new Error(`no secret ${name} in the account — this limits an account secret; a project's own is that project's already`);
     console.log(`\n  ${describe(hit.workspaces)}${hit.workspaces ? "" : c.dim(` — limit it: foldrun secrets workspaces ${name} <workspace> …`)}\n`);
     return 0;
   }
@@ -3378,7 +3378,7 @@ async function secretWorkspacesCmd(args, flags, url, layout) {
   const guard = {};
   if (flags["if-workspaces"] !== undefined) {
     const v = typeof flags["if-workspaces"] === "string" ? flags["if-workspaces"].trim() : "";
-    if (!v) throw new Error("--if-workspaces takes the list you read: names (a,b), all (every workspace) or none");
+    if (!v) throw new Error("--if-workspaces takes the list you read: names (a,b), all (every project) or none");
     guard.ifWorkspaces = v === "all" ? null : v === "none" ? [] : v.split(",").map((x) => x.trim()).filter(Boolean);
   }
   const stored = url
@@ -3468,7 +3468,7 @@ async function secretsCmd(positional, flags, layout) {
     console.log();
     for (const s of entries) {
       console.log(
-        `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}${s.sites?.length ? ` · sent only to ${s.sites.join(", ")}` : ""}${Array.isArray(s.workspaces) ? ` · ${s.workspaces.length ? `only in ${s.workspaces.join(", ")}` : "in no workspace"}` : ""}`)}`,
+        `  ${c.bold(s.name)}  ${c.dim(`${s.scope}${s.shadowed ? " · shadowed" : ""} · ${s.updatedAt ?? ""}${s.sites?.length ? ` · sent only to ${s.sites.join(", ")}` : ""}${Array.isArray(s.workspaces) ? ` · ${s.workspaces.length ? `only in ${s.workspaces.join(", ")}` : "in no project"}` : ""}`)}`,
       );
       // The platform says what the far end answered last time; this
       // machine's vault keeps no such record, so nothing is shown there.
@@ -3515,7 +3515,7 @@ async function secretsCmd(positional, flags, layout) {
         ? (await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
         : (await core()).listSecrets("default", scope);
       const hit = entries.find((s) => s.name === name);
-      if (!hit) throw new Error(`no secret ${name}${scope ? ` in workspace ${scope}` : " in the account"}`);
+      if (!hit) throw new Error(`no secret ${name}${scope ? ` in project ${scope}` : " in the account"}`);
       console.log(hit.sites?.length
         ? `\n  ${c.bold(name)} is sent only to ${hit.sites.join(", ")} — on the platform it never enters a sandbox\n`
         : `\n  ${c.bold(name)} is not bound to sites — a step with a script or Bash gets its real value. Bind it: foldrun secrets sites ${name} api.example.com\n`);
@@ -3535,7 +3535,7 @@ async function secretsCmd(positional, flags, layout) {
     // --workspaces a,b / --none: an ACCOUNT secret limited to those
     // workspaces, sent with the value so it is never open in between.
     const limitTo = workspacesFlag(flags);
-    if (limitTo !== undefined && scope) throw new Error("--workspaces limits an account secret — add --account (a workspace's own secret is that workspace's already)");
+    if (limitTo !== undefined && scope) throw new Error("--workspaces limits an account secret — add --account (a project's own secret is that project's already)");
     const withLimit = limitTo !== undefined ? { workspaces: limitTo } : {};
     /** @returns {Promise<{ k: any, limit: object }>} — typed loosely, as limitingCore is. */
     const localLimit = async () => {
@@ -3607,13 +3607,13 @@ async function secretsCmd(positional, flags, layout) {
       k.setSecret("default", name, value, scope, undefined, limit);
       if (sites.length) await localSetSites(name, sites, scope);
     }
-    const limited = limitTo === undefined ? "" : limitTo.length ? `, only for ${limitTo.join(", ")}` : ", for no workspace yet";
+    const limited = limitTo === undefined ? "" : limitTo.length ? `, only for ${limitTo.join(", ")}` : ", for no project yet";
     console.log(`\n  ${c.green("✓")} ${name} stored${sites.length ? ` and sent only to ${sites.join(", ")}` : ""}${limited} — declare it in agent.md under \`secrets:\` to use it\n`);
     return 0;
   }
 
   if (verb === "rm") {
-    if (!(await sureToDelete(flags, "secrets rm", `secret ${name}${scope ? ` (workspace ${scope})` : " (account)"}${url ? ` on ${url}` : ""}`))) return 1;
+    if (!(await sureToDelete(flags, "secrets rm", `secret ${name}${scope ? ` (project ${scope})` : " (account)"}${url ? ` on ${url}` : ""}`))) return 1;
     /** @type {any} */
     let revoked;
     if (url) {
@@ -3963,7 +3963,7 @@ async function invoke(target, flags) {
   }
   if (!target) throw new Error("which flow? try `foldrun invoke <flow> --to <workspace>`");
   const ws = flags.to;
-  if (!ws) throw new Error("which workspace is it in? pass --to <workspace>");
+  if (!ws) throw new Error("which project is it in? pass --to <workspace>");
 
   // --wait asks in short pieces, not one long request: whatever sits in
   // front of the platform cuts a request that stays silent too long
@@ -4760,7 +4760,7 @@ async function keysCmd(positional, flags) {
           ? gatewayLine(k.gateway)
         : k.purpose === "a2a"
           ? `A2A · ${k.a2a?.workspace ?? "?"} · ${(k.a2a?.flows ?? []).join(",")}${k.a2a?.maxTasks ? ` · up to ${k.a2a.maxTasks} open` : ""}`
-          : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no workspaces" : "all workspaces"}`;
+          : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no projects" : "all projects"}`;
       const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
       const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
       // A key `foldrun login` minted lasts 90 days and renews itself while
@@ -4798,13 +4798,13 @@ async function keysCmd(positional, flags) {
     // --to <ws[,ws]> says the same (every other verb's --to names a workspace):
     // it scopes the key, it is never dropped — a key the person believes is
     // scoped but isn't is the worst way to be wrong.
-    if (flags.to !== undefined && (typeof flags.to !== "string" || !flags.to.trim())) throw new Error("--to needs a workspace: `foldrun keys create <label> --to <workspace>`");
+    if (flags.to !== undefined && (typeof flags.to !== "string" || !flags.to.trim())) throw new Error("--to needs a project: `foldrun keys create <label> --to <workspace>`");
     if (flags.to !== undefined && flags.workspaces !== undefined) throw new Error("--to or --workspaces, not both (they say the same thing)");
     const scope = flags.workspaces !== undefined ? flags.workspaces : flags.to;
     if (scope !== undefined && typeof scope !== "string") throw new Error("--workspaces needs names: a,b — or all");
     if (typeof scope === "string") {
       const names = scope.split(",").map((w) => w.trim()).filter(Boolean);
-      if (scope !== "all" && !names.length) throw new Error("no workspace named — `--to <workspace>` or `--workspaces a,b`");
+      if (scope !== "all" && !names.length) throw new Error("no project named — `--to <workspace>` or `--workspaces a,b`");
       body.workspaces = scope === "all" ? null : names;
     }
     // --require-customer (FOL-168): every run the key starts must name one.
@@ -4813,7 +4813,7 @@ async function keysCmd(positional, flags) {
     // Asked to scope it, told it is not scoped: never hand that key out.
     if (Array.isArray(body.workspaces) && made.workspaces === null) {
       await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
-      throw new Error(`the platform made ${made.id} for every workspace, not ${body.workspaces.join(",")} — it was revoked; this platform cannot scope a key`);
+      throw new Error(`the platform made ${made.id} for every project, not ${body.workspaces.join(",")} — it was revoked; this platform cannot scope a key`);
     }
     console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
     if (made.key == null) return lostSecret(made.id);
@@ -4874,9 +4874,9 @@ async function keysCmd(positional, flags) {
  */
 async function keysCreateA2a(url, label, flags) {
   if (flags.role !== undefined || flags.workspaces !== undefined) {
-    throw new Error("an A2A key takes --to <workspace> and --flows, not --role or --workspaces — it opens /a2a only, for that workspace's flows");
+    throw new Error("an A2A key takes --to <workspace> and --flows, not --role or --workspaces — it opens /a2a only, for that project's flows");
   }
-  if (typeof flags.to !== "string" || !flags.to) throw new Error("which workspace? `foldrun keys create <label> --a2a --to <workspace> --flows <flow,…>`");
+  if (typeof flags.to !== "string" || !flags.to) throw new Error("which project? `foldrun keys create <label> --a2a --to <workspace> --flows <flow,…>`");
   const flows = typeof flags.flows === "string" ? [...new Set(flags.flows.split(",").map((f) => f.trim()).filter(Boolean))] : [];
   if (!flows.length) throw new Error(`which flows may it call? --flows <flow,…> — \`foldrun a2a ls --to ${flags.to}\` lists what ${flags.to} publishes`);
   const body = { label, purpose: "a2a", workspace: flags.to, flows };
@@ -5475,9 +5475,9 @@ async function auditCmd(positional, flags) {
 async function sourceCmd(positional, flags) {
   const [verb, a, b] = positional;
   const url = remoteUrl(flags);
-  if (!url) throw new Error("source reads a workspace on a platform — pass --url, or `foldrun login` first");
+  if (!url) throw new Error("source reads a project on a platform — pass --url, or `foldrun login` first");
   const ws = flags.to;
-  if (!ws) throw new Error("which workspace? pass --to <workspace>");
+  if (!ws) throw new Error("which project? pass --to <workspace>");
   const base = `/api/workspaces/${encodeURIComponent(ws)}/source`;
 
   if (verb === "ls" || verb === "list" || verb === undefined) {
@@ -5485,7 +5485,7 @@ async function sourceCmd(positional, flags) {
     const prefix = a ? a.replace(/\/+$/, "") + "/" : "";
     const shown = files.filter((f) => !prefix || f.startsWith(prefix));
     if (!shown.length) {
-      console.log(`\n  ${c.dim(prefix ? `nothing under ${prefix}` : "an empty workspace")}\n`);
+      console.log(`\n  ${c.dim(prefix ? `nothing under ${prefix}` : "an empty project")}\n`);
       return 0;
     }
     console.log("");
@@ -5590,7 +5590,7 @@ async function sourceShare(url, flags, ws, base, spec) {
     // The route's own 404 says "no <path> in <ws>"; any other 404 is a
     // platform from before the route.
     if (err instanceof HttpError && err.status === 404 && !/^no /.test(err.message)) {
-      throw new Error(`${url} has no "Move to shared" route yet — it is newer than this platform; move it on the dashboard (the workspace's Files or Tools & hooks page → Move to shared), or update the platform`);
+      throw new Error(`${url} has no "Move to shared" route yet — it is newer than this platform; move it on the dashboard (the project's Files or Tools & hooks page → Move to shared), or update the platform`);
     }
     throw err;
   }
@@ -5615,7 +5615,7 @@ async function sourceShare(url, flags, ws, base, spec) {
     console.log(`  ${c.dim("--dry-run: nothing moved")}\n`);
     return 0;
   }
-  if (!(await confirmed(flags, "source share", `Move ${plan.unit} to shared? Every workspace in the account will be able to use it, and it leaves ${ws}. [y/N] `))) {
+  if (!(await confirmed(flags, "source share", `Move ${plan.unit} to shared? Every project in the account will be able to use it, and it leaves ${ws}. [y/N] `))) {
     console.log(`\n  ${c.dim("nothing moved")}\n`);
     return 0;
   }
@@ -5626,7 +5626,7 @@ async function sourceShare(url, flags, ws, base, spec) {
     console.log(JSON.stringify(done, null, 2));
     return 0;
   }
-  console.log(`  ${c.green("✓")} ${done.unit} ${c.dim(`moved to library/${done.kind}/${done.unit.slice(done.kind.length + 1)} — every workspace in the account can use it`)}\n`);
+  console.log(`  ${c.green("✓")} ${done.unit} ${c.dim(`moved to library/${done.kind}/${done.unit.slice(done.kind.length + 1)} — every project in the account can use it`)}\n`);
   return 0;
 }
 
@@ -5759,7 +5759,7 @@ async function deployAccountAgentsMd(url, flags, content, dry) {
     return 0;
   }
   if (there.refused) {
-    console.log(`  ${c.amber("·")} AGENTS.md ${c.dim("not sent — the account's AGENTS.md is every workspace's; an admin of every workspace sends it")}`);
+    console.log(`  ${c.amber("·")} AGENTS.md ${c.dim("not sent — the account's AGENTS.md is every project's; an admin of every project sends it")}`);
     return 0;
   }
   if (sameAccountMd(there.content, content)) {
@@ -5773,12 +5773,12 @@ async function deployAccountAgentsMd(url, flags, content, dry) {
   try {
     const done = await remoteCall(url, flags, "/api/account/agents-md", { method: "PUT", body: JSON.stringify({ content, ifMatch: there.exists ? there.sha256 : null, message: "foldrun deploy" }) });
     const warns = (done.issues ?? []).filter((i) => i.level !== "error").length;
-    console.log(`  ${c.green("✓")} AGENTS.md ${c.dim(`(account) sent — every workspace reads it${warns ? ` · ${warns} warning${warns === 1 ? "" : "s"}` : ""}`)}`);
+    console.log(`  ${c.green("✓")} AGENTS.md ${c.dim(`(account) sent — every project reads it${warns ? ` · ${warns} warning${warns === 1 ? "" : "s"}` : ""}`)}`);
     return 0;
   } catch (err) {
     if (!(err instanceof HttpError)) throw err;
     if (err.status === 403) {
-      console.log(`  ${c.amber("·")} AGENTS.md ${c.dim("not sent — the account's AGENTS.md is every workspace's; an admin of every workspace sends it")}`);
+      console.log(`  ${c.amber("·")} AGENTS.md ${c.dim("not sent — the account's AGENTS.md is every project's; an admin of every project sends it")}`);
       return 0;
     }
     console.log(`  ${c.red("✗")} AGENTS.md ${c.dim(`(account) not sent — ${err.message}`)}`);
@@ -6038,7 +6038,7 @@ async function reportRuntimes(url, workspace, flags, { waitSeconds = 0 } = {}) {
 async function runtimesCmd(flags, layout) {
   const url = platformFor(flags, "runtimes");
   const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
-  if (!ws) throw new Error("which workspace? `foldrun runtimes --to <workspace>` — or run it inside one");
+  if (!ws) throw new Error("which project? `foldrun runtimes --to <workspace>` — or run it inside one");
   console.log(`\n  ${c.bold(ws)} ${c.dim("runtimes")}`);
   const runtimes = await reportRuntimes(url, ws, flags, { waitSeconds: flags.wait === true ? 120 : 0 });
   if (!runtimes.length) console.log(`    ${c.dim("no agent here declares a runtime")}`);
@@ -6259,7 +6259,7 @@ async function statusCmd(layout, flags, only) {
   if (tree.agentsMd !== null) {
     const there = await remoteAccountAgentsMd(url, flags);
     if (there === null) console.log(`\n  ${c.dim(NO_ACCOUNT_FILE_API)}`);
-    else if (there.refused) console.log(`\n  ${c.dim("AGENTS.md (account): not readable with this key — an admin of every workspace sees it")}`);
+    else if (there.refused) console.log(`\n  ${c.dim("AGENTS.md (account): not readable with this key — an admin of every project sees it")}`);
     else console.log(`\n  ${sameAccountMd(there.content, tree.agentsMd) ? `${c.green("✓")} AGENTS.md ${c.dim("(account) the same here and there")}` : `${c.dim("~")} AGENTS.md ${c.dim("(account) differs — `foldrun deploy` sends it")}`}`);
   }
   console.log();
@@ -6285,12 +6285,12 @@ async function pullCmd(layout, flags, only) {
   const wsRoot = layout.workspacesDir ?? path.join(root, "workspaces");
 
   const names = (await remoteWorkspaceNames(url, flags)).filter((n) => (only ? n === only : true));
-  if (only && !names.length) throw new Error(`no workspace "${only}" on ${url}`);
+  if (only && !names.length) throw new Error(`no project "${only}" on ${url}`);
 
   /** @type {{ file: string, content: string, same?: (before: string) => boolean }[]} */
   const incoming = [];
   for (const name of names) {
-    if (!SAFE_NAME.test(name)) throw new Error(`the platform named a workspace "${name}", which is not a workspace name — refusing to write it`);
+    if (!SAFE_NAME.test(name)) throw new Error(`the platform named a project "${name}", which is not a project name — refusing to write it`);
     const there = await remoteWorkspaceFiles(url, flags, name, isSourcePath);
     for (const [rel, content] of there) incoming.push({ file: within(path.join(wsRoot, name), rel), content });
   }
@@ -6338,7 +6338,7 @@ async function pullCmd(layout, flags, only) {
     written++;
   }
   console.log(
-    `\n  ${c.green("✓")} pulled ${names.length} workspace${names.length === 1 ? "" : "s"} from ${url}  ` +
+    `\n  ${c.green("✓")} pulled ${names.length} project${names.length === 1 ? "" : "s"} from ${url}  ` +
       c.dim(`${written} file${written === 1 ? "" : "s"} written, ${incoming.length - written} already current`),
   );
   console.log(`  ${c.dim(`into ${root}`)}`);
@@ -6347,7 +6347,7 @@ async function pullCmd(layout, flags, only) {
     if (what === "created" || what === "updated") console.log(`  ${c.green("✓")} ${file} ${c.dim(`${what} — the coding-agent rules, pointing at \`foldrun docs\``)}`);
   }
   if (accountMd === null) console.log(`  ${c.dim(NO_ACCOUNT_FILE_API)}`);
-  else if (accountMd.refused) console.log(`  ${c.dim("AGENTS.md (account): not pulled — an admin of every workspace reads it")}`);
+  else if (accountMd.refused) console.log(`  ${c.dim("AGENTS.md (account): not pulled — an admin of every project reads it")}`);
   console.log();
   return 0;
 }
@@ -6365,7 +6365,7 @@ async function workspacesCmd(positional, flags, layout) {
     // The dashboard's Create workspace: blank (an AGENTS.md), or with
     // --starter the example researcher, writer and publish flow.
     if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
-    if (!name) throw new Error("which workspace? `foldrun workspaces new <name> --platform`");
+    if (!name) throw new Error("which project? `foldrun workspaces new <name> --platform`");
     assertName(name);
     const r = await remoteCall(url, flags, "/api/workspaces", {
       method: "POST",
@@ -6377,11 +6377,11 @@ async function workspacesCmd(positional, flags, layout) {
   }
 
   if (verb === "rm" || verb === "remove" || verb === "delete") {
-    if (!name) throw new Error("which workspace? `foldrun workspaces rm <name>`");
+    if (!name) throw new Error("which project? `foldrun workspaces rm <name>`");
     // `rm ..` joined to workspaces/ is the account folder itself. A name is
     // one path segment, never . or .., and locally one this account has.
     if (name === "." || name === ".." || /[\\/]/.test(name)) {
-      throw new Error(`"${name}" is not a workspace name — have: ${(layout.workspaces ?? []).join(", ") || "none"}`);
+      throw new Error(`"${name}" is not a project name — have: ${(layout.workspaces ?? []).join(", ") || "none"}`);
     }
     if (flags.platform === true) {
       if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
@@ -6395,7 +6395,7 @@ async function workspacesCmd(positional, flags, layout) {
     if (!layout.workspacesDir) throw new Error("not in an account folder — there is nothing here to remove");
     const dir = path.join(layout.workspacesDir, name);
     if (!layout.workspaces.includes(name) || !fs.existsSync(dir)) {
-      throw new Error(`no workspace "${name}" here — have: ${layout.workspaces.join(", ") || "none"}`);
+      throw new Error(`no project "${name}" here — have: ${layout.workspaces.join(", ") || "none"}`);
     }
     if (!(await sureToDelete(flags, "workspaces rm", `the folder ${dir} and everything in it`))) return 1;
     fs.rmSync(dir, { recursive: true, force: true });
@@ -6403,7 +6403,7 @@ async function workspacesCmd(positional, flags, layout) {
     return 0;
   }
   if (verb && verb !== "ls" && verb !== "list") {
-    throw new Error(`workspaces: unknown verb "${verb}" — ls, show <name>, new <name>, rm <name>, demo`);
+    throw new Error(`projects: unknown verb "${verb}" — ls, show <name>, new <name>, rm <name>, demo`);
   }
 
   const here = layout.workspaces;
@@ -6438,9 +6438,9 @@ async function workspacesCmd(positional, flags, layout) {
   // Nothing here and the platform could not be read is not "no workspaces":
   // that once answered a refused API version, a bad key and a down platform
   // alike, with exit 0 (FOL-41).
-  if (!all.length && reach) throw new Error(`could not read the platform's workspaces: ${reach}`);
+  if (!all.length && reach) throw new Error(`could not read the platform's projects: ${reach}`);
   if (!all.length) {
-    console.log(`\n  ${c.dim("no workspaces — `foldrun new <name>` makes one")}\n`);
+    console.log(`\n  ${c.dim("no projects — `foldrun new <name>` makes one")}\n`);
     return 0;
   }
   const width = Math.max(...all.map((n) => n.length));
@@ -6720,7 +6720,7 @@ function printExtracted(result, flags) {
  */
 async function textCmd(positional, flags) {
   const file = positional[0];
-  if (!file) throw new Error("which file? `foldrun text <file>` — a PDF, scan, document, sheet or recording on this machine (`foldrun storage text <path>` for one already in a workspace)");
+  if (!file) throw new Error("which file? `foldrun text <file>` — a PDF, scan, document, sheet or recording on this machine (`foldrun storage text <path>` for one already in a project)");
   if (positional.length > 1) throw new Error(`one file at a time — \`foldrun text ${file}\` (got ${positional.length})${flags.wait === true ? "; --wait takes seconds: --wait 30" : ""}`);
   const opts = extractOptions(flags);
   const url = platformFor(flags, "text");
@@ -6748,7 +6748,7 @@ async function textCmd(positional, flags) {
 async function storageTextCmd(url, ws, positional, flags) {
   const given = positional[1];
   if (!given) throw new Error("`foldrun storage text <path>` — a path under storage/, as `foldrun storage ls` names it");
-  if (typeof flags.out === "string" && flags.out) throw new Error("--out is for `foldrun text <file>`; `storage text` writes <path>.txt in the workspace (--no-write: it does not)");
+  if (typeof flags.out === "string" && flags.out) throw new Error("--out is for `foldrun text <file>`; `storage text` writes <path>.txt in the project (--no-write: it does not)");
   const rel = given.replace(/^storage\//, "");
   const opts = extractOptions(flags);
   const seconds = explicitTimeout(flags) ?? Math.max(timeoutSeconds(flags), (opts.wait ?? 50) + 30);
@@ -6787,7 +6787,7 @@ async function storageLsAll(url, prefix, flags) {
   }
   const full = desks.filter((d) => d.files.length);
   if (!full.length && !desks.some((d) => d.error)) {
-    console.log(`\n  ${c.dim(`nothing in any workspace's storage${prefix ? ` under ${prefix}` : ""}${desks.length ? "" : " — no workspaces yet"}`)}\n`);
+    console.log(`\n  ${c.dim(`nothing in any project's storage${prefix ? ` under ${prefix}` : ""}${desks.length ? "" : " — no projects yet"}`)}\n`);
     return 0;
   }
   const all = full.flatMap((d) => d.files);
@@ -6806,7 +6806,7 @@ async function storageLsAll(url, prefix, flags) {
   for (const d of desks.filter((x) => x.error)) console.log(`\n  ${c.red("✗")} ${c.bold(d.workspace)}  ${c.dim(d.error)}`);
   const empty = desks.filter((d) => !d.files.length && !d.error).map((d) => d.workspace);
   if (empty.length) console.log(`\n  ${c.dim(`nothing${prefix ? ` under ${prefix}` : ""} in ${empty.join(", ")}`)}`);
-  console.log(`\n  ${c.dim(`${all.length} file${all.length === 1 ? "" : "s"} in ${full.length} workspace${full.length === 1 ? "" : "s"} · ${humanBytes(all.reduce((n, f) => n + (f.size ?? 0), 0))} — \`foldrun storage cat <path> --to <workspace>\``)}\n`);
+  console.log(`\n  ${c.dim(`${all.length} file${all.length === 1 ? "" : "s"} in ${full.length} project${full.length === 1 ? "" : "s"} · ${humanBytes(all.reduce((n, f) => n + (f.size ?? 0), 0))} — \`foldrun storage cat <path> --to <workspace>\``)}\n`);
   return desks.some((d) => d.error) ? 1 : 0;
 }
 
@@ -6815,7 +6815,7 @@ async function storageCmd(positional, flags, layout) {
   // `ls --all`: every workspace's storage, as the account's Storage page.
   // (On `shares`, --all keeps meaning expired and revoked links too.)
   if ((positional[0] ?? "ls") === "ls" && flags.all === true) {
-    if (typeof flags.to === "string") throw new Error("`foldrun storage ls --all` lists every workspace — or `--to <workspace>` for one, not both");
+    if (typeof flags.to === "string") throw new Error("`foldrun storage ls --all` lists every project — or `--to <workspace>` for one, not both");
     return storageLsAll(url, positional[1], flags);
   }
   // A folder that is not a workspace is not a workspace: `logs` and `source`
@@ -6825,7 +6825,7 @@ async function storageCmd(positional, flags, layout) {
   // `storage text` also takes --workspace <name> — a name, not a folder.
   const named = positional[0] === "text" && typeof flags.workspace === "string" && /^[^/\\.][^/\\]*$/.test(flags.workspace) ? flags.workspace : null;
   const ws = typeof flags.to === "string" ? flags.to : named ?? (layout?.kind === "empty" ? null : takeWorkspace([], layout));
-  if (!ws) throw new Error("which workspace? `foldrun storage ls --to <workspace>` — or run it inside one");
+  if (!ws) throw new Error("which project? `foldrun storage ls --to <workspace>` — or run it inside one");
   const verb = positional[0] ?? "ls";
 
   if (verb === "text") return storageTextCmd(url, ws, positional, flags);
@@ -7130,7 +7130,7 @@ async function docsCmd(positional, flags) {
 async function triggersCmd(flags, layout) {
   const url = platformFor(flags, "triggers");
   const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
-  if (!ws) throw new Error("which workspace? `foldrun triggers --to <workspace>` — or run it inside one");
+  if (!ws) throw new Error("which project? `foldrun triggers --to <workspace>` — or run it inside one");
   const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
   const body = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/triggers?days=${days}`);
   const rows = body.flows ?? [];
@@ -7175,7 +7175,7 @@ const TRIGGER_REASON = {
   debounced: ["held for the burst", "debounce:"],
   quarantined: ["flow switched off", "disable_after:"],
   paused: ["work is done, paused", "pause_when:"],
-  halted: ["paused by a person", "account or workspace pause"],
+  halted: ["paused by a person", "account or project pause"],
   "overlap-skipped": ["previous run still live", "overlap: skip"],
   missed: ["missed while down", "catchup: none"],
   filtered: ["did not match the filter", "filter:"],
@@ -7516,14 +7516,14 @@ const NOTIFY_EVENTS = ["failed", "awaiting-approval", "completed"];
 
 /** Why a caller limited to some workspaces sees "set" for the account's
  *  notify: URL or telemetry: (GET /api/account answers `hidden: true`). */
-const HIDDEN_NOTE = "where it goes is shown only to a member or key with every workspace";
+const HIDDEN_NOTE = "where it goes is shown only to a member or key with every project";
 
 /** The account's defaults, as one readable block. */
 function printDefaults(d) {
   const notify = d.notify
     ? [d.notify.email, d.notify.url, d.notify.hidden ? `a webhook ${c.dim(`(${HIDDEN_NOTE})`)}` : null].filter(Boolean).join(", ") + c.dim(` on ${(d.notify.events ?? []).join(", ") || "nothing"}`)
     : c.dim("nobody is told anything");
-  console.log(`\n  ${c.bold("account defaults")}  ${c.dim("every workspace here inherits these")}\n`);
+  console.log(`\n  ${c.bold("account defaults")}  ${c.dim("every project here inherits these")}\n`);
   console.log(`  timezone     ${d.timezone ?? c.dim("unset — schedules read UTC")}`);
   console.log(`  notify       ${notify}`);
   console.log(`  budget       ${d.budget ? `$${d.budget.usd} per ${d.budget.period}` : c.dim("no cap")}`);
@@ -7621,7 +7621,7 @@ async function telemetryCmd(url, args, flags) {
   }
   const { defaults } = await remoteCall(url, flags, "/api/account");
   const current = defaults?.telemetry;
-  if (current?.hidden) throw new Error("the account's telemetry is hidden from this key (it needs access to every workspace) — set it from a key or login that has them all");
+  if (current?.hidden) throw new Error("the account's telemetry is hidden from this key (it needs access to every project) — set it from a key or login that has them all");
   const headers = { ...(current?.headers ?? {}) };
   for (const [k, v] of Object.entries(given)) {
     if (v) headers[k] = v;
@@ -7758,7 +7758,7 @@ async function jobsCmd(flags, layout) {
     console.log(JSON.stringify(view, null, 2));
     return 0;
   }
-  console.log(`\n  ${c.bold("The four jobs")}  ${c.dim(ws ? `workspace ${ws}, over the account's` : "the account — every workspace inherits these")}`);
+  console.log(`\n  ${c.bold("The four jobs")}  ${c.dim(ws ? `project ${ws}, over the account's` : "the account — every project inherits these")}`);
   for (const j of view.jobs) {
     console.log(`\n  ${c.bold(j.title)}  ${c.dim(j.what)}`);
     const w = Math.max(...j.fields.map((f) => f.key.length));
@@ -7806,7 +7806,7 @@ async function pauseCmd(flags, verb, what, { post, del }) {
     // An account resume leaves a workspace paused on its own paused.
     const own = Object.keys(r.workspaces ?? {});
     const held = still
-      ? c.amber(` — but still held: ${still.scope === "account" ? "the account" : "this workspace"} is paused (${pauseLine(still)})`)
+      ? c.amber(` — but still held: ${still.scope === "account" ? "the account" : "this project"} is paused (${pauseLine(still)})`)
       : own.length
         ? c.amber(` — but ${own.join(", ")} ${own.length === 1 ? "is" : "are"} paused on ${own.length === 1 ? "its" : "their"} own (\`foldrun workspace resume --to <name>\`)`)
         : " — runs start again";
@@ -7858,7 +7858,7 @@ async function accountCmd(positional, flags) {
   if (verb === "providers") return providersCmd(url, flags);
   if (verb === "telemetry") return telemetryCmd(url, positional.slice(1), flags);
   if (verb === "pause" || verb === "resume") {
-    return pauseCmd(flags, verb, "every workspace in the account", {
+    return pauseCmd(flags, verb, "every project in the account", {
       post: (body) => remoteCall(url, flags, "/api/account/pause", { method: "POST", body }),
       del: () => remoteCall(url, flags, "/api/account/pause", { method: "DELETE" }),
     });
@@ -7942,7 +7942,7 @@ async function accountCmd(positional, flags) {
 
   const answer = await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify(patch) });
   printDefaults(answer.defaults ?? {});
-  console.log(`\n  ${c.green("✓")} ${verb === "clear" ? `${key} cleared` : `${key} set`} — every workspace in this account reads it\n`);
+  console.log(`\n  ${c.green("✓")} ${verb === "clear" ? `${key} cleared` : `${key} set`} — every project in this account reads it\n`);
   return 0;
 }
 
@@ -8153,7 +8153,7 @@ async function workspaceOfRun(url, flags, layout, runId) {
   const names = await remoteWorkspaceNames(url, flags);
   const here = takeWorkspace([], layout);
   const order = here && names.includes(here) ? [here, ...names.filter((n) => n !== here)] : names;
-  if (!order.length) throw new Error(`no workspaces on ${url} — \`foldrun workspaces\` lists them`);
+  if (!order.length) throw new Error(`no projects on ${url} — \`foldrun workspaces\` lists them`);
 
   const found = await pool(order, 8, async (ws) => {
     try {
@@ -8167,7 +8167,7 @@ async function workspaceOfRun(url, flags, layout, runId) {
   const hit = found.find(Boolean);
   if (!hit) {
     throw new Error(
-      `no run "${runId}" in any workspace on ${url} — \`foldrun runs\` lists them, and --to <workspace> looks in one`,
+      `no run "${runId}" in any project on ${url} — \`foldrun runs\` lists them, and --to <workspace> looks in one`,
     );
   }
   return hit;
@@ -8487,7 +8487,7 @@ async function mcpMachineClientsCmd(sub, rest, flags) {
     ...(auth === "private_key_jwt" ? { jwks: JSON.parse(fs.readFileSync(flags["jwks-file"], "utf8")) } : {}),
   };
   const made = await remoteCall(url, flags, "/api/mcp/clients", { method: "POST", body: JSON.stringify(body) });
-  console.log(`\n  ${c.green("✓")} registered ${c.bold(rest[0])} ${c.dim(`(${body.access === "write" ? "read and act" : "read only"} · ${body.role} · ${workspaces ? workspaces.join(", ") : "the workspaces you can open"})`)}\n`);
+  console.log(`\n  ${c.green("✓")} registered ${c.bold(rest[0])} ${c.dim(`(${body.access === "write" ? "read and act" : "read only"} · ${body.role} · ${workspaces ? workspaces.join(", ") : "the projects you can open"})`)}\n`);
   console.log(`    client_id      ${made.client_id}`);
   if (made.client_secret) console.log(`    client_secret  ${made.client_secret}   ${c.amber("— shown once")}`);
   console.log(`    token URL      ${made.token_endpoint}`);
@@ -8510,7 +8510,7 @@ async function mcpConnectionsCmd(flags) {
   if (!rows.length) console.log(`\n  ${c.dim("none — claude.ai connects itself when you add this platform's /api/mcp as a custom connector")}`);
   for (const r of rows) {
     const used = r.lastUsedAt ? `last used ${String(r.lastUsedAt).slice(0, 16).replace("T", " ")}` : "not used yet";
-    console.log(`\n  ${c.bold(r.client)} ${c.dim(`· ${r.machine ? "machine client" : r.redirectHost} · ${r.access === "read" ? "read only" : "read and act"} · ${r.workspaces ? r.workspaces.join(", ") : "all workspaces"}`)}${r.revokedAt ? c.red(" · disconnected") : ""}`);
+    console.log(`\n  ${c.bold(r.client)} ${c.dim(`· ${r.machine ? "machine client" : r.redirectHost} · ${r.access === "read" ? "read only" : "read and act"} · ${r.workspaces ? r.workspaces.join(", ") : "all projects"}`)}${r.revokedAt ? c.red(" · disconnected") : ""}`);
     console.log(`    ${c.dim(`${r.id} · ${r.person} · connected ${String(r.createdAt).slice(0, 16).replace("T", " ")} · ${used}`)}`);
   }
   console.log("");
@@ -8957,7 +8957,7 @@ async function runsCmd(flags, layout) {
   const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
   if (!names.length) {
     if (flags.json === true) console.log(JSON.stringify({ runs: [], next: null }, null, 2));
-    else console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
+    else console.log(`\n  ${c.dim(`no projects on ${url}`)}\n`);
     return 0;
   }
   const limit = Number(flags.limit) > 0 ? Math.floor(Number(flags.limit)) : 20;
@@ -9550,7 +9550,7 @@ function platformWorkspace(flags, layout, what) {
   const ws = typeof flags.to === "string" ? flags.to : guess;
   if (!ws) {
     throw new Error(
-      `which workspace is it in? \`foldrun ${what} --to <workspace>\`${
+      `which project is it in? \`foldrun ${what} --to <workspace>\`${
         layout?.workspaces?.length ? ` — this account has ${layout.workspaces.join(", ")}` : ""
       }`,
     );
@@ -9949,7 +9949,7 @@ async function hookLsRemote(flags) {
         continue;
       }
       const on = (x.onFor ?? []).length ? `on for ${x.onFor.join(", ")}` : "turned on by nobody";
-      const note = x.shadowed ? "(the workspace's own of this name is the one that runs)" : `${on}${x.description ? ` — ${x.description}` : ""}`;
+      const note = x.shadowed ? "(the project's own of this name is the one that runs)" : `${on}${x.description ? ` — ${x.description}` : ""}`;
       console.log(`  ${c.green("✓")} ${c.bold(x.name.padEnd(w))}  ${c.dim(where.padEnd(9))}  ${String(x.on).padEnd(11)}  ${String(x.tool ?? "*").padEnd(12)}  ${c.dim(note)}`);
     }
   }
@@ -9983,7 +9983,7 @@ async function hookLsCmd(flags, layout) {
       continue;
     }
     const what = `${x.on.padEnd(11)}  ${(x.tool ?? "*").padEnd(12)}`;
-    const note = x.shadowed ? c.dim("(the workspace's own of this name is the one that runs)") : c.dim(x.description ?? "");
+    const note = x.shadowed ? c.dim("(the project's own of this name is the one that runs)") : c.dim(x.description ?? "");
     console.log(`  ${c.green("✓")} ${c.bold(x.name.padEnd(w))}  ${c.dim(where.padEnd(9))}  ${what}  ${note}`);
   }
   console.log(`\n  ${c.dim("an agent turns one on with hooks: [name]; AGENTS.md hooks: turns it on for every agent under it")}\n`);
@@ -10183,9 +10183,9 @@ function localDeskDir(layout, flowName) {
       const hits = layout.workspaces.filter((ws) => fs.existsSync(path.join(layout.workspacesDir, ws, "flows", `${flowName}.md`)));
       if (hits.length === 1) return path.join(layout.workspacesDir, hits[0]);
     }
-    throw new Error(`which workspace? --workspace <name> — this account has ${layout.workspaces.join(", ") || "none"} (--to <workspace> edits the deployed copy instead)`);
+    throw new Error(`which project? --workspace <name> — this account has ${layout.workspaces.join(", ") || "none"} (--to <workspace> edits the deployed copy instead)`);
   }
-  throw new Error("this is not a workspace — `foldrun init <dir>` makes one, or cd into an existing one (--to <workspace> reaches a deployed one)");
+  throw new Error("this is not a project — `foldrun init <dir>` makes one, or cd into an existing one (--to <workspace> reaches a deployed one)");
 }
 
 /**
@@ -10705,7 +10705,7 @@ async function agentImportCmd(positional, flags, layout) {
       return 0;
     }
     if (!workspaces.length) {
-      console.log(`\n  ${c.dim(`nothing to import into ${ws} — no other workspace you can read has an agent`)}\n`);
+      console.log(`\n  ${c.dim(`nothing to import into ${ws} — no other project you can read has an agent`)}\n`);
       return 0;
     }
     const w = Math.max(...workspaces.flatMap((x) => (x.agents ?? []).map((a) => `${x.name}/${a.name}`.length)));
@@ -10742,7 +10742,7 @@ async function agentImportCmd(positional, flags, layout) {
   assertName(name);
   const src = path.join(layout.workspacesDir, from, "agents", agent);
   if (!fs.existsSync(path.join(src, "agent.md"))) {
-    throw new Error(`no agent "${agent}" in ${from} — ${layout.workspaces.includes(from) ? "" : `this account has ${layout.workspaces.join(", ") || "no workspaces"}`}`.replace(/ — $/, ""));
+    throw new Error(`no agent "${agent}" in ${from} — ${layout.workspaces.includes(from) ? "" : `this account has ${layout.workspaces.join(", ") || "no projects"}`}`.replace(/ — $/, ""));
   }
   const target =
     typeof flags.workspace === "string"
@@ -10750,7 +10750,7 @@ async function agentImportCmd(positional, flags, layout) {
       : layout.workspaceDir && layout.kind !== "empty"
         ? layout.workspaceDir
         : null;
-  if (!target || !fs.existsSync(target)) throw new Error("into which workspace? cd into it, or --workspace <name>");
+  if (!target || !fs.existsSync(target)) throw new Error("into which project? cd into it, or --workspace <name>");
   if (path.resolve(target) === path.resolve(path.join(layout.workspacesDir, from)) && name === agent) {
     throw new Error(`${agent} is already in ${from} — give the copy another name with --as`);
   }
@@ -10777,7 +10777,7 @@ async function agentImportCmd(positional, flags, layout) {
   walk(src);
   console.log(`\n  ${c.green("✓")} ${c.bold(name)}  ${c.dim(`from ${from} → ${path.basename(target)}`)}`);
   for (const f of written) console.log(`  ${c.dim(f)}`);
-  console.log(`  ${c.dim("its memory stayed in")} ${from}${c.dim(" — `foldrun check` names any tool, skill or secret it uses that this workspace lacks")}\n`);
+  console.log(`  ${c.dim("its memory stayed in")} ${from}${c.dim(" — `foldrun check` names any tool, skill or secret it uses that this project lacks")}\n`);
   return 0;
 }
 
@@ -12088,7 +12088,7 @@ async function importCmd(positional, flags, layout) {
     console.log(JSON.stringify(plan, null, 2));
     return 0;
   }
-  console.log(`\n  ${c.bold(what)} → ${c.bold(ws)}${plan.creates ? c.dim("  (a new workspace)") : ""}`);
+  console.log(`\n  ${c.bold(what)} → ${c.bold(ws)}${plan.creates ? c.dim("  (a new project)") : ""}`);
   console.log(`  ${plan.added.length} new · ${plan.unchanged.length} identical · ${plan.overwritten.length ? c.amber(`${plan.overwritten.length} would be replaced`) : "0 replaced"}`);
   for (const p of plan.overwritten.slice(0, 20)) console.log(`    ${c.amber("~")} ${p}`);
   if (plan.skipped?.length) console.log(`  ${c.dim(`${plan.skipped.length} not imported (memory, state, or outside the authored folders): ${plan.skipped.slice(0, 6).join(", ")}${plan.skipped.length > 6 ? " …" : ""}`)}`);
@@ -12465,7 +12465,7 @@ async function observeCmd(flags, layout) {
     return 0;
   }
   if (!obs.length) {
-    console.log(`\n  ${c.dim(`no workspaces on ${url}`)}\n`);
+    console.log(`\n  ${c.dim(`no projects on ${url}`)}\n`);
     return 0;
   }
   // Each workspace's completion rate against the window before, from the analysis.
@@ -12484,7 +12484,7 @@ async function observeCmd(flags, layout) {
     console.log(`  ${o.failedRuns ? c.red("✗") : c.green("✓")} ${c.bold(pad(o.workspace, w))}  ${pad(o.runs, 5)}  ${o.failedRuns ? c.red(failed) : failed}  ${pad(o.steps, 6)}  ${pad(`$${o.costUsd.toFixed(2)}`, 6)}${account ? `  ${trend(o.workspace)}` : ""}`);
   }
   const total = rows.reduce((t, o) => ({ runs: t.runs + o.runs, failed: t.failed + o.failedRuns, cost: t.cost + o.costUsd }), { runs: 0, failed: 0, cost: 0 });
-  console.log(`\n  ${c.dim(`${total.runs} runs · ${total.failed} failed · $${total.cost.toFixed(2)} across ${rows.length} workspace${rows.length === 1 ? "" : "s"}`)}`);
+  console.log(`\n  ${c.dim(`${total.runs} runs · ${total.failed} failed · $${total.cost.toFixed(2)} across ${rows.length} project${rows.length === 1 ? "" : "s"}`)}`);
   if (account) printAccountAnalysis(account);
   const fails = rows.flatMap((o) => (o.failures ?? []).map((f) => ({ ...f, ws: o.workspace }))).sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 8);
   if (fails.length) {
@@ -12607,7 +12607,7 @@ function notifyWithout(current, channel, clearAll) {
   const other = channel === "email" ? "url" : "email";
   // A key limited to some workspaces sees the account's URL only as hidden;
   // sending the block without it would drop it.
-  if (other === "url" && !n.url && n.hidden) throw new Error("the webhook URL beside it is hidden from this key — clear the email with a key that holds every workspace");
+  if (other === "url" && !n.url && n.hidden) throw new Error("the webhook URL beside it is hidden from this key — clear the email with a key that holds every project");
   if (!n[other]) throw new Error(`the ${channel === "url" ? "webhook URL" : "email"} is notify's only channel — \`${clearAll}\` turns notify off`);
   return { [other]: n[other], events: Array.isArray(n.events) && n.events.length ? n.events : ["failed", "awaiting-approval"] };
 }
@@ -12780,7 +12780,7 @@ async function usageComputeCmd(flags) {
   // must fit every level it belongs to.
   const wss = Array.isArray(d.workspaces) ? d.workspaces.filter((w) => w.inUse?.steps || w.pool?.vcpu != null || w.pool?.memGiB != null || w.pool?.diskGiB != null) : [];
   if (wss.length) {
-    console.log(`\n  ${c.bold("workspaces")}  ${c.dim("each one's own pool, inside the account's")}`);
+    console.log(`\n  ${c.bold("projects")}  ${c.dim("each one's own pool, inside the account's")}`);
     const width = Math.max(...wss.map((w) => w.workspace.length));
     for (const w of wss) console.log(`  ${pad(w.workspace, width)}  ${held(w.inUse ?? {}, w.pool)}`);
   }
@@ -13019,7 +13019,7 @@ async function workspaceCmd(positional, flags, layout) {
       del: () => remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`, { method: "DELETE" }),
     });
   }
-  if (verb !== "set" && verb !== "clear") throw new Error(`unknown workspace verb "${verb}" — set <key> <value>, clear <key>, pause, resume (bare: show them)`);
+  if (verb !== "set" && verb !== "clear") throw new Error(`unknown project verb "${verb}" — set <key> <value>, clear <key>, pause, resume (bare: show them)`);
   if (!KEYS.includes(key) || (verb === "clear" && key === "name")) {
     throw new Error(`which setting? \`foldrun workspace ${verb} <${(verb === "clear" ? KEYS.filter((k) => k !== "name") : KEYS).join("|")}> … --to <workspace>\``);
   }
@@ -13054,7 +13054,7 @@ async function workspaceCmd(positional, flags, layout) {
 
   if (key === "name" && verb === "set") {
     console.log(`\n  ${c.yellow("!")} renaming ${c.bold(ws)} to ${c.bold(patch.name)} changes every webhook URL it has — anything posting to the old ones is refused`);
-    if (!(await confirmed(flags, "renaming a workspace", "Rename it? [y/N] "))) {
+    if (!(await confirmed(flags, "renaming a project", "Rename it? [y/N] "))) {
       console.log(`\n  ${c.dim("nothing renamed")}\n`);
       return 1;
     }
@@ -13066,7 +13066,7 @@ async function workspaceCmd(positional, flags, layout) {
   console.log(`\n  ${c.green("✓")} ${r.renamed ? `renamed to ${r.name}` : verb === "clear" ? `${key} cleared` : `${key} set`} ${c.dim(`on ${r.name ?? ws}`)}`);
   // FOL-105: "off" here only drops this file's own true — the account's on
   // still refuses, and a ✓ alone read as if runs here were now allowed.
-  if (turnedOff && aboveOn) console.log(`  ${c.amber("!")} still refused here: the account enforces network_enforce — \`foldrun account set network_enforce off\` turns it off for every workspace`);
+  if (turnedOff && aboveOn) console.log(`  ${c.amber("!")} still refused here: the account enforces network_enforce — \`foldrun account set network_enforce off\` turns it off for every project`);
   if (r.brokeWebhooks?.length) console.log(`  ${c.amber("!")} webhook URLs changed for ${r.brokeWebhooks.join(", ")} — copy the new ones from each flow`);
   console.log();
   return 0;
@@ -13074,7 +13074,7 @@ async function workspaceCmd(positional, flags, layout) {
 
 /** `foldrun notify test --to <workspace>` — send one, and say what happened. */
 async function notifyCmd(positional, flags, layout) {
-  if (positional[0] !== "test") throw new Error("`foldrun notify test --to <workspace>` — sends one test notification to whatever that workspace's notify: resolves to");
+  if (positional[0] !== "test") throw new Error("`foldrun notify test --to <workspace>` — sends one test notification to whatever that project's notify: resolves to");
   const url = platformFor(flags, "notify test");
   const ws = platformWorkspace(flags, layout, "notify test");
   const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/notify/test`, { method: "POST" });
@@ -13156,7 +13156,7 @@ async function notificationsCmd(positional, flags) {
   if (positional[0] === "set") {
     const [, category, value] = positional;
     if (!category || !["on", "off"].includes(value ?? "")) {
-      throw new Error("`foldrun notifications set <category> on|off` (--to <workspace> for one workspace) — `foldrun notifications` lists the categories");
+      throw new Error("`foldrun notifications set <category> on|off` (--to <workspace> for one project) — `foldrun notifications` lists the categories");
     }
     const body = { category, enabled: value === "on", ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) };
     const r = await remoteCall(url, flags, "/api/me/notifications", { method: "PATCH", body: JSON.stringify(body) });
@@ -13308,7 +13308,7 @@ async function historyCmd(positional, flags, layout) {
 async function onboardingCmd(flags) {
   const url = platformFor(flags, "onboarding");
   const ws = typeof flags.to === "string" && flags.to ? flags.to : null;
-  if (flags.to !== undefined && !ws) throw new Error("`foldrun onboarding --to <workspace>` — name the workspace whose checklist you want");
+  if (flags.to !== undefined && !ws) throw new Error("`foldrun onboarding --to <workspace>` — name the project whose checklist you want");
   const o = await remoteCall(url, flags, `/api/me/onboarding${ws ? `?workspace=${encodeURIComponent(ws)}` : ""}`);
   if (flags.json === true) {
     console.log(JSON.stringify(o, null, 2));
@@ -13364,7 +13364,7 @@ async function backupsCmd(positional, flags) {
       note: typeof flags.note === "string" ? flags.note : null,
     };
     const { request } = await remoteCall(url, flags, "/api/account/backups/requests", { method: "POST", body: JSON.stringify(body) });
-    console.log(`\n  ${c.green("✓")} asked ${c.dim(`· ${request.id} · ${what} in ${request.workspace ?? "every workspace"} as at ${request.target}`)}`);
+    console.log(`\n  ${c.green("✓")} asked ${c.dim(`· ${request.id} · ${what} in ${request.workspace ?? "every project"} as at ${request.target}`)}`);
     console.log(`  ${request.notified ? c.dim("the platform team has been emailed; nothing is restored until they do it") : c.yellow("recorded, but the email to the platform team did not send — contact them as well")}\n`);
     return 0;
   }
@@ -13382,7 +13382,7 @@ async function backupsCmd(positional, flags) {
     }
     console.log();
     for (const r of requests) {
-      console.log(`  ${when(r.at)}  ${c.bold(r.status)}  ${r.what} · ${r.workspace ?? "every workspace"} · to ${r.target}  ${c.dim(`${r.id} · ${r.by}${r.notified ? "" : " · platform team not emailed"}`)}`);
+      console.log(`  ${when(r.at)}  ${c.bold(r.status)}  ${r.what} · ${r.workspace ?? "every project"} · to ${r.target}  ${c.dim(`${r.id} · ${r.by}${r.notified ? "" : " · platform team not emailed"}`)}`);
       if (r.note) console.log(`      ${c.dim(firstLine(r.note, 100))}`);
     }
     console.log(`\n  ${c.dim(`${requests.length} request${requests.length === 1 ? "" : "s"} · the platform team restores; nothing here changes until they do`)}\n`);
@@ -13408,7 +13408,7 @@ async function backupsCmd(positional, flags) {
     }
   }
   if (b.workspaces?.length) {
-    console.log(`\n  ${c.dim("restore a workspace's source yourself — foldrun restore <workspace> --to <revision|time|3d> --dry-run")}`);
+    console.log(`\n  ${c.dim("restore a project's source yourself — foldrun restore <workspace> --to <revision|time|3d> --dry-run")}`);
     const w = Math.max(...b.workspaces.map((x) => x.name.length));
     for (const x of b.workspaces) {
       console.log(`  ${pad(x.name, w)}  ${x.lastChange ? c.dim(`last change ${when(x.lastChange.at)} — ${firstLine(x.lastChange.message, 50)}`) : c.dim("no history yet")}`);
@@ -13487,7 +13487,7 @@ async function accountExportCmd(url, flags) {
   const code = writeDownload(got.bytes, got.name ?? "foldrun-export.json", flags, "the account");
   try {
     const x = JSON.parse(got.bytes.toString("utf8"));
-    if (flags.file !== "-") console.log(`  ${c.dim(`${x.workspaces?.length ?? 0} workspaces · ${x.runs?.length ?? 0} runs · ${x.members?.length ?? 0} members · ${x.ledger?.length ?? 0} ledger lines — the markdown itself comes down with \`foldrun pull\``)}\n`);
+    if (flags.file !== "-") console.log(`  ${c.dim(`${x.workspaces?.length ?? 0} projects · ${x.runs?.length ?? 0} runs · ${x.members?.length ?? 0} members · ${x.ledger?.length ?? 0} ledger lines — the markdown itself comes down with \`foldrun pull\``)}\n`);
   } catch {
     /* the file is written; the counts are a courtesy */
   }
@@ -14039,7 +14039,7 @@ async function assistantCmd(positional, flags, layout) {
 
   const ask = async (text) => {
     messages.push({ role: "user", content: text });
-    if (!flags.json) console.log(`\n  ${c.dim("reading the docs and the workspace — one reply, charged like a step…")}`);
+    if (!flags.json) console.log(`\n  ${c.dim("reading the docs and the project — one reply, charged like a step…")}`);
     let d;
     try {
       d = await remoteCall(
@@ -14073,7 +14073,7 @@ async function assistantCmd(positional, flags, layout) {
       const share = u.cacheReadTokens !== undefined && u.inputTokens > 0 ? ` (${Math.round((u.cacheReadTokens / u.inputTokens) * 100)}% cached)` : "";
       console.log(`  ${c.dim(`${k(u.inputTokens)} tokens in${share} · ${k(u.outputTokens)} out${paid ? ` · ${paid}` : ""}`)}\n`);
     }
-    if (proposedWs) console.log(`  ${c.bold("new workspace")} ${proposedWs.name} ${c.dim(`— ${proposedWs.purpose}`)}\n`);
+    if (proposedWs) console.log(`  ${c.bold("new project")} ${proposedWs.name} ${c.dim(`— ${proposedWs.purpose}`)}\n`);
     await showFiles();
   };
 
@@ -14086,7 +14086,7 @@ async function assistantCmd(positional, flags, layout) {
    *  @param {{ name: string, purpose: string }} p */
   const createProposed = async (p) => {
     const name = p.name;
-    if (!(await confirmed(flags, "assistant", `Create the workspace ${name}? [y/N] `))) {
+    if (!(await confirmed(flags, "assistant", `Create the project ${name}? [y/N] `))) {
       console.log(`\n  ${c.dim("not created")}\n`);
       return false;
     }
@@ -14096,7 +14096,7 @@ async function assistantCmd(positional, flags, layout) {
       await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ name, template: true, ifAbsent: true }) });
     } catch (err) {
       if (err instanceof HttpError && err.status === 409) {
-        console.log(`  ${c.red("✗")} a workspace called ${name} exists — nothing created\n`);
+        console.log(`  ${c.red("✗")} a project called ${name} exists — nothing created\n`);
         return false;
       }
       throw err;
@@ -14136,11 +14136,11 @@ async function assistantCmd(positional, flags, layout) {
     const p = proposal();
     if (p && !flags.json) {
       if (flags["dry-run"] === true) {
-        console.log(`  ${c.dim("--dry-run: no workspace created")}\n`);
+        console.log(`  ${c.dim("--dry-run: no project created")}\n`);
         return 0;
       }
       if (flags.yes !== true && !process.stdin.isTTY) {
-        console.log(`  ${c.dim(`not a terminal to ask — no workspace created; run it again with --yes, or create it with \`foldrun new ${p.name}\` and deploy`)}\n`);
+        console.log(`  ${c.dim(`not a terminal to ask — no project created; run it again with --yes, or create it with \`foldrun new ${p.name}\` and deploy`)}\n`);
         return 1;
       }
       const made = await createProposed(p);
@@ -14213,9 +14213,9 @@ async function assistantCmd(positional, flags, layout) {
           ws = made;
           files = [];
           issues = [];
-          messages.push({ role: "assistant", content: `Created the workspace \`${made}\`.` });
+          messages.push({ role: "assistant", content: `Created the project \`${made}\`.` });
           console.log(`  ${c.dim(`now working in ${made}`)}`);
-          await ask(`The workspace "${made}" now exists and you are working in it. Carry on with what I asked for: write its agents, flows, tools and skills.`);
+          await ask(`The project "${made}" now exists and you are working in it. Carry on with what I asked for: write its agents, flows, tools and skills.`);
         }
       }
     } catch (err) {
@@ -14331,7 +14331,7 @@ async function libraryCmd(positional, flags) {
     else if (process.stdin.isTTY) throw new Error("what goes in it? --file <path>, or pipe it in");
     else content = fs.readFileSync(0, "utf8");
     await remoteCall(url, flags, `/api/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: rel, content }) });
-    console.log(`\n  ${c.green("✓")} library/${kind}/${rel} ${c.dim(`${humanBytes(Buffer.byteLength(content))} — every workspace in the account sees it`)}\n`);
+    console.log(`\n  ${c.green("✓")} library/${kind}/${rel} ${c.dim(`${humanBytes(Buffer.byteLength(content))} — every project in the account sees it`)}\n`);
     return 0;
   }
   if (verb === "new") {
@@ -14342,12 +14342,12 @@ async function libraryCmd(positional, flags) {
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw new Error(`"${name}" is not a name — kebab-case only, e.g. skills/house-style`);
     const body = { name, ...(typeof flags.template === "string" ? { template: flags.template } : {}), ...(typeof flags.language === "string" ? { language: flags.language } : {}) };
     const r = await remoteCall(url, flags, `/api/library/${kind}`, { method: "POST", body: JSON.stringify(body) });
-    console.log(`\n  ${c.green("✓")} library/${kind}/${r.path ?? name} ${c.dim("— every workspace in the account sees it")}\n`);
+    console.log(`\n  ${c.green("✓")} library/${kind}/${r.path ?? name} ${c.dim("— every project in the account sees it")}\n`);
     return 0;
   }
   if (verb === "rm") {
     const { kind, rel } = split(spec);
-    if (!(await sureToDelete(flags, "library rm", `library/${kind}/${rel} — every workspace that names it loses it`))) return 1;
+    if (!(await sureToDelete(flags, "library rm", `library/${kind}/${rel} — every project that names it loses it`))) return 1;
     await remoteCall(url, flags, `/api/library/${kind}`, { method: "DELETE", body: JSON.stringify({ path: rel }) });
     console.log(`\n  ${c.green("✓")} removed library/${kind}/${rel}\n`);
     return 0;
@@ -14640,7 +14640,7 @@ async function billingPlansCmd(verb, sub, flags) {
     console.log(`\n  ${c.bold("plans")}  ${c.dim(`one credit is ${usd(p.creditUsd)}${cur?.plan ? ` · on ${cur.plan} (${cur.status})` : " · Free: 300 credits a month, bought credits on top"}`)}`);
     for (const x of p.plans ?? []) {
       const mark = cur?.plan === x.id ? c.green("●") : c.dim("○");
-      console.log(`  ${mark} ${c.bold(pad(x.id, 8))} ${pad(`$${x.monthlyUsd}/mo`, 9)} ${pad(`${Number(x.credits).toLocaleString()} credits`, 16)} ${pad(`${x.storageGb ?? "?"} GB`, 8)} ${pad(`${x.vcpu ?? "?"} vCPU · ${x.memGiB ?? "?"} GiB`, 16)} ${pad(x.workspaces == null ? "any workspaces" : `${x.workspaces} workspaces`, 15)} ${c.dim(x.pitch ?? "")}`);
+      console.log(`  ${mark} ${c.bold(pad(x.id, 8))} ${pad(`$${x.monthlyUsd}/mo`, 9)} ${pad(`${Number(x.credits).toLocaleString()} credits`, 16)} ${pad(`${x.storageGb ?? "?"} GB`, 8)} ${pad(`${x.vcpu ?? "?"} vCPU · ${x.memGiB ?? "?"} GiB`, 16)} ${pad(x.workspaces == null ? "any projects" : `${x.workspaces} workspaces`, 15)} ${c.dim(x.pitch ?? "")}`);
     }
     if (cur?.plan) console.log(`\n  ${c.dim(`this cycle: ${cur.cycleRemainingCredits ?? "?"} of ${cur.cycleCredits ?? "?"} credits left${cur.resetsAt ? `, resets ${String(cur.resetsAt).slice(0, 10)}` : ""}`)}`);
     console.log(`  ${c.dim(`balance ${usd(p.balanceUsd)}${p.cards ? "" : " · card payments are not configured on this install"}`)}`);
@@ -14713,7 +14713,7 @@ async function apiVersionCmd(positional, flags) {
   console.log(`\n  ${c.bold("API version")}  ${v.effective}  ${c.dim(v.pinned ? `pinned (current is ${v.current})` : "current — not pinned")}`);
   console.log(`  ${c.dim(`served: ${(v.supported ?? []).join(", ") || "—"} · each for ${v.supportMonths ?? "?"} months after the next · this CLI sends ${API_VERSION}`)}`);
   if (l.perCredential) console.log(`  ${c.bold("rate limits")}  ${c.dim(`${l.plan} · per key ${l.perCredential.read} reads / ${l.perCredential.write} writes, per account ${l.perAccount?.read} / ${l.perAccount?.write} — every ${l.windowSeconds}s`)}`);
-  if (facts.usageHidden) console.log(`  ${c.bold("your use")}  ${c.dim("shown only to a member or key with every workspace")}`);
+  if (facts.usageHidden) console.log(`  ${c.bold("your use")}  ${c.dim("shown only to a member or key with every project")}`);
   else apiUsageLines(facts.usage);
   console.log(`\n  ${c.dim("foldrun api version pin YYYY-MM-DD · unpin")}\n`);
   return 0;
@@ -14937,7 +14937,7 @@ async function findCmd(positional, flags) {
  */
 async function workspacesShowCmd(name, flags) {
   const url = platformFor(flags, "workspaces show");
-  if (!name) throw new Error("which workspace? `foldrun workspaces show <name>`");
+  if (!name) throw new Error("which project? `foldrun workspaces show <name>`");
   const r = await remoteCall(url, flags, `/api/workspaces/${enc(name)}`);
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
@@ -15024,7 +15024,7 @@ async function teamCmd(positional, flags) {
   const w = Math.max(...members.map((m) => m.email.length));
   console.log();
   for (const m of members) {
-    const scope = m.workspaces === null || m.workspaces === undefined ? "every workspace" : m.workspaces.length ? m.workspaces.join(", ") : "no workspaces";
+    const scope = m.workspaces === null || m.workspaces === undefined ? "every project" : m.workspaces.length ? m.workspaces.join(", ") : "no projects";
     console.log(`  ${c.bold(pad(m.email, w))}  ${pad(m.owner ? "owner" : m.role, 7)} ${c.dim(scope)}  ${c.dim(m.createdAt ? `joined ${String(m.createdAt).slice(0, 10)}` : "")}`);
   }
   console.log(`\n  ${c.dim(`${members.length} member${members.length === 1 ? "" : "s"} · foldrun team invite | role | access | remove (your own \`foldrun login\`, never a key made by hand)`)}\n`);
@@ -15052,7 +15052,7 @@ async function memberNamed(url, flags, who, verb) {
   return m;
 }
 
-const SCOPE_TEXT = (w) => (w === null || w === undefined ? "every workspace" : w.length ? w.join(", ") : "no workspaces");
+const SCOPE_TEXT = (w) => (w === null || w === undefined ? "every project" : w.length ? w.join(", ") : "no projects");
 
 /**
  * `foldrun team invite [email] [--role viewer|editor|admin] [--workspaces
@@ -15066,7 +15066,7 @@ async function teamInviteCmd(positional, flags) {
   const email = positional[0];
   const role = typeof flags.role === "string" ? flags.role : "editor";
   if (!["viewer", "editor", "admin"].includes(role)) throw new Error("--role is viewer, editor or admin (owner is transferred, in the browser)");
-  if (flags.none === true) throw new Error("an invite opens some workspaces: --workspaces <names>, or --all for every one");
+  if (flags.none === true) throw new Error("an invite opens some projects: --workspaces <names>, or --all for every one");
   const workspaces = memberScopeFlag(flags);
   const body = { role, ...(workspaces !== undefined ? { workspaces } : {}), ...(email ? { email } : {}), ...(flags["no-send"] === true ? { send: false } : {}) };
   const r = await remoteCall(url, flags, "/api/team", { method: "POST", body: JSON.stringify(body) });
@@ -15106,7 +15106,7 @@ async function teamRoleCmd(positional, flags) {
 async function teamAccessCmd(positional, flags) {
   const url = platformFor(flags, "team access");
   const workspaces = memberScopeFlag(flags);
-  if (workspaces === undefined) throw new Error("which workspaces? `foldrun team access <email|id> --workspaces a,b` (or --all, or --none)");
+  if (workspaces === undefined) throw new Error("which projects? `foldrun team access <email|id> --workspaces a,b` (or --all, or --none)");
   const m = await memberNamed(url, flags, positional[0], "access");
   const r = await remoteCall(url, flags, `/api/team/members/${enc(m.id)}`, { method: "PATCH", body: JSON.stringify({ workspaces }) });
   if (flags.json === true) {
@@ -15220,7 +15220,7 @@ async function teamInvitesCmd(positional, flags) {
   const w = Math.max(...invites.map((i) => label(i).length));
   console.log();
   for (const i of invites) {
-    const scope = i.workspaces === null || i.workspaces === undefined ? "every workspace" : i.workspaces.length ? i.workspaces.join(", ") : "no workspaces";
+    const scope = i.workspaces === null || i.workspaces === undefined ? "every project" : i.workspaces.length ? i.workspaces.join(", ") : "no projects";
     const state = i.status === "pending" ? `expires ${when(i.expiresAt)}` : i.status;
     console.log(`  ${c.bold(pad(label(i), w))}  ${pad(i.role, 6)} ${c.dim(scope)}  ${c.dim(`by ${i.invitedBy} · ${state}`)}  ${c.dim(i.id)}`);
   }
@@ -15817,7 +15817,7 @@ async function usageBudgetCmd(flags) {
   const d = await remoteCall(url, flags, "/api/usage/budget");
   const ws = typeof flags.to === "string" ? flags.to : null;
   const rows = (Array.isArray(d.workspaces) ? d.workspaces : []).filter((w) => !ws || w.workspace === ws);
-  if (ws && !rows.length) throw new Error(`no workspace "${ws}" among the ones this credential may open`);
+  if (ws && !rows.length) throw new Error(`no project "${ws}" among the ones this credential may open`);
   if (flags.json === true) {
     console.log(JSON.stringify(ws ? { workspaces: rows } : d, null, 2));
     return 0;
@@ -15838,13 +15838,13 @@ async function usageBudgetCmd(flags) {
   console.log();
   if (!ws) {
     if (d.account) console.log(`  ${c.bold("account")}  ${line(d.account)}`);
-    else if (d.accountHidden) console.log(`  ${c.bold("account")}  ${c.dim("shown only to a member or key with every workspace — it is spend over all of them")}`);
+    else if (d.accountHidden) console.log(`  ${c.bold("account")}  ${c.dim("shown only to a member or key with every project — it is spend over all of them")}`);
   }
   if (rows.length) {
     const width = Math.max(...rows.map((w) => w.workspace.length));
-    if (!ws) console.log(`\n  ${c.bold("workspaces")}  ${c.dim("most spent first")}`);
+    if (!ws) console.log(`\n  ${c.bold("projects")}  ${c.dim("most spent first")}`);
     for (const w of rows) console.log(`  ${pad(w.workspace, width)}  ${line(w)}`);
-  } else console.log(`  ${c.dim("no workspaces yet")}`);
+  } else console.log(`  ${c.dim("no projects yet")}`);
   console.log(`\n  ${c.dim("set a cap: foldrun account set budget 500 · foldrun workspace set budget 60/day --to <ws>")}\n`);
   return 0;
 }
@@ -15884,7 +15884,7 @@ async function billingInvoicesCmd(flags) {
     d = await remoteCall(url, flags, "/api/billing/invoices");
   } catch (err) {
     if (err instanceof HttpError && err.status === 404) throw new Error(`${new URL(url).host} has no billing — invoices are the hosted platform's (or it runs a platform from before 5 Nov 2026)`);
-    if (err instanceof HttpError && err.status === 403) throw new Error(`invoices need a member or key with every workspace — ${err.message}`);
+    if (err instanceof HttpError && err.status === 403) throw new Error(`invoices need a member or key with every project — ${err.message}`);
     throw err;
   }
   if (flags.json === true) {
@@ -16028,7 +16028,7 @@ export async function run(command, positional, flags, workspace, layout) {
       if (typeof flags.to === "string") return remoteEvalsCmd(positional[0], flags, layout);
       // --last reads the platform's results; a local eval has none to read,
       // and running the cases instead would break its promise to run nothing.
-      if (flags.last === true || flags.run !== undefined) throw new Error("--last and --run read a deployed workspace's results — add --to <workspace>");
+      if (flags.last === true || flags.run !== undefined) throw new Error("--last and --run read a deployed project's results — add --to <workspace>");
       needsOne(layout, "eval");
       return runEvals(positional[0], flags);
     case "promote":
@@ -16060,7 +16060,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return historyCmd(positional, flags, layout);
     case "repo":
       // The platform's own git went on 17 Oct 2026.
-      throw new Error("`foldrun repo` is gone with the platform's own git — `foldrun history` lists a workspace's revisions and `foldrun restore <ws> --to <revision|time|age>` rolls back");
+      throw new Error("`foldrun repo` is gone with the platform's own git — `foldrun history` lists a project's revisions and `foldrun restore <ws> --to <revision|time|age>` rolls back");
     case "restore":
       return restoreCmd(positional, flags);
     case "backups":

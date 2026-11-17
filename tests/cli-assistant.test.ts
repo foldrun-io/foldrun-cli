@@ -97,7 +97,7 @@ test("a proposed workspace is created blank on --yes, never over one that exists
   const r = await at(s.url, "assistant", "a separate desk for ads", "--to", "desk", "--yes");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /new workspace ads-desk — Runs the ad accounts\./);
+  assert.match(r.out, /new project ads-desk — Runs the ad accounts\./);
   assert.match(r.out, /12\.4k tokens in · 900 out · \$0\.31 charged/);
   const post = s.seen.find((x) => x.method === "POST" && x.url === "/api/workspaces")!;
   assert.deepEqual(JSON.parse(post.body), { name: "ads-desk", template: true, ifAbsent: true });
@@ -119,7 +119,7 @@ test("a proposed workspace on a pipe without --yes creates nothing", async () =>
   const r = await at(s.url, "assistant", "a desk for ads", "--to", "desk");
   s.close();
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /no workspace created/);
+  assert.match(r.out, /no project created/);
   assert.ok(!s.seen.some((x) => x.method === "POST" && x.url === "/api/workspaces"));
 });
 

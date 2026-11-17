@@ -13,7 +13,7 @@ curl -H "Authorization: Bearer $FOLDRUN_TOKEN" "$FOLDRUN_URL/api/workspaces"
 ```
 
 A key comes from **Settings → API keys** and carries a role (viewer, editor,
-admin) and a workspace scope no wider than the person who minted it. The
+admin) and a project scope no wider than the person who minted it. The
 dashboard uses the session cookie instead; both go through the same funnel. A
 handful of routes are a person's alone and refuse a key — see
 [api](api.md#authentication).
@@ -185,5 +185,5 @@ Some carry a `code` a program can branch on beside it — `unknown_api_version`,
 There is no cursor yet. The lists that can grow — runs — answer newest first
 and take `limit` (`/api/workspaces/<ws>/runs?limit=`, default 50, at most
 500). Everything else (flows, agents, keys,
-secrets, workspaces) comes whole. A cursor, when one is added, will be a new
+secrets, projects) comes whole. A cursor, when one is added, will be a new
 optional parameter and will not move the API version.

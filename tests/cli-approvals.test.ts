@@ -296,7 +296,7 @@ test("without --to the run's workspace is found, and a run in none of them says 
   const missing = await at(s.url, "report", "run-nope");
   s.close();
   assert.equal(missing.code, 1, missing.out);
-  assert.match(missing.out, /no run "run-nope" in any workspace/);
+  assert.match(missing.out, /no run "run-nope" in any project/);
 });
 
 // ------------------------------------------------------------------ runs

@@ -160,7 +160,7 @@ test("a2a ls: keys null (not an admin) leaves the keys out; no workspace is refu
   assert.doesNotMatch(r.out, /A2A keys/);
   assert.match(r.out, /none yet/);
   assert.equal(none.code, 1);
-  assert.match(none.out, /which workspace/);
+  assert.match(none.out, /which project/);
   assert.equal(s.seen.length, 1);
 });
 
@@ -188,7 +188,7 @@ test("keys create --a2a refuses, before any request, without --to or --flows, a 
   const role = await at(s.url, "keys", "create", "bot", "--a2a", "--to", "blog-desk", "--flows", "publish", "--role", "admin");
   s.close();
   for (const r of [noWs, noFlows, bad, role]) assert.equal(r.code, 1, r.out);
-  assert.match(noWs.out, /which workspace/);
+  assert.match(noWs.out, /which project/);
   assert.match(noFlows.out, /which flows may it call/);
   assert.match(bad.out, /--max-tasks takes a whole number from 1 to 100/);
   assert.match(role.out, /not --role or --workspaces/);

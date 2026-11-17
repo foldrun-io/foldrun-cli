@@ -3,8 +3,8 @@
 A secret is a value an agent may use and must never see written down. It is
 stored in the platform's vault, named in an agent's `secrets:` list, and
 handed to that agent's scripts as an environment variable at run time. It is
-never written into the workspace, never printed into a prompt, and never in
-git — which is what makes a workspace safe to commit.
+never written into the project, never printed into a prompt, and never in
+git — which is what makes a project safe to commit.
 
 
 ## Setting one
@@ -38,7 +38,7 @@ Reads return which secrets exist, never their values.
 A **service account** is a key file that signs its own token request. It
 acts as itself, or — with **Act as** (`subject`) — as a user the provider
 lets it act for (RFC 7523's grant subject; for Google, domain-wide
-delegation, which a Workspace admin grants in their own console). Each
+delegation, which a Project admin grants in their own console). Each
 subject gets its own token.
 
 An **`api`** connection is a base URL and the headers that go with it. For
@@ -62,20 +62,20 @@ tokens (RFC 8705), which foldrun does not do.
 
 ## Scopes
 
-A secret lives at the **account** or in one **workspace**. An agent looks in
-its workspace first, then the account; a workspace secret shadows an account
+A secret lives at the **account** or in one **project**. An agent looks in
+its project first, then the account; a project secret shadows an account
 one of the same name. The run trace says which scope each secret came from
-(`secret DATAFORSEO_LOGIN ← workspace scope`), so a workspace quietly falling
+(`secret DATAFORSEO_LOGIN ← workspace scope`), so a project quietly falling
 back to a shared credential is visible rather than silent.
 
-Put a credential at the account when every workspace should use the same one
-— your model provider, your email sender. Put it in a workspace when it is
+Put a credential at the account when every project should use the same one
+— your model provider, your email sender. Put it in a project when it is
 that job's — a customer's Search Console, a CRM key.
 
-### Limited to some workspaces
+### Limited to some projects
 
-An account secret is open to every workspace by default. To share one
-credential with a few workspaces but not the rest — the way GitHub limits an
+An account secret is open to every project by default. To share one
+credential with a few projects but not the rest — the way GitHub limits an
 organisation secret to selected repositories — limit it:
 
 ```sh
@@ -93,31 +93,31 @@ refused (409) when another admin changed it since — what Settings sends as
 
 In the dashboard it is **Workspaces: all / selected** on the secret's row in
 Settings → Secrets, and on the form that adds one; over the API,
-`PATCH /api/secrets { name, workspaces }` (`null` for every workspace, `[]`
+`PATCH /api/secrets { name, workspaces }` (`null` for every project, `[]`
 for none), or `workspaces` on the `PUT` that stores the value. Given with the
 value, the two are saved in one write: the secret is never open to every
-workspace in between. "All" includes workspaces made later. Every other workspace finds the
+project in between. "All" includes projects made later. Every other project finds the
 secret **not set**, exactly as if it had never been stored: a run reports it
 missing, a tool test and a `notify:` or `telemetry:` header leave
 `${NAME}` unfilled, the egress proxy has nothing to fill, an MCP server does
 not get it, a notification email it sends does not go out through the
 account's `RESEND_API_KEY` or `EMAIL_FROM` (the platform's sender is used, if
-there is one), and the workspace's secret list and the editor's completions
-leave it out. A workspace's own secret of the same name still works there.
+there is one), and the project's secret list and the editor's completions
+leave it out. A project's own secret of the same name still works there.
 
 A limit applies to runs that **start after it**. A run already going keeps
 what it was given when it started — values in its sandbox, and the ones the
 egress proxy fills for it — so stop a running one to cut it off at once.
 
-The names must be workspaces that exist. Renaming a workspace carries its
-place on every list; deleting one takes it off first, so a new workspace
+The names must be projects that exist. Renaming a project carries its
+place on every list; deleting one takes it off first, so a new project
 given the old name inherits nothing. If a secret limited to it cannot be read
 with the platform's keys, the rename or delete is refused and names it — set
 it again or delete it, then try again. Only an admin with access to every
-workspace sets the limit, and the account's `RESEND_API_KEY` and `EMAIL_FROM`
+project sets the limit, and the account's `RESEND_API_KEY` and `EMAIL_FROM`
 stay the owner's, signed in (no key, not even `foldrun login`). The account's own uses of a secret — its model key in
 Settings → Models, and the mail the platform sends for the account (password
-resets, invites, billing) — are not a workspace's and are not limited. A new
+resets, invites, billing) — are not a project's and are not limited. A new
 value or a new site binding keeps the limit. Limiting a secret seals the list
 with the value, like `sites` (see [How they are kept](#how-they-are-kept)),
 whatever form the secret was stored in before: a list changed on disk makes
@@ -148,7 +148,7 @@ call the same API the step did.
 
 A value with a line break in it — a PEM key, a service-account JSON — cannot
 travel as an environment variable. It arrives as a file instead: a
-private file in the step's copy of the workspace, with the variable holding
+private file in the step's copy of the project, with the variable holding
 its path, and the run log names the secret that was handed over that way.
 
 ## Where the value actually is
@@ -428,7 +428,7 @@ The safest credential is none at all. A cloud that supports workload
 identity federation — AWS (`AssumeRoleWithWebIdentity`), Google Cloud
 (Workload Identity Federation), Microsoft Entra (federated credentials) —
 can trust **foldrun's signature** instead of a key you store: a step proves
-which account, workspace and agent it is, and the cloud gives it a
+which account, project and agent it is, and the cloud gives it a
 short-lived credential of its own.
 
 1. In your cloud, trust this install as an OIDC provider: its issuer is
@@ -455,7 +455,7 @@ What it is and is not:
   stops or ends.
 - Stopping a step stops renewal; it cannot recall a token already issued,
   which expires within ten minutes on its own.
-- Within an account, a workspace or agent recreated under the same name
+- Within an account, a project or agent recreated under the same name
   is the same subject: pin your trust policy to the account at least.
 - Who may run or edit an agent that names the identity may use it — as
   with every secret.

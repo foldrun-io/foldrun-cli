@@ -20,10 +20,10 @@ hooks: [no-force-push]
 ```
 
 `hooks:` in an agent's frontmatter turns hooks on for that agent. The same
-key in a workspace's `AGENTS.md` turns them on for every agent in it, and in
-the account's `AGENTS.md` for every agent in every workspace. They run in
-that order (account, workspace, agent), each name once. A name is looked up
-in the workspace's `hooks/` first, then the library's. A name that resolves
+key in a project's `AGENTS.md` turns them on for every agent in it, and in
+the account's `AGENTS.md` for every agent in every project. They run in
+that order (account, project, agent), each name once. A name is looked up
+in the project's `hooks/` first, then the library's. A name that resolves
 to nothing is a `foldrun check` error, and a step that names one is refused
 rather than run without its hooks.
 
@@ -115,7 +115,7 @@ a `tool.call` hook uses a provider's own search.
 
 Every refusal, rewrite, added context and failure is a line on the step's
 trail (`hook no-force-push denied Bash: force push — use --force-with-lease`)
-and a badge on the run page. The workspace's Hooks page lists its hooks and
+and a badge on the run page. The project's Hooks page lists its hooks and
 what each one refused or rewrote lately.
 
 ## Trying one

@@ -36,7 +36,7 @@ account in the beta first, then for a rollout, then for everyone. The
 features are finished, but may still change.
 
 Joining or leaving is the account's own choice, made by an admin of every
-workspace, and it can be undone at any time:
+project, and it can be undone at any time:
 
 - the dashboard: **Settings → General → Beta features**;
 - `foldrun account beta on` (or `off`; bare `foldrun account beta` shows where

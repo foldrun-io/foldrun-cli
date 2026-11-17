@@ -81,9 +81,9 @@ A site is a domain or `*.domain` — no scheme, no path, no port; every port
 of the host is covered. `*.example.com` covers `api.example.com`,
 `a.b.example.com` and `example.com` itself. Quote a wildcard in YAML.
 
-It is read on the agent, in the workspace's `AGENTS.md` and in the account's
+It is read on the agent, in the project's `AGENTS.md` and in the account's
 `AGENTS.md`. The level and `defaults` are nearest-wins — the agent's, else the
-workspace's, else the account's. The `allow` lists add up across all three,
+project's, else the account's. The `allow` lists add up across all three,
 so a site every agent needs is written once, in the account's `AGENTS.md`.
 
 `foldrun check` and every deploy refuse a value they cannot read — a level
@@ -229,14 +229,14 @@ say which applies to an agent.
 
 The list is refused when any one of three says so:
 
-- `network_enforce: true` in the account's `AGENTS.md` — every workspace;
-- `network_enforce: true` in a workspace's `AGENTS.md` — that workspace;
+- `network_enforce: true` in the account's `AGENTS.md` — every project;
+- `network_enforce: true` in a project's `AGENTS.md` — that project;
 - `FOLDRUN_NETWORK_ENFORCE=1` on the install's worker — every account.
 
-Each only switches it on. A workspace cannot turn off what its account
+Each only switches it on. A project cannot turn off what its account
 turned on, and nothing in an account turns off the install's. Settings →
-Policies → Guardrail, on the account's and a workspace's Settings, has the switch, and so does
-`foldrun account set network_enforce on` / `foldrun workspace set
+Policies → Guardrail, on the account's and a project's Settings, has the switch, and so does
+`foldrun account set network_enforce on` / `foldrun project set
 network_enforce on --to <workspace>`.
 
 Until one of them says so, the proxy only **reports**: a site off the list
@@ -394,7 +394,7 @@ each call there through the egress proxy and gets back what the call wrote:
   does in the step — clicks, fills, frames, `js=` and `eval` (which run in
   the page, as always), screenshots, PDFs, video, HAR, downloads (they come
   back to the path the call names), uploads (the file is sent from the
-  workspace), `session=` (kept as the browser's storage state in
+  project), `session=` (kept as the browser's storage state in
   `outputs/.browser/<name>/`, as on the account's browser pod), saved logins
   (`state:` and `state_key:`, read from and written to `state/browser/`),
   aria numbers, `mode=diff` and `mode=crawl`. The live view streams as before.
@@ -406,7 +406,7 @@ each call there through the egress proxy and gets back what the call wrote:
 - **What stays in the step**, exactly as before, saying so on the call: a
   `live:` session, engines other than Chromium and Chrome (Firefox, WebKit,
   Lightpanda, Obscura), `extensions:`, `proxy=`, a vendor's browser, a page
-  on the sandbox's own machine or a private address, and a workspace whose
+  on the sandbox's own machine or a private address, and a project whose
   copy of the `web` tool was edited (the service runs foldrun's own program,
   never an edited one). A call the service could not start runs in the step;
   a call that started there and was cut off is **not** run again — it may

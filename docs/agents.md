@@ -29,7 +29,7 @@ and new posts. Write the digest to outputs/digest.md.
 |---|---|
 | `name` | kebab-case, unique in the account. The agent's identity — the folder must match |
 | `description` | what it does *and when to use it*. Other agents read this when consulting; people read it in the dashboard |
-| `owner` | the person who answers for it — an email or a name. Unset, it is the workspace `AGENTS.md`'s `owner:`, then the account's. Shown on the agent list, the agent's page and `foldrun agent ls` |
+| `owner` | the person who answers for it — an email or a name. Unset, it is the project `AGENTS.md`'s `owner:`, then the account's. Shown on the agent list, the agent's page and `foldrun agent ls` |
 
 ### Who owns it, and whether anyone still uses it
 
@@ -94,13 +94,13 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `subagents` | colleagues it may delegate a whole job to — own context, own tools, never more than its own ([below](#delegating-to-a-sub-agent)) |
 | `sandbox` | `own` \| `parent` (default) — delegated to as a sub-agent, run each job in a sandbox of its own, with its own tools, secrets and network ([below](#isolated-sub-agents-sandbox-own)) |
 | `scripts` | programs in `scripts/`, each becoming a callable tool |
-| `hooks` | your own code at every tool call, step start and step end — refuse, rewrite, add context — the same on every model ([Hooks](hooks)). Also in a workspace's or the account's `AGENTS.md` for every agent under it |
+| `hooks` | your own code at every tool call, step start and step end — refuse, rewrite, add context — the same on every model ([Hooks](hooks)). Also in a project's or the account's `AGENTS.md` for every agent under it |
 | `apis` | an HTTP API declared inline, as one tool |
 | `mcpServers` | an MCP server declared inline |
 | `remotes` | outside agents it may call over A2A — `[{name, card, secret?, description?}]`: the four `a2a_*` tools, and each card's own site added to its network ([below](#calling-an-outside-agent-remotes)) |
 | `secrets` | vault entries its tools may use — names only, never values. The names the step's own model call uses (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, the `ANTHROPIC_*_MODEL` tiers, `CLAUDE_CODE_OAUTH_TOKEN`, `FOLDRUN_MODEL_KEY`) never replace the model's own settings, and `foldrun check` warns: script and API tools and `verify:` get the declared value under that name, but the agent's own shell sees the model's — give it another name (`MY_ANTHROPIC_KEY`), or run the model on it with `provider:` |
 | `limits` | the most calls one step may make — per tool, per web action, or in all: `limits: {web.search: 40, crm: 20, calls: 300, repeat: 5}` (`repeat`: the same call with the same input). A call past a limit is refused, never run; every step has `calls: 1000, repeat: 25` unless set, and one refused 20 times is stopped ([Tools](tools#limits--how-many-calls-a-step-may-make)) |
-| `network` | which sites its sandbox may reach: `open`, `trusted` or `none`, or a list of sites added to the trusted list — `network: [api.hubapi.com]`. Unset, an agent that may fetch or browse the web is `open` and every other `trusted`. Also in a workspace's or the account's `AGENTS.md` ([Network](network)) |
+| `network` | which sites its sandbox may reach: `open`, `trusted` or `none`, or a list of sites added to the trusted list — `network: [api.hubapi.com]`. Unset, an agent that may fetch or browse the web is `open` and every other `trusted`. Also in a project's or the account's `AGENTS.md` ([Network](network)) |
 | `permissionMode` | `plan` makes the run read-only, whatever else was granted |
 | `web` | the `web` tool's settings: `actions:` — which of its eight it may use (all when absent) — and who does each, `web: {search: brave, fetch: jina, browse: browserbase, crawl: firecrawl}`, with the key named in the vault. Unset is foldrun's own. `search:` also takes a block of the own engine's settings — engines, categories, safesearch, plugins ([Tools](tools#tuning-the-accounts-own-engine)); `browse:` a block of the browser's ([below](#webbrowse--which-browser-and-how-it-presents-itself)), and `browse:` alone cascades from `AGENTS.md`. The providers and their keys: [Tools](tools#reaching-the-web). A per-action key outside the block is not read — `check` errors on it |
 
@@ -115,7 +115,7 @@ only Web takes a provider:
 | | `text` | `extract_text(path, lang?, ocr?, save?)` — a file it can reach as text: images and scanned PDFs (Persian and English OCR), text PDFs, DOCX, PPTX, XLSX, EPUB, HTML, and the speech in audio and video, read by foldrun's own extraction service ([Files to text](extract)). `lang` is `fa`, `en` or `auto` (default); `save: true` also writes `<path>.txt` beside the file (or under `outputs/` where it cannot write, or where that file already exists — it never overwrites). Text over 200 KB returns its start; `save: true` keeps all of it in the file (a second call is answered from the cache); files over 200 MB are refused; a long recording may take minutes. Platform runs only — on `foldrun run` it says so and sends nothing. Named `text`, not `extract`, because `extract` is one of `web`'s actions. Platform limits: files up to the install's extraction limit (100 MB by default), 30 files a minute per step, 3 extractions at once per account (shared with the dashboard and API) — past one the tool says when to try again; the same file with the same options is answered from the account's earlier result. `limits: {text: 20}` caps it per step | — |
 | **Code** | `code` | Bash — runs anything in the sandbox: Python and Node (packages via `runtime:`), Debian programs (`runtime: system:`), or a binary you ship | — |
 | **Memory** | `search` | `search_files(query)` over knowledge, memory, state and storage at every scope | — |
-| | `history` | `recall_runs()` and `read_run(id)` — the workspace's last thirty finished runs | — |
+| | `history` | `recall_runs()` and `read_run(id)` — the project's last thirty finished runs | — |
 | | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
 | **People** | `ask` | `ask_person(question, options?)` — asks the person running the desk mid-step and waits for the answer ([below](#asking-a-person-mid-step)) | — |
 | | `peers` | `peers_list()` and `peers_message(to, text)` — the other steps running beside it in its parallel group, and a message to one of them (or all), which reaches that agent after its next tool call ([below](#asking-a-colleague-beside-you)) | — |
@@ -127,7 +127,7 @@ only Web takes a provider:
 `tools: [ask]` gives the agent `ask_person`. It posts a question — with up to
 ten `options` when the answer is one of a few — and waits. The question shows
 on the run page, in the dashboard's banner, in `foldrun approvals`, and goes
-wherever the workspace's `notify:` sends approvals. A person answers with a
+wherever the project's `notify:` sends approvals. A person answers with a
 click, a sentence, `foldrun answer <run-id> "…"` or `POST
 …/runs/<id>/answer`; the agent gets the answer within a second or two and
 carries on in the same step. Nobody answering in time is an answer too: the
@@ -199,7 +199,7 @@ error in `foldrun check` naming what to write instead: `files` and `bash`
 under `web:` (`web: {search: zai}`), and anything else is an unknown tool.
 
 Anything in `tools:` that no built-in claims is one of your own tools,
-resolved against the workspace's `tools/` and then the account library. A
+resolved against the project's `tools/` and then the account library. A
 `[[link]]` makes that explicit and is the only way to grant a tool whose name
 a built-in would otherwise shadow:
 
@@ -272,7 +272,7 @@ What it may reach and send:
   most 50 messages and polls at most 600 times whatever `limits:` says.
 - **Test runs** send nothing: `a2a_send`, `a2a_reply` and `a2a_cancel` say
   what they would have sent.
-- **Retries.** An agent with `remotes:` acts outside the workspace, like one
+- **Retries.** An agent with `remotes:` acts outside the project, like one
   holding an `outward: true` tool: a step that called a tool and then failed
   its `verify:` or `output:` check is not run again on its own, so the work is
   not asked for twice in other words.
@@ -387,12 +387,12 @@ What holds:
 - **Only the reply comes back.** The reply is still text the parent reads —
   it can carry an instruction — but it reaches a model whose sandbox never
   held the page.
-- **Files.** What it writes reaches the workspace when its job ends, and is
+- **Files.** What it writes reaches the project when its job ends, and is
   copied into the parent's sandbox at the same paths before the reply comes
   back — so the parent's model, its `verify: file:` and the next step all see
   it. The reply lists the paths. Up to 4 MiB and 100 files a job are copied
   back; what is larger is listed as not in the parent's sandbox and reaches
-  the workspace for the next step only. A file the parent had already
+  the project for the next step only. A file the parent had already
   changed in its own sandbox is not overwritten: the job's version is put
   beside it as `<name>.from-<agent><ext>`, and the reply says so. If both
   write one path, the parent, finishing later, wins — as between two steps of
@@ -450,9 +450,9 @@ All three are **hard ceilings**:
   class gets a bigger share.
 - **Disk:** a step over it is evicted rather than the node filling up.
   This is the step's scratch space, not the account's storage: the
-  sandbox's copy of the workspace and whatever the step writes while it
+  sandbox's copy of the project and whatever the step writes while it
   runs. When the step ends, the files it changed are copied back to the
-  workspace and the sandbox, scratch space included, is deleted.
+  project and the sandbox, scratch space included, is deleted.
 
 Pick `small` for an agent that mostly waits on an API, `heavy` for one that
 renders a browser or holds real data. The step's `resources:` line reports CPU
@@ -581,7 +581,7 @@ none — no environment is built for them.
 On a platform, a deploy builds the environments its agents need before any
 step does: `foldrun deploy` waits for them and prints each one, ready or
 failed with the installer's own error, and `foldrun runtimes` asks again
-later — as does the **Runtimes** panel on the workspace's overview page. A package that will not install is heard at deploy, not from the
+later — as does the **Runtimes** panel on the project's overview page. A package that will not install is heard at deploy, not from the
 first scheduled run.
 
 ## Installing what a step needs
@@ -699,7 +699,7 @@ the file tools and through bash.
 ### Where files live, from the agent's point of view
 
 An agent's working directory is its own folder, `agents/<name>/`, and every
-path is relative to it. The workspace root is `workspace/` — write that,
+path is relative to it. The project root is `workspace/` — write that,
 everywhere: in the agent's prose, in a flow's options, in a script's
 arguments and in a shell command.
 
@@ -713,7 +713,7 @@ arguments and in a shell command.
 `workspace/` resolves the same in the file tools (Read, Write, Edit, Glob,
 Grep), in Bash and the scripts it runs, in `scripts:` and folder tools, and
 in a shell `verify:` — for the length of a step the agent's folder holds a
-`workspace` link to the workspace root, removed when the step ends. The older
+`workspace` link to the project root, removed when the step ends. The older
 `../../storage/…` reaches the same place and keeps working; `foldrun check`
 points it out as a hint, never an error.
 
@@ -732,9 +732,9 @@ an agent's folder with the same link, so a tool that reads
 `workspace/state/…` tests as it runs.
 
 There is no `/tmp` for an agent, and no absolute path is inside its
-workspace. A directory a tool made outside the workspace — a repository it
+project. A directory a tool made outside the project — a repository it
 cloned, say — is reached only through that tool's own read or find action.
-A path outside the workspace is refused with a message naming the path the
+A path outside the project is refused with a message naming the path the
 agent probably meant; the run page and the agent's Activity page count those
 refusals per step, because each one is a wasted turn and a prompt that names
 the exact path brings the count to zero.
@@ -751,7 +751,7 @@ concluded; the file is the record.
 ## AGENTS.md — context above the agent
 
 Two scopes, both optional, both inherited: `<account>/AGENTS.md` for everyone,
-`<workspace>/AGENTS.md` for one workspace. Frontmatter there sets defaults —
+`<workspace>/AGENTS.md` for one project. Frontmatter there sets defaults —
 ### `language:` — the language this agent works in
 
 ```yaml
@@ -767,7 +767,7 @@ gains one sentence naming the language, `web action=search` asks the engine in i
 page's locale, and `web action=fetch` requests it. A `language=` argument on
 `web action=search`, or `locale=` on `web action=browse`, overrides it for one call.
 
-It cascades like the clock: agent frontmatter → workspace `AGENTS.md` →
+It cascades like the clock: agent frontmatter → project `AGENTS.md` →
 account `AGENTS.md` → `FOLDRUN_LANGUAGE` → English. Leave it out to
 inherit. A value that is not a tag — `Persian` where `fa` was meant — is
 refused by `check` and by the deploy, in one sentence, rather than being
@@ -791,7 +791,7 @@ rather than a cookie), `device`, `locale` and `timezone` complete the picture. `
 runs the same browser with a window (on a virtual screen where the machine
 has none); unset is the usual no-window browser. The same key still
 takes a vendor name on its own (`web: {browse: browserbase}`), and inside a
-block that is `via:`. It cascades like the clock — agent, workspace, account
+block that is `via:`. It cascades like the clock — agent, project, account
 — and a call argument overrides it for one call. Full table and the reasons:
 [Tools](tools#how-this-agents-browser-presents-itself).
 
@@ -800,7 +800,7 @@ are locks, not defaults: `allowed_domains:` (the only hosts it can reach — a
 call may narrow the list, never widen it) and `deny:` (actions it may never
 take, like `eval` or `download`; a misspelt one is refused by `check`).
 Beside them: `boundaries: true` marks the page's words in every reply,
-`init:` runs workspace scripts before each page's own, `extensions:` loads
+`init:` runs project scripts before each page's own, `extensions:` loads
 unpacked Chrome extensions, `webgpu: true`, `ignore_https_errors: true`, and
 `state_key:` names a secret that encrypts saved logins; `state:` names a saved login every call uses (beside `cookies:` it needs `state_key:`, and the secret then seeds it once — see tools.md); `video: true`
 records every call for the run page to play, and `live_view: false` stops
@@ -843,7 +843,7 @@ derivation is wrong for a business — `currency: usd` for an Iranian firm
 that invoices in dollars, `calendar: gregory` for one that files to a
 Gregorian regulator, `units: imperial` — and nothing else is a key.
 
-It cascades like `language:`: agent → workspace `AGENTS.md` → account
+It cascades like `language:`: agent → project `AGENTS.md` → account
 `AGENTS.md` → `FOLDRUN_REGION` → the region in the language tag (`en-AU`
 says AU) → none. With none, nothing is invented: no currency, metric,
 Gregorian. `region: Australia`, `currency: dollars`, `units: both` and a

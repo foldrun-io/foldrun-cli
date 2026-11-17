@@ -136,7 +136,7 @@ test("storage ls --all lists every workspace's files, busiest first, and names t
   assert.match(r.out, /big-desk\s+2 files/);
   assert.match(r.out, /report\.pdf/);
   assert.match(r.out, /nothing in empty-desk/);
-  assert.match(r.out, /3 files in 2 workspaces/);
+  assert.match(r.out, /3 files in 2 projects/);
   const j = await at(s.url, "storage", "ls", "--all", "--json", "draft/");
   assert.equal(j.code, 0, j.out);
   const doc = JSON.parse(j.out.slice(j.out.indexOf("{")));
