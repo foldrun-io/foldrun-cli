@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.5.1] — 2026-11-17
+
+### docs
+
+- sync runs.md — the end customer's id is kept inside foldrun ([00e4ad7](https://github.com/foldrun-io/foldrun-cli/commit/00e4ad7))
+
 ## [26.5.0] — 2026-11-17
 
 ### perf
