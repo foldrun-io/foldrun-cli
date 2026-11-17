@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.4.0] — 2026-11-17
+
+- feat(keys): foldrun keys delete <id> ([19d8c35](https://github.com/foldrun-io/foldrun-cli/commit/19d8c35))
+
+### docs
+
+- sync api-usage (Idempotency-Key with ?wait, 503) ([f5f5bfb](https://github.com/foldrun-io/foldrun-cli/commit/f5f5bfb))
+
 ## [26.3.6] — 2026-11-17
 
 ### deps
