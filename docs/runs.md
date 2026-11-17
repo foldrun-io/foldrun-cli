@@ -680,11 +680,10 @@ What follows from it:
   `PUT /api/customers/<id>/block`). Its runs are refused at start (`403`,
   code `customer_blocked`), and a run of it already going stops at its next
   model call. Unblocking lets it through again.
-- **Told to the model provider.** On foldrun's models, the provider is sent
-  the customer as its end-user id — hashed with your account, so your id never
-  leaves foldrun and two accounts' `user-1` are never one identity there. A
-  provider that acts on abuse acts on that customer, not on everyone. Runs on
-  your own model keys are not changed.
+- **Kept inside foldrun.** The customer id is not sent to the model provider,
+  on foldrun's models or your own keys: no end-user id of any kind goes
+  upstream. Attribution, the block list and the daily cap are applied by
+  foldrun itself. (Until 17 Nov 2026 the provider was sent a hashed id.)
 - **Found.** The run page shows **Customer**, linked to the runs list filtered
   to it; `foldrun runs --customer c-8812` and `GET …/runs?customer=c-8812` list
   them.
