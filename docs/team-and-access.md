@@ -157,6 +157,12 @@ and ends the old key: at once, or after a grace of an hour or a day so a CI
 job can be moved across first. In the dashboard it is the Rotate button on
 the key; `foldrun keys rotate <id> --grace 1h`; `POST /api/keys/<id>/rotate`.
 
+**Revoke** ends a key: anything using it stops at once, and it stays in the
+list marked revoked. **Delete** removes a key from the list: a live one is
+revoked in the same moment, a revoked or expired one just goes. The audit log
+keeps the record (`apikey.deleted`). In the dashboard it is the Delete button
+on the key; `foldrun keys delete <id>`; `DELETE /api/keys/<id>`.
+
 A key is rotated **once**. While the old key runs out its grace it shows
 **rotated → <new key>** (in `foldrun keys ls` too), and rotating it again is
 refused with `this key was already rotated to <prefix>…; rotate that one`.

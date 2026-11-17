@@ -203,3 +203,15 @@ test("help: audit and the key verbs are documented, and --help runs nothing", as
   assert.match(k.out, /rotate <id> \[--grace 1h\]/);
   assert.match(k.out, /--expires <span>/);
 });
+
+test("keys delete asks first, then sends DELETE /api/keys/<id> and says whether it ended a live key", async () => {
+  const s = await serve({ "DELETE /api/keys/k1": () => ({ ok: true, id: "k1", revoked: true }) });
+  const refused = await at(s.url, "keys", "delete", "k1");
+  assert.notEqual(refused.code, 0);
+  assert.equal(s.seen.length, 0, "nothing sent without --yes on a pipe");
+  const ok = await at(s.url, "keys", "delete", "k1", "--yes");
+  s.close();
+  assert.equal(ok.code, 0, ok.out);
+  assert.equal(s.seen[0].method, "DELETE");
+  assert.match(ok.out, /deleted k1 \(it was live: revoked now\)/);
+});

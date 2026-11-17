@@ -4724,7 +4724,8 @@ async function doctor(flags) {
  *   keys ls                          every key, live and revoked
  *   keys create <label> [--role r]   an account key (editor unless said)
  *   keys create <label> --to <ws>  (or --workspaces a,b) one that opens those workspaces alone
- *   keys revoke <id>
+ *   keys revoke <id>                 it stops working; it stays listed as revoked
+ *   keys delete <id>                 revoked (if live) and gone from the list
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
@@ -4826,6 +4827,15 @@ async function keysCmd(positional, flags) {
     if (!(await sureToDelete(flags, "keys revoke", `API key ${arg} on ${url} (anything using it stops working)`))) return 1;
     await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: arg }) });
     console.log(`\n  ${c.green("✓")} revoked ${arg}\n`);
+    return 0;
+  }
+  // Delete (17 Nov 2026): a live key is revoked in the same moment, and the
+  // key leaves `keys ls` and Settings; the audit log keeps the record.
+  if (verb === "delete") {
+    if (!arg) throw new Error("which key? foldrun keys delete <id> — ids are in `foldrun keys ls`");
+    if (!(await sureToDelete(flags, "keys delete", `API key ${arg} on ${url} (revoked first if it is live — anything using it stops working — then removed from the list)`))) return 1;
+    const done = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}`, { method: "DELETE" });
+    console.log(`\n  ${c.green("✓")} deleted ${arg}${done?.revoked ? " (it was live: revoked now)" : ""}\n`);
     return 0;
   }
   if (verb === "rotate") {
