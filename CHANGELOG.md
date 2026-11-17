@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.3.5] — 2026-11-17
+
+### fix
+
+- CLI help and messages say "project" ([b2f2ed3](https://github.com/foldrun-io/foldrun-cli/commit/b2f2ed3))
+
+### test
+
+- the remote check reads core's "project" wording as well as the old one ([ddd0857](https://github.com/foldrun-io/foldrun-cli/commit/ddd0857))
+
 ## [26.3.4] — 2026-11-17
 
 ### deps
