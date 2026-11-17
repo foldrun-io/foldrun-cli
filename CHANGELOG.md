@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.5.2] — 2026-11-17
+
+- chore(hooks): pre-push links console/node_modules into the worktree it checks ([630c1f1](https://github.com/foldrun-io/foldrun-cli/commit/630c1f1))
+
+### deps
+
+- @foldrun/core ^24.3.0 ([a5c546c](https://github.com/foldrun-io/foldrun-cli/commit/a5c546c))
+
+### docs
+
+- sync api.md from foldrun-docs ([ed637fd](https://github.com/foldrun-io/foldrun-cli/commit/ed637fd))
+
 ## [26.5.1] — 2026-11-17
 
 ### docs
