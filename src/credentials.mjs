@@ -22,6 +22,7 @@
 // CI job with a key in the environment never reads a file.
 
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -79,6 +80,151 @@ function nameFor(profiles, account, url) {
   for (let i = 2; ; i++) if (!profiles[`${withHost}-${i}`]) return `${withHost}-${i}`;
 }
 
+/** One process at a time changes the file: each change reads it and writes
+ *  it whole, so two at once (a renewal beside `workspaces use`, two logins)
+ *  could each undo the other (Codex review, 19 Nov 2026). The lock is a file
+ *  linked into place beside it already holding its owner's pid and a token.
+ *  It is stale only when that process is gone (an empty one, left by an
+ *  older CLI, after LOCK_EMPTY_STALE_MS); see takeOver for how a
+ *  stale one changes hands. Released only by the owner whose token it holds. Synchronous, like the
+ *  rest of this module. */
+const LOCK_EMPTY_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 10_000;
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const readLock = (p) => {
+  try {
+    return fs.readFileSync(p, "utf8");
+  } catch {
+    return null;
+  }
+};
+function ownerGone(content, lockPath) {
+  const pid = Number(/^(\d+):/.exec(content ?? "")?.[1]);
+  if (!pid) {
+    try {
+      return Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_EMPTY_STALE_MS;
+    } catch {
+      return false;
+    }
+  }
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    return err?.code === "ESRCH";
+  }
+}
+function locked(fn) {
+  fs.mkdirSync(credentialsDir(), { recursive: true, mode: 0o700 });
+  const lock = `${file()}.lock`;
+  const token = `${process.pid}:${crypto.randomBytes(8).toString("hex")}`;
+  const until = Date.now() + LOCK_WAIT_MS;
+  sweepClaims(lock);
+  // The lock is written whole first, then hard-linked into place (atomic,
+  // EEXIST when held): never an empty lock to be taken for a crashed one
+  // while its maker is merely slow (Codex review).
+  const mine = `${lock}.${token.replace(":", "-")}.own`;
+  fs.writeFileSync(mine, token, { mode: 0o600 });
+  try {
+    for (;;) {
+      try {
+        fs.linkSync(mine, lock);
+        break;
+      } catch (err) {
+        if (err?.code !== "EEXIST") throw err;
+      }
+      if (takeOver(lock, token)) break;
+      if (Date.now() > until) throw new Error(`${lock} is held by another foldrun command — try again, or remove it if no foldrun is running`);
+      pause(25);
+    }
+  } finally {
+    fs.rmSync(mine, { force: true });
+  }
+  try {
+    return fn();
+  } finally {
+    if (readLock(lock) === token) fs.rmSync(lock, { force: true });
+  }
+}
+
+/** Take over a lock whose owner is gone, without the path ever standing
+ *  empty (Codex review): one claim file per dead lock (keyed by its content,
+ *  inode and time), made with O_EXCL and holding the claimant's pid, so
+ *  exactly one contender wins it; the winner checks the lock is still that
+ *  dead one and renames its own lock file over it. The claim stays while its
+ *  claimant lives, so a late contender that saw the same dead lock cannot win
+ *  it again; a claim whose claimant is gone (crashed mid-takeover) is cleared.
+ *  Limit, accepted: without kernel file locks (Node has none) a claimant
+ *  paused between its check and its rename while its claim is cleared as dead
+ *  could still overlap — it needs a crash during another crash's recovery. */
+function takeOver(lock, token) {
+  let st;
+  const seen = readLock(lock);
+  try {
+    st = fs.statSync(lock);
+  } catch {
+    return false;
+  }
+  if (seen === null || !ownerGone(seen, lock)) return false;
+  const key = crypto.createHash("sha256").update(`${seen}\0${st.ino}\0${st.mtimeMs}`).digest("hex").slice(0, 16);
+  const claim = `${lock}.claim-${key}`;
+  let fd;
+  try {
+    fd = fs.openSync(claim, "wx", 0o600);
+  } catch {
+    // Another contender has this dead lock — unless it died too.
+    const held = readLock(claim);
+    if (held !== null && ownerGone(held, claim)) fs.rmSync(claim, { force: true });
+    return false;
+  }
+  try {
+    fs.writeSync(fd, `${process.pid}:claim`);
+  } finally {
+    fs.closeSync(fd);
+  }
+  let stillDead = false;
+  try {
+    stillDead = readLock(lock) === seen && fs.statSync(lock).ino === st.ino;
+  } catch {
+    /* gone: someone released it */
+  }
+  if (!stillDead) {
+    fs.rmSync(claim, { force: true });
+    return false;
+  }
+  const tmp = `${lock}.${token.replace(":", "-")}.tmp`;
+  try {
+    fs.writeFileSync(tmp, token, { mode: 0o600 });
+    fs.renameSync(tmp, lock);
+    return true;
+  } catch {
+    fs.rmSync(tmp, { force: true });
+    fs.rmSync(claim, { force: true });
+    return false;
+  }
+}
+
+/** Claims whose claimant is gone go: nobody is taking that lock over. */
+function sweepClaims(lock) {
+  const dir = path.dirname(lock);
+  const base = `${path.basename(lock)}.claim-`;
+  try {
+    for (const n of fs.readdirSync(dir)) {
+      if (!n.startsWith(base)) continue;
+      const p = path.join(dir, n);
+      try {
+        const held = readLock(p);
+        if (held !== null && ownerGone(held, p)) fs.rmSync(p, { force: true });
+      } catch {
+        /* gone meanwhile */
+      }
+    }
+  } catch {
+    /* an unreadable folder: the open below says so */
+  }
+}
+
 function write(current, profiles) {
   // The old shape goes on being written for the newest profile on each URL,
   // so a machine that moves between CLI versions is not signed out by the
@@ -120,42 +266,46 @@ function write(current, profiles) {
  * @param {{ makeDefault?: boolean, name?: string }} [opts]
  */
 export function saveCredential(url, entry, { makeDefault = true, name } = {}) {
-  const key = normaliseUrl(url);
-  const { current, profiles } = readCredentials();
-  const existing = name ?? Object.keys(profiles).find((n) => normaliseUrl(profiles[n].url) === key && profiles[n].account === entry.account);
-  const profileName = existing ?? nameFor(profiles, entry.account, key);
-  // The default project (`foldrun workspaces use`) is what is stored NOW for
-  // this account on this platform, never what the entry carries: a renewal
-  // writes back a profile read before a `use` or `--clear` changed it, and a
-  // re-login to the same account keeps it (Codex review, 19 Nov 2026).
-  const prev = profiles[profileName];
-  const kept = prev && normaliseUrl(prev.url) === key && prev.account === entry.account && typeof prev.workspace === "string" ? { workspace: prev.workspace } : {};
-  const { workspace: _carried, ...fields } = entry;
-  profiles[profileName] = { ...fields, ...kept, url: key, loggedInAt: new Date().toISOString() };
-  write(makeDefault || !current ? profileName : current, profiles);
-  return profileName;
+  return locked(() => {
+    const key = normaliseUrl(url);
+    const { current, profiles } = readCredentials();
+    const existing = name ?? Object.keys(profiles).find((n) => normaliseUrl(profiles[n].url) === key && profiles[n].account === entry.account);
+    const profileName = existing ?? nameFor(profiles, entry.account, key);
+    // The default project (`foldrun workspaces use`) is what is stored NOW for
+    // this account on this platform, never what the entry carries: a renewal
+    // writes back a profile read before a `use` or `--clear` changed it, and a
+    // re-login to the same account keeps it (Codex review, 19 Nov 2026).
+    const prev = profiles[profileName];
+    const kept = prev && normaliseUrl(prev.url) === key && prev.account === entry.account && typeof prev.workspace === "string" ? { workspace: prev.workspace } : {};
+    const { workspace: _carried, ...fields } = entry;
+    profiles[profileName] = { ...fields, ...kept, url: key, loggedInAt: new Date().toISOString() };
+    write(makeDefault || !current ? profileName : current, profiles);
+    return profileName;
+  });
 }
 
 /** Forget one. By name, else by URL (the newest there). Returns what was
  *  stored, for a best-effort revoke. */
 export function removeCredential(urlOrName) {
-  const { current, profiles } = readCredentials();
-  const key = (() => {
-    if (profiles[urlOrName]) return urlOrName;
-    try {
-      const u = normaliseUrl(urlOrName);
-      const here = Object.keys(profiles).filter((n) => normaliseUrl(profiles[n].url) === u);
-      return here.sort((a, b) => String(profiles[a].loggedInAt ?? "").localeCompare(String(profiles[b].loggedInAt ?? ""))).at(-1) ?? null;
-    } catch {
-      return null;
-    }
-  })();
-  if (!key) return null;
-  const gone = profiles[key];
-  delete profiles[key];
-  const names = Object.keys(profiles);
-  write(current === key ? names[0] ?? null : current, profiles);
-  return gone;
+  return locked(() => {
+    const { current, profiles } = readCredentials();
+    const key = (() => {
+      if (profiles[urlOrName]) return urlOrName;
+      try {
+        const u = normaliseUrl(urlOrName);
+        const here = Object.keys(profiles).filter((n) => normaliseUrl(profiles[n].url) === u);
+        return here.sort((a, b) => String(profiles[a].loggedInAt ?? "").localeCompare(String(profiles[b].loggedInAt ?? ""))).at(-1) ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!key) return null;
+    const gone = profiles[key];
+    delete profiles[key];
+    const names = Object.keys(profiles);
+    write(current === key ? names[0] ?? null : current, profiles);
+    return gone;
+  });
 }
 
 /** The stored entry for a URL — the newest account signed in there. */
@@ -186,28 +336,32 @@ export function currentProfile() {
 
 /** Make one the profile a bare command talks as. */
 export function useProfile(name) {
-  const { profiles } = readCredentials();
-  if (!profiles[name]) return null;
-  write(name, profiles);
-  return { ...profiles[name], name };
+  return locked(() => {
+    const { profiles } = readCredentials();
+    if (!profiles[name]) return null;
+    write(name, profiles);
+    return { ...profiles[name], name };
+  });
 }
 
 /** Save (or, with null, forget) the project a profile's commands use when
  *  they name none — `foldrun workspaces use`. Kept on the profile, so it is
  *  one account on one platform's, and never follows a --token. */
 export function setProfileWorkspace(name, workspace, expect = {}) {
-  const { current, profiles } = readCredentials();
-  if (!profiles[name]) return null;
-  // Still the account and platform it was checked against: a sign-out or a
-  // new sign-in under the same name meanwhile saves nothing.
-  if (expect.url && normaliseUrl(profiles[name].url) !== normaliseUrl(expect.url)) return null;
-  if (expect.account && profiles[name].account !== expect.account) return null;
-  const next = { ...profiles[name] };
-  if (workspace) next.workspace = workspace;
-  else delete next.workspace;
-  profiles[name] = next;
-  write(current, profiles);
-  return { ...next, name };
+  return locked(() => {
+    const { current, profiles } = readCredentials();
+    if (!profiles[name]) return null;
+    // Still the account and platform it was checked against: a sign-out or a
+    // new sign-in under the same name meanwhile saves nothing.
+    if (expect.url && normaliseUrl(profiles[name].url) !== normaliseUrl(expect.url)) return null;
+    if (expect.account && profiles[name].account !== expect.account) return null;
+    const next = { ...profiles[name] };
+    if (workspace) next.workspace = workspace;
+    else delete next.workspace;
+    profiles[name] = next;
+    write(current, profiles);
+    return { ...next, name };
+  });
 }
 
 /** All of them, newest sign-in last. */
