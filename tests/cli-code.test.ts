@@ -717,3 +717,163 @@ test("Ctrl-C while git checks the patch, with --yes: the apply never starts (Cod
   assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n");
   assert.ok(!fs.existsSync(path.join(d, "greet.txt")));
 });
+
+// The live view of foldrun code (19 Nov 2026, from a tester's screen): the
+// platform's notes on each step filled the screen, and the reply showed
+// twice — once as a clipped event line while the run was live (no result to
+// compare with yet), then in full.
+test("code's live view: the platform's notes are left to the run page, and the reply is printed once even while the run is live", async () => {
+  const { printNew, dropHeldReply } = await import("../src/commands.mjs");
+  const out: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => void out.push(a.join(" "));
+  try {
+    const seen = new Map();
+    const open = new Map();
+    const step = { agent: "coder", events: [] as any[], result: undefined as string | undefined };
+    const run = { steps: [step] };
+    step.events.push({ type: "info", text: "clock: UTC (default)" }, { type: "info", text: "isolation: k8s" });
+    step.events.push({ type: "text", text: "Let me look at calc.py first." });
+    printNew(run, seen, open, { skipResult: true, quiet: true });
+    // A tool call after the remark: the remark was on the way, so it shows.
+    step.events.push({ type: "tool", text: "Read", call: "c1" }, { type: "tool", text: "Read", call: "c1", ms: 3 });
+    step.events.push({ type: "text", text: "Fixed add() and added a test." });
+    printNew(run, seen, open, { skipResult: true, quiet: true });
+    // The run ends: the result is the held text, printed once by the caller.
+    step.events.push({ type: "info", text: "timing: sandbox ready in 1.1s" });
+    step.result = "Fixed add() and added a test.";
+    printNew(run, seen, open, { skipResult: true, quiet: true });
+    dropHeldReply(run, seen, open);
+  } finally {
+    console.log = log;
+  }
+  const text = out.join("\n");
+  assert.doesNotMatch(text, /clock:|isolation:|timing:/, "no platform notes");
+  assert.match(text, /Let me look at calc\.py first\./, "a remark before a tool call stays");
+  assert.match(text, /Read/);
+  assert.doesNotMatch(text, /Fixed add\(\) and added a test\./, "the reply is left for the caller to print in full, once");
+});
+
+test("code's live view with --verbose keeps the notes; a held text that is not the reply is still printed", async () => {
+  const { printNew, dropHeldReply } = await import("../src/commands.mjs");
+  const out: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => void out.push(a.join(" "));
+  try {
+    const seen = new Map();
+    const step = { agent: "coder", events: [{ type: "info", text: "clock: UTC (default)" }, { type: "text", text: "Thinking aloud." }], result: "The real answer." };
+    printNew({ steps: [step] }, seen, new Map(), { skipResult: true, quiet: false });
+    dropHeldReply({ steps: [step] }, seen, new Map());
+  } finally {
+    console.log = log;
+  }
+  assert.match(out.join("\n"), /clock: UTC/);
+  assert.match(out.join("\n"), /Thinking aloud\./);
+});
+
+test("code to <name> (the dashes left off) says --to", async () => {
+  const d = repo(BASE);
+  const r = await new Promise<{ out: string; code: number }>((resolve) => {
+    const c = spawn(process.execPath, [path.join(import.meta.dirname, "..", "bin/foldrun.mjs"), "code", "to", "my-project"], { cwd: d, env: { ...process.env, NO_COLOR: "1", FOLDRUN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "fh-")) } });
+    let out = "";
+    c.stdout.on("data", (x) => (out += x));
+    c.stderr.on("data", (x) => (out += x));
+    c.on("close", (code) => resolve({ out, code: code ?? 1 }));
+  });
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /did you mean `foldrun code --to my-project`\?/);
+});
+
+/** printNew's lines for a sequence of frames (each frame: events added, then printed). */
+async function frames(steps: any[], batches: Array<() => void>, opts: { quiet: boolean }, end: "reply" | "flush" = "reply") {
+  const { printNew, dropHeldReply, flushHeld } = await import("../src/commands.mjs");
+  const out: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => void out.push(a.join(" "));
+  try {
+    const seen = new Map();
+    const open = new Map();
+    const run = { steps };
+    for (const b of batches) {
+      b();
+      printNew(run, seen, open, { skipResult: true, quiet: opts.quiet });
+    }
+    if (end === "reply") dropHeldReply(run, seen, open);
+    else flushHeld(seen, open);
+  } finally {
+    console.log = log;
+  }
+  return out;
+}
+
+test("live view, --verbose: a trailing note does not release the reply before its result arrives (Codex)", async () => {
+  const step: any = { agent: "coder", events: [], result: undefined };
+  const out = await frames([step], [
+    () => step.events.push({ type: "text", text: "Done: add() fixed." }, { type: "info", text: "timing: 7s" }),
+    () => (step.result = "Done: add() fixed."),
+  ], { quiet: false });
+  assert.equal(out.filter((l) => l.includes("Done: add() fixed.")).length, 0, "left for the caller's one full print");
+  assert.ok(out.some((l) => l.includes("timing: 7s")));
+});
+
+test("live view: a parent's remark shows before its sub-agent's output (Codex)", async () => {
+  const parent: any = { agent: "coder", events: [], result: undefined };
+  const sub: any = { agent: "helper", subagentOf: "coder", events: [] };
+  const out = await frames([parent, sub], [
+    () => parent.events.push({ type: "text", text: "I'll hand the tests to helper." }),
+    () => sub.events.push({ type: "tool", text: "Bash", call: "s1" }, { type: "tool", text: "Bash", call: "s1", ms: 4 }),
+    () => { parent.events.push({ type: "text", text: "All green." }); parent.result = "All green."; },
+  ], { quiet: true });
+  const remark = out.findIndex((l) => l.includes("hand the tests"));
+  const tool = out.findIndex((l) => l.includes("Bash"));
+  assert.ok(remark >= 0 && tool > remark, out.join("\n"));
+});
+
+test("live view, quiet: a limits refusal is shown; other notes are not (Codex)", async () => {
+  const step: any = { agent: "coder", events: [], result: "ok" };
+  const out = await frames([step], [
+    () => step.events.push({ type: "info", text: "isolation: k8s" }, { type: "info", text: "web.search: 10 of 10 used (WebSearch refused)" }),
+  ], { quiet: true });
+  assert.ok(out.some((l) => l.includes("WebSearch refused")));
+  assert.ok(!out.some((l) => l.includes("isolation")));
+});
+
+test("live view: a turn that ends another way (an error, Ctrl-C) still prints the held text (Codex)", async () => {
+  const step: any = { agent: "coder", events: [], result: undefined };
+  const out = await frames([step], [() => step.events.push({ type: "text", text: "Half way through the refactor." })], { quiet: true }, "flush");
+  assert.ok(out.some((l) => l.includes("Half way through the refactor.")));
+});
+
+test("live view: an older sub-agent event seen in the same frame does not release the parent's newer reply (Codex)", async () => {
+  const parent: any = { agent: "coder", events: [], result: undefined };
+  const sub: any = { agent: "helper", subagentOf: "coder", events: [] };
+  const out = await frames([parent, sub], [
+    () => {
+      sub.events.push({ type: "tool", text: "Bash", call: "s1", t: "2026-11-19T00:00:01Z" }, { type: "tool", text: "Bash", call: "s1", ms: 4, t: "2026-11-19T00:00:02Z" });
+      parent.events.push({ type: "text", text: "All green.", t: "2026-11-19T00:00:05Z" });
+    },
+    () => (parent.result = "All green."),
+  ], { quiet: true });
+  assert.equal(out.filter((l) => l.includes("All green.")).length, 0, out.join("\n"));
+});
+
+test("live view, quiet: a failure note shows (browser pod reconnect failed) (Codex)", async () => {
+  const step: any = { agent: "coder", events: [], result: "ok" };
+  const out = await frames([step], [() => step.events.push({ type: "info", text: "browser pod: reconnect failed (try 3 of 3) — connection reset" })], { quiet: true });
+  assert.ok(out.some((l) => l.includes("reconnect failed")));
+});
+
+test("live view: one frame's events from several steps print in the order they happened (Codex)", async () => {
+  const parent: any = { agent: "coder", events: [], result: undefined };
+  const sub: any = { agent: "helper", subagentOf: "coder", events: [] };
+  const out = await frames([parent, sub], [
+    () => {
+      parent.events.push({ type: "text", text: "R1", t: "2026-11-19T00:00:01Z" }, { type: "text", text: "R3", t: "2026-11-19T00:00:03Z" }, { type: "text", text: "R4", t: "2026-11-19T00:00:04Z" });
+      sub.events.push({ type: "tool", text: "Bash", call: "s1", t: "2026-11-19T00:00:01.5Z" }, { type: "tool", text: "Bash", call: "s1", ms: 4, t: "2026-11-19T00:00:02Z" });
+    },
+    () => { parent.events.push({ type: "text", text: "Done.", t: "2026-11-19T00:00:06Z" }); parent.result = "Done."; },
+  ], { quiet: true });
+  const at = (s: string) => out.findIndex((l) => l.includes(s));
+  assert.ok(at("R1") < at("Bash") && at("Bash") < at("R3") && at("R3") < at("R4"), out.join("\n"));
+  assert.equal(out.filter((l) => l.includes("Done.")).length, 0);
+});

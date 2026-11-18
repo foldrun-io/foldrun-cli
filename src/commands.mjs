@@ -2741,21 +2741,95 @@ function eventLine(e, rawAgent, open) {
  * tool call is two events — one line per call, printed when it completes.
  * `open` carries the calls still in flight across polls and reconnects.
  */
-function printNew(run, seen, open = new Map(), { skipResult = false } = {}) {
+export function printNew(run, seen, open = new Map(), { skipResult = false, quiet = false } = {}) {
   // skipResult: the caller prints the last top-level step's reply in full
   // afterwards (foldrun code), so that one step's reply line is not printed
-  // twice; any other step's (a sub-agent's) stays (Codex).
+  // twice; any other step's (a sub-agent's) stays (Codex). While the run is
+  // live the step has no result yet to compare with, so that step's newest
+  // text is HELD until something follows it: a tool call after it means it
+  // was a remark on the way and it is printed; the run ending with it means
+  // it is the reply (dropHeldReply) — 19 Nov 2026, the reply showed twice.
+  // quiet (foldrun code): the platform's own notes on the step (`info`:
+  // clock, credential, isolation, network, dns, timing, egress …) are left
+  // to the run page; tool calls, the agent's words and errors stay.
+  // An info note is not "something after" the held text: it neither
+  // releases it (a trailing note would print the reply before its result,
+  // then the caller again — Codex) nor, when quiet, shows at all — except a
+  // note that something was refused (a `limits:` refusal is an info note,
+  // and the user must see why a call did not run — Codex).
   const own = run.steps.filter((x) => !x.subagentOf);
   const replying = skipResult ? own.at(-1) : undefined;
+  const held = heldText(seen);
+  // Steps are visited in order, not in time: an older event of a later step
+  // (a sub-agent's, unseen until this frame) must not release a parent's
+  // newer text — that text may be the reply, whose result is still to come
+  // (Codex). Events carry `t`; without one, the event releases.
+  const release = (by) => {
+    for (const [j, h] of held) {
+      if (by?.t && h.t && String(by.t) < String(h.t)) continue;
+      console.log(eventLine(h, run.steps[j]?.agent, open));
+      held.delete(j);
+    }
+  };
+  // One frame's new events, from every step, in the order they happened
+  // (`t`; stable, so events with no time keep step order): a sub-agent's
+  // call between two of the parent's remarks prints between them (Codex).
+  const fresh = [];
   run.steps.forEach((step, i) => {
     const from = seen.get(i) ?? 0;
-    for (const e of step.events.slice(from)) {
-      if (step === replying && e.type === "text" && step.result && String(e.text).trim() === String(step.result).trim()) continue;
-      const line = eventLine(e, step.agent, open);
-      if (line !== null) console.log(line);
-    }
+    step.events.slice(from).forEach((e) => fresh.push({ i, step, e }));
     seen.set(i, step.events.length);
   });
+  if (fresh.every((x) => x.e.t)) fresh.sort((a, b) => (String(a.e.t) < String(b.e.t) ? -1 : String(a.e.t) > String(b.e.t) ? 1 : 0));
+  for (const { i, step, e } of fresh) {
+    const note = e.type === "info";
+    if (note && quiet && !REFUSED_NOTE.test(String(e.text ?? ""))) continue;
+    if (step === replying && e.type === "text") {
+      if (step.result && String(e.text).trim() === String(step.result).trim()) continue;
+      release();
+      held.set(i, { ...e, __agent: step.agent });
+      continue;
+    }
+    // Anything else that is not a note — a tool call, an error, any other
+    // step's words (a sub-agent's) — came after the held text: it shows first.
+    if (!note) release(e);
+    const line = eventLine(e, step.agent, open);
+    if (line !== null) console.log(line);
+  }
+}
+
+/** An info note that something was refused or went wrong (a `limits:`
+ *  refusal, "browser pod: reconnect failed …"): shown even in the quiet view. */
+const REFUSED_NOTE = /\b(refused|denied|blocked|failed|failure|error|lost|timed out)\b/i;
+
+/** Whatever text is still held is printed: the turn is ending another way
+ *  (an error, a second Ctrl-C), so no reply follows it (Codex). */
+export function flushHeld(seen, open) {
+  if (!seen) return;
+  const held = heldText(seen);
+  for (const [, h] of held) console.log(eventLine(h, h.__agent ?? "", open ?? new Map()));
+  held.clear();
+}
+
+/** printNew's held text, per step, kept beside `seen` across polls and reconnects. */
+const HELD = new WeakMap();
+/** @param {Map<number, number>} seen */
+function heldText(seen) {
+  let m = HELD.get(seen);
+  if (!m) HELD.set(seen, (m = new Map()));
+  return m;
+}
+
+/** The run is over: a held text that is not the reply printed after it is
+ *  printed now (the reply itself is not printed twice). */
+export function dropHeldReply(run, seen, open) {
+  const held = heldText(seen);
+  const own = (run.steps ?? []).filter((x) => !x.subagentOf);
+  const reply = String(own.at(-1)?.result ?? "").trim();
+  for (const [i, e] of held) {
+    if (String(e.text).trim() !== reply) console.log(eventLine(e, run.steps[i]?.agent, open));
+  }
+  held.clear();
 }
 
 /** The stream is over: print a start line for each call that never completed. */
@@ -2899,10 +2973,10 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map(), print =
  * from printing twice. It used to block `invoke --watch` and `logs
  * --follow` for as long as a stalled tunnel cared to keep the socket.
  */
-async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map(), { holdOpen = false, skipResult = false } = {}) {
+async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map(), { holdOpen = false, skipResult = false, quiet = false } = {}) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const run = await streamOnce(url, flags, ws, runId, seen, open, { skipResult });
+      const run = await streamOnce(url, flags, ws, runId, seen, open, { skipResult, quiet });
       // holdOpen: the caller reads the run once more when the stream ended
       // with it still live, and flushes after — a start flushed here would
       // print a second time when that read brings its completion (Codex).
@@ -2911,7 +2985,7 @@ async function followRemote(url, flags, ws, runId, seen = new Map(), open = new 
     } catch (err) {
       if (!(err instanceof StreamIdle)) throw err;
       const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
-      printNew(run, seen, open, { skipResult });
+      printNew(run, seen, open, { skipResult, quiet });
       if (!isLive(run)) {
         flushCalls(open);
         return run;
@@ -12855,6 +12929,7 @@ async function codeTurn(s, task) {
       return;
     }
     if (cancel.asked && cancel.stop === "acked") {
+      flushHeld(seen, open);
       console.log(`\n  ${c.dim(`left — the platform took the stop for ${cancel.runId}`)}`);
       process.exit(130);
     }
@@ -12873,6 +12948,10 @@ async function codeTurn(s, task) {
   process.on("SIGINT", onInt);
   let run;
   let runId;
+  /** @type {Map<number, number> | null} */
+  let seen = null;
+  /** @type {Map<string, unknown> | null} */
+  let open = null;
   try {
     const { packed, left, unscanned, summary } = await packFolder(dir);
     if (cancel.asked) return "cancelled";
@@ -12902,14 +12981,16 @@ async function codeTurn(s, task) {
     if (cancel.asked) stop(); // pressed while the run was being started
     console.log(`  ${c.dim(`run ${plainText(runId)}${started.test ? " (test)" : ""} — Ctrl-C stops it; the dashboard shows it live`)}\n`);
     run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
-    const seen = new Map();
-    const open = new Map();
-    printNew(run, seen, open, { skipResult: true });
-    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, skipResult: true })) ?? run;
+    seen = new Map();
+    open = new Map();
+    const view = { skipResult: true, quiet: flags.verbose !== true };
+    printNew(run, seen, open, view);
+    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view })) ?? run;
     if (isLive(run)) {
       run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
-      printNew(run, seen, open, { skipResult: true });
+      printNew(run, seen, open, view);
     }
+    dropHeldReply(run, seen, open);
     flushCalls(open);
     cancel.phase = "patch";
 
@@ -12941,6 +13022,9 @@ async function codeTurn(s, task) {
     }
     return run.status;
   } finally {
+    // The success path has printed or dropped any held text already; an
+    // error on the way out has not (Codex).
+    flushHeld(seen, open);
     // A stop still on its way is waited for on every way out — a thrown
     // follower included — so the turn never ends before the platform was
     // told, and says so when it cannot tell (Codex).
@@ -12972,7 +13056,11 @@ async function codeTurn(s, task) {
  */
 async function codeCmd(positional, flags, layout) {
   const dir = path.resolve(positional[0] ?? ".");
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`${dir} is not a folder`);
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+    // `foldrun code to my-project` (19 Nov 2026, a tester): the dashes left off.
+    if (positional[0] === "to" && positional[1]) throw new Error(`${dir} is not a folder — did you mean \`foldrun code --to ${positional[1]}\`?`);
+    throw new Error(`${dir} is not a folder`);
+  }
   if (spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).status !== 0) {
     throw new Error(`${dir} is not in a git repository — foldrun code sends what git would commit and applies the agent's patch with git, so \`git init\` it first`);
   }
