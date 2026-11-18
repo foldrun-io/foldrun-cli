@@ -2098,7 +2098,10 @@ function promptVisible(question) {
     const { stdin } = process;
     stdin.resume();
     stdin.setEncoding("utf8");
+    const onEnd = () => resolve(""); // the input closed (Ctrl-D): no answer, which every caller reads as a no
+    stdin.once("end", onEnd);
     stdin.once("data", (line) => {
+      stdin.off("end", onEnd);
       stdin.pause();
       resolve(String(line).replace(/\r?\n$/, ""));
     });
@@ -12306,6 +12309,13 @@ async function pushPacked(url, flags, ws, packed) {
   return body;
 }
 
+/** What a send left out, and what went without a secret scan (binary files):
+ *  named, as `snapshot push` names them, so nobody takes "checked" to cover them. */
+function sentNotes(left, unscanned) {
+  for (const l of left.slice(0, 10)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+  if (unscanned.length) console.log(`  ${c.amber("!")} not checked for secrets (binary): ${unscanned.slice(0, 10).join(", ")}${unscanned.length > 10 ? " …" : ""}`);
+}
+
 /** A snapshot id as the platform names one: the archive's sha256. */
 const SNAPSHOT_ID = /^[0-9a-f]{64}$/;
 
@@ -12317,10 +12327,10 @@ const SNAPSHOT_ID = /^[0-9a-f]{64}$/;
 async function snapshotFor(url, flags, ws, value) {
   const given = value === true ? "." : String(value);
   if (SNAPSHOT_ID.test(given) && !fs.existsSync(given)) return given;
-  const { packed, left, summary } = await packFolder(path.resolve(given));
+  const { packed, left, unscanned, summary } = await packFolder(path.resolve(given));
   const body = await pushPacked(url, flags, ws, packed);
   console.log(`  ${c.dim(`sent ${summary} → snapshot ${String(body.snapshotId).slice(0, 12)}${body.reused ? " (already there)" : ""}`)}`);
-  for (const l of left.slice(0, 10)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+  sentNotes(left, unscanned);
   return String(body.snapshotId);
 }
 
@@ -12332,6 +12342,12 @@ async function snapshotFor(url, flags, ws, value) {
  * sent, never by the agent (platform snapshot-patch.ts).
  */
 async function runPatch(url, flags, ws, run, agentFlag) {
+  // Only a run that was sent a folder has a patch the PLATFORM made: on any
+  // other run, outputs/snapshot.patch is whatever the agent chose to write
+  // there, and must never be applied as one (Codex review).
+  if (!run.snapshot?.id) {
+    return { agent: null, status: "none", reason: `run ${run.id} was not sent a folder (\`agent run --snapshot\`, \`foldrun code\`), so it has no patch` };
+  }
   const agents = [...new Set((run.steps ?? []).filter((s) => !s.subagentOf).map((s) => s.agent))];
   const agent = typeof agentFlag === "string" ? agentFlag : agents.length === 1 ? agents[0] : null;
   if (!agent) throw new Error(`run ${run.id} has steps by ${agents.join(", ")} — say whose patch with --agent <name>`);
@@ -12367,32 +12383,139 @@ function patchSummaryLines(meta) {
  * every path the patch names, because patch paths read from the top.
  * Answers whether it was applied.
  */
-async function applyPatch(dir, patch, flags, label) {
+/** @param {{ asked: boolean, onAsk?: Set<() => void> } | null} [cancel] a turn's Ctrl-C state: pressed means "do not apply" */
+async function applyPatch(dir, patch, flags, label, cancel = null) {
   const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  if (top.status !== 0) throw new Error(`${dir} is not in a git repository — the patch is applied with git`);
-  const prefix = spawnSync("git", ["-C", dir, "rev-parse", "--show-prefix"], { encoding: "utf8" }).stdout.trim();
-  const file = path.join(os.tmpdir(), `foldrun-${label.replace(/[^A-Za-z0-9_.-]/g, "_")}.patch`);
-  fs.writeFileSync(file, patch);
-  const args = (...more) => ["-C", top.stdout.trim(), "apply", ...(prefix ? [`--directory=${prefix.replace(/\/$/, "")}`] : []), ...more, file];
-  const check = spawnSync("git", args("--check"), { encoding: "utf8" });
-  if (check.status !== 0) {
-    throw new Error(`the patch does not apply to ${dir} as it is now — it was made against the folder as it was sent. git said:\n${String(check.stderr).trim()}\nThe patch is kept at ${file}`);
+  const pre = spawnSync("git", ["-C", dir, "rev-parse", "--show-prefix"], { encoding: "utf8" });
+  if (top.status !== 0 || pre.status !== 0) throw new Error(`${dir} is not in a git repository — the patch is applied with git`);
+  // Only git's own line ending is taken off: a folder whose name starts or
+  // ends with a space is still that folder, not its neighbour (Codex).
+  const root = top.stdout.replace(/\r?\n$/, "");
+  const prefix = pre.stdout.replace(/\r?\n$/, "").replace(/\/$/, "");
+  if (fs.realpathSync(path.join(root, prefix)) !== fs.realpathSync(dir)) {
+    throw new Error(`git places ${dir} at ${path.join(root, prefix)} — not applying a patch to a folder other than the one named`);
   }
-  const stat = spawnSync("git", args("--stat"), { encoding: "utf8" });
-  for (const line of String(stat.stdout).trimEnd().split("\n")) if (line.trim()) console.log(`  ${line.trim()}`);
+  // The patch goes to git on stdin, from memory: the bytes checked are the
+  // bytes applied, and no file in a shared temp folder can be swapped or
+  // aimed elsewhere in between (Codex).
+  const git = (...more) => spawnSync("git", ["-C", root, "apply", ...(prefix ? [`--directory=${prefix}`] : []), ...more], { input: patch, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const check = git("--check");
+  if (check.status !== 0 || check.error) {
+    throw new Error(`the patch does not apply to ${dir} as it is now — it was made against the folder as it was sent. git said:\n${String(check.stderr).trim()}\nThe patch is kept at ${keepPatch(patch, label)}`);
+  }
+  // git refuses paths that climb out, name .git, or pass through a link; it
+  // would still make or change a link or a submodule entry, which the
+  // platform's own patch never holds (snapshot-patch.ts refuses links, and
+  // diffs with --no-renames). Read from the patch's own header lines, which
+  // no hunk line can imitate (those begin with space, + , - or \\), never
+  // from git's display output (Codex).
+  const odd = patchTypeProblems(String(patch));
+  // An existing path that is a link here is refused too, whatever mode the
+  // patch claims for it.
+  const touched = git("--numstat", "-z");
+  if (touched.status !== 0 || touched.error) throw new Error(`git could not read the patch: ${String(touched.stderr || touched.error?.message).trim()}`);
+  for (const rel of numstatPaths(String(touched.stdout))) {
+    /** @type {fs.Stats | null} */
+    let st = null;
+    try {
+      st = fs.lstatSync(path.join(root, rel));
+    } catch {
+      /* a new file */
+    }
+    if (st?.isSymbolicLink()) odd.push(`${rel} is a link in this folder`);
+  }
+  if (odd.length) {
+    throw new Error(`the patch makes or changes a link, a submodule, a rename or a copy, which foldrun's patches never do — not applied:\n${odd.join("\n")}\nThe patch is kept at ${keepPatch(patch, label)}`);
+  }
+  for (const line of String(git("--stat").stdout).trimEnd().split("\n")) if (line.trim()) console.log(`  ${line.trim()}`);
   if (flags.yes !== true && !process.stdin.isTTY) {
-    console.log(`  ${c.dim(`not applied — no terminal to ask, and --yes applies without asking. The patch is at ${file}`)}`);
+    console.log(`  ${c.dim(`not applied — no terminal to ask, and --yes applies without asking. The patch is at ${keepPatch(patch, label)}`)}`);
     return false;
   }
-  if (!(await confirmed(flags, "applying a patch", `apply it to ${dir}? [y/N] `))) {
-    console.log(`  ${c.dim(`not applied — the patch is at ${file}`)}`);
+  if (flags.yes !== true && !/^y(es)?$/i.test((await cancellablePrompt(`  apply it to ${dir}? [y/N] `, cancel)) ?? "")) {
+    console.log(`  ${c.dim(`not applied — the patch is at ${keepPatch(patch, label)}`)}`);
     return false;
   }
-  const done = spawnSync("git", args(), { encoding: "utf8" });
-  if (done.status !== 0) throw new Error(`git apply failed: ${String(done.stderr).trim()} — the patch is kept at ${file}`);
-  fs.rmSync(file, { force: true });
+  // The checks above run git synchronously, and a Ctrl-C pressed meanwhile
+  // reaches its handler only when the event loop turns — which --yes would
+  // never let it do before the apply. A timer passes through the loop's
+  // poll phase, where the signal is delivered (Codex).
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  if (cancel?.asked) {
+    console.log(`  ${c.dim(`not applied — you pressed Ctrl-C. The patch is at ${keepPatch(patch, label)}`)}`);
+    return false;
+  }
+  const done = git();
+  if (done.status !== 0 || done.error) throw new Error(`git apply failed: ${String(done.stderr).trim()} — the patch is kept at ${keepPatch(patch, label)}`);
   console.log(`  ${c.green("✓")} applied ${c.dim("— review it with git diff, and commit it when you are happy")}`);
   return true;
+}
+
+/** The header lines of a patch that a foldrun patch never has. An
+ *  allowlist, not a list of bad modes: git reads a mode as octal, so
+ *  `0120000` is a link to it too (Codex, reproduced) — so every mode line
+ *  must say exactly 100644 or 100755, an index line may carry only those,
+ *  and renames, copies and similarity headers are refused outright (the
+ *  platform diffs with --no-renames). Header lines only: inside a hunk every
+ *  line begins with a space, "+", "-" or "\\", so file content cannot pose
+ *  as one. */
+export function patchTypeProblems(patch) {
+  const out = [];
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) inHunk = false;
+    else if (line.startsWith("@@")) inHunk = true;
+    if (inHunk && /^[ +\-\\]/.test(line)) continue;
+    if (/^(?:new file mode|deleted file mode|new mode|old mode)/.test(line)) {
+      if (!/^(?:new file mode|deleted file mode|new mode|old mode) 100(?:644|755)$/.test(line)) out.push(line);
+    } else if (line.startsWith("index ")) {
+      if (!/^index [0-9a-f]+\.\.[0-9a-f]+(?: 100644| 100755)?$/.test(line)) out.push(line);
+    } else if (/^(?:rename|copy|similarity index|dissimilarity index)\b/.test(line)) out.push(line);
+  }
+  return out;
+}
+
+/** The paths of `git apply --numstat -z`: "<added>\t<deleted>\t<path>\0" per file. */
+function numstatPaths(out) {
+  return out.split("\0").map((rec) => rec.split("\t").slice(2).join("\t")).filter(Boolean);
+}
+
+/** A one-line answer from the terminal that Ctrl-C (via `cancel.onAsk`) or
+ *  EOF ends with null, its listeners removed — so the session goes on to
+ *  its next prompt rather than waiting for a line nobody will type (Codex). */
+function cancellablePrompt(question, cancel) {
+  return new Promise((resolve) => {
+    const { stdin } = process;
+    const done = (/** @type {string | null} */ v) => {
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      cancel?.onAsk?.delete(onCancel);
+      stdin.pause();
+      resolve(v);
+    };
+    const onData = (/** @type {string} */ line) => done(String(line).replace(/\r?\n$/, ""));
+    const onEnd = () => done(null);
+    const onCancel = () => {
+      process.stdout.write("\n");
+      done(null);
+    };
+    process.stdout.write(question);
+    if (cancel?.asked) return done(null);
+    cancel?.onAsk?.add(onCancel);
+    stdin.setEncoding("utf8");
+    stdin.once("data", onData);
+    stdin.once("end", onEnd);
+    stdin.resume();
+  });
+}
+
+/** A patch not applied, kept for the person: in a fresh private folder
+ *  (0700), as a new file (0600) that refuses to open anything already there. */
+function keepPatch(patch, label) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-patch-"));
+  const file = path.join(dir, `${String(label).replace(/[^A-Za-z0-9_.-]/g, "_")}.patch`);
+  fs.writeFileSync(file, patch, { mode: 0o600, flag: "wx" });
+  return file;
 }
 
 /**
@@ -12419,7 +12542,9 @@ async function reportPatchCmd(runId, flags, layout) {
   }
   if (flags.apply !== true) {
     console.error(["", ...patchSummaryLines(p.meta), ""].join("\n"));
-    process.stdout.write(p.patch ?? "");
+    // Waited for: the CLI exits as soon as this returns, and an unflushed
+    // pipe would hand `| git apply` half a patch (Codex).
+    await new Promise((resolve) => process.stdout.write(p.patch ?? "", () => resolve(undefined)));
     return 0;
   }
   const dir = path.resolve(typeof flags.dir === "string" ? flags.dir : ".");
@@ -12483,28 +12608,77 @@ async function ensureCodeAgent(url, flags, ws, agent) {
  */
 async function codeTurn(s, task) {
   const { url, flags, ws, agent, dir } = s;
-  const { packed, left, summary } = await packFolder(dir);
-  const snap = await pushPacked(url, flags, ws, packed);
-  console.log(`  ${c.dim(`sent ${summary}${snap.reused ? " (unchanged since the last turn)" : ""}`)}`);
-  for (const l of left.slice(0, 5)) console.log(`  ${c.dim(`left out: ${l}`)}`);
-  const started = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/${enc(agent)}/run`, {
-    method: "POST",
-    body: JSON.stringify({ task, snapshot: String(snap.snapshotId), context: s.context, ...(flags.test === true ? { test: true } : {}) }),
-  });
-  const runId = started?.runId;
-  if (!runId) throw new Error(`${url} started no run — ${JSON.stringify(started).slice(0, 200)}`);
-  console.log(`  ${c.dim(`run ${runId}${started.test ? " (test)" : ""} — Ctrl-C stops it; the dashboard shows it live`)}\n`);
-
-  let stopping = false;
+  // Ctrl-C is recorded the moment it is pressed, before the run even has an
+  // id, and an interrupted turn never applies a patch — however the race
+  // between the stop and the run's own end comes out (Codex). A second
+  // Ctrl-C retries a stop that failed; after a stop was sent, it leaves.
+  // stop: "none" (not sent, or sent and refused), "inflight", "acked".
+  // Ctrl-C is recorded the moment it is pressed, and only an ACKNOWLEDGED
+  // stop lets a further Ctrl-C leave: never while the stop is still on its
+  // way (Codex). After the run ended (phase "patch"), Ctrl-C means "do not
+  // apply", and the session goes on.
+  /** @type {{ asked: boolean, runId: string | null, stop: "none" | "inflight" | "acked", phase: "run" | "patch", stopPromise: Promise<unknown> | null, onAsk: Set<() => void> }} */
+  const cancel = { asked: false, runId: null, stop: "none", phase: "run", stopPromise: null, onAsk: new Set() };
+  const stop = () => {
+    if (!cancel.runId || cancel.stop !== "none") return;
+    cancel.stop = "inflight";
+    cancel.stopPromise = remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(cancel.runId)}/stop`, { method: "POST", body: "{}" }).then(
+      () => (cancel.stop = "acked"),
+      (err) => {
+        cancel.stop = "none";
+        console.log(`  ${c.red("✗")} stop: ${explain(err)} — Ctrl-C again tries once more`);
+      },
+    );
+  };
   const onInt = () => {
-    if (stopping) return;
-    stopping = true;
-    console.log(`\n  ${c.amber("stopping")} ${runId} …`);
-    remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/stop`, { method: "POST", body: "{}" }).catch((err) => console.log(`  ${c.red("✗")} stop: ${explain(err)}`));
+    if (cancel.phase === "patch") {
+      if (!cancel.asked) console.log(`\n  ${c.amber("not applying")} ${c.dim("— this turn's patch will be kept, not applied")}`);
+      cancel.asked = true;
+      for (const f of [...cancel.onAsk]) f();
+      return;
+    }
+    if (cancel.asked && cancel.stop === "acked") {
+      console.log(`\n  ${c.dim(`left — the platform took the stop for ${cancel.runId}`)}`);
+      process.exit(130);
+    }
+    if (cancel.asked && cancel.stop === "inflight") {
+      console.log(`\n  ${c.dim("the stop is on its way to the platform — waiting for its answer")}`);
+      return;
+    }
+    if (cancel.asked && !cancel.runId) {
+      console.log(`\n  ${c.dim("waiting for the run to start, so it can be stopped")}`);
+      return;
+    }
+    cancel.asked = true;
+    console.log(`\n  ${c.amber("stopping")}${cancel.runId ? ` ${cancel.runId}` : ""} …`);
+    stop();
   };
   process.on("SIGINT", onInt);
   let run;
+  let runId;
   try {
+    const { packed, left, unscanned, summary } = await packFolder(dir);
+    if (cancel.asked) return "cancelled";
+    const snap = await pushPacked(url, flags, ws, packed);
+    console.log(`  ${c.dim(`sent ${summary}${snap.reused ? " (unchanged since the last turn)" : ""}`)}`);
+    sentNotes(left, unscanned);
+    if (cancel.asked) return "cancelled";
+    let started;
+    try {
+      started = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/${enc(agent)}/run`, {
+        method: "POST",
+        body: JSON.stringify({ task, snapshot: String(snap.snapshotId), context: s.context, ...(flags.test === true ? { test: true } : {}) }),
+      });
+    } catch (err) {
+      // The platform may have taken the run before the answer was lost.
+      if (cancel.asked) throw new Error(`${explain(err)} — the run may have started anyway: \`foldrun runs --to ${ws}\` shows it, and \`foldrun stop <run-id>\` stops it`);
+      throw err;
+    }
+    runId = started?.runId;
+    if (!runId) throw new Error(`${url} started no run — ${JSON.stringify(started).slice(0, 200)}`);
+    cancel.runId = runId;
+    if (cancel.asked) stop(); // pressed while the run was being started
+    console.log(`  ${c.dim(`run ${runId}${started.test ? " (test)" : ""} — Ctrl-C stops it; the dashboard shows it live`)}\n`);
     run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
     const seen = new Map();
     const open = new Map();
@@ -12512,28 +12686,44 @@ async function codeTurn(s, task) {
     if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open)) ?? run;
     flushCalls(open);
     if (isLive(run)) run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+    cancel.phase = "patch";
+
+    const own = (run.steps ?? []).filter((x) => !x.subagentOf);
+    const reply = own.at(-1)?.result;
+    if (reply) console.log(`\n${String(reply).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
+    const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
+    console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${run.status} ${c.dim(`· $${cost.toFixed(4)} · ${runId}`)}`);
+    if (cancel.asked) {
+      console.log(`  ${c.dim(`stopped by you — nothing applied. What it made, if anything: foldrun report ${runId} patch --to ${ws}`)}\n`);
+      return "cancelled";
+    }
+    if (run.status !== "completed") {
+      console.log(`  ${c.dim(`foldrun report ${runId} --to ${ws} — what happened; a patch it made anyway: foldrun report ${runId} patch --to ${ws}`)}\n`);
+      return run.status;
+    }
+    const p = await runPatch(url, flags, ws, run, agent);
+    if (cancel.asked) {
+      console.log(`  ${c.dim(`not applied — you pressed Ctrl-C. It stays on the run: foldrun report ${runId} patch --to ${ws}`)}\n`);
+      return run.status;
+    }
+    if (p.status === "unchanged") console.log(`  ${c.dim("no change to the folder")}\n`);
+    else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${p.reason ?? p.status}\n`);
+    else {
+      console.log();
+      await applyPatch(dir, p.patch, flags, runId, cancel);
+      console.log();
+    }
+    return run.status;
   } finally {
+    // A stop still on its way is waited for on every way out — a thrown
+    // follower included — so the turn never ends before the platform was
+    // told, and says so when it cannot tell (Codex).
+    if (cancel.stop === "inflight" && cancel.stopPromise) {
+      const answered = await Promise.race([cancel.stopPromise.then(() => true), new Promise((r) => setTimeout(() => r(false), timeoutSeconds(flags) * 1000))]);
+      if (!answered) console.log(`  ${c.amber("!")} the stop for ${cancel.runId} was sent but the platform has not answered — \`foldrun runs --to ${ws}\` shows whether it is still going`);
+    }
     process.off("SIGINT", onInt);
   }
-
-  const own = (run.steps ?? []).filter((x) => !x.subagentOf);
-  const reply = own.at(-1)?.result;
-  if (reply) console.log(`\n${String(reply).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
-  const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
-  console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${run.status} ${c.dim(`· $${cost.toFixed(4)} · ${runId}`)}`);
-  if (run.status !== "completed") {
-    console.log(`  ${c.dim(`foldrun report ${runId} --to ${ws} — what happened; a patch it made anyway: foldrun report ${runId} patch --to ${ws}`)}\n`);
-    return run.status;
-  }
-  const p = await runPatch(url, flags, ws, run, agent);
-  if (p.status === "unchanged") console.log(`  ${c.dim("no change to the folder")}\n`);
-  else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${p.reason ?? p.status}\n`);
-  else {
-    console.log();
-    await applyPatch(dir, p.patch, flags, runId);
-    console.log();
-  }
-  return run.status;
 }
 
 /**
@@ -12550,8 +12740,9 @@ async function codeTurn(s, task) {
  * of whatever install this profile is signed in to. The turns of a session
  * share a conversation (`context`), so the agent reads the earlier ones.
  *
- * `--task "…"` runs one turn and exits (for scripts); with no terminal it
- * needs --yes to apply. /new starts a fresh conversation, /quit leaves.
+ * `--task "…"` runs one turn and exits (for scripts; 0 when it completed,
+ * 130 when you stopped it, 1 otherwise); with no terminal it needs --yes to
+ * apply. /new starts a fresh conversation, /quit leaves.
  */
 async function codeCmd(positional, flags, layout) {
   const dir = path.resolve(positional[0] ?? ".");
@@ -12562,32 +12753,32 @@ async function codeCmd(positional, flags, layout) {
   const url = platformFor(flags, "code");
   const ws = platformWorkspace(flags, layout, "code");
   const agent = typeof flags.agent === "string" ? flags.agent : "coder";
+  // Usage first: a call that cannot run must not add an agent on its way out (Codex).
+  if (typeof flags.task === "string" && !flags.task.trim()) throw new Error('--task needs the instruction, e.g. --task "add a test for the parser"');
+  if (typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
   await ensureCodeAgent(url, flags, ws, agent);
   const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
   const s = { url, flags, ws, agent, dir, context: typeof flags.context === "string" ? flags.context : newContext() };
 
   if (typeof flags.task === "string") {
-    if (!flags.task.trim()) throw new Error('--task needs the instruction, e.g. --task "add a test for the parser"');
     console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} · ${dir}`)}\n`);
     const status = await codeTurn(s, flags.task.trim());
-    return status === "completed" ? 0 : 1;
+    return status === "completed" ? 0 : status === "cancelled" ? 130 : 1;
   }
-  if (!process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
-
   const { createInterface } = await import("node:readline/promises");
   console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} on ${url}`)}`);
   console.log(`  ${c.dim(`${dir} — each message sends it to a sandbox; you apply what comes back`)}`);
   console.log(`  ${c.dim("/new  a fresh conversation    /quit  leave")}\n`);
   for (;;) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    let line;
-    try {
-      line = (await rl.question(`${c.bold("you ›")} `)).trim();
-    } catch {
-      line = "/quit"; // the input closed (Ctrl-D)
-    } finally {
-      rl.close();
-    }
+    // Closing the input (Ctrl-D) leaves question() unsettled on Node 26 —
+    // it neither resolves nor rejects — so the close is raced with it.
+    const answer = await new Promise((resolve) => {
+      rl.once("close", () => resolve(null));
+      rl.question(`${c.bold("you ›")} `).then(resolve, () => resolve(null));
+    });
+    rl.close();
+    const line = answer === null ? "/quit" : String(answer).trim();
     if (!line) continue;
     if (line === "/quit" || line === "/exit") {
       console.log();

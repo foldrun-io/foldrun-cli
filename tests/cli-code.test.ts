@@ -9,7 +9,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import http from "node:http";
+import { execFileSync, spawn } from "node:child_process";
 import { serve, at, raw, failing } from "./fake-platform.ts";
 
 const ID = "b".repeat(64);
@@ -45,10 +46,11 @@ function patchFor(base: Record<string, string>, after: Record<string, string | n
   return git(d, "diff", "--cached", "--no-renames", "--binary");
 }
 
-const record = (status: string, result = "Added a greeting.") => ({
+const record = (status: string, result = "Added a greeting.", snapshot: boolean = true) => ({
   id: RUN_ID,
   flow: "adhoc:coder",
   status,
+  ...(snapshot ? { snapshot: { id: ID } } : {}),
   startedAt: "2026-11-18T01:00:00.000Z",
   finishedAt: "2026-11-18T01:02:00.000Z",
   steps: [{ agent: "coder", group: 1, status: status === "completed" ? "completed" : "failed", attempts: 1, costUsd: 0.05, events: [], result, startedAt: "2026-11-18T01:00:00.000Z", finishedAt: "2026-11-18T01:02:00.000Z" }],
@@ -96,7 +98,7 @@ test("code: with no terminal and no --yes the patch is not applied, and where it
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /not applied — no terminal to ask/);
-  assert.match(r.out, /foldrun-run-code-1\.patch/);
+  assert.match(r.out, /foldrun-patch-[^/\s]+\/run-code-1\.patch/);
   assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n", "nothing changed in the folder");
 });
 
@@ -194,15 +196,35 @@ test("agent run --snapshot: a folder is sent first and the run takes its id; an 
   assert.equal(JSON.parse(after.find((x) => x.url.endsWith("/run"))!.body).snapshot, id);
 });
 
-test("report <run> patch: the patch to stdout; --apply --yes puts it into --dir", async () => {
+/** The binary with stdout and stderr apart — `report patch` promises the
+ *  patch alone on stdout, byte for byte. */
+function split(args: string[]): Promise<{ stdout: Buffer; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(import.meta.dirname, "..", "bin/foldrun.mjs"), ...args], {
+      env: { ...process.env, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1" },
+    });
+    const out: Buffer[] = [];
+    let err = "";
+    child.stdout.on("data", (d) => out.push(d));
+    child.stderr.on("data", (d) => (err += d));
+    child.stdin.end();
+    child.on("close", (code) => resolve({ stdout: Buffer.concat(out), stderr: err, code: code ?? 1 }));
+  });
+}
+
+test("report <run> patch: the patch to stdout, byte for byte and nothing else; --apply --yes puts it into --dir", async () => {
   const d = repo(BASE);
-  const patch = patchFor(BASE, AFTER);
+  // Large enough that an unflushed pipe at exit would cut it short.
+  const big: Record<string, string> = { ...AFTER };
+  for (let i = 0; i < 400; i++) big[`gen/file${i}.txt`] = `line ${i}\n`.repeat(50);
+  const patch = patchFor(BASE, big);
   const s = await platform({ patch });
-  const r = await at(s.url, "report", RUN_ID, "patch", "--to", "desk");
-  assert.equal(r.code, 0, r.out);
-  assert.ok(r.out.includes(patch.trim()), "the patch itself is printed");
-  assert.match(r.out, /M hello\.txt/);
-  assert.match(r.out, /A greet\.txt/);
+  const r = await split(["report", RUN_ID, "patch", "--to", "desk", "--url", s.url, "--token", "k"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stdout.length > 64 * 1024, "a patch bigger than one pipe buffer");
+  assert.ok(r.stdout.equals(Buffer.from(patch)), "stdout is exactly the patch");
+  assert.match(r.stderr, /M hello\.txt/);
+  assert.match(r.stderr, /A greet\.txt/);
 
   const a = await at(s.url, "report", RUN_ID, "patch", "--to", "desk", "--apply", "--dir", d, "--yes");
   s.close();
@@ -233,6 +255,274 @@ test("report <run> patch: unchanged is not an error; unavailable says why; a run
   assert.match(r3.out, /was not sent a folder/);
 });
 
+test("report <run> patch: a run that was sent no folder has no patch, whatever its agent left in outputs/ (Codex)", async () => {
+  const d = repo(BASE);
+  const s = await serve({
+    [`GET ${WS}/runs/${RUN_ID}`]: () => record("completed", "done", false),
+    [`GET ${WS}/runs/${RUN_ID}/archive`]: (_b, q) =>
+      q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "changed", modified: ["hello.txt"], added: [], deleted: [] }), "application/json") : raw(patchFor(BASE, AFTER), "text/x-diff"),
+  });
+  const r = await at(s.url, "report", RUN_ID, "patch", "--to", "desk", "--apply", "--dir", d, "--yes");
+  s.close();
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /was not sent a folder/);
+  assert.ok(!s.seen.some((x) => x.url.endsWith("/archive")), "the agent's own files are not even fetched");
+  assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n");
+});
+
+test("a patch that makes a link is refused whole, and kept in a private file (Codex)", async () => {
+  const d = repo(BASE);
+  const link = repo(BASE);
+  fs.symlinkSync("/etc/passwd", path.join(link, "pw"));
+  git(link, "add", "-A");
+  const patch = git(link, "diff", "--cached", "--no-renames");
+  assert.match(patch, /new file mode 120000/);
+  const s = await platform({ patch });
+  const r = await at(s.url, "code", d, "--to", "desk", "--task", "x", "--yes");
+  s.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /makes or changes a link/);
+  assert.ok(!fs.existsSync(path.join(d, "pw")), "no link was made");
+  const kept = /The patch is kept at (\S+)/.exec(r.out)?.[1];
+  assert.ok(kept && fs.existsSync(kept), r.out);
+  assert.equal(fs.statSync(kept).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.dirname(kept)).mode & 0o777, 0o700);
+  assert.ok(!kept.startsWith(path.join(os.tmpdir(), "foldrun-run-code-1")), "not the old guessable name");
+});
+
+test("an ordinary file whose name holds 120000 is not taken for a link; an edit to a link already here is refused (Codex)", async () => {
+  const d = repo(BASE);
+  const s = await platform({ patch: patchFor(BASE, { "build-120000.txt": "x\n" }) });
+  const ok = await at(s.url, "code", d, "--to", "desk", "--task", "x", "--yes");
+  s.close();
+  assert.equal(ok.code, 0, ok.out);
+  assert.equal(fs.readFileSync(path.join(d, "build-120000.txt"), "utf8"), "x\n");
+
+  // A link the person has, and a patch that edits it in place (git writes
+  // `index a..b 120000`, and --summary prints nothing for it).
+  const here = repo(BASE);
+  fs.symlinkSync("hello.txt", path.join(here, "ln"));
+  git(here, "add", "-A");
+  git(here, "commit", "-qm", "link");
+  const src = repo(BASE);
+  fs.symlinkSync("hello.txt", path.join(src, "ln"));
+  git(src, "add", "-A");
+  git(src, "commit", "-qm", "link");
+  fs.rmSync(path.join(src, "ln"));
+  fs.symlinkSync("/etc/hosts", path.join(src, "ln"));
+  git(src, "add", "-A");
+  const edit = git(src, "diff", "--cached", "--no-renames");
+  assert.match(edit, /^index [0-9a-f]+\.\.[0-9a-f]+ 120000$/m);
+  const s2 = await platform({ patch: edit });
+  const r = await at(s2.url, "code", here, "--to", "desk", "--task", "x", "--yes");
+  s2.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /makes or changes a link/);
+  assert.equal(fs.readlinkSync(path.join(here, "ln")), "hello.txt");
+});
+
+test("a mode spelled another way is still refused — git reads 0120000 as a link (Codex, reproduced)", async () => {
+  const d = repo(BASE);
+  const patch = "diff --git a/ln b/ln\nnew file mode 0120000\nindex 0000000..e69de29\n--- /dev/null\n+++ b/ln\n@@ -0,0 +1 @@\n+/etc/hosts\n\\ No newline at end of file\n";
+  const s = await platform({ patch });
+  const r = await at(s.url, "code", d, "--to", "desk", "--task", "x", "--yes");
+  s.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /new file mode 0120000/);
+  assert.ok(!fs.existsSync(path.join(d, "ln")));
+  const { patchTypeProblems } = await import("../src/commands.mjs");
+  for (const bad of ["new mode 120000", "old mode 0100644", "new file mode 160000", "similarity index 90%", "index 1234567..89abcde 0120000", "deleted file mode 100644 "]) {
+    assert.equal(patchTypeProblems(`diff --git a/x b/x\n${bad}\n`).length, 1, bad);
+  }
+  for (const good of ["new file mode 100644", "new mode 100755", "index 1234567..89abcde 100644", "index 1234567..89abcde"]) {
+    assert.equal(patchTypeProblems(`diff --git a/x b/x\n${good}\n`).length, 0, good);
+  }
+});
+
+test("patchTypeProblems reads header lines only: file content that looks like a header is not one", async () => {
+  const { patchTypeProblems } = await import("../src/commands.mjs");
+  const content = patchFor(BASE, { "notes.txt": "new file mode 120000\nrename from a\nindex 1234567..89abcde 160000\n" });
+  assert.deepEqual(patchTypeProblems(content), []);
+  assert.equal(patchTypeProblems("diff --git a/x b/y\nrename from x\nrename to y\n").length, 2);
+});
+
+test("code: binary files sent without a secret scan are named", async () => {
+  const d = repo({ ...BASE, "logo.bin": "\u0000\u0001binary" });
+  const s = await platform({ meta: { status: "unchanged", bytes: 0, modified: [], added: [], deleted: [] } });
+  const r = await at(s.url, "code", d, "--to", "desk", "--task", "x");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /not checked for secrets \(binary\): logo\.bin/);
+});
+
+test("code: a call that cannot run adds no agent on its way out, even with --yes (Codex)", async () => {
+  const d = repo(BASE);
+  const s = await platform({ agents: [] });
+  const empty = await at(s.url, "code", d, "--to", "desk", "--task", "  ", "--yes");
+  const noTask = await at(s.url, "code", d, "--to", "desk", "--yes");
+  s.close();
+  assert.notEqual(empty.code, 0);
+  assert.match(empty.out, /--task needs the instruction/);
+  assert.notEqual(noTask.code, 0);
+  assert.match(noTask.out, /in a script, give one turn with --task/);
+  assert.ok(!s.seen.some((x) => x.method === "PUT"), "no agent written");
+});
+
+/**
+ * A platform whose run is live: the stream stays open until a stop arrives,
+ * then — the race Codex named — reports the run COMPLETED anyway, with a
+ * patch ready. `stopFails` answers the first stop with a 500.
+ */
+interface LiveOpts { stopFails?: boolean; stopDelayMs?: number; completeAtOnce?: boolean; holdArchive?: boolean }
+function liveRun(patch: string, opts: LiveOpts = {}): Promise<{ url: string; seen: string[]; streaming: Promise<void>; archiving: Promise<void>; releaseArchive: () => void; close: () => void }> {
+  const seen: string[] = [];
+  let streamRes: http.ServerResponse | null = null;
+  let markStreaming: () => void;
+  const streaming = new Promise<void>((r) => (markStreaming = r));
+  let markArchiving: () => void;
+  const archiving = new Promise<void>((r) => (markArchiving = r));
+  let release: () => void = () => {};
+  const released = new Promise<void>((r) => (release = r));
+  let stops = 0;
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const [u, q] = (req.url ?? "").split("?");
+      seen.push(`${req.method} ${u}${q ? `?${q}` : ""}`);
+      const json = (status: number, v: unknown) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(v));
+      };
+      if (u === `${WS}/agents`) return json(200, { agents: [{ name: "coder" }] });
+      if (u === `${WS}/snapshots`) return json(200, { snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "x", reused: false });
+      if (u === `${WS}/agents/coder/run`) return json(200, { ok: true, runId: RUN_ID });
+      if (u === `${WS}/runs/${RUN_ID}`) return json(200, record("running"));
+      if (u === `${WS}/runs/${RUN_ID}/stream`) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`event: run\ndata: ${JSON.stringify(record("running"))}\n\n`);
+        streamRes = res;
+        markStreaming();
+        if (opts.completeAtOnce) {
+          res.write(`event: run\ndata: ${JSON.stringify(record("completed"))}\n\nevent: done\ndata: {}\n\n`);
+          res.end();
+        }
+        return;
+      }
+      if (u === `${WS}/runs/${RUN_ID}/stop`) {
+        stops++;
+        if (opts.stopFails && stops === 1) return json(500, { error: "try again" });
+        setTimeout(() => {
+          json(200, { ok: true });
+          streamRes?.write(`event: run\ndata: ${JSON.stringify(record("completed"))}\n\nevent: done\ndata: {}\n\n`);
+          streamRes?.end();
+        }, opts.stopDelayMs ?? 0);
+        return;
+      }
+      if (u === `${WS}/runs/${RUN_ID}/archive`) {
+        const meta = new URLSearchParams(q).get("path") === "snapshot.json";
+        const answer = () => {
+          res.writeHead(200, { "content-type": meta ? "application/json" : "text/x-diff" });
+          res.end(meta ? JSON.stringify({ status: "changed", modified: ["hello.txt"], added: ["greet.txt"], deleted: [] }) : patch);
+        };
+        if (opts.holdArchive && meta) {
+          markArchiving();
+          released.then(answer);
+          return;
+        }
+        return answer();
+      }
+      json(404, { error: "not found" });
+    });
+  });
+  return new Promise((resolve) =>
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as { port: number };
+      resolve({ url: `http://127.0.0.1:${port}`, seen, streaming, archiving, releaseArchive: () => release(), close: () => { server.closeAllConnections(); server.close(); } });
+    }),
+  );
+}
+
+function codeChild(url: string, d: string) {
+  const child = spawn(process.execPath, [path.join(import.meta.dirname, "..", "bin/foldrun.mjs"), "code", d, "--to", "desk", "--task", "greet", "--yes", "--url", url, "--token", "k"], {
+    env: { ...process.env, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1" },
+  });
+  let out = "";
+  child.stdout.on("data", (x) => (out += x));
+  child.stderr.on("data", (x) => (out += x));
+  child.stdin.end();
+  const done = new Promise<number>((r) => child.on("close", (code) => r(code ?? 1)));
+  return { child, done, out: () => out };
+}
+
+const LIVE = { timeout: 20_000 };
+
+test("Ctrl-C mid-run stops it on the platform, and a run that completes anyway applies nothing, even with --yes (Codex)", LIVE, async (t) => {
+  const d = repo(BASE);
+  const p = await liveRun(patchFor(BASE, AFTER));
+  const c = codeChild(p.url, d);
+  t.after(() => { c.child.kill("SIGKILL"); p.close(); });
+  await p.streaming;
+  c.child.kill("SIGINT");
+  const code = await c.done;
+  assert.equal(code, 130, c.out());
+  assert.ok(p.seen.includes(`POST ${WS}/runs/${RUN_ID}/stop`), c.out());
+  assert.match(c.out(), /stopped by you — nothing applied/);
+  assert.ok(!p.seen.some((x) => x.includes("/archive")), "the patch is not even fetched");
+  assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n");
+});
+
+test("Ctrl-C: a stop that fails says so, and a second Ctrl-C tries again (Codex)", LIVE, async (t) => {
+  const d = repo(BASE);
+  const p = await liveRun(patchFor(BASE, AFTER), { stopFails: true });
+  const c = codeChild(p.url, d);
+  t.after(() => { c.child.kill("SIGKILL"); p.close(); });
+  await p.streaming;
+  c.child.kill("SIGINT");
+  for (let i = 0; i < 100 && !/tries once more/.test(c.out()); i++) await new Promise((r) => setTimeout(r, 50));
+  assert.match(c.out(), /stop: .*Ctrl-C again tries once more/);
+  c.child.kill("SIGINT");
+  const code = await c.done;
+  assert.equal(code, 130, c.out());
+  assert.equal(p.seen.filter((x) => x === `POST ${WS}/runs/${RUN_ID}/stop`).length, 2);
+  assert.match(c.out(), /nothing applied/);
+  assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n");
+});
+
+test("Ctrl-C twice while the stop is still on its way does not leave before the platform answers (Codex)", LIVE, async (t) => {
+  const d = repo(BASE);
+  const p = await liveRun(patchFor(BASE, AFTER), { stopDelayMs: 800 });
+  const c = codeChild(p.url, d);
+  t.after(() => { c.child.kill("SIGKILL"); p.close(); });
+  await p.streaming;
+  c.child.kill("SIGINT");
+  for (let i = 0; i < 100 && !p.seen.includes(`POST ${WS}/runs/${RUN_ID}/stop`); i++) await new Promise((r) => setTimeout(r, 20));
+  c.child.kill("SIGINT");
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(c.child.exitCode, null, "still there while the stop is unanswered");
+  assert.match(c.out(), /the stop is on its way/);
+  const code = await c.done;
+  assert.equal(code, 130, c.out());
+  assert.match(c.out(), /stopped by you — nothing applied/);
+  assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n");
+});
+
+test("Ctrl-C while the patch is being fetched: not applied, kept on the run, and no stop is sent for a finished run (Codex)", LIVE, async (t) => {
+  const d = repo(BASE);
+  const p = await liveRun(patchFor(BASE, AFTER), { completeAtOnce: true, holdArchive: true });
+  const c = codeChild(p.url, d);
+  t.after(() => { c.child.kill("SIGKILL"); p.close(); });
+  await p.archiving;
+  c.child.kill("SIGINT");
+  for (let i = 0; i < 100 && !/not applying/.test(c.out()); i++) await new Promise((r) => setTimeout(r, 20));
+  p.releaseArchive();
+  const code = await c.done;
+  assert.equal(code, 0, c.out());
+  assert.match(c.out(), /not applied — you pressed Ctrl-C/);
+  assert.ok(!p.seen.some((x) => x.endsWith("/stop")), "a finished run is not stopped");
+  assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n");
+});
+
 test("--help runs nothing", async () => {
   const s = await platform();
   for (const args of [["code", "--help"], ["report", "--help"]]) {
@@ -241,4 +531,99 @@ test("--help runs nothing", async () => {
   }
   s.close();
   assert.equal(s.seen.length, 0);
+});
+
+/** The CLI on a real pseudo-terminal, through Python's pty module (macOS
+ *  and Linux alike; script(1) refuses the socket Node gives it for stdin) —
+ *  so Ctrl-C (\x03) and Ctrl-D (\x04) arrive as they do from a keyboard.
+ *  Null where there is no python3. */
+function onTerminal(args: string[]) {
+  const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
+  try {
+    execFileSync("python3", ["-c", "import pty"], { stdio: "ignore" });
+  } catch {
+    return null;
+  }
+  const child = spawn("python3", ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, cli, ...args], { env: { ...process.env, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", TERM: "dumb" } });
+  let out = "";
+  child.stdout.on("data", (x) => (out += x));
+  child.stderr.on("data", (x) => (out += x));
+  const done = new Promise<number>((r) => child.on("close", (code) => r(code ?? 1)));
+  const until = async (re: RegExp, ms = 10_000) => {
+    for (let t = 0; t < ms && !re.test(out); t += 25) await new Promise((r) => setTimeout(r, 25));
+    assert.match(out, re);
+  };
+  return { child, done, out: () => out, until, type: (x: string) => child.stdin.write(x) };
+}
+
+test("on a terminal: Ctrl-C at the apply prompt applies nothing and the session goes on to its next prompt; Ctrl-D leaves (Codex)", LIVE, async (t) => {
+  const d = repo(BASE);
+  const s = await platform({ patch: patchFor(BASE, AFTER) });
+  const term = onTerminal(["code", d, "--to", "desk", "--url", s.url, "--token", "k"]);
+  if (!term) {
+    s.close();
+    t.skip("no python3 to give the CLI a terminal");
+    return;
+  }
+  t.after(() => { term.child.kill("SIGKILL"); s.close(); });
+  await term.until(/you ›/);
+  term.type("greet the world\r");
+  await term.until(/apply it to .*\[y\/N\]/);
+  term.type("\x03");
+  await term.until(/not applied — the patch is at/);
+  await term.until(/you ›[\s\S]*you ›/);
+  term.type("\x04");
+  const code = await term.done;
+  assert.equal(code, 0, term.out());
+  assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n", "nothing applied");
+  assert.ok(!fs.existsSync(path.join(d, "greet.txt")));
+});
+
+test("on a terminal: y at the apply prompt applies it, and /quit leaves", LIVE, async (t) => {
+  const d = repo(BASE);
+  const s = await platform({ patch: patchFor(BASE, AFTER) });
+  const term = onTerminal(["code", d, "--to", "desk", "--url", s.url, "--token", "k"]);
+  if (!term) {
+    s.close();
+    t.skip("no python3 to give the CLI a terminal");
+    return;
+  }
+  t.after(() => { term.child.kill("SIGKILL"); s.close(); });
+  await term.until(/you ›/);
+  term.type("greet the world\r");
+  await term.until(/apply it to .*\[y\/N\]/);
+  term.type("y\r");
+  await term.until(/✓ applied/);
+  await term.until(/you ›[\s\S]*you ›/);
+  term.type("/quit\r");
+  assert.equal(await term.done, 0, term.out());
+  assert.equal(fs.readFileSync(path.join(d, "greet.txt"), "utf8"), "hi\n");
+});
+
+test("Ctrl-C while git checks the patch, with --yes: the apply never starts (Codex)", LIVE, async (t) => {
+  const d = repo(BASE);
+  const s = await platform({ patch: patchFor(BASE, AFTER) });
+  // A git first on PATH that, for the preflight's --numstat, says it started
+  // and holds for a moment; everything else is the real git.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cli-git-"));
+  const marker = path.join(bin, "preflight-started");
+  const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\ncase " $* " in *" --numstat "*) touch '${marker}'; sleep 1;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+  const child = spawn(process.execPath, [path.join(import.meta.dirname, "..", "bin/foldrun.mjs"), "code", d, "--to", "desk", "--task", "greet", "--yes", "--url", s.url, "--token", "k"], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1" },
+  });
+  let out = "";
+  child.stdout.on("data", (x) => (out += x));
+  child.stderr.on("data", (x) => (out += x));
+  child.stdin.end();
+  const done = new Promise<number>((r) => child.on("close", (code) => r(code ?? 1)));
+  t.after(() => { child.kill("SIGKILL"); s.close(); });
+  for (let i = 0; i < 400 && !fs.existsSync(marker); i++) await new Promise((r) => setTimeout(r, 25));
+  assert.ok(fs.existsSync(marker), out);
+  child.kill("SIGINT");
+  await done;
+  assert.match(out, /not applied — you pressed Ctrl-C/);
+  assert.doesNotMatch(out, /✓ applied/);
+  assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello\n");
+  assert.ok(!fs.existsSync(path.join(d, "greet.txt")));
 });
