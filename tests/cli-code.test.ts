@@ -832,10 +832,11 @@ test("live view: a parent's remark shows before its sub-agent's output (Codex)",
 test("live view, quiet: a limits refusal is shown; other notes are not (Codex)", async () => {
   const step: any = { agent: "coder", events: [], result: "ok" };
   const out = await frames([step], [
-    () => step.events.push({ type: "info", text: "isolation: k8s" }, { type: "info", text: "web.search: 10 of 10 used (WebSearch refused)" }),
+    () => step.events.push({ type: "info", text: "isolation: k8s" }, { type: "info", text: "limits: calls 1000, repeat 25 — per step; a call past one is refused" }, { type: "info", text: "web.search: 10 of 10 used (WebSearch refused)" }),
   ], { quiet: true });
   assert.ok(out.some((l) => l.includes("WebSearch refused")));
   assert.ok(!out.some((l) => l.includes("isolation")));
+  assert.ok(!out.some((l) => l.includes("a call past one is refused")), "the limits setup note is not a refusal");
 });
 
 test("live view: a turn that ends another way (an error, Ctrl-C) still prints the held text (Codex)", async () => {

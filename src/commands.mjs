@@ -2800,7 +2800,9 @@ export function printNew(run, seen, open = new Map(), { skipResult = false, quie
 
 /** An info note that something was refused or went wrong (a `limits:`
  *  refusal, "browser pod: reconnect failed …"): shown even in the quiet view. */
-const REFUSED_NOTE = /\b(refused|denied|blocked|failed|failure|error|lost|timed out)\b/i;
+// "(WebSearch refused)" is how a refused call ends; the setup note
+// "limits: … a call past one is refused" is not one (seen on 26.8.0).
+const REFUSED_NOTE = /\(\S+ refused\)|\b(denied|blocked|failed|failure|error|lost|timed out)\b/i;
 
 /** Whatever text is still held is printed: the turn is ending another way
  *  (an error, a second Ctrl-C), so no reply follows it (Codex). */
