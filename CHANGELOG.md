@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.7.0] — 2026-11-18
+
+### New in the public API
+
+- `foldrun workspaces use`
+
+- feat(cli): foldrun workspaces use <name> — a default project for commands that name none ([64fe960](https://github.com/foldrun-io/foldrun-cli/commit/64fe960))
+
 ## [26.6.2] — 2026-11-18
 
 - test(cli): assistant leaves with 0 on Ctrl-D at a later prompt, on a real terminal ([ce77744](https://github.com/foldrun-io/foldrun-cli/commit/ce77744))
