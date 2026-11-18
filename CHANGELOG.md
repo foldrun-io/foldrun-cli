@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.7.1] — 2026-11-18
+
+- fix(cli): two foldrun commands at once no longer undo each other's sign-in changes ([2d62bf5](https://github.com/foldrun-io/foldrun-cli/commit/2d62bf5))
+
 ## [26.7.0] — 2026-11-18
 
 ### New in the public API
