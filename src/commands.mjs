@@ -2749,6 +2749,31 @@ class StreamIdle extends Error {
 }
 
 /**
+ * An SSE frame's event name and data, read as the WHATWG spec says: every
+ * `data:` line, joined with "\n", one leading space dropped from each. The
+ * platform sends the run record indented, so its JSON spans one `data:`
+ * line per line; reading only the first ("{") dropped every frame, and no
+ * live run showed its tool calls (19 Nov 2026). A CR before the LF is
+ * dropped too.
+ * @param {string} frame
+ */
+export function sseFields(frame) {
+  let event = "";
+  const data = [];
+  for (const raw of frame.split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const colon = line.indexOf(":");
+    if (colon <= 0) continue;
+    const field = line.slice(0, colon);
+    let value = line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value;
+    else if (field === "data") data.push(value);
+  }
+  return { event, data: data.join("\n") };
+}
+
+/**
  * One connection to a run's stream, printed as frames land. Resolves with
  * the finished run on `done`, with the last run seen if the server ends it
  * first, and throws StreamIdle when nothing arrives for streamIdleSeconds.
@@ -2799,8 +2824,7 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
       while ((cut = buffer.indexOf("\n\n")) !== -1) {
         const frame = buffer.slice(0, cut);
         buffer = buffer.slice(cut + 2);
-        const event = frame.match(/^event: (.*)$/m)?.[1];
-        const data = frame.match(/^data: (.*)$/m)?.[1];
+        const { event, data } = sseFields(frame);
         if (!event || !data) continue;
         if (event === "run") {
           try {
@@ -2835,11 +2859,14 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
  * from printing twice. It used to block `invoke --watch` and `logs
  * --follow` for as long as a stalled tunnel cared to keep the socket.
  */
-async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map()) {
+async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map(), { holdOpen = false } = {}) {
   for (let attempt = 1; ; attempt++) {
     try {
       const run = await streamOnce(url, flags, ws, runId, seen, open);
-      flushCalls(open);
+      // holdOpen: the caller reads the run once more when the stream ended
+      // with it still live, and flushes after — a start flushed here would
+      // print a second time when that read brings its completion (Codex).
+      if (!(holdOpen && run && isLive(run))) flushCalls(open);
       return run;
     } catch (err) {
       if (!(err instanceof StreamIdle)) throw err;
@@ -12563,7 +12590,6 @@ name: coder
 description: Changes code in a folder sent by \`foldrun code\`, and checks the change with the folder's own tests.
 model: default
 effort: medium
-size: large
 tools: [write, code]
 ---
 
@@ -12585,17 +12611,60 @@ back to them, as a patch they review and apply.
 `;
 
 /** `foldrun code` needs its agent in the project; offers to make `coder`. */
-async function ensureCodeAgent(url, flags, ws, agent) {
+/**
+ * The project `foldrun code --to` names, made when it is not there (owner,
+ * 19 Nov 2026): one question — or --yes — makes it blank, with the coder
+ * agent (ensureCodeAgent adds it without asking again). Created with
+ * ifAbsent, so a project made meanwhile is used, never written over. True
+ * when it was made now.
+ */
+async function ensureCodeProject(url, flags, ws, agent) {
+  try {
+    await remoteCall(url, flags, `/api/workspaces/${enc(ws)}`);
+    return false;
+  } catch (err) {
+    if (!(err instanceof HttpError && err.status === 404)) throw err;
+  }
+  assertName(ws);
+  if (agent !== "coder") throw new Error(`no project "${ws}" on ${url}, so no agent "${agent}" in it — leave out --agent and foldrun code offers to make the project with a coder agent`);
+  console.log(`\n  ${c.amber("!")} there is no project ${c.bold(ws)} on ${url}.`);
+  console.log(`  ${c.dim("foldrun code can make it — blank, with a coder agent (agents/coder/agent.md: tools [write, code], model default) to edit like any other.")}`);
+  if (!(await confirmed(flags, "foldrun code", `create ${ws}? [y/N] `))) throw new Error(`nothing created — \`foldrun workspaces new ${ws} --platform\` makes it, or name one that exists with --to`);
+  try {
+    await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ name: ws, template: true, ifAbsent: true }) });
+  } catch (err) {
+    if (!(err instanceof HttpError && err.status === 409)) throw err;
+    return false; // made meanwhile: used as it is
+  }
+  console.log(`  ${c.green("✓")} created ${ws}`);
+  return true;
+}
+
+/** @param {boolean} [fresh] the project was made this moment: add the agent without asking twice */
+async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
   const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents`);
   if ((r.agents ?? []).some((a) => a.name === agent)) return;
   if (agent !== "coder") throw new Error(`no agent "${agent}" in ${ws} — \`foldrun agent ls --to ${ws}\` lists them; leave out --agent and foldrun code offers to make one called coder`);
-  console.log(`\n  ${c.amber("!")} ${ws} has no ${c.bold("coder")} agent yet.`);
-  console.log(`  ${c.dim("foldrun code can add one (agents/coder/agent.md: tools [write, code], size large, model default) — edit it afterwards like any agent.")}`);
-  if (!(await confirmed(flags, "foldrun code", `add it to ${ws}? [y/N] `))) throw new Error(`nothing started — add an agent with \`foldrun agent new\`, or name one with --agent <name>`);
-  await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, {
-    method: "PUT",
-    body: JSON.stringify({ path: "agents/coder/agent.md", content: CODER_AGENT, message: "foldrun code: the coder agent" }),
-  });
+  if (!fresh) {
+    console.log(`\n  ${c.amber("!")} ${ws} has no ${c.bold("coder")} agent yet.`);
+    console.log(`  ${c.dim("foldrun code can add one (agents/coder/agent.md: tools [write, code], model default) — edit it afterwards like any agent.")}`);
+    if (!(await confirmed(flags, "foldrun code", `add it to ${ws}? [y/N] `))) throw new Error(`nothing started — add an agent with \`foldrun agent new\`, or name one with --agent <name>`);
+  }
+  // Create-only (ifMatch: null): a coder written meanwhile — another
+  // session, or someone while this one waited for the yes — is used, never
+  // written over (Codex).
+  try {
+    await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, {
+      method: "PUT",
+      body: JSON.stringify({ path: "agents/coder/agent.md", content: CODER_AGENT, message: "foldrun code: the coder agent", ifMatch: null }),
+    });
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 409) {
+      console.log(`  ${c.dim(`a coder agent appeared in ${ws} meanwhile — using that one`)}`);
+      return;
+    }
+    throw err;
+  }
   console.log(`  ${c.green("✓")} added agents/coder/agent.md to ${ws}`);
 }
 
@@ -12660,7 +12729,7 @@ async function codeTurn(s, task) {
     const { packed, left, unscanned, summary } = await packFolder(dir);
     if (cancel.asked) return "cancelled";
     const snap = await pushPacked(url, flags, ws, packed);
-    console.log(`  ${c.dim(`sent ${summary}${snap.reused ? " (unchanged since the last turn)" : ""}`)}`);
+    console.log(`  ${c.dim(`sent ${summary}${snap.reused ? " (already there)" : ""}`)}`);
     sentNotes(left, unscanned);
     if (cancel.asked) return "cancelled";
     let started;
@@ -12683,9 +12752,12 @@ async function codeTurn(s, task) {
     const seen = new Map();
     const open = new Map();
     printNew(run, seen, open);
-    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open)) ?? run;
+    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true })) ?? run;
+    if (isLive(run)) {
+      run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+      printNew(run, seen, open);
+    }
     flushCalls(open);
-    if (isLive(run)) run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
     cancel.phase = "patch";
 
     const own = (run.steps ?? []).filter((x) => !x.subagentOf);
@@ -12756,7 +12828,7 @@ async function codeCmd(positional, flags, layout) {
   // Usage first: a call that cannot run must not add an agent on its way out (Codex).
   if (typeof flags.task === "string" && !flags.task.trim()) throw new Error('--task needs the instruction, e.g. --task "add a test for the parser"');
   if (typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
-  await ensureCodeAgent(url, flags, ws, agent);
+  await ensureCodeAgent(url, flags, ws, agent, await ensureCodeProject(url, flags, ws, agent));
   const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
   const s = { url, flags, ws, agent, dir, context: typeof flags.context === "string" ? flags.context : newContext() };
 

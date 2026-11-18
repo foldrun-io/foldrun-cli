@@ -50,7 +50,7 @@ const toolRecord = () => ({
  * sends a frame and `done`. The run itself is live until `liveFor`
  * polls have been answered.
  */
-function fakePlatform(streams: ("stall" | "finish" | "tools")[], { liveFor = Infinity, refuse = false } = {}) {
+function fakePlatform(streams: ("stall" | "finish" | "tools" | "pretty")[], { liveFor = Infinity, refuse = false } = {}) {
   let connections = 0;
   let polls = 0;
   const sockets = new Set<import("node:stream").Duplex>();
@@ -71,9 +71,13 @@ function fakePlatform(streams: ("stall" | "finish" | "tools")[], { liveFor = Inf
       if (url === "/api/workspaces/ws/runs/r1/stream") {
         const mode = streams[connections++] ?? "stall";
         res.writeHead(200, { "content-type": "text/event-stream" });
-        const record = mode === "tools" ? toolRecord() : runRecord(mode === "finish" ? "completed" : "running", connections);
-        res.write(`event: run\ndata: ${JSON.stringify(record)}\n\n`);
-        if (mode === "finish" || mode === "tools") res.end("event: done\ndata: {}\n\n");
+        const record = mode === "tools" || mode === "pretty" ? toolRecord() : runRecord(mode === "finish" ? "completed" : "running", connections);
+        // "pretty": as the platform sends it — the stored record is indented
+        // JSON, and an SSE frame carries each of its lines as its own
+        // `data:` line, which a reader joins with "\n" (WHATWG SSE).
+        const data = mode === "pretty" ? JSON.stringify(record, null, 2).split("\n").map((l) => `data: ${l}`).join("\n") : `data: ${JSON.stringify(record)}`;
+        res.write(`id: v1.3\nevent: run\n${data}\n\n`);
+        if (mode === "finish" || mode === "tools" || mode === "pretty") res.end("event: done\ndata: {}\n\n");
         return;
       }
       if (url === "/api/workspaces/ws/runs/r1") {
@@ -174,6 +178,20 @@ test("a tool call — a start then a completion sharing its id — prints one li
     const grep = (r.out.match(/^.*\bgrep\b.*$/gm) ?? []);
     assert.equal(grep.length, 1, `grep start printed once:\n${r.out}`);
     assert.doesNotMatch(grep[0], /ms/);
+    assert.match(r.out, /✓.*completed/);
+  } finally {
+    p.close();
+  }
+});
+
+test("a frame whose JSON spans many data: lines — as the platform sends it — is read whole (19 Nov 2026)", async () => {
+  // The CLI read only the first `data:` line ("{"), failed to parse it and
+  // dropped every frame silently: no live run ever showed its tool calls.
+  const p = await fakePlatform(["pretty"]);
+  try {
+    const r = await run(["invoke", "daily", "--to", "ws", "--watch", "--url", p.url, "--token", "k"], QUICK);
+    assert.equal(r.code, 0, r.out);
+    assert.equal((r.out.match(/^.*\bbash\b.*1200ms.*$/gm) ?? []).length, 1, r.out);
     assert.match(r.out, /✓.*completed/);
   } finally {
     p.close();

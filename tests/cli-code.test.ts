@@ -57,10 +57,19 @@ const record = (status: string, result = "Added a greeting.", snapshot: boolean 
 });
 
 /** A platform with a coder agent whose run changed the folder. */
-function platform(opts: { agents?: string[]; status?: string; meta?: unknown; patch?: string } = {}) {
+function platform(opts: { agents?: string[]; status?: string; meta?: unknown; patch?: string; missing?: boolean } = {}) {
   const meta = opts.meta ?? { status: "changed", bytes: (opts.patch ?? "").length, modified: ["hello.txt"], added: ["greet.txt"], deleted: [] };
+  let exists = !opts.missing;
+  let agents = opts.agents ?? ["coder"];
   return serve({
-    [`GET ${WS}/agents`]: () => ({ agents: (opts.agents ?? ["coder"]).map((name) => ({ name })) }),
+    [`GET ${WS}`]: () => (exists ? { name: "desk" } : failing(404, { error: "workspace not found" })),
+    ["POST /api/workspaces"]: () => {
+      if (exists) return failing(409, { error: "a workspace called desk exists — nothing was changed" });
+      exists = true;
+      agents = [];
+      return { name: "desk", agents: 0, flows: 0 };
+    },
+    [`GET ${WS}/agents`]: () => ({ agents: agents.map((name) => ({ name })) }),
     [`PUT ${WS}/source`]: () => ({ ok: true }),
     [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "2026-11-25T00:00:00.000Z", reused: false }),
     [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN_ID, test: false, snapshot: ID }),
@@ -151,8 +160,58 @@ test("code: a project with no coder agent is asked first — refused with no ter
   assert.equal(yes.code, 0, yes.out);
   const put = JSON.parse(s.seen.find((x) => x.method === "PUT")!.body);
   assert.equal(put.path, "agents/coder/agent.md");
+  assert.equal(put.ifMatch, null, "create-only: a coder written meanwhile is never overwritten");
   assert.match(put.content, /^---\nname: coder\n/);
   assert.match(put.content, /tools: \[write, code\]/);
+});
+
+test("code --to a project that is not there: asked, refused with no terminal; with --yes made blank with its coder agent in one go (owner, 19 Nov)", async (t) => {
+  const d = repo(BASE);
+  const s = await platform({ missing: true, patch: patchFor(BASE, AFTER) });
+  t.after(() => s.close());
+  const no = await at(s.url, "code", d, "--to", "desk", "--task", "greet");
+  assert.notEqual(no.code, 0);
+  assert.match(no.out, /there is no project desk/);
+  assert.match(no.out, /pass --yes/);
+  assert.ok(!s.seen.some((x) => x.method !== "GET"), "nothing made");
+
+  const yes = await at(s.url, "code", d, "--to", "desk", "--task", "greet", "--yes");
+  assert.equal(yes.code, 0, yes.out);
+  const made = JSON.parse(s.seen.find((x) => x.method === "POST" && x.url === "/api/workspaces")!.body);
+  assert.deepEqual(made, { name: "desk", template: true, ifAbsent: true }, "created only if absent: never over one made meanwhile");
+  assert.match(yes.out, /✓ created desk/);
+  assert.doesNotMatch(yes.out, /has no coder agent yet/, "one question, not two");
+  assert.equal(JSON.parse(s.seen.find((x) => x.method === "PUT")!.body).path, "agents/coder/agent.md");
+  assert.match(yes.out, /✓ applied/);
+  assert.equal(fs.readFileSync(path.join(d, "greet.txt"), "utf8"), "hi\n");
+});
+
+test("code: a coder agent written while foldrun code waited is used, not overwritten (Codex)", async (t) => {
+  const d = repo(BASE);
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [] }),
+    [`PUT ${WS}/source`]: () => failing(409, { error: "agents/coder/agent.md changed since it was loaded", sha256: "x" }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN_ID }),
+    [`GET ${WS}/runs/${RUN_ID}`]: () => record("completed"),
+    [`GET ${WS}/runs/${RUN_ID}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "unchanged" }), "application/json") : raw("", "text/x-diff")),
+  });
+  t.after(() => s.close());
+  const r = await at(s.url, "code", d, "--to", "desk", "--task", "x", "--yes");
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /appeared in desk meanwhile — using that one/);
+  assert.ok(s.seen.some((x) => x.url.endsWith("/agents/coder/run")), "the turn ran on the agent that won");
+});
+
+test("code --to a missing project with --agent other than coder: refused, nothing made", async () => {
+  const d = repo(BASE);
+  const s = await platform({ missing: true });
+  const r = await at(s.url, "code", d, "--to", "desk", "--agent", "fixer", "--task", "x", "--yes");
+  s.close();
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /no project "desk".*no agent "fixer"/);
+  assert.ok(!s.seen.some((x) => x.method !== "GET"), "nothing made");
 });
 
 test("code: --agent names one that must exist; not a git folder is refused before anything is sent", async () => {
@@ -394,6 +453,7 @@ function liveRun(patch: string, opts: LiveOpts = {}): Promise<{ url: string; see
         res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(v));
       };
+      if (u === WS) return json(200, { name: "desk" });
       if (u === `${WS}/agents`) return json(200, { agents: [{ name: "coder" }] });
       if (u === `${WS}/snapshots`) return json(200, { snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "x", reused: false });
       if (u === `${WS}/agents/coder/run`) return json(200, { ok: true, runId: RUN_ID });
