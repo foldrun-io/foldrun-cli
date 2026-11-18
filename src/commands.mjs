@@ -2767,7 +2767,10 @@ export function printNew(run, seen, open = new Map(), { skipResult = false, quie
   const release = (by) => {
     for (const [j, h] of held) {
       if (by?.t && h.t && String(by.t) < String(h.t)) continue;
-      console.log(eventLine(h, run.steps[j]?.agent, open));
+      // The result came in this frame and holds it: it is printed with the
+      // result, once (Codex).
+      const result = run.steps[j]?.result;
+      if (!(result && String(result).includes(String(h.text).trim()))) console.log(eventLine(h, run.steps[j]?.agent, open));
       held.delete(j);
     }
   };
@@ -2785,14 +2788,19 @@ export function printNew(run, seen, open = new Map(), { skipResult = false, quie
     const note = e.type === "info";
     if (note && quiet && !REFUSED_NOTE.test(String(e.text ?? ""))) continue;
     if (step === replying && e.type === "text") {
-      if (step.result && String(e.text).trim() === String(step.result).trim()) continue;
+      // The result holds all the step's words: text already inside it is
+      // printed with it, once (Codex).
+      if (step.result && String(step.result).includes(String(e.text).trim())) continue;
       release();
       held.set(i, { ...e, __agent: step.agent });
       continue;
     }
     // Anything else that is not a note — a tool call, an error, any other
     // step's words (a sub-agent's) — came after the held text: it shows first.
-    if (!note) release(e);
+    // An error in the replying step itself prints without releasing its
+    // held text: a refusal after the agent's last words would otherwise
+    // print the reply as a line, then again in full (seen 19 Nov 2026).
+    if (!note && !(step === replying && e.type === "error")) release(e);
     const line = eventLine(e, step.agent, open);
     if (line !== null) console.log(line);
   }
@@ -2802,7 +2810,9 @@ export function printNew(run, seen, open = new Map(), { skipResult = false, quie
  *  refusal, "browser pod: reconnect failed …"): shown even in the quiet view. */
 // "(WebSearch refused)" is how a refused call ends; the setup note
 // "limits: … a call past one is refused" is not one (seen on 26.8.0).
-const REFUSED_NOTE = /\(\S+ refused\)|\b(denied|blocked|failed|failure|error|lost|timed out)\b/i;
+// Core's other refusals: "refused path: …" (copy-back) and "the model
+// credential was refused mid-step" (Codex).
+const REFUSED_NOTE = /\(\S+ refused\)|^refused path:|\bwas refused\b|\b(denied|blocked|failed|failure|error|lost|timed out)\b/i;
 
 /** Whatever text is still held is printed: the turn is ending another way
  *  (an error, a second Ctrl-C), so no reply follows it (Codex). */
@@ -2829,7 +2839,10 @@ export function dropHeldReply(run, seen, open) {
   const own = (run.steps ?? []).filter((x) => !x.subagentOf);
   const reply = String(own.at(-1)?.result ?? "").trim();
   for (const [i, e] of held) {
-    if (String(e.text).trim() !== reply) console.log(eventLine(e, run.steps[i]?.agent, open));
+    // The result holds the step's words, so a held text inside it is
+    // printed with it, not on its own as well.
+    const text = String(e.text).trim();
+    if (!(reply && reply.includes(text))) console.log(eventLine(e, run.steps[i]?.agent, open));
   }
   held.clear();
 }

@@ -878,3 +878,47 @@ test("live view: one frame's events from several steps print in the order they h
   assert.ok(at("R1") < at("Bash") && at("Bash") < at("R3") && at("R3") < at("R4"), out.join("\n"));
   assert.equal(out.filter((l) => l.includes("Done.")).length, 0);
 });
+
+test("live view: a refusal after the agent's last words does not print the reply twice (seen 19 Nov 2026)", async () => {
+  const step: any = { agent: "coder", events: [], result: undefined };
+  const out = await frames([step], [
+    () => step.events.push({ type: "text", text: "I fixed add()." }, { type: "error", text: "refused before it ran: Bash" }),
+    () => (step.result = "I'm in snapshot/.\nI fixed add()."),
+  ], { quiet: true });
+  assert.equal(out.filter((l) => l.includes("I fixed add().")).length, 0, out.join("\n"));
+  assert.ok(out.some((l) => l.includes("refused before it ran")));
+});
+
+test("live view, quiet: core's other refusal notes show (Codex)", async () => {
+  const step: any = { agent: "coder", events: [], result: "ok" };
+  const out = await frames([step], [() => step.events.push(
+    { type: "info", text: "refused path: agents/coder/agent.md (config) — a step cannot change the project's configuration or code" },
+    { type: "info", text: "the model credential was refused mid-step — waiting for the refreshed one" },
+  )], { quiet: true });
+  assert.ok(out.some((l) => l.includes("refused path:")));
+  assert.ok(out.some((l) => l.includes("credential was refused")));
+});
+
+test("live view: the final text inside a finished result is not released by a later sub-agent event (Codex)", async () => {
+  const parent: any = { agent: "coder", events: [], result: undefined };
+  const sub: any = { agent: "helper", subagentOf: "coder", events: [] };
+  const out = await frames([parent, sub], [() => {
+    parent.events.push({ type: "text", text: "Done." , t: "2026-11-19T00:00:01Z" });
+    parent.result = "Looked first.\nDone.";
+    sub.events.push({ type: "tool", text: "Bash", call: "s1", t: "2026-11-19T00:00:02Z" }, { type: "tool", text: "Bash", call: "s1", ms: 2, t: "2026-11-19T00:00:03Z" });
+  }], { quiet: true });
+  assert.equal(out.filter((l) => l.includes("Done.")).length, 0, out.join("\n"));
+});
+
+test("live view: text held in an earlier frame is not released when the finished frame brings the result and a sub-agent event (Codex)", async () => {
+  const parent: any = { agent: "coder", events: [], result: undefined };
+  const sub: any = { agent: "helper", subagentOf: "coder", events: [] };
+  const out = await frames([parent, sub], [
+    () => parent.events.push({ type: "text", text: "Done.", t: "2026-11-19T00:00:01Z" }),
+    () => {
+      parent.result = "Looked first.\nDone.";
+      sub.events.push({ type: "tool", text: "Bash", call: "s1", t: "2026-11-19T00:00:02Z" }, { type: "tool", text: "Bash", call: "s1", ms: 2, t: "2026-11-19T00:00:03Z" });
+    },
+  ], { quiet: true });
+  assert.equal(out.filter((l) => l.includes("Done.")).length, 0, out.join("\n"));
+});
