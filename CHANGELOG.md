@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.9.0] — 2026-11-18
+
+- feat(cli): foldrun code shows the session (turns, spend, model, context) and survives a dropped connection ([bd98b8b](https://github.com/foldrun-io/foldrun-cli/commit/bd98b8b))
+- fix(cli): foldrun code prints the reply once when an error or sub-agent event follows it ([fad435a](https://github.com/foldrun-io/foldrun-cli/commit/fad435a))
+- fix(cli): foldrun code no longer shows the limits setup note as a refusal ([ed79210](https://github.com/foldrun-io/foldrun-cli/commit/ed79210))
+
 ## [26.8.0] — 2026-11-18
 
 ### New in the public API
