@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.6.2] — 2026-11-18
+
+- test(cli): assistant leaves with 0 on Ctrl-D at a later prompt, on a real terminal ([ce77744](https://github.com/foldrun-io/foldrun-cli/commit/ce77744))
+
 ## [26.6.1] — 2026-11-18
 
 - fix(cli): foldrun code's live view — tool summaries, one reply, no terminal control ([f7a0b06](https://github.com/foldrun-io/foldrun-cli/commit/f7a0b06))
