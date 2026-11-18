@@ -12,6 +12,19 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.6.0] — 2026-11-18
+
+### New in the public API
+
+- `foldrun code`
+- the `--snapshot` flag
+- the `--apply` flag
+- the `--dir` flag
+
+- fix(cli): live runs show every step again; foldrun code makes a missing project ([355ed59](https://github.com/foldrun-io/foldrun-cli/commit/355ed59))
+- fix(code): harden applying a run's patch, and Ctrl-C in foldrun code (Codex review) ([e883d92](https://github.com/foldrun-io/foldrun-cli/commit/e883d92))
+- feat(code): foldrun code — code with an agent in a sandbox, apply its patch ([48e1da2](https://github.com/foldrun-io/foldrun-cli/commit/48e1da2))
+
 ## [26.5.2] — 2026-11-17
 
 - chore(hooks): pre-push links console/node_modules into the worktree it checks ([630c1f1](https://github.com/foldrun-io/foldrun-cli/commit/630c1f1))
