@@ -46,6 +46,7 @@
 //   foldrun eval grades <eval> what a grader found in the real runs it graded — eval grade <eval> --run <id> grades one
 //   foldrun eval trends    evals by change: each eval against its last run on a different commit
 //   foldrun agent run <name>  run one agent once on a platform, no flow
+//   foldrun code  [dir]     code with an agent in a sandbox on the platform: it gets the folder, you apply its patch
 //   foldrun tool test <name>  exercise one tool alone — no model, no run
 //   foldrun hook <verb>     ls / add / test / rm — your own code at every tool call and step
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
@@ -119,6 +120,8 @@ const HELP = `foldrun — agents are just folders
   foldrun check --rules     every rule check knows: id, level, what it guards against (--json)
   foldrun check --to <ws> --online  also the network checks, run by the platform: known vulnerabilities for exact runtime pins (OSV) and remote MCP servers' tool text — and what could not be checked
   foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test, --context <id>, --file <path> repeatable)
+  foldrun agent run <name> --snapshot [dir|id]  …on a folder: sent first (what git would commit, checked for secrets), the agent works on it in snapshot/, and the patch of its changes is on the run (foldrun report <run-id> patch)
+  foldrun code [dir]        code with an agent on the platform: each message sends the folder (a snapshot), the agent works on it in its own sandbox, and you apply the patch it hands back after git apply --check (--to, --agent <name> (default coder, added on first use with a yes), --task "…" one turn and exit, --yes apply without asking, --test, --context <id>)
   foldrun agent run <name> --no-task  run it with no instruction, on its own prompt alone — the dashboard's Run (--to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker> (--isolated: sandbox: own on the worker), --consult <agent> or --can-ask (--description for a worker with none)
   foldrun agent unlink <agent>  take one away: --subagent <name>, --consult <name> or --can-ask
@@ -175,6 +178,7 @@ const HELP = `foldrun — agents are just folders
   foldrun runs rm <run-id> <run-id>…  delete several: lists them, asks once, then deletes them in one runs/bulk call per project, as the dashboard does
   foldrun runs rm --until <30d|date>  delete every finished run that started before then — records, captured calls, archived outputs (an admin; --to <workspace>, --dry-run, --yes); live runs are left alone
   foldrun report <run-id>   one run, whole: header, every step, what it wrote and what is still waiting
+  foldrun report <run-id> patch  the patch a snapshot run made: the patch to stdout, what it changes to stderr; --apply puts it into --dir <folder> (default here) after git apply --check, asking first unless --yes (--agent <name> when several agents ran)
   foldrun report <run-id> get <agent>/<path>  download a file the run archived from that agent's outputs/ (--file <path>|-, --force)
   foldrun report <run-id> --compare [<run-id>]  beside the flow's last good run (or the one named): changed files and what differs step by step (--json)
   foldrun report <run-id> --tree  the run as one tree: step → model call → tool call, with what went wrong marked (--json)
@@ -338,15 +342,18 @@ Options
   --starter                 new, workspaces new: include the example researcher, writer and publish flow (a new project is blank)
   --transport <k>           tool new: script (default), http or mcp
   --language <l>            tool new, source new, library new: the script's language — javascript, python, bash
-  --task "<text>"           the instruction for a manual run
+  --task "<text>"           the instruction for a manual run; code: one turn, then exit
   --no-task                 agent run: start it with no instruction — the agent works from its own prompt alone
   --task "<text>"           flow inputs save: the task the saved set holds (--file <path> reads it from a file)
-  --test                    run, invoke: a test run — nothing outward, state/ untouched, receipts on the run page
+  --snapshot [dir|id]       agent run: a folder for the agent to work on — sent first (this folder when bare), or a snapshot id foldrun snapshot push answered
+  --apply                   report patch: put the patch into --dir (default this folder) after git apply --check, asking first unless --yes
+  --dir <folder>            report patch: the folder --apply puts the patch into (default this one)
+  --test                    run, invoke, code: a test run — nothing outward, state/ untouched, receipts on the run page
   --file <path>             invoke, agent run: a file handed to the run (repeatable) — a storage path, or ./local-file uploaded to storage/inputs/ first; the first step finds them in inputs/ and can read images and PDFs (FOL-163)
   --require-customer        keys create: every run (or gateway call) with the key must name an end customer (FOL-168)
   --customer <id>           invoke, agent run: which of your own users the run is for (FOL-168) — limits and blocks follow it; runs: only that customer's runs
   --reason "<text>"         customers block: why, kept on the block and the audit log
-  --context <id>            invoke, agent run: a turn of that conversation — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters); runs: only that conversation's runs
+  --context <id>            invoke, agent run, code: a turn of that conversation — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters); runs: only that conversation's runs
   --follow                  logs: keep tailing a live run (with --url: on the platform)
   --status <s>              runs, stop, rerun: only these statuses, comma-separated (failed, completed, awaiting-approval…)
   --since <span>            runs, stop, rerun: only runs started within 24h, 7d, 90m, 2w, or today (the last 24h)
@@ -359,7 +366,7 @@ Options
   --verdict <v>             runs: only completed runs whose summary leads with it — good, bad, quiet, blocked (comma-separated)
   --q <words>               runs: the runs page's text search — every word, any order, across id, flow, project, status, verdict, summary and failure; assistant history: search the conversations
   --flow <name>             export: that flow and everything it runs; runs, stop, rerun: only that flow's runs; flow add: the other flow a subflow step runs; flow draft: the existing flow to redraft
-  --agent <name>            export: that agent and what it grants; flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame; source new: the agent the document belongs to
+  --agent <name>            code: the agent that works on the folder (default coder); report patch: whose patch, when several agents ran; export: that agent and what it grants; flow add: the agent a chain, parallel or router step runs; rerun: from the first step that agent runs; report live: whose browser frame; source new: the agent the document belongs to
   --instruction "<text>"    flow add: what a new step (chain, parallel, router) is told to do
   --after <n>               flow add, flow move-step, flow paste: put the new group after the nth (0 = first); --before <n> before it (flow add); default last
   --group <n>               flow add, flow move-step, flow paste: the group a step joins, in parallel
@@ -432,7 +439,7 @@ Options
   --stale [days]            agent ls: only agents not run in that many days (never run included); bare, those past alerts: stale_days
   --reason "<text>"         account pause, project pause: why — shown to everyone who opens it
   --stop                    account pause, project pause: also stop every run going now (asks; --yes to mean it)
-  --yes                     approve, stop, rerun (bulk), pause --stop, flow rotate-hook, flow draft, assistant, history restore, restore <ws>, import, billing plan, workspace set name, team remove, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
+  --yes                     code, report patch: apply the patch without asking; approve, stop, rerun (bulk), pause --stop, flow rotate-hook, flow draft, assistant, history restore, restore <ws>, import, billing plan, workspace set name, team remove, and every rm/revoke/unshare: skip the confirmation, deliberately (required with no terminal)
   --json                    report: the raw run record instead of the report; runs: { runs, next }; runs outputs: { runId, files, totalBytes }; observe, usage, api version, changelog, find, preferences, workspace vocabulary, flags, projects, workspaces show, agent ls, flow ls, agent import --list, backups requests, team, hook ls, secrets ls, triggers, storage ls --all: the raw document; version: {cli, core, platform}
   --events <a,b>            account set notify: failed, awaiting-approval, completed
   --failed                  webhooks deliveries: only the ones that gave up
@@ -528,7 +535,7 @@ if (!command || command === "--help" || command === "-h") {
 // `--value` as the account's argument and stored an empty secret; `--force
 // ./dir` swallowed the directory. A flag followed by another flag is also
 // boolean, so an unlisted switch at least does not eat its neighbour.
-const BOOLEAN_FLAGS = new Set(["read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "claude-code", "login", "unreachable", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty", "plain", "no-beep", "require-customer", "no-write"]);
+const BOOLEAN_FLAGS = new Set(["apply", "read-only", "account", "follow", "force", "oauth2", "wait", "watch", "print", "dry-run", "help", "no-browser", "local", "test", "flat", "yes", "platform", "json", "forever", "all", "check", "new-client", "quiet", "off", "can-ask", "preview", "csv", "failed", "starter", "history", "list", "library", "clear", "security", "changed", "write-baseline", "no-baseline", "rules", "calls", "tree", "tool-error", "stop", "last", "no-pkce", "generate-key", "device", "write", "dpop", "export", "isolated", "no-wait", "dismissed", "unread", "team", "started", "mine", "none", "a2a", "gateway", "claude-code", "login", "unreachable", "public-card", "private-card", "return-immediately", "online", "overwrite", "no-send", "event-wait", "with-client", "use", "clear-name", "clear-description", "clear-examples", "clear-accept-risk", "clear-address", "clear-email", "clear-abn", "no-task", "empty", "plain", "no-beep", "require-customer", "no-write"]);
 // Flags said more than once collect into a list: `--tag a --tag b`.
 const REPEATABLE = new Set(["tag", "expect", "header", "site", "add", "remove", "rule", "authorize-param", "example", "accept-risk"]);
 /** Flags that become a list only when given more than once (FOL-163 `--file`). */

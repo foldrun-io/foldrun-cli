@@ -9714,6 +9714,10 @@ async function agentRunCmd(positional, flags, layout) {
   const base = `/api/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
   if (flags.context !== undefined && typeof flags.context !== "string") throw new Error("which conversation? `--context <id>`");
   const files = await runInputs(url, flags, ws);
+  // --snapshot [dir|id]: a folder for the agent to work on (Part B3). It
+  // finds it in snapshot/; the patch of what it changed is on the run when
+  // it ends (`foldrun report <run-id> patch`).
+  const snapshot = flags.snapshot === undefined ? null : await snapshotFor(url, flags, ws, flags.snapshot);
 
   // A waited run that FAILS is the answer to the question, not a fault in
   // the call: 200 with its status since FOL-106, 500 with the same record
@@ -9735,7 +9739,7 @@ async function agentRunCmd(positional, flags, layout) {
       // at the proxy, send-capable secrets withheld, state/ kept.
       // --context <id> (FOL-162): a turn of that conversation — the agent
       // reads the earlier runs started with the same context first.
-      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}), ...(typeof flags.context === "string" ? { context: flags.context } : {}), ...(files.length ? { inputs: files } : {}), ...(typeof flags.customer === "string" ? { customer: flags.customer } : {}) }),
+      body: JSON.stringify({ ...(task ? { task } : {}), ...(flags.test === true ? { test: true } : {}), ...(typeof flags.context === "string" ? { context: flags.context } : {}), ...(files.length ? { inputs: files } : {}), ...(typeof flags.customer === "string" ? { customer: flags.customer } : {}), ...(snapshot ? { snapshot } : {}) }),
     }),
   );
   const runId = body?.runId;
@@ -9746,7 +9750,8 @@ async function agentRunCmd(positional, flags, layout) {
       `\n  ${c.green("✓")} queued ${c.bold(runId)}${body.test ? ` ${c.amber("TEST")}` : ""}  ${c.dim(`${name} · ${ws}`)}`,
     );
     console.log(`  ${c.dim(`foldrun report ${runId} --to ${ws}`)}`);
-    console.log(`  ${c.dim(`foldrun logs ${runId} --to ${ws} --follow`)}\n`);
+    console.log(`  ${c.dim(`foldrun logs ${runId} --to ${ws} --follow`)}${snapshot ? "" : "\n"}`);
+    if (snapshot) console.log(`  ${c.dim(`foldrun report ${runId} patch --to ${ws} --apply   (when it ends: put its changes into the folder)`)}\n`);
     return 0;
   }
 
@@ -12171,6 +12176,49 @@ async function snapshotCmd(positional, flags, layout) {
   const verb = positional[0];
   if (verb !== "push") throw new Error("`foldrun snapshot push [dir] --to <workspace>` — send a git folder for an agent on foldrun to work on (--dry-run, --out <file.tar.gz> [--force], --json)");
   const dir = path.resolve(positional[1] ?? ".");
+  const { packed, left, unscanned, summary } = await packFolder(dir);
+  if (typeof flags.out === "string") {
+    // Never over a file that is there unless asked (--force), as export does:
+    // a preview must not be able to destroy a file named by mistake (Codex).
+    if (fs.existsSync(flags.out) && flags.force !== true) throw new Error(`${flags.out} already exists — --force replaces it`);
+    fs.writeFileSync(flags.out, packed.archive);
+  }
+  if (flags["dry-run"] === true) {
+    if (flags.json === true) console.log(JSON.stringify({ dryRun: true, snapshotId: packed.sha256, files: packed.files, bytes: packed.bytes, compressedBytes: packed.archive.length, leftOut: left, unscanned }, null, 2));
+    else {
+      console.log(`\n  ${c.bold(summary)} ${c.dim(`· ${packed.sha256.slice(0, 12)}`)}`);
+      for (const l of left.slice(0, 20)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+      if (unscanned.length) console.log(`  ${c.amber("!")} not checked for secrets (binary): ${unscanned.slice(0, 10).join(", ")}${unscanned.length > 10 ? " …" : ""}`);
+      console.log(`\n  ${c.dim("(--dry-run: nothing sent)")}\n`);
+    }
+    return 0;
+  }
+
+  const url = platformFor(flags, "snapshot push");
+  const ws = platformWorkspace(flags, layout, "snapshot push");
+  const body = await pushPacked(url, flags, ws, packed);
+  if (flags.json === true) {
+    console.log(JSON.stringify({ ...body, leftOut: left, unscanned }, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.green("✓")} ${summary} → ${c.bold(ws)}${body.reused ? c.dim("  (already there)") : ""}`);
+  console.log(`  snapshot ${c.bold(String(body.snapshotId))}`);
+  console.log(`  ${c.dim(`kept until ${body.expiresAt}, and while a run uses it`)}`);
+  for (const l of left.slice(0, 20)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+  if (unscanned.length) console.log(`  ${c.amber("!")} not checked for secrets (binary): ${unscanned.slice(0, 10).join(", ")}${unscanned.length > 10 ? " …" : ""}`);
+  console.log();
+  return 0;
+}
+
+/**
+ * A git folder packed as a snapshot: what git would commit (the tracked files
+ * and the untracked ones .gitignore does not exclude), as they are on disk
+ * now. Links and anything that is not a plain file are left out and named; a
+ * secret in any file refuses it before anything leaves the machine. Shared by
+ * `snapshot push`, `agent run --snapshot` and `foldrun code`, so the three
+ * send exactly the same thing.
+ */
+async function packFolder(dir) {
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`${dir} is not a folder`);
   const git = spawnSync("git", ["-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "buffer", maxBuffer: 256 * 1024 * 1024 });
   if (git.error || git.status !== 0) {
@@ -12233,26 +12281,13 @@ async function snapshotCmd(positional, flags, layout) {
     if (err instanceof SnapshotRefused) throw new Error(`not sent: ${err.message}`);
     throw err;
   }
-  if (typeof flags.out === "string") {
-    // Never over a file that is there unless asked (--force), as export does:
-    // a preview must not be able to destroy a file named by mistake (Codex).
-    if (fs.existsSync(flags.out) && flags.force !== true) throw new Error(`${flags.out} already exists — --force replaces it`);
-    fs.writeFileSync(flags.out, packed.archive);
-  }
   const summary = `${packed.files} file${packed.files === 1 ? "" : "s"}, ${packed.bytes} bytes (${packed.archive.length} compressed)`;
-  if (flags["dry-run"] === true) {
-    if (flags.json === true) console.log(JSON.stringify({ dryRun: true, snapshotId: packed.sha256, files: packed.files, bytes: packed.bytes, compressedBytes: packed.archive.length, leftOut: left, unscanned }, null, 2));
-    else {
-      console.log(`\n  ${c.bold(summary)} ${c.dim(`· ${packed.sha256.slice(0, 12)}`)}`);
-      for (const l of left.slice(0, 20)) console.log(`  ${c.dim(`left out: ${l}`)}`);
-      if (unscanned.length) console.log(`  ${c.amber("!")} not checked for secrets (binary): ${unscanned.slice(0, 10).join(", ")}${unscanned.length > 10 ? " …" : ""}`);
-      console.log(`\n  ${c.dim("(--dry-run: nothing sent)")}\n`);
-    }
-    return 0;
-  }
+  return { packed, left, unscanned, summary };
+}
 
-  const url = platformFor(flags, "snapshot push");
-  const ws = platformWorkspace(flags, layout, "snapshot push");
+/** Send a packed folder to POST …/snapshots; answers the platform's body
+ *  ({ snapshotId, files, bytes, expiresAt, reused }). */
+async function pushPacked(url, flags, ws, packed) {
   const token = await renewedToken(url, flags);
   const res = await remoteFetch(
     url,
@@ -12268,17 +12303,311 @@ async function snapshotCmd(positional, flags, layout) {
     /* not JSON — the status says enough */
   }
   if (!res.ok) throw new HttpError(`${body.error ?? `snapshot push → HTTP ${res.status}`}${res.status === 401 || res.status === 403 ? refusedHint(url, flags) : ""}`, res.status, body);
-  if (flags.json === true) {
-    console.log(JSON.stringify({ ...body, leftOut: left, unscanned }, null, 2));
+  return body;
+}
+
+/** A snapshot id as the platform names one: the archive's sha256. */
+const SNAPSHOT_ID = /^[0-9a-f]{64}$/;
+
+/**
+ * `--snapshot [dir|id]` on `agent run`: the folder to send (bare: this one),
+ * or the id a `snapshot push` answered. A folder is packed and sent first;
+ * answers the id the run takes.
+ */
+async function snapshotFor(url, flags, ws, value) {
+  const given = value === true ? "." : String(value);
+  if (SNAPSHOT_ID.test(given) && !fs.existsSync(given)) return given;
+  const { packed, left, summary } = await packFolder(path.resolve(given));
+  const body = await pushPacked(url, flags, ws, packed);
+  console.log(`  ${c.dim(`sent ${summary} → snapshot ${String(body.snapshotId).slice(0, 12)}${body.reused ? " (already there)" : ""}`)}`);
+  for (const l of left.slice(0, 10)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+  return String(body.snapshotId);
+}
+
+/**
+ * The patch a snapshot run made, read from the run's archive: the agent's
+ * outputs/snapshot.json says whether there is one (changed, unchanged, or
+ * unavailable with the reason), outputs/snapshot.patch holds it. The patch
+ * is made by the platform in the held pod against a fresh copy of what was
+ * sent, never by the agent (platform snapshot-patch.ts).
+ */
+async function runPatch(url, flags, ws, run, agentFlag) {
+  const agents = [...new Set((run.steps ?? []).filter((s) => !s.subagentOf).map((s) => s.agent))];
+  const agent = typeof agentFlag === "string" ? agentFlag : agents.length === 1 ? agents[0] : null;
+  if (!agent) throw new Error(`run ${run.id} has steps by ${agents.join(", ")} — say whose patch with --agent <name>`);
+  const archive = (rel) => `/api/workspaces/${enc(ws)}/runs/${enc(run.id)}/archive?agent=${enc(agent)}&path=${enc(rel)}`;
+  let meta;
+  try {
+    const { bytes } = await remoteBytes(url, flags, archive("snapshot.json"), `${agent}/snapshot.json in ${run.id}`);
+    meta = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) {
+      return { agent, status: "none", reason: `${agent} in ${run.id} has no snapshot.json — the run was not sent a folder (\`agent run --snapshot\`), or it has not finished` };
+    }
+    throw err;
+  }
+  if (meta?.status !== "changed") return { agent, status: meta?.status ?? "unavailable", reason: meta?.reason ?? null, meta };
+  const { bytes } = await remoteBytes(url, flags, archive("snapshot.patch"), `${agent}/snapshot.patch in ${run.id}`);
+  return { agent, status: "changed", meta, patch: Buffer.from(bytes) };
+}
+
+/** What a patch changes, as git's own stat lines — read from the summary the platform wrote. */
+function patchSummaryLines(meta) {
+  const out = [];
+  for (const [list, mark] of [[meta?.modified, c.amber("M")], [meta?.added, c.green("A")], [meta?.deleted, c.red("D")]]) {
+    for (const f of list ?? []) out.push(`  ${mark} ${typeof f === "string" ? f : f?.path ?? JSON.stringify(f)}`);
+  }
+  return out;
+}
+
+/**
+ * Put a run's patch into a folder: `git apply --check` first, then git's own
+ * stat, then a yes (or --yes), then `git apply`. Run from the repository's
+ * top with --directory: a `git apply` started in a subfolder silently skips
+ * every path the patch names, because patch paths read from the top.
+ * Answers whether it was applied.
+ */
+async function applyPatch(dir, patch, flags, label) {
+  const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (top.status !== 0) throw new Error(`${dir} is not in a git repository — the patch is applied with git`);
+  const prefix = spawnSync("git", ["-C", dir, "rev-parse", "--show-prefix"], { encoding: "utf8" }).stdout.trim();
+  const file = path.join(os.tmpdir(), `foldrun-${label.replace(/[^A-Za-z0-9_.-]/g, "_")}.patch`);
+  fs.writeFileSync(file, patch);
+  const args = (...more) => ["-C", top.stdout.trim(), "apply", ...(prefix ? [`--directory=${prefix.replace(/\/$/, "")}`] : []), ...more, file];
+  const check = spawnSync("git", args("--check"), { encoding: "utf8" });
+  if (check.status !== 0) {
+    throw new Error(`the patch does not apply to ${dir} as it is now — it was made against the folder as it was sent. git said:\n${String(check.stderr).trim()}\nThe patch is kept at ${file}`);
+  }
+  const stat = spawnSync("git", args("--stat"), { encoding: "utf8" });
+  for (const line of String(stat.stdout).trimEnd().split("\n")) if (line.trim()) console.log(`  ${line.trim()}`);
+  if (flags.yes !== true && !process.stdin.isTTY) {
+    console.log(`  ${c.dim(`not applied — no terminal to ask, and --yes applies without asking. The patch is at ${file}`)}`);
+    return false;
+  }
+  if (!(await confirmed(flags, "applying a patch", `apply it to ${dir}? [y/N] `))) {
+    console.log(`  ${c.dim(`not applied — the patch is at ${file}`)}`);
+    return false;
+  }
+  const done = spawnSync("git", args(), { encoding: "utf8" });
+  if (done.status !== 0) throw new Error(`git apply failed: ${String(done.stderr).trim()} — the patch is kept at ${file}`);
+  fs.rmSync(file, { force: true });
+  console.log(`  ${c.green("✓")} applied ${c.dim("— review it with git diff, and commit it when you are happy")}`);
+  return true;
+}
+
+/**
+ * `foldrun report <run-id> patch [--apply] [--dir <folder>] [--agent <name>]`
+ * — the patch a snapshot run made. Without --apply the patch itself goes to
+ * stdout (so `> fix.patch` or `| git apply` work) and what it changes to
+ * stderr; with --apply it is put into --dir (this folder by default) after
+ * `git apply --check`, asking first unless --yes.
+ */
+async function reportPatchCmd(runId, flags, layout) {
+  if (!runId) throw new Error("`foldrun report <run-id> patch` — which run?");
+  const url = platformFor(flags, "report patch");
+  const ws = await workspaceOfRun(url, flags, layout, runId);
+  const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+  if (isLive(run)) throw new Error(`run ${runId} is still ${run.status} — the patch is made when it ends (\`foldrun logs ${runId} --to ${ws} --follow\`)`);
+  const p = await runPatch(url, flags, ws, run, flags.agent);
+  if (p.status === "unchanged") {
+    console.error(`\n  ${c.dim(`${p.agent} changed nothing in the folder it was sent`)}\n`);
     return 0;
   }
-  console.log(`\n  ${c.green("✓")} ${summary} → ${c.bold(ws)}${body.reused ? c.dim("  (already there)") : ""}`);
-  console.log(`  snapshot ${c.bold(String(body.snapshotId))}`);
-  console.log(`  ${c.dim(`kept until ${body.expiresAt}, and while a run uses it`)}`);
-  for (const l of left.slice(0, 20)) console.log(`  ${c.dim(`left out: ${l}`)}`);
-  if (unscanned.length) console.log(`  ${c.amber("!")} not checked for secrets (binary): ${unscanned.slice(0, 10).join(", ")}${unscanned.length > 10 ? " …" : ""}`);
+  if (p.status !== "changed") {
+    console.error(`\n  ${c.red("✗")} no patch: ${p.reason ?? p.status}\n`);
+    return 1;
+  }
+  if (flags.apply !== true) {
+    console.error(["", ...patchSummaryLines(p.meta), ""].join("\n"));
+    process.stdout.write(p.patch ?? "");
+    return 0;
+  }
+  const dir = path.resolve(typeof flags.dir === "string" ? flags.dir : ".");
+  console.log(`\n  ${c.bold(`patch from ${runId}`)} ${c.dim(`· ${p.agent} · into ${dir}`)}\n`);
+  const applied = await applyPatch(dir, p.patch, flags, runId);
   console.log();
-  return 0;
+  return applied ? 0 : 1;
+}
+
+/** The agent `foldrun code` makes in a project that has none. Plain
+ *  markdown like any other: the person edits its tools, model, hooks and
+ *  limits in the file (or the dashboard), and every turn runs it in its
+ *  own sandbox. */
+export const CODER_AGENT = `---
+name: coder
+description: Changes code in a folder sent by \`foldrun code\`, and checks the change with the folder's own tests.
+model: default
+effort: medium
+size: large
+tools: [write, code]
+---
+
+You work on a code folder a person sent from their computer. It is in
+snapshot/ under your working directory. Only what you change there comes
+back to them, as a patch they review and apply.
+
+- Read before you change anything: find the files the task is about, and
+  the project's own conventions (README, AGENTS.md, CLAUDE.md, the tests).
+- Make the smallest change that does the task. Do not reformat, rename or
+  tidy what the task does not need.
+- Run the project's tests or build for what you changed, and fix what
+  fails. If you cannot run them (a service is missing, a package will not
+  install), say so plainly rather than guessing they pass.
+- Never put a secret in a file, and never create .git or links in
+  snapshot/.
+- End with a short summary: what you changed, file by file, and what you
+  ran to check it.
+`;
+
+/** `foldrun code` needs its agent in the project; offers to make `coder`. */
+async function ensureCodeAgent(url, flags, ws, agent) {
+  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents`);
+  if ((r.agents ?? []).some((a) => a.name === agent)) return;
+  if (agent !== "coder") throw new Error(`no agent "${agent}" in ${ws} — \`foldrun agent ls --to ${ws}\` lists them; leave out --agent and foldrun code offers to make one called coder`);
+  console.log(`\n  ${c.amber("!")} ${ws} has no ${c.bold("coder")} agent yet.`);
+  console.log(`  ${c.dim("foldrun code can add one (agents/coder/agent.md: tools [write, code], size large, model default) — edit it afterwards like any agent.")}`);
+  if (!(await confirmed(flags, "foldrun code", `add it to ${ws}? [y/N] `))) throw new Error(`nothing started — add an agent with \`foldrun agent new\`, or name one with --agent <name>`);
+  await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, {
+    method: "PUT",
+    body: JSON.stringify({ path: "agents/coder/agent.md", content: CODER_AGENT, message: "foldrun code: the coder agent" }),
+  });
+  console.log(`  ${c.green("✓")} added agents/coder/agent.md to ${ws}`);
+}
+
+/**
+ * One turn of `foldrun code`: the folder as it is now goes as a snapshot,
+ * the agent runs on it in its own sandbox (a turn of the session's
+ * conversation, so it reads the earlier turns), its events print as they
+ * happen, and the patch it leaves is offered to apply. Ctrl-C stops the run
+ * on the platform. Answers the run's status.
+ */
+async function codeTurn(s, task) {
+  const { url, flags, ws, agent, dir } = s;
+  const { packed, left, summary } = await packFolder(dir);
+  const snap = await pushPacked(url, flags, ws, packed);
+  console.log(`  ${c.dim(`sent ${summary}${snap.reused ? " (unchanged since the last turn)" : ""}`)}`);
+  for (const l of left.slice(0, 5)) console.log(`  ${c.dim(`left out: ${l}`)}`);
+  const started = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/${enc(agent)}/run`, {
+    method: "POST",
+    body: JSON.stringify({ task, snapshot: String(snap.snapshotId), context: s.context, ...(flags.test === true ? { test: true } : {}) }),
+  });
+  const runId = started?.runId;
+  if (!runId) throw new Error(`${url} started no run — ${JSON.stringify(started).slice(0, 200)}`);
+  console.log(`  ${c.dim(`run ${runId}${started.test ? " (test)" : ""} — Ctrl-C stops it; the dashboard shows it live`)}\n`);
+
+  let stopping = false;
+  const onInt = () => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`\n  ${c.amber("stopping")} ${runId} …`);
+    remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/stop`, { method: "POST", body: "{}" }).catch((err) => console.log(`  ${c.red("✗")} stop: ${explain(err)}`));
+  };
+  process.on("SIGINT", onInt);
+  let run;
+  try {
+    run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+    const seen = new Map();
+    const open = new Map();
+    printNew(run, seen, open);
+    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open)) ?? run;
+    flushCalls(open);
+    if (isLive(run)) run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+  } finally {
+    process.off("SIGINT", onInt);
+  }
+
+  const own = (run.steps ?? []).filter((x) => !x.subagentOf);
+  const reply = own.at(-1)?.result;
+  if (reply) console.log(`\n${String(reply).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
+  const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
+  console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${run.status} ${c.dim(`· $${cost.toFixed(4)} · ${runId}`)}`);
+  if (run.status !== "completed") {
+    console.log(`  ${c.dim(`foldrun report ${runId} --to ${ws} — what happened; a patch it made anyway: foldrun report ${runId} patch --to ${ws}`)}\n`);
+    return run.status;
+  }
+  const p = await runPatch(url, flags, ws, run, agent);
+  if (p.status === "unchanged") console.log(`  ${c.dim("no change to the folder")}\n`);
+  else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${p.reason ?? p.status}\n`);
+  else {
+    console.log();
+    await applyPatch(dir, p.patch, flags, runId);
+    console.log();
+  }
+  return run.status;
+}
+
+/**
+ * `foldrun code [dir] --to <workspace>` — code with an agent that works in
+ * a sandbox on the platform, not on this computer. Each message sends the
+ * folder as a snapshot (what git would commit, checked for secrets here and
+ * there), runs the agent on it in its own pod — gVisor where the install
+ * runs it — and offers the patch it hands back, which `git apply` puts into
+ * the folder after a yes. Nothing the agent runs touches this machine.
+ *
+ * The agent is an ordinary agent file (`--agent`, default `coder`, made on
+ * first use with a yes), so its tools, model, hooks, limits and network are
+ * frontmatter like any other; each turn is an ordinary run, on the run page
+ * of whatever install this profile is signed in to. The turns of a session
+ * share a conversation (`context`), so the agent reads the earlier ones.
+ *
+ * `--task "…"` runs one turn and exits (for scripts); with no terminal it
+ * needs --yes to apply. /new starts a fresh conversation, /quit leaves.
+ */
+async function codeCmd(positional, flags, layout) {
+  const dir = path.resolve(positional[0] ?? ".");
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`${dir} is not a folder`);
+  if (spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).status !== 0) {
+    throw new Error(`${dir} is not in a git repository — foldrun code sends what git would commit and applies the agent's patch with git, so \`git init\` it first`);
+  }
+  const url = platformFor(flags, "code");
+  const ws = platformWorkspace(flags, layout, "code");
+  const agent = typeof flags.agent === "string" ? flags.agent : "coder";
+  await ensureCodeAgent(url, flags, ws, agent);
+  const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
+  const s = { url, flags, ws, agent, dir, context: typeof flags.context === "string" ? flags.context : newContext() };
+
+  if (typeof flags.task === "string") {
+    if (!flags.task.trim()) throw new Error('--task needs the instruction, e.g. --task "add a test for the parser"');
+    console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} · ${dir}`)}\n`);
+    const status = await codeTurn(s, flags.task.trim());
+    return status === "completed" ? 0 : 1;
+  }
+  if (!process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
+
+  const { createInterface } = await import("node:readline/promises");
+  console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} on ${url}`)}`);
+  console.log(`  ${c.dim(`${dir} — each message sends it to a sandbox; you apply what comes back`)}`);
+  console.log(`  ${c.dim("/new  a fresh conversation    /quit  leave")}\n`);
+  for (;;) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    let line;
+    try {
+      line = (await rl.question(`${c.bold("you ›")} `)).trim();
+    } catch {
+      line = "/quit"; // the input closed (Ctrl-D)
+    } finally {
+      rl.close();
+    }
+    if (!line) continue;
+    if (line === "/quit" || line === "/exit") {
+      console.log();
+      return 0;
+    }
+    if (line === "/new") {
+      s.context = newContext();
+      console.log(`  ${c.dim("a fresh conversation — the agent no longer reads the earlier turns")}\n`);
+      continue;
+    }
+    if (line.startsWith("/")) {
+      console.log(`  ${c.dim("/new  a fresh conversation    /quit  leave")}\n`);
+      continue;
+    }
+    try {
+      await codeTurn(s, line);
+    } catch (err) {
+      console.log(`  ${c.red("✗")} ${explain(err)}\n`);
+    }
+  }
 }
 
 /**
@@ -16023,6 +16352,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return importCmd(positional, flags, layout);
     case "snapshot":
       return snapshotCmd(positional, flags, layout);
+    case "code":
+      return codeCmd(positional, flags, layout);
     case "status":
       return statusCmd(layout, flags, positional[0]);
     case "workspaces":
@@ -16150,6 +16481,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "report":
       if (positional[1] === "live") return reportLiveCmd(positional[0], flags, layout);
       if (positional[1] === "call") return reportCallCmd(positional[0], positional[2], flags, layout);
+      if (positional[1] === "patch") return reportPatchCmd(positional[0], flags, layout);
       return positional[1] === "get" ? reportGetCmd(positional[0], positional[2], flags, layout) : reportCmd(positional[0], flags, layout);
     case "stop":
       // No run id and a filter: every run the filter matches (runs/bulk).

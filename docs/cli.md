@@ -44,6 +44,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun extract [dir]` | move each single-file script tool — a `tools/<name>.md` with its program in a fenced block — into a folder: `tools/<name>/tool.md` with `run:` pointing at `run.js`, `run.py` or `run.sh` beside it. Frontmatter is edited as text, never re-serialised, so the diff is only what moved. A tool that already has a folder is left for you; `--dry-run` lists what it would do |
 | `foldrun check --to <ws>` | validate the copy that is DEPLOYED, rather than the folder in front of you — a project edited through the API, by an agent or by `foldrun source put`, has had no way to be checked short of spending a run. The files are fetched into a temporary folder and the ordinary check runs over them, so there is one copy of the rules; the output names the project and the platform it checked. `--online` adds the network checks the platform runs: known vulnerabilities for exact runtime pins and remote MCP servers' tool text, and what could not be checked (an editor's key or above; the platform keeps the answer 10 minutes while the files are unchanged). Either way it ends with when the platform's [daily rescan](checks#online-checks-and-the-daily-rescan) last ran, as the Checks page does — a platform that does not say leaves the line out |
 | `foldrun agent run <name>` | run one agent once on a platform, with no flow file: a flow of one step. `--task "…"` is the instruction and is required. Prints the run id and how to follow it; `--wait` holds on (in 25-second pieces, as `invoke` does) and then prints the same report `foldrun report` would; `--test` makes it a [test run](runs#test-runs) |
+| `foldrun agent run <name> --snapshot [dir\|id]` | run it on a folder: the folder (this one when bare) is sent first, exactly as `snapshot push` sends it, or a snapshot id that command answered is used as it is. The agent finds it in `snapshot/`; when the run ends the patch of what it changed is on the run (`foldrun report <run-id> patch`). Needs an install that runs steps in sandboxes (`FOLDRUN_RUN_ISOLATION=k8s`) |
 | `foldrun agent run <name> --no-task` | run it with no instruction, as the dashboard's **Run** on an agent row does (`POST …/agents/<agent>/run` with `{}`): the agent works from its own prompt alone. Explicit, so a mistyped `--task` never starts a run with nothing to do; `--task` and `--no-task` together are refused. `--wait`, `--test` and `--to` as for `agent run` |
 | `foldrun agent link <agent>` | add to an agent's team, in its own frontmatter — `--subagent <worker>` (`subagents:`, a worker it delegates to), `--consult <agent>` (`agents:`, a colleague it asks) or `--can-ask` (`ask` in `tools:`, so it may ask you mid-step). The edit is core's, the one the canvas's docks make: only the lines of that one list change, flow style stays flow style, comments and the prose stay byte for byte. A sub-agent without a `description:` needs one, because the model picks a sub-agent by it — asked for at a terminal, `--description "…"` otherwise, and written into the worker's file first. `--isolated` also writes `sandbox: own` on the worker: each job it is handed runs in its own sandbox, with its own tools, secrets and network, not cut to the delegating agent's; its reply comes back with the files it wrote (`foldrun docs agents`). Says which flows use the agent ("used by 3 flows"), since the change reaches all of them. Prints the diff, and refuses an edit `foldrun check` would call an error; `--dry-run` writes nothing. In this folder by default (`--workspace <name>` in an account with several); `--to <workspace>` edits the deployed copy through `PATCH /api/workspaces/<ws>/agents/<name>`. In this folder it re-reads each file just before writing — after the description prompt, after `check` — and refuses, writing nothing to either file, when one changed since it was read |
 | `foldrun agent import <workspace>/<agent>` | copy an agent you already have in another project into this one: its `agent.md` and own `skills/`, `scripts/`, `knowledge/` — never `memory/`, `outputs/` or `state/`. Into the project you stand in, or `--workspace <name>`; `--as <name>` imports it under another name (and rewrites `name:`), which a name clash requires. `--to <workspace>` does it on the platform (`POST /api/workspaces/<ws>/agents/import`) and lists the tools, skills, scripts and secrets the copy uses that the project lacks. See [Importing an agent](workspaces#importing-an-agent-you-already-have) |
@@ -101,6 +102,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun report <run-id> --compare [<run-id>]` | this run beside the flow's [last good run](runs#compare-with-the-last-good-run), or the one named: whether they ran the same files and which changed, then what differs step by step (status, new errors, instruction, model, tools, time, tokens). `--json` |
 | `foldrun report <run-id> --tree` | the run as [one tree](runs#the-trace-tree): each step, each model call (model, tokens, why it stopped) and each tool call under the call that asked for it, with how long each took and `← what went wrong` on the first failure. `--json` gives the tree and the failure path |
 | `foldrun report <run-id> --calls` · `foldrun report <run-id> call <call-id>` | what the run [recorded](runs#what-a-run-records): `--calls` adds every model call (model, time, tokens and cache share, why it stopped, tools) and lists the tool calls whose input and output were kept; `call <call-id>` prints one of those, secrets masked (`--json`). The header says which commit the run ran and how long it queued |
+| `foldrun report <run-id> patch` | the patch a snapshot run made — by the platform, in the held sandbox, against a fresh copy of what was sent, never by the agent. The patch goes to stdout (so `> fix.patch` or `\| git apply` work) and what it changes to stderr; a run that changed nothing says so and exits 0, one with no patch says why and exits 1. `--apply` puts it into `--dir <folder>` (this one by default) after `git apply --check`, asking first unless `--yes`; `--agent <name>` when several agents ran |
 | `foldrun report <run-id> get <agent>/<path>` | download one file the run archived — whatever that agent left in `outputs/`, copied under the run when it ended. Writes it beside you under its own name; `--file <path>` names somewhere else (`-` for stdout), `--force` overwrites |
 | `foldrun report <run-id> live` | the run page's live browser view: which agents' browsers have posted a frame, and when; `--agent <name>` saves the newest frame as a JPEG (`--file <path>`, `-` for stdout) and prints the page's address, the engine and whether the browser has closed (`GET …/runs/<id>/live`) |
 | `foldrun insights` | recurring [problems](runs#insights) found in the last week of runs — a prompt mostly uncached, a big tool result sent again, a retry loop, steps near their timeout — each with why, what to do, about what it cost and the runs it was seen in. `--days <1-30>`, `--to <workspace>`, `--json` |
@@ -134,6 +136,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun export [workspace]` | a deployed project as a `.zip` — agents, flows, tools, skills, scripts, evals, knowledge; never memory, state, storage or a secret's value. `--flow <name>` exports that flow with every flow and agent it runs and the tools, skills and scripts they grant; `--agent <name>` that agent and what it grants. Written under the name the platform gives it (`<ws>.zip`, `<ws>-flow-<name>.zip`); `--file <path>` (`-` for stdout), `--force` to replace (`GET …/export`) |
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a project package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun snapshot push [dir]` | send a folder for an agent on foldrun to work on (a snapshot). What goes is what git would commit — tracked files and untracked ones `.gitignore` does not exclude, as they are on disk; links and submodules are left out and named. A secret in any file stops it before anything leaves the machine (remove it, or leave the file out with `.gitignore`); the platform checks again. Answers the snapshot id, kept 7 days from the last send and while a run uses it. `--to <workspace>`, `--dry-run` packs and checks only, `--out <file.tar.gz>` keeps the archive (`--force` over a file that is there), `--json` (`POST …/snapshots`) |
+| `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it, and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; `/new` starts a fresh conversation, `/quit` leaves. `--to <workspace>`, `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` applies without asking (required with no terminal), `--test`, `--context <id>` |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
 | `foldrun status --platform` | is the platform up: overall, each component (dashboard and API, run workers, scheduler, model providers, email, storage) and any incident or maintenance the operator posted, with its latest update. Reads the open `/api/status` — no key needed; the signed-in platform, `--url` / `FOLDRUN_URL`, or the default, dash.foldrun.io. `--json` prints the answer as is. Exits 1, saying *status unavailable — the platform may be down*, when it does not answer. Plain `foldrun status` opens with the same one-line verdict |
 | `foldrun status --platform --history` | what the status page draws as bars: each component's uptime over the window and a mark per day — up, degraded or maintenance, an outage, or no samples — then the incidents and maintenance in it, from the open `GET /api/status/history?days=<n>`. `--days 1-90` (default 90), `--json` |
@@ -238,13 +241,15 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `--as <name>` | `agent import`: the name the copy gets in this project (rewrites its `name:`); `storage put`: the path one uploaded file lands at |
 | `--transport <k>` | `tool new`: `script` (the default — a folder with its program beside it), `http` or `mcp` |
 | `--language <l>` | `tool new`, `source new`, `library new`: the script's language — `javascript`, `python` or `bash` |
-| `--task "<text>"` | the instruction for a manual run |
+| `--task "<text>"` | the instruction for a manual run; `code`: one turn, then exit |
+| `--snapshot [dir\|id]` | `agent run`: a folder for the agent to work on — sent first (this folder when bare), or a snapshot id `snapshot push` answered |
+| `--apply`, `--dir <folder>` | `report patch`: put the patch into the folder (this one by default) after `git apply --check`, asking first unless `--yes` |
 | `--no-task` | `agent run`: start it with no instruction — the agent works from its own prompt alone |
 | `--task "<text>"` | `flow inputs save`: the task the saved set holds |
 | `--file <path>` | `invoke`, `agent run`: a file handed to the run — repeatable; a storage path, or a local one (`./`, `../`, `/`, `~`) uploaded to `storage/inputs/<upload id>/` first. The first step finds them in `inputs/` ([inputs](runs#inputs)) |
 | `--customer <id>` | `invoke`, `agent run`: which of your own users the run is for ([end customers](runs#end-customers)); `runs`: only that customer's runs |
-| `--context <id>` | `invoke`, `agent run`: a turn of that [conversation](runs#conversations) — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters, no spaces); `runs`: only that conversation's runs |
-| `--test` | `run`, `invoke`, `agent run`: a test run — every step runs, nothing outward happens, `state/` and `storage/` are left alone, and the run page lists what would have happened. See [Test runs](runs#test-runs) |
+| `--context <id>` | `invoke`, `agent run`, `code`: a turn of that [conversation](runs#conversations) — the first step reads the earlier runs started with the same context (any id you choose, 1–200 printable characters, no spaces); `runs`: only that conversation's runs |
+| `--test` | `run`, `invoke`, `agent run`, `code`: a test run — every step runs, nothing outward happens, `state/` and `storage/` are left alone, and the run page lists what would have happened. See [Test runs](runs#test-runs) |
 | `--follow` | `logs`: keep tailing a live run — locally, or on the platform with `--url` |
 | `--status <s>` | `runs`, and a bulk `stop` or `rerun`: only these statuses, comma-separated — `failed`, `completed`, `awaiting-approval`, `running`, `queued` |
 | `--since <span>` | `runs`, and a bulk `stop` or `rerun`: only runs started within `24h`, `7d`, `90m`, `2w`, or `today` (the dashboard's "Today": the last 24 hours). `--status stopped` names a run a person stopped (its record says failed; `--status failed` names it too). `observe` and `triggers` take a number of days instead (sent as `?days=`). `--until <span\|date>` on a bulk `stop` or `rerun`: only runs started before then |
@@ -291,7 +296,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `--event-wait` | `reject`: refuse a step waiting on `wait: event` rather than a person's gate |
 | `--note "<text>"` | `approve`: guidance the approved step reads in its prompt — "approve, but skip the Sydney batch". `reject`: the reason, recorded on the trace |
 | `--read-only` | `mcp`: offer the AI app only the tools that read — no `run_flow`, `run_agent`, `decide_approval`, `answer_question`, `message_run`, `stop_run`, `create_workspace`, `write_file` or `delete_file` |
-| `--yes` | skip the confirmation, deliberately: `approve`, `stop`, `deploy` (when it would delete files), and a bulk `stop` or `rerun`, `flow rotate-hook`, `flow draft`, `assistant`, `mcp disconnect`, `a2a cancel`, `history restore`, `restore`, `billing plan`, `repo deploy`/`merge`, `workspace set name`, and every delete — `runs rm`, `storage rm`, `storage unshare`, `source rm`, `secrets rm`, `keys revoke`, `keys delete`, `workspaces rm`. Required when there is no terminal to ask; without it nothing is deleted |
+| `--yes` | skip the confirmation, deliberately: `code` and `report patch` (apply the patch), `approve`, `stop`, `deploy` (when it would delete files), and a bulk `stop` or `rerun`, `flow rotate-hook`, `flow draft`, `assistant`, `mcp disconnect`, `a2a cancel`, `history restore`, `restore`, `billing plan`, `repo deploy`/`merge`, `workspace set name`, and every delete — `runs rm`, `storage rm`, `storage unshare`, `source rm`, `secrets rm`, `keys revoke`, `keys delete`, `workspaces rm`. Required when there is no terminal to ask; without it nothing is deleted |
 | `--json` | `report`: the raw run record instead of the report. `observe`, `usage`, `workspaces`, `workspaces show`, `agent ls`, `flow ls`, `agent import --list`, `assistant`, `backups requests`, `status --platform --history`, `signup status`, `team`, `secrets ls`, `triggers`, `storage ls --all`: the raw document |
 | `--events <a,b>` | `account set notify`: which events are notified on — `failed`, `awaiting-approval`, `completed` |
 | `--watch` | `invoke`: follow the run's trace here as it happens; the exit code is the run's |
@@ -587,6 +592,53 @@ folder, and the deployed copy only when `--to`, `--url`, `--profile` or
 named — by `--url`, by `FOLDRUN_URL`, or by having signed in (`--local` puts a
 deploy back on this machine): then it lists that project's runs there, prints one run's
 trail, and `--follow` tails a live one. `open` always needs a platform.
+
+## Coding in a sandbox
+
+`foldrun code` is a coding session where the agent never runs on your
+computer. You type in the terminal; the work happens in a sandbox on the
+platform (its own pod, under gVisor where the install runs it), and only a
+patch comes back.
+
+```sh
+cd my-app                      # a git folder
+foldrun code --to dev-desk     # each message: send, run, review, apply
+```
+
+Each message is one turn:
+
+1. **The folder goes as a snapshot** — what git would commit, as it is on
+   disk now, links left out, refused if any file holds a secret (checked
+   here and again on the platform). A folder that has not changed since the
+   last turn is not stored twice.
+2. **The agent runs on it** in its own sandbox, as an ordinary run: on the
+   run page of whatever install you are signed in to, self-hosted included,
+   with its cost and every tool call. The turns of a session share a
+   [conversation](runs#conversations), so it reads what it did before.
+3. **The patch comes back** — made by the platform, not the agent, against
+   a fresh copy of what was sent. `git apply --check` first; git's stat; then
+   you say yes. A folder you edited meanwhile so the patch no longer fits is
+   refused whole, never half-applied, and the patch is kept for you.
+
+The agent is a file like any other, `agents/coder/agent.md` — added on first
+use after a yes, or yours with `--agent <name>`. So everything that governs
+it is frontmatter: `tools:`, `model:`, `effort:`, `size:` and `resources:`
+for the sandbox, `runtime:` for what the project needs installed, `hooks:`
+at every tool call, `limits:`, `network:`, `budget:`. Edit it, deploy, and
+the next turn runs the new one.
+
+`--task "…"` runs one turn and exits, for a script; with no terminal,
+`--yes` applies the patch. The same three steps by hand:
+
+```sh
+foldrun agent run coder --to dev-desk --task "fix the failing test" --snapshot .
+foldrun report <run-id> patch --to dev-desk            # the patch, to stdout
+foldrun report <run-id> patch --to dev-desk --apply    # into this folder
+```
+
+A snapshot needs an install that runs steps in sandboxes
+(`FOLDRUN_RUN_ISOLATION=k8s`); one that does not refuses the run and runs
+nothing.
 
 ## The loop, in order
 
