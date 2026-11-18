@@ -88,11 +88,20 @@ function write(current, profiles) {
     platforms[normaliseUrl(p.url)] = { token: p.token, email: p.email ?? null, account: p.account, role: p.role, ...(p.minted ? { minted: true } : {}), loggedInAt: p.loggedInAt };
   }
   fs.mkdirSync(credentialsDir(), { recursive: true, mode: 0o700 });
+  // Written beside it and renamed over it: a reader in another process sees
+  // the old file or the new one, never half of one (Codex review, 19 Nov).
+  const tmp = `${file()}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(
-    file(),
+    tmp,
     JSON.stringify({ current, default: current && profiles[current] ? normaliseUrl(profiles[current].url) : null, profiles, platforms }, null, 2) + "\n",
     { mode: 0o600 },
   );
+  try {
+    fs.renameSync(tmp, file());
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
   // `mode` applies only when the file is created; one made before (or by
   // hand) keeps whatever it had. It holds tokens: owner-only, every write.
   try {
@@ -115,7 +124,14 @@ export function saveCredential(url, entry, { makeDefault = true, name } = {}) {
   const { current, profiles } = readCredentials();
   const existing = name ?? Object.keys(profiles).find((n) => normaliseUrl(profiles[n].url) === key && profiles[n].account === entry.account);
   const profileName = existing ?? nameFor(profiles, entry.account, key);
-  profiles[profileName] = { ...entry, url: key, loggedInAt: new Date().toISOString() };
+  // The default project (`foldrun workspaces use`) is what is stored NOW for
+  // this account on this platform, never what the entry carries: a renewal
+  // writes back a profile read before a `use` or `--clear` changed it, and a
+  // re-login to the same account keeps it (Codex review, 19 Nov 2026).
+  const prev = profiles[profileName];
+  const kept = prev && normaliseUrl(prev.url) === key && prev.account === entry.account && typeof prev.workspace === "string" ? { workspace: prev.workspace } : {};
+  const { workspace: _carried, ...fields } = entry;
+  profiles[profileName] = { ...fields, ...kept, url: key, loggedInAt: new Date().toISOString() };
   write(makeDefault || !current ? profileName : current, profiles);
   return profileName;
 }
@@ -174,6 +190,24 @@ export function useProfile(name) {
   if (!profiles[name]) return null;
   write(name, profiles);
   return { ...profiles[name], name };
+}
+
+/** Save (or, with null, forget) the project a profile's commands use when
+ *  they name none — `foldrun workspaces use`. Kept on the profile, so it is
+ *  one account on one platform's, and never follows a --token. */
+export function setProfileWorkspace(name, workspace, expect = {}) {
+  const { current, profiles } = readCredentials();
+  if (!profiles[name]) return null;
+  // Still the account and platform it was checked against: a sign-out or a
+  // new sign-in under the same name meanwhile saves nothing.
+  if (expect.url && normaliseUrl(profiles[name].url) !== normaliseUrl(expect.url)) return null;
+  if (expect.account && profiles[name].account !== expect.account) return null;
+  const next = { ...profiles[name] };
+  if (workspace) next.workspace = workspace;
+  else delete next.workspace;
+  profiles[name] = next;
+  write(current, profiles);
+  return { ...next, name };
 }
 
 /** All of them, newest sign-in last. */

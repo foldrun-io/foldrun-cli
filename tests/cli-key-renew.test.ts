@@ -120,6 +120,22 @@ test("a credentials file this CLI cannot write: nothing is rotated, so the new k
   assert.equal(stored(dir).token, "mda_old");
 });
 
+test("a writable credentials file in a folder this CLI cannot write: nothing is rotated (the file is replaced by a rename)", { skip: process.getuid?.() === 0 ? "root writes a read-only folder anyway" : false }, async (t) => {
+  const s = await serve({
+    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
+    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
+    "/api/workspaces": () => WORKSPACES,
+  });
+  const dir = home(s.url);
+  fs.chmodSync(dir, 0o555);
+  t.after(() => fs.chmodSync(dir, 0o700));
+  const r = await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } });
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.equal(calls(s, "/api/keys/k1/rotate").length, 0, "the new key could not be saved");
+  assert.equal(stored(dir).token, "mda_old");
+});
+
 test("a command that fetches bytes itself (storage cat) renews too", async () => {
   const s = await serve({
     "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),

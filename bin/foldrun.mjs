@@ -52,7 +52,7 @@
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
 //   foldrun pull            bring the platform's account down into this folder
 //   foldrun status          what differs here from what is deployed — --platform [--history]: is the platform up
-//   foldrun workspaces      what exists here, and there — show <name>, new <name> --platform
+//   foldrun workspaces      what exists here, and there — show <name>, new <name> --platform, use <name>
 //   foldrun invoke <flow>   start a flow on a running platform
 //   foldrun source <verb>   ls / cat / put / new / mv / rm one workspace file on a platform
 //   foldrun open  [page]    the dashboard for this workspace
@@ -276,6 +276,7 @@ const HELP = `foldrun — agents are just folders
   foldrun workspaces show <name>  what is deployed in one: its agents, flows and how each fires, its files by folder (--json)
   foldrun workspaces new <name> --platform  make it on the platform: blank (an AGENTS.md), or --starter for the example researcher, writer and flow
   foldrun workspaces demo   make the demo pipeline project on the platform — "Try the demo pipeline"
+  foldrun workspaces use <name>  the project your commands use when they name none (no --to, no project folder) — checked on the platform, kept on this sign-in; no name shows it, --clear forgets it
   foldrun library           the account's shared library on the platform: ls [skills|tools|hooks|scripts|knowledge|memory], cat <kind>/<path>, put <kind>/<path> (--file, else stdin), rm <kind>/<path> (asks)
   foldrun library new <kind>/<name>  a new one from the platform's template, as the Library page's New (--template <transport or gallery entry>, --language)
   foldrun find <words>      search the account as the dashboard's ⌘K does: projects, agents, flows, tools, skills, knowledge, memory, runs (--json)
@@ -449,7 +450,7 @@ Options
   --limit <n>               usage: rows of by flow and by agent, the most charged first (default 10; 0 hides them)
   --value "<text>"          secrets set: skip the prompt (careful with shell history)
   --site <domain>           secrets set, secrets sites: a site the secret is bound to — the egress proxy fills it for those alone (repeatable, or a,b)
-  --clear                   secrets sites: unbind it; flow compute: no cap of its own; me name: no name
+  --clear                   secrets sites: unbind it; flow compute: no cap of its own; me name: no name; workspaces use: forget the default project
   --all                     runs: every run that matches, every page; secrets workspaces: every project may use the account secret again; storage ls: every project's storage; storage shares: expired and revoked links too; mcp connections: the disconnected ones too; team invite, team access: every project
   --none                    secrets workspaces, secrets set: no project may use the account secret; team access: no projects
   --if-workspaces <a,b|all|none>  secrets workspaces: change it only while the list is still this one (refused, 409, when someone changed it since)

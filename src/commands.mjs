@@ -13,7 +13,7 @@ import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, do
 import { browserCmd } from "./browser.mjs";
 import { createRequire } from "node:module";
 import { execFileSync, spawnSync } from "node:child_process";
-import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir } from "./credentials.mjs";
+import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
 // job, or a test that wants to match what a person reads. The tests had
@@ -2599,13 +2599,15 @@ async function renewIfDue(url, flags) {
   }
 }
 
-/** Whether the credentials file can be written in place (or, not there yet,
- *  made) — checked before a renewal, which cannot be undone. */
+/** Whether the credentials file can be replaced — checked before a renewal,
+ *  which cannot be undone. The file is written beside itself and renamed over
+ *  (credentials.mjs), so its FOLDER must be writable, and the file too. */
 function credentialsWritable() {
   const dir = credentialsDir();
   const file = path.join(dir, "credentials.json");
   try {
-    fs.accessSync(fs.existsSync(file) ? file : dir, fs.constants.W_OK);
+    fs.accessSync(dir, fs.constants.W_OK);
+    if (fs.existsSync(file)) fs.accessSync(file, fs.constants.W_OK);
     return true;
   } catch {
     return false;
@@ -3730,7 +3732,7 @@ async function logsCmd(positional, flags, layout) {
   // Inside an account folder the workspace comes first, the way it does on
   // every other workspace-scoped command — or is the only one there is.
   const named = takeWorkspace(positional, layout);
-  if (!named && !flags.to && layout?.kind === "account") throw whichWorkspace(layout, "logs");
+  if (!named && !flags.to && layout?.kind === "account" && !(flags.local !== true && remoteUrl(flags) && savedWorkspace(flags))) throw whichWorkspace(layout, "logs");
   if (named && layout?.workspacesDir && layout.workspaces.includes(named)) {
     process.env.FOLDRUN_WORKSPACE = path.join(layout.workspacesDir, named);
   }
@@ -3739,7 +3741,11 @@ async function logsCmd(positional, flags, layout) {
   // machine's store even when signed in — the same escape hatch deploy,
   // secrets and keys have, and the one thing `logs` was missing.
   const url = flags.local === true ? undefined : remoteUrl(flags);
-  if (url) return remoteLogs(url, positional, { ...flags, to: flags.to ?? named ?? undefined });
+  if (url) {
+    // Resolved before the copy: savedDefault pins flags.profile (Codex).
+    const to = flags.to ?? named ?? savedDefault(flags) ?? undefined;
+    return remoteLogs(url, positional, { ...flags, to });
+  }
 
   const { listRuns, readRun } = await core();
   const T = "default";
@@ -4022,7 +4028,7 @@ async function flowInputsCmd(positional, flags, layout) {
  * server whether or not this terminal sticks around. `--wait` holds on for
  * the result like an RPC.
  */
-async function invoke(target, flags) {
+async function invoke(target, flags, layout) {
   const url = remoteUrl(flags);
   if (!url) {
     throw new Error(
@@ -4030,7 +4036,7 @@ async function invoke(target, flags) {
     );
   }
   if (!target) throw new Error("which flow? try `foldrun invoke <flow> --to <workspace>`");
-  const ws = flags.to;
+  const ws = flags.to ?? (inProjectFolder(layout) ? undefined : savedDefault(flags));
   if (!ws) throw new Error("which project is it in? pass --to <workspace>");
 
   // --wait asks in short pieces, not one long request: whatever sits in
@@ -5550,11 +5556,13 @@ async function auditCmd(positional, flags) {
  * dashboard's Storage page — source is what you wrote, storage is what
  * they wrote.
  */
-async function sourceCmd(positional, flags) {
+async function sourceCmd(positional, flags, layout) {
   const [verb, a, b] = positional;
   const url = remoteUrl(flags);
   if (!url) throw new Error("source reads a project on a platform — pass --url, or `foldrun login` first");
-  const ws = flags.to;
+  // The saved default only outside a project folder (inside one, --to as
+  // before), and never for a delete: a delete names its project.
+  const ws = flags.to ?? (verb === "rm" || verb === "delete" || inProjectFolder(layout) ? undefined : savedDefault(flags));
   if (!ws) throw new Error("which project? pass --to <workspace>");
   const base = `/api/workspaces/${encodeURIComponent(ws)}/source`;
 
@@ -6124,7 +6132,7 @@ async function reportRuntimes(url, workspace, flags, { waitSeconds = 0 } = {}) {
 /** `foldrun runtimes` — the deployed workspace's environments and their state. */
 async function runtimesCmd(flags, layout) {
   const url = platformFor(flags, "runtimes");
-  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  const ws = typeof flags.to === "string" ? flags.to : (layout?.kind === "empty" ? null : takeWorkspace([], layout)) ?? savedDefault(flags);
   if (!ws) throw new Error("which project? `foldrun runtimes --to <workspace>` — or run it inside one");
   console.log(`\n  ${c.bold(ws)} ${c.dim("runtimes")}`);
   const runtimes = await reportRuntimes(url, ws, flags, { waitSeconds: flags.wait === true ? 120 : 0 });
@@ -6453,6 +6461,55 @@ async function pullCmd(layout, flags, only) {
  * `foldrun workspaces` — what exists here, what exists there, and which are
  * both. `rm <name>` removes one; on the platform it needs saying twice.
  */
+/** `foldrun workspaces use [<name>] [--clear]`: the project this profile's
+ *  commands use when they name none (no --to, no project folder) — checked
+ *  to exist on the platform first, kept on the profile. No name shows it. */
+async function workspacesUseCmd(name, flags) {
+  if (typeof flags.token === "string" || env("FOLDRUN_TOKEN")) {
+    throw new Error("a default project is kept on a signed-in profile — with --token or FOLDRUN_TOKEN, name the project with --to each time");
+  }
+  const p = chosenProfile(flags);
+  if (!p) throw new Error(NOT_SIGNED_IN);
+  if (flags.clear === true) {
+    if (!setProfileWorkspace(p.name, null, { url: p.url, account: p.account })) {
+      throw new Error(`${p.name} changed meanwhile (signed out, or signed in again as someone else) — nothing cleared; run it again`);
+    }
+    if (flags.json === true) {
+      console.log(JSON.stringify({ profile: p.name, url: p.url, workspace: null }));
+      return 0;
+    }
+    console.log(`\n  ${c.green("✓")} no default project for ${c.bold(p.name)} ${c.dim(`on ${p.url} — commands need --to again`)}\n`);
+    return 0;
+  }
+  if (!name) {
+    if (flags.json === true) {
+      console.log(JSON.stringify({ profile: p.name, url: p.url, workspace: p.workspace ?? null }));
+      return 0;
+    }
+    console.log(p.workspace
+      ? `\n  ${c.bold(p.workspace)} ${c.dim(`— ${p.name} on ${p.url}; commands without --to use it (--clear forgets it)`)}\n`
+      : `\n  ${c.dim(`no default project for ${p.name} on ${p.url} — \`foldrun workspaces use <name>\` sets one`)}\n`);
+    return 0;
+  }
+  assertName(name);
+  const url = p.url;
+  try {
+    await remoteCall(url, { ...flags, profile: p.name }, `/api/workspaces/${encodeURIComponent(name)}`);
+  } catch (err) {
+    if (err?.status === 404) throw new Error(`no project "${name}" on ${url} — \`foldrun workspaces new ${name} --platform\` makes it`);
+    throw err;
+  }
+  if (!setProfileWorkspace(p.name, name, { url, account: p.account })) {
+    throw new Error(`${p.name} changed while checking (signed out, or signed in again as someone else) — nothing saved; run it again`);
+  }
+  if (flags.json === true) {
+    console.log(JSON.stringify({ profile: p.name, url, workspace: name }));
+    return 0;
+  }
+  console.log(`\n  ${c.green("✓")} ${c.bold(name)} ${c.dim(`is the project for ${p.name} on ${url} — commands without --to use it; --to, or a project folder you stand in, still win`)}\n`);
+  return 0;
+}
+
 async function workspacesCmd(positional, flags, layout) {
   const [verb, name] = positional;
   const url = flags.local === true ? undefined : remoteUrl(flags);
@@ -6472,6 +6529,8 @@ async function workspacesCmd(positional, flags, layout) {
     console.log(`  ${c.dim(`foldrun agent new <name> --platform --to ${r.name ?? name} · foldrun pull ${r.name ?? name}`)}\n`);
     return 0;
   }
+
+  if (verb === "use") return workspacesUseCmd(name, flags);
 
   if (verb === "rm" || verb === "remove" || verb === "delete") {
     if (!name) throw new Error("which project? `foldrun workspaces rm <name>`");
@@ -6921,7 +6980,7 @@ async function storageCmd(positional, flags, layout) {
   // the file were missing. --to is the answer from anywhere else.
   // `storage text` also takes --workspace <name> — a name, not a folder.
   const named = positional[0] === "text" && typeof flags.workspace === "string" && /^[^/\\.][^/\\]*$/.test(flags.workspace) ? flags.workspace : null;
-  const ws = typeof flags.to === "string" ? flags.to : named ?? (layout?.kind === "empty" ? null : takeWorkspace([], layout));
+  const ws = typeof flags.to === "string" ? flags.to : named ?? (layout?.kind === "empty" ? null : takeWorkspace([], layout)) ?? (positional[0] === "rm" ? null : savedDefault(flags));
   if (!ws) throw new Error("which project? `foldrun storage ls --to <workspace>` — or run it inside one");
   const verb = positional[0] ?? "ls";
 
@@ -7226,7 +7285,7 @@ async function docsCmd(positional, flags) {
  */
 async function triggersCmd(flags, layout) {
   const url = platformFor(flags, "triggers");
-  const ws = typeof flags.to === "string" ? flags.to : layout?.kind === "empty" ? null : takeWorkspace([], layout);
+  const ws = typeof flags.to === "string" ? flags.to : (layout?.kind === "empty" ? null : takeWorkspace([], layout)) ?? savedDefault(flags);
   if (!ws) throw new Error("which project? `foldrun triggers --to <workspace>` — or run it inside one");
   const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
   const body = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/triggers?days=${days}`);
@@ -9642,12 +9701,60 @@ async function reportCmd(runId, flags, layout) {
 // ------------------------------------------------- one tool, one agent, alone
 
 /** Which workspace a platform command is about: --to, else the folder we stand in. */
+/** The project the signed-in profile saved with `foldrun workspaces use`,
+ *  or null: never with --token or FOLDRUN_TOKEN (no profile speaks), and
+ *  never when --url / FOLDRUN_URL points at another platform than the
+ *  profile's. */
+function savedWorkspace(flags) {
+  if (typeof flags.token === "string" || env("FOLDRUN_TOKEN")) return null;
+  let p;
+  try {
+    p = chosenProfile(flags);
+  } catch {
+    return null;
+  }
+  if (!p?.workspace || typeof p.workspace !== "string") return null;
+  const url = remoteUrl(flags);
+  try {
+    if (url && normaliseUrl(url) !== normaliseUrl(p.url)) return null;
+  } catch {
+    return null;
+  }
+  // The profile the name came from: the request is pinned to it (Codex) —
+  // another process switching the current profile meanwhile must not pair
+  // this project's name with another account's token.
+  if (typeof flags.profile !== "string") flags.profile = p.name;
+  return p.workspace;
+}
+
+/** Standing in a project folder (or an account folder with one project):
+ *  the folder names the project, so the saved default never applies. */
+function inProjectFolder(layout) {
+  return Boolean(layout && layout.kind !== "empty" && takeWorkspace([], layout));
+}
+
+/** The saved default (savedWorkspace), said once on stderr when used, so a
+ *  command never acts on a project the person did not see named. */
+let usedSaved = false;
+function savedDefault(flags) {
+  const saved = savedWorkspace(flags);
+  // Even with --quiet or --json: it is stderr, and a command acting on a
+  // project nobody named must say which (Codex review).
+  if (saved && !usedSaved) {
+    usedSaved = true;
+    console.error(`  ${c.dim(`project ${saved} (foldrun workspaces use)`)}`);
+  }
+  return saved;
+}
+
 function platformWorkspace(flags, layout, what) {
   // A folder with no agents in it is not a workspace, whatever it is called,
   // and guessing from its name posts to a workspace that does not exist —
   // which comes back as the platform's 404 about something else entirely.
   const guess = layout?.kind === "empty" ? null : takeWorkspace([], layout);
-  const ws = typeof flags.to === "string" ? flags.to : guess;
+  // Then the profile's own default (`foldrun workspaces use`), last: --to and
+  // the folder you stand in always win over it.
+  const ws = typeof flags.to === "string" ? flags.to : guess ?? savedDefault(flags);
   if (!ws) {
     throw new Error(
       `which project is it in? \`foldrun ${what} --to <workspace>\`${
@@ -16868,7 +16975,7 @@ export async function run(command, positional, flags, workspace, layout) {
       if (positional[0] === "rm-step") return flowRmStepCmd(positional, flags, layout);
       if (positional[0] === "dup-step") return flowDupStepCmd(positional, flags, layout);
       if (positional[0] === "show") return flowShowCmd(positional, flags, layout);
-      if (positional[0] === "run") return invoke(positional[1], flags);
+      if (positional[0] === "run") return invoke(positional[1], flags, layout);
       if (positional[0] === "inputs") return flowInputsCmd(positional, flags, layout);
       if (positional[0] === "rotate-hook") return rotateHookCmd(positional, flags, layout);
       if (positional[0] === "hook") return flowHookCmd(positional, flags, layout);
@@ -16890,9 +16997,9 @@ export async function run(command, positional, flags, workspace, layout) {
     case "hooks":
       return hookCmd(positional, flags, layout);
     case "invoke":
-      return invoke(positional[0], flags);
+      return invoke(positional[0], flags, layout);
     case "source":
-      return sourceCmd(positional, flags);
+      return sourceCmd(positional, flags, layout);
     case "open":
       return openCmd(positional, flags);
     default:
