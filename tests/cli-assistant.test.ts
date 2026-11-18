@@ -163,3 +163,31 @@ test("--conversation carries a kept one on: its messages go back, its id rides a
   assert.deepEqual(post.messages.map((m: { content: string }) => m.content), ["how do flows work?", "A numbered list.", "and in parallel?"]);
   assert.match(r.out, /kept as c_abc123def45/);
 });
+
+test("on a terminal: Ctrl-D at a later prompt leaves with 0 (Node 26 leaves question() unsettled when the input closes)", { timeout: 20_000 }, async (t) => {
+  const { spawn, execFileSync } = await import("node:child_process");
+  const path = await import("node:path");
+  try {
+    execFileSync("python3", ["-c", "import pty"], { stdio: "ignore" });
+  } catch {
+    t.skip("no python3 to give the CLI a terminal");
+    return;
+  }
+  const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
+  // No message: straight to the prompt, no request made (nothing listens here).
+  const child = spawn("python3", ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, cli, "assistant", "--to", "desk", "--url", "http://127.0.0.1:9", "--token", "k"], { env: { ...process.env, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", TERM: "dumb" } });
+  t.after(() => child.kill("SIGKILL"));
+  let out = "";
+  child.stdout.on("data", (x) => (out += x));
+  child.stderr.on("data", (x) => (out += x));
+  const done = new Promise<number>((r) => child.on("close", (code) => r(code ?? 1)));
+  for (let w = 0; w < 10_000 && !/you ›/.test(out); w += 25) await new Promise((r) => setTimeout(r, 25));
+  assert.match(out, /you ›/);
+  // A second prompt first (a fresh readline after a closed one), then Ctrl-D.
+  child.stdin.write("/new\r");
+  for (let w = 0; w < 10_000 && !/a new conversation[\s\S]*you ›/.test(out); w += 25) await new Promise((r) => setTimeout(r, 25));
+  assert.match(out, /a new conversation[\s\S]*you ›/);
+  child.stdin.write("\x04");
+  const code = await Promise.race([done, new Promise<string>((r) => setTimeout(() => r("hung"), 5_000))]);
+  assert.equal(code, 0, out);
+});
