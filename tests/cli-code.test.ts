@@ -53,7 +53,7 @@ const record = (status: string, result = "Added a greeting.", snapshot: boolean 
   ...(snapshot ? { snapshot: { id: ID } } : {}),
   startedAt: "2026-11-18T01:00:00.000Z",
   finishedAt: "2026-11-18T01:02:00.000Z",
-  steps: [{ agent: "coder", group: 1, status: status === "completed" ? "completed" : "failed", attempts: 1, costUsd: 0.05, events: [], result, startedAt: "2026-11-18T01:00:00.000Z", finishedAt: "2026-11-18T01:02:00.000Z" }],
+  steps: [{ agent: "coder", group: 1, status: status === "completed" ? "completed" : "failed", attempts: 1, costUsd: 0.05, events: [{ type: "tool", text: "Bash", call: "c1" }, { type: "tool", text: "Bash", call: "c1", ms: 5 }, ...(result ? [{ type: "text", text: result }] : [])], result, startedAt: "2026-11-18T01:00:00.000Z", finishedAt: "2026-11-18T01:02:00.000Z" }],
 });
 
 /** A platform with a coder agent whose run changed the folder. */
@@ -95,6 +95,8 @@ test("code --task: the folder goes as a snapshot, the agent runs on it in a conv
   assert.match(body.context, /^code-[0-9a-f]{16}$/, "each session is a conversation");
   assert.ok(s.seen.some((x) => x.method === "POST" && x.url === `${WS}/snapshots`), "the folder was sent");
   assert.match(r.out, /Added a greeting\./, "the agent's reply is shown");
+  assert.equal((r.out.match(/Added a greeting\./g) ?? []).length, 1, "the reply is shown once, not also as a live line");
+  assert.match(r.out, /→ coder\s+Bash\s+5ms/, "the agent's steps are shown as they happen");
   assert.match(r.out, /✓ applied/);
   assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello, world\n");
   assert.equal(fs.readFileSync(path.join(d, "greet.txt"), "utf8"), "hi\n");
@@ -403,6 +405,34 @@ test("patchTypeProblems reads header lines only: file content that looks like a 
   const content = patchFor(BASE, { "notes.txt": "new file mode 120000\nrename from a\nindex 1234567..89abcde 160000\n" });
   assert.deepEqual(patchTypeProblems(content), []);
   assert.equal(patchTypeProblems("diff --git a/x b/y\nrename from x\nrename to y\n").length, 2);
+});
+
+test("code: the agent's reply cannot drive the terminal before the apply prompt (Codex)", async (t) => {
+  const d = repo(BASE);
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN_ID }),
+    [`GET ${WS}/runs/${RUN_ID}`]: () => record("completed", "done\u001b[2K\u001b[1A\u001b]0;x\u0007 ✓ applied"),
+    [`GET ${WS}/runs/${RUN_ID}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "changed", modified: ["a\u001b[31m.txt"] }), "application/json") : raw(patchFor(BASE, AFTER), "text/x-diff")),
+  });
+  t.after(() => s.close());
+  const r = await at(s.url, "code", d, "--to", "desk", "--task", "x");
+  assert.doesNotMatch(r.out, /\u001b\[2K|\u001b\[1A|\u001b\]0;/, "no control sequence from the agent reaches the screen");
+  assert.match(r.out, /done ✓ applied/, "the words themselves are shown");
+});
+
+test("the no-patch reason (it can name an agent's file) cannot drive the terminal, in code and report patch (Codex)", async (t) => {
+  const d = repo(BASE);
+  const meta = { status: "unavailable", reason: "refused a link: x\u001b[2K\u001b]0;t\u0007y" };
+  const s = await platform({ meta });
+  t.after(() => s.close());
+  const r = await at(s.url, "code", d, "--to", "desk", "--task", "x");
+  assert.match(r.out, /no patch: refused a link: xy/);
+  const rp = await at(s.url, "report", RUN_ID, "patch", "--to", "desk");
+  assert.match(rp.out, /no patch: refused a link: xy/);
+  for (const out of [r.out, rp.out]) assert.doesNotMatch(out, /\u001b\[2K|\u001b\]0;/);
 });
 
 test("code: binary files sent without a secret scan are named", async () => {

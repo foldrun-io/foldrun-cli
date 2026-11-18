@@ -198,6 +198,19 @@ test("a frame whose JSON spans many data: lines — as the platform sends it —
   }
 });
 
+test("toolSummary: the command, file or pattern from a captured input; nothing without one", async () => {
+  const { toolSummary, plainText } = await import("../src/commands.mjs");
+  // Agent output cannot drive the terminal (Codex): escape sequences and controls are dropped.
+  assert.equal(toolSummary(JSON.stringify({ command: "ls\u001b[2K\u001b[1A\rapply it? \u001b]0;title\u0007ok" })), "ls apply it? ok");
+  assert.equal(plainText("a\u001b[31mred\u001b[0m\u009b2Jb\u0000c\nd"), "aredbc\nd");
+  assert.equal(toolSummary(JSON.stringify({ command: "node   --test\n" })), "node --test");
+  assert.equal(toolSummary(JSON.stringify({ file_path: "snapshot/calc.mjs", content: "x" })), "snapshot/calc.mjs");
+  assert.equal(toolSummary(JSON.stringify({ pattern: "mul\\(" })), "mul\\(");
+  assert.equal(toolSummary(undefined), "");
+  assert.equal(toolSummary("{not json"), "");
+  assert.equal(toolSummary(JSON.stringify({ other: 1 })), "");
+});
+
 test("a refused key on logs --url and invoke --watch names the account that was sent", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const p = await fakePlatform([], { refuse: true });

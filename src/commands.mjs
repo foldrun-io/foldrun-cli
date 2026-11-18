@@ -2677,8 +2677,37 @@ function rateLimitHint(res, body) {
 const EVENT_MARK = (e) =>
   e.type === "error" ? c.red("✗") : e.type === "tool" ? c.dim("→") : c.dim("·");
 
+/** Text with no terminal control in it: escape sequences (CSI, OSC and the
+ *  rest) and every other C0/C1 control character but the newline are
+ *  dropped. Agent output reaches the terminal through here, so it cannot
+ *  move the cursor, rewrite a line or dress up the apply prompt (Codex). */
+export const plainText = (text) =>
+  String(text)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]|\x1b[@-Z\\-_]|\x9b[0-?]*[ -\/]*[@-~]/g, "")
+    .replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
+
 /** An event's first physical line, clipped to fit a terminal row. */
-const clipLine = (text) => text.split("\n")[0].slice(0, 140);
+const clipLine = (text) => plainText(String(text).split("\n")[0]).slice(0, 140);
+
+/**
+ * What a tool call was for, in a few words — the command, the file, the
+ * pattern — from its recorded input. Only a project with `capture: full`
+ * records inputs (they can hold private data); otherwise there is none and
+ * the line names the tool alone.
+ * @param {unknown} input the call's input as the trail keeps it: JSON text
+ */
+export function toolSummary(input) {
+  if (typeof input !== "string" || !input) return "";
+  let o;
+  try {
+    o = JSON.parse(input);
+  } catch {
+    return "";
+  }
+  if (!o || typeof o !== "object") return "";
+  const v = o.command ?? o.file_path ?? o.path ?? o.pattern ?? o.url ?? o.query;
+  return typeof v === "string" ? plainText(v.replace(/\s+/g, " ")).trim().slice(0, 100) : "";
+}
 
 /**
  * One console line for one event — or null when the event is held back.
@@ -2690,14 +2719,17 @@ const clipLine = (text) => text.split("\n")[0].slice(0, 140);
  * A start whose completion never lands — the stream ended mid-call — is
  * printed later by flushCalls. Every other event prints as it arrives.
  */
-function eventLine(e, agent, open) {
+function eventLine(e, rawAgent, open) {
+  const agent = plainText(rawAgent ?? "");
   if (e.type === "tool" && e.call != null) {
     if (e.ms == null) {
       open.set(e.call, { agent, e });
       return null;
     }
+    const start = open.get(e.call)?.e;
     open.delete(e.call);
-    return `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}  ${c.dim(`${e.ms}ms`)}`;
+    const what = toolSummary(start?.io?.input ?? e.io?.input);
+    return `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}${what ? ` ${c.dim(what)}` : ""}  ${c.dim(`${Number(e.ms) || 0}ms`)}`;
   }
   return `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`;
 }
@@ -2707,10 +2739,16 @@ function eventLine(e, agent, open) {
  * tool call is two events — one line per call, printed when it completes.
  * `open` carries the calls still in flight across polls and reconnects.
  */
-function printNew(run, seen, open = new Map()) {
+function printNew(run, seen, open = new Map(), { skipResult = false } = {}) {
+  // skipResult: the caller prints the last top-level step's reply in full
+  // afterwards (foldrun code), so that one step's reply line is not printed
+  // twice; any other step's (a sub-agent's) stays (Codex).
+  const own = run.steps.filter((x) => !x.subagentOf);
+  const replying = skipResult ? own.at(-1) : undefined;
   run.steps.forEach((step, i) => {
     const from = seen.get(i) ?? 0;
     for (const e of step.events.slice(from)) {
+      if (step === replying && e.type === "text" && step.result && String(e.text).trim() === String(step.result).trim()) continue;
       const line = eventLine(e, step.agent, open);
       if (line !== null) console.log(line);
     }
@@ -2778,7 +2816,7 @@ export function sseFields(frame) {
  * the finished run on `done`, with the last run seen if the server ends it
  * first, and throws StreamIdle when nothing arrives for streamIdleSeconds.
  */
-async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
+async function streamOnce(url, flags, ws, runId, seen, open = new Map(), print = {}) {
   const token = await renewedToken(url, flags);
   const idle = streamIdleSeconds();
   const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
@@ -2829,7 +2867,7 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
         if (event === "run") {
           try {
             last = JSON.parse(data);
-            printNew(last, seen, open);
+            printNew(last, seen, open, print);
           } catch {
             // a partial frame; the next one supersedes it
           }
@@ -2859,10 +2897,10 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map()) {
  * from printing twice. It used to block `invoke --watch` and `logs
  * --follow` for as long as a stalled tunnel cared to keep the socket.
  */
-async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map(), { holdOpen = false } = {}) {
+async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map(), { holdOpen = false, skipResult = false } = {}) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const run = await streamOnce(url, flags, ws, runId, seen, open);
+      const run = await streamOnce(url, flags, ws, runId, seen, open, { skipResult });
       // holdOpen: the caller reads the run once more when the stream ended
       // with it still live, and flushes after — a start flushed here would
       // print a second time when that read brings its completion (Codex).
@@ -2871,7 +2909,7 @@ async function followRemote(url, flags, ws, runId, seen = new Map(), open = new 
     } catch (err) {
       if (!(err instanceof StreamIdle)) throw err;
       const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
-      printNew(run, seen, open);
+      printNew(run, seen, open, { skipResult });
       if (!isLive(run)) {
         flushCalls(open);
         return run;
@@ -12398,7 +12436,8 @@ async function runPatch(url, flags, ws, run, agentFlag) {
 function patchSummaryLines(meta) {
   const out = [];
   for (const [list, mark] of [[meta?.modified, c.amber("M")], [meta?.added, c.green("A")], [meta?.deleted, c.red("D")]]) {
-    for (const f of list ?? []) out.push(`  ${mark} ${typeof f === "string" ? f : f?.path ?? JSON.stringify(f)}`);
+    // The names are the agent's files: no terminal control reaches the screen.
+    for (const f of list ?? []) out.push(`  ${mark} ${plainText(typeof f === "string" ? f : f?.path ?? JSON.stringify(f))}`);
   }
   return out;
 }
@@ -12428,7 +12467,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
   const git = (...more) => spawnSync("git", ["-C", root, "apply", ...(prefix ? [`--directory=${prefix}`] : []), ...more], { input: patch, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   const check = git("--check");
   if (check.status !== 0 || check.error) {
-    throw new Error(`the patch does not apply to ${dir} as it is now — it was made against the folder as it was sent. git said:\n${String(check.stderr).trim()}\nThe patch is kept at ${keepPatch(patch, label)}`);
+    throw new Error(`the patch does not apply to ${dir} as it is now — it was made against the folder as it was sent. git said:\n${plainText(String(check.stderr)).trim()}\nThe patch is kept at ${keepPatch(patch, label)}`);
   }
   // git refuses paths that climb out, name .git, or pass through a link; it
   // would still make or change a link or a submodule entry, which the
@@ -12452,7 +12491,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
     if (st?.isSymbolicLink()) odd.push(`${rel} is a link in this folder`);
   }
   if (odd.length) {
-    throw new Error(`the patch makes or changes a link, a submodule, a rename or a copy, which foldrun's patches never do — not applied:\n${odd.join("\n")}\nThe patch is kept at ${keepPatch(patch, label)}`);
+    throw new Error(`the patch makes or changes a link, a submodule, a rename or a copy, which foldrun's patches never do — not applied:\n${plainText(odd.join("\n"))}\nThe patch is kept at ${keepPatch(patch, label)}`);
   }
   for (const line of String(git("--stat").stdout).trimEnd().split("\n")) if (line.trim()) console.log(`  ${line.trim()}`);
   if (flags.yes !== true && !process.stdin.isTTY) {
@@ -12473,7 +12512,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
     return false;
   }
   const done = git();
-  if (done.status !== 0 || done.error) throw new Error(`git apply failed: ${String(done.stderr).trim()} — the patch is kept at ${keepPatch(patch, label)}`);
+  if (done.status !== 0 || done.error) throw new Error(`git apply failed: ${plainText(String(done.stderr)).trim()} — the patch is kept at ${keepPatch(patch, label)}`);
   console.log(`  ${c.green("✓")} applied ${c.dim("— review it with git diff, and commit it when you are happy")}`);
   return true;
 }
@@ -12564,7 +12603,7 @@ async function reportPatchCmd(runId, flags, layout) {
     return 0;
   }
   if (p.status !== "changed") {
-    console.error(`\n  ${c.red("✗")} no patch: ${p.reason ?? p.status}\n`);
+    console.error(`\n  ${c.red("✗")} no patch: ${plainText(p.reason ?? p.status)}\n`);
     return 1;
   }
   if (flags.apply !== true) {
@@ -12595,7 +12634,9 @@ tools: [write, code]
 
 You work on a code folder a person sent from their computer. It is in
 snapshot/ under your working directory. Only what you change there comes
-back to them, as a patch they review and apply.
+back to them, as a patch they review and apply. Your shell keeps its
+directory from one command to the next: cd into snapshot/ once, or write
+every path as snapshot/….
 
 - Read before you change anything: find the files the task is about, and
   the project's own conventions (README, AGENTS.md, CLAUDE.md, the tests).
@@ -12695,7 +12736,7 @@ async function codeTurn(s, task) {
       () => (cancel.stop = "acked"),
       (err) => {
         cancel.stop = "none";
-        console.log(`  ${c.red("✗")} stop: ${explain(err)} — Ctrl-C again tries once more`);
+        console.log(`  ${c.red("✗")} stop: ${plainText(explain(err))} — Ctrl-C again tries once more`);
       },
     );
   };
@@ -12744,27 +12785,33 @@ async function codeTurn(s, task) {
       throw err;
     }
     runId = started?.runId;
-    if (!runId) throw new Error(`${url} started no run — ${JSON.stringify(started).slice(0, 200)}`);
+    // Refused, not cleaned: an id with anything else in it is not used for
+    // a stop, a read or a patch, which a cleaned one could aim at another
+    // run (Codex). A refused id is shown as JSON, so it cannot drive the terminal.
+    if (typeof runId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) {
+      throw new Error(`${url} started no run it could name — ${plainText(JSON.stringify(started ?? null).slice(0, 200))}`);
+    }
     cancel.runId = runId;
     if (cancel.asked) stop(); // pressed while the run was being started
-    console.log(`  ${c.dim(`run ${runId}${started.test ? " (test)" : ""} — Ctrl-C stops it; the dashboard shows it live`)}\n`);
+    console.log(`  ${c.dim(`run ${plainText(runId)}${started.test ? " (test)" : ""} — Ctrl-C stops it; the dashboard shows it live`)}\n`);
     run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
     const seen = new Map();
     const open = new Map();
-    printNew(run, seen, open);
-    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true })) ?? run;
+    printNew(run, seen, open, { skipResult: true });
+    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, skipResult: true })) ?? run;
     if (isLive(run)) {
       run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
-      printNew(run, seen, open);
+      printNew(run, seen, open, { skipResult: true });
     }
     flushCalls(open);
     cancel.phase = "patch";
 
     const own = (run.steps ?? []).filter((x) => !x.subagentOf);
     const reply = own.at(-1)?.result;
-    if (reply) console.log(`\n${String(reply).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
+    // The agent's words, right before the apply prompt: no terminal control (Codex).
+    if (reply) console.log(`\n${plainText(String(reply)).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
-    console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${run.status} ${c.dim(`· $${cost.toFixed(4)} · ${runId}`)}`);
+    console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${plainText(run.status)} ${c.dim(`· $${cost.toFixed(4)} · ${plainText(runId)}`)}`);
     if (cancel.asked) {
       console.log(`  ${c.dim(`stopped by you — nothing applied. What it made, if anything: foldrun report ${runId} patch --to ${ws}`)}\n`);
       return "cancelled";
@@ -12779,7 +12826,7 @@ async function codeTurn(s, task) {
       return run.status;
     }
     if (p.status === "unchanged") console.log(`  ${c.dim("no change to the folder")}\n`);
-    else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${p.reason ?? p.status}\n`);
+    else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${plainText(p.reason ?? p.status)}\n`);
     else {
       console.log();
       await applyPatch(dir, p.patch, flags, runId, cancel);
@@ -12868,7 +12915,7 @@ async function codeCmd(positional, flags, layout) {
     try {
       await codeTurn(s, line);
     } catch (err) {
-      console.log(`  ${c.red("✗")} ${explain(err)}\n`);
+      console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
     }
   }
 }
