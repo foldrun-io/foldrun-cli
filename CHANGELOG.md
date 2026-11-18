@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.8.0] — 2026-11-18
+
+### New in the public API
+
+- the `--verbose` flag
+
+- fix(cli): foldrun code shows the work, not the platform's setup notes, and the reply once ([2d53a71](https://github.com/foldrun-io/foldrun-cli/commit/2d53a71))
+
+### deps
+
+- @foldrun/core ^24.3.1 ([2ce3a8b](https://github.com/foldrun-io/foldrun-cli/commit/2ce3a8b))
+
 ## [26.7.1] — 2026-11-18
 
 - fix(cli): two foldrun commands at once no longer undo each other's sign-in changes ([2d62bf5](https://github.com/foldrun-io/foldrun-cli/commit/2d62bf5))
