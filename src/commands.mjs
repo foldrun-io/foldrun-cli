@@ -2998,8 +2998,22 @@ async function followRemote(url, flags, ws, runId, seen = new Map(), open = new 
       if (!(holdOpen && run && isLive(run))) flushCalls(open);
       return run;
     } catch (err) {
-      if (!(err instanceof StreamIdle)) throw err;
-      const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+      // A dropped connection (a laptop's network blinking: "terminated:
+      // read ETIMEDOUT", 19 Nov 2026) is not the run ending: read the run
+      // and follow it again, as when the stream goes quiet.
+      if (!(err instanceof StreamIdle) && !droppedConnection(err)) throw err;
+      // The read has its own three tries, apart from the stream's (Codex).
+      let run;
+      for (let read = 1; ; read++) {
+        try {
+          run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+          break;
+        } catch (readErr) {
+          if (!droppedConnection(readErr) || read >= 3) throw readErr;
+          console.error(`  ${c.dim(`… ${plainText(String(readErr?.message ?? readErr))}; reading the run again (${read}/3)`)}`);
+          await new Promise((r) => setTimeout(r, 1000 * read));
+        }
+      }
       printNew(run, seen, open, { skipResult, quiet });
       if (!isLive(run)) {
         flushCalls(open);
@@ -3013,6 +3027,18 @@ async function followRemote(url, flags, ws, runId, seen = new Map(), open = new 
       console.error(`  ${c.dim(`… ${err.message}; reconnecting (${attempt}/3)`)}`);
     }
   }
+}
+
+/**
+ * A network failure the run itself does not share: the socket dropped,
+ * timed out or could not connect. Never an abort (Ctrl-C) or an HTTP answer.
+ * @param {any} err
+ */
+export function droppedConnection(err) {
+  if (!err || err.name === "AbortError" || err instanceof StreamIdle) return false;
+  if (typeof err.status === "number") return false;
+  const text = [err.message, err.code, err.cause?.code, err.cause?.message].filter(Boolean).join(" ");
+  return /\bterminated\b|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETDOWN|UND_ERR_(SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT)|fetch failed|socket hang up|other side closed|could not reach|did not answer .* within/i.test(text);
 }
 
 /**
@@ -13015,6 +13041,8 @@ async function codeTurn(s, task) {
     if (reply) console.log(`\n${plainText(String(reply)).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
     console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${plainText(run.status)} ${c.dim(`· $${cost.toFixed(4)} · ${plainText(runId)}`)}`);
+    noteSessionTurn(s, run, cost);
+    console.log(`  ${c.dim(sessionLine(s))}`);
     if (cancel.asked) {
       console.log(`  ${c.dim(`stopped by you — nothing applied. What it made, if anything: foldrun report ${runId} patch --to ${ws}`)}\n`);
       return "cancelled";
@@ -13097,7 +13125,7 @@ async function codeCmd(positional, flags, layout) {
   const { createInterface } = await import("node:readline/promises");
   console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} on ${url}`)}`);
   console.log(`  ${c.dim(`${dir} — each message sends it to a sandbox; you apply what comes back`)}`);
-  console.log(`  ${c.dim("/new  a fresh conversation    /quit  leave")}\n`);
+  console.log(`  ${c.dim("/new  a fresh conversation    /status  this session    /quit  leave")}\n`);
   for (;;) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     // Closing the input (Ctrl-D) leaves question() unsettled on Node 26 —
@@ -13113,13 +13141,19 @@ async function codeCmd(positional, flags, layout) {
       console.log();
       return 0;
     }
+    if (line === "/status") {
+      console.log(`  ${c.dim(`${sessionLine(s)} · ${agent} · ${ws} on ${url}`)}\n`);
+      continue;
+    }
     if (line === "/new") {
       s.context = newContext();
+      // Nothing of the old conversation stays in the count (Codex).
+      for (const k of ["turns", "costUsd", "model", "contextTokens", "secs"]) delete s[k];
       console.log(`  ${c.dim("a fresh conversation — the agent no longer reads the earlier turns")}\n`);
       continue;
     }
     if (line.startsWith("/")) {
-      console.log(`  ${c.dim("/new  a fresh conversation    /quit  leave")}\n`);
+      console.log(`  ${c.dim("/new  a fresh conversation    /status  this session    /quit  leave")}\n`);
       continue;
     }
     try {
@@ -13128,6 +13162,42 @@ async function codeCmd(positional, flags, layout) {
       console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
     }
   }
+}
+
+/**
+ * What a foldrun code session has done so far, like Claude Code's status
+ * line (owner, 19 Nov 2026): turns, spend, the model, how much the agent
+ * read last turn (its context), how long it took. `/new` starts the count
+ * again; `/status` prints it.
+ * @param {{ turns?: number, costUsd?: number, model?: string, contextTokens?: number, secs?: number }} s
+ * @param {any} run
+ * @param {number} cost
+ */
+export function noteSessionTurn(s, run, cost) {
+  s.turns = (s.turns ?? 0) + 1;
+  s.costUsd = (s.costUsd ?? 0) + (Number.isFinite(cost) ? cost : 0);
+  const step = (run.steps ?? []).filter((x) => !x.subagentOf).at(-1);
+  const started = (step?.events ?? []).find((e) => e.type === "info" && /^step started \(/.test(String(e.text)));
+  const model = started && /model: ([^\s,)]+)/.exec(String(started.text))?.[1];
+  if (model) s.model = model;
+  const t = step?.tokens;
+  s.contextTokens = t ? Number(t.input ?? 0) : undefined;
+  const a = Date.parse(run.startedAt ?? "");
+  const b = Date.parse(run.finishedAt ?? "");
+  s.secs = Number.isFinite(a) && Number.isFinite(b) ? (b - a) / 1000 : undefined;
+}
+
+/** @param {{ turns?: number, costUsd?: number, model?: string, contextTokens?: number, secs?: number, context?: string }} s */
+export function sessionLine(s) {
+  const k = (/** @type {number} */ n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+  return [
+    `session: ${s.turns ?? 0} turn${s.turns === 1 ? "" : "s"}`,
+    `$${(s.costUsd ?? 0).toFixed(4)} in all`,
+    s.model ? plainText(s.model) : null,
+    s.contextTokens !== undefined ? `last turn read ${k(s.contextTokens)} tokens` : null,
+    s.secs !== undefined ? `${s.secs.toFixed(1)}s` : null,
+    s.context ? `conversation ${plainText(s.context)}` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 /**

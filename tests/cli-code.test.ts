@@ -462,7 +462,7 @@ test("code: a call that cannot run adds no agent on its way out, even with --yes
  * then — the race Codex named — reports the run COMPLETED anyway, with a
  * patch ready. `stopFails` answers the first stop with a 500.
  */
-interface LiveOpts { stopFails?: boolean; stopDelayMs?: number; completeAtOnce?: boolean; holdArchive?: boolean }
+interface LiveOpts { stopFails?: boolean; stopDelayMs?: number; completeAtOnce?: boolean; holdArchive?: boolean; dropStream?: boolean }
 function liveRun(patch: string, opts: LiveOpts = {}): Promise<{ url: string; seen: string[]; streaming: Promise<void>; archiving: Promise<void>; releaseArchive: () => void; close: () => void }> {
   const seen: string[] = [];
   let streamRes: http.ServerResponse | null = null;
@@ -473,6 +473,7 @@ function liveRun(patch: string, opts: LiveOpts = {}): Promise<{ url: string; see
   let release: () => void = () => {};
   const released = new Promise<void>((r) => (release = r));
   let stops = 0;
+  let dropped = false;
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
@@ -487,12 +488,19 @@ function liveRun(patch: string, opts: LiveOpts = {}): Promise<{ url: string; see
       if (u === `${WS}/agents`) return json(200, { agents: [{ name: "coder" }] });
       if (u === `${WS}/snapshots`) return json(200, { snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "x", reused: false });
       if (u === `${WS}/agents/coder/run`) return json(200, { ok: true, runId: RUN_ID });
-      if (u === `${WS}/runs/${RUN_ID}`) return json(200, record("running"));
+      if (u === `${WS}/runs/${RUN_ID}`) return json(200, record(dropped ? "completed" : "running"));
       if (u === `${WS}/runs/${RUN_ID}/stream`) {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(`event: run\ndata: ${JSON.stringify(record("running"))}\n\n`);
         streamRes = res;
         markStreaming();
+        if (opts.dropStream) {
+          // The laptop's network blinks: the socket dies mid-run; the run
+          // goes on and completes on the platform.
+          dropped = true;
+          setTimeout(() => res.socket?.destroy(), 50);
+          return;
+        }
         if (opts.completeAtOnce) {
           res.write(`event: run\ndata: ${JSON.stringify(record("completed"))}\n\nevent: done\ndata: {}\n\n`);
           res.end();
@@ -921,4 +929,43 @@ test("live view: text held in an earlier frame is not released when the finished
     },
   ], { quiet: true });
   assert.equal(out.filter((l) => l.includes("Done.")).length, 0, out.join("\n"));
+});
+
+test("code: the session line counts turns and spend, and names the model, context and time (owner, 19 Nov 2026)", async () => {
+  const { noteSessionTurn, sessionLine } = await import("../src/commands.mjs");
+  const s: any = { context: "code-abc" };
+  const run = (input: number) => ({
+    startedAt: "2026-11-19T00:00:00.000Z",
+    finishedAt: "2026-11-19T00:00:07.500Z",
+    steps: [{ agent: "coder", tokens: { input, output: 10 }, events: [{ type: "info", text: "step started (agent: coder, model: sonnet — agent, effort: medium)" }] }],
+  });
+  noteSessionTurn(s, run(1200), 0.01);
+  noteSessionTurn(s, run(60340), 0.0236);
+  assert.equal(sessionLine(s), "session: 2 turns · $0.0336 in all · sonnet · last turn read 60k tokens · 7.5s · conversation code-abc");
+});
+
+test("code: a dropped stream mid-run is followed again — the turn ends with the run, and its patch is offered (seen 19 Nov 2026)", LIVE, async () => {
+  const patch = patchFor(BASE, AFTER);
+  const d = repo(BASE);
+  const p = await liveRun(patch, { dropStream: true });
+  try {
+    const run = codeChild(p.url, d);
+    const code = await run.done;
+    assert.equal(code, 0, run.out());
+    assert.match(run.out(), /completed/);
+    assert.match(run.out(), /applied/);
+    assert.equal(fs.readFileSync(path.join(d, "greet.txt"), "utf8"), "hi\n");
+  } finally {
+    p.close();
+  }
+});
+
+test("droppedConnection: socket failures yes; an abort, an HTTP answer or anything else no", async () => {
+  const { droppedConnection } = await import("../src/commands.mjs");
+  assert.ok(droppedConnection(new TypeError("terminated", { cause: Object.assign(new Error("read ETIMEDOUT"), { code: "ETIMEDOUT" }) })));
+  assert.ok(droppedConnection(new TypeError("fetch failed", { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } })));
+  assert.ok(!droppedConnection(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  assert.ok(!droppedConnection(Object.assign(new Error("could not reach x"), { status: 500 })));
+  assert.ok(!droppedConnection(new Error("workspace not found")));
+  assert.ok(droppedConnection(new Error("dev.foldrun.io did not answer GET /api/workspaces/x/runs/y within 30s — FOLDRUN_TIMEOUT=<seconds> allows longer")), "the CLI's own timeout (Codex)");
 });
