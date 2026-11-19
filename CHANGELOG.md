@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.11.1] — 2026-11-19
+
+- fix(code): what a live turn on staging showed — failed tools, tool names, binary diffs ([146810a](https://github.com/foldrun-io/foldrun-cli/commit/146810a))
+
 ## [26.11.0] — 2026-11-19
 
 ### New in the public API
