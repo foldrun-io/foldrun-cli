@@ -643,6 +643,14 @@ says it is still working, and ends with how long it took, what it cost, what
 the session has cost so far, the model and how much it read. `/status` has
 the rest, the last run's id included.
 
+File names and commands on those lines come from the tool calls' inputs,
+which a project records only with `capture: full` in its AGENTS.md (runs
+then keep each call's input and output, secrets masked). The default,
+`metadata`, keeps the name, size and time, so the lines say `● Run` and
+`● Edit`; foldrun code says so once a session and never turns it on itself
+— as tracing tools treat tool arguments, keeping them is the project's
+choice.
+
 | Type | What it does |
 |---|---|
 | `/help` | the commands |

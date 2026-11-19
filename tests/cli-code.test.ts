@@ -97,6 +97,7 @@ test("code --task: the folder goes as a snapshot, the agent runs on it in a conv
   assert.match(r.out, /Added a greeting\./, "the agent's reply is shown");
   assert.equal((r.out.match(/Added a greeting\./g) ?? []).length, 1, "the reply is shown once, not also as a live line");
   assert.match(r.out, /● Run\n/, "the agent's steps are shown as they happen, as a verb (a call under a second has no time)");
+  assert.equal(r.out.match(/add capture: full to desk's AGENTS\.md — runs then keep each tool's input and output too/g)?.length, 1, "with no inputs recorded, how to see them is said once, with what it stores");
   assert.doesNotMatch(r.out, /run-code-1/, "the run's id is not on the turn's lines — /status has it");
   assert.match(r.out, /✓ done · 2m 00s · \$0\.050/, "the turn ends with how long and what it cost");
   assert.match(r.out, /session code-[0-9a-f]{16}/, "the header names the session");

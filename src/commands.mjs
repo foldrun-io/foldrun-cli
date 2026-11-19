@@ -2735,6 +2735,7 @@ let codeView = null;
 function codeToolLine(start, done, agent) {
   const who = agent && agent !== codeView?.agent ? `${c.dim(`[${agent}]`)} ` : "";
   const what = folderRelative(toolSummary(start?.io?.input ?? done?.io?.input));
+  if (!what && codeView) codeView.bareTools = true;
   const secs = Number(done?.ms) / 1000;
   const mark = done?.err ? c.red("●") : c.cyan("●");
   return `  ${mark} ${who}${c.bold(clipLine(friendlyTool(start?.text ?? done?.text)))}${what ? ` ${c.dim(clipLine(what))}` : ""}${secs >= 1 ? `  ${c.dim(formatSecs(secs))}` : ""}`;
@@ -13191,6 +13192,14 @@ async function codeTurn(s, task, include = []) {
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
     noteSessionTurn(s, run, cost);
     console.log(`\n${turnLine(s, run, cost, cancel.asked)}`);
+    // The project records tool calls as metadata (the default), so the lines
+    // name the action but not the file or command. Said once a session,
+    // with what turning it on stores — opt-in, as tracing tools treat tool
+    // arguments; foldrun code never turns it on itself.
+    if (codeView?.bareTools && !s.captureHinted) {
+      s.captureHinted = true;
+      console.log(`  ${c.dim(`to see file names and commands here, add capture: full to ${ws}'s AGENTS.md — runs then keep each tool's input and output too (secrets masked)`)}`);
+    }
     if (cancel.asked || run.status !== "completed") {
       // Stopping never loses the work (19 Nov 2026): what it changed before
       // it stopped or failed is offered too — always asked, never --yes.
