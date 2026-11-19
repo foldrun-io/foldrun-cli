@@ -666,7 +666,9 @@ choice.
 
 At the apply prompt `d` shows the whole diff before you answer. A turn you
 stop with Ctrl-C, or one that fails, still offers what it had changed. ↑ and
-↓ bring back what you typed before (kept in `~/.foldrun/code-history`); a
+↓ bring back what you typed before (kept in `~/.foldrun/code-history`), and
+Ctrl-R searches it — type to narrow, Ctrl-R again for older, Enter puts the
+match on the line to edit or send, Esc leaves the line as it was; a
 line ending in `\` goes on to the next, and a paste of many lines is one
 message. Ctrl-C on an empty prompt twice leaves. A paste is one message
 however slowly it arrives (bracketed paste, where the terminal has it). A turn longer than 20

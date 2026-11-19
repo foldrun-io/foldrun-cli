@@ -318,3 +318,52 @@ test("/model: shows the agent's model; /model max changes its file's model: line
     s.close();
   }
 });
+
+test("Ctrl-R: search what was typed before, Ctrl-R again for older, Enter puts it on the line, Esc leaves the line as it was", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  fs.writeFileSync(path.join(home, "code-history"), "fix the login test\nadd b\nfix the signup test\n", { mode: 0o600 });
+  const s = await platform();
+  const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1" });
+  const pause = () => new Promise((r) => setTimeout(r, 150));
+  try {
+    let at = await t.until(/you ›/);
+    t.send("draft");
+    await pause();
+    t.send("\x12");
+    await pause();
+    t.send("zzz");
+    at = await t.until(/no match/, at);
+    t.send("\x1b");
+    await pause();
+    // Typed fast: the keys come in one piece, and each is still the search's.
+    t.send("\x12fix\x12");
+    at = await t.until(/fix the login test/, at);
+    t.send("\r");
+    await pause();
+    assert.equal(s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run")).length, 0, "Enter in the search only puts the match on the line");
+    t.send(" now\r");
+    at = await t.until(/apply it to/, at);
+    const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
+    assert.equal(posts.length, 1);
+    assert.match(JSON.parse(posts[0]!.body).task as string, /^fix the login test now$/m, "the older match, edited, then sent — the Esc'd search left 'draft' and Ctrl-R replaced it");
+    t.send("n\r");
+    at = await t.until(/you ›/, at);
+    // Typed, Ctrl-R, a query and Enter in one piece: the typed text reaches
+    // the line first, and the match replaces it — never "match + abc" (Codex).
+    t.send("abc\x12login\r");
+    await pause();
+    t.send(" again\r");
+    at = await t.until(/apply it to/, at);
+    const second = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
+    assert.equal(second.length, 2);
+    assert.match(JSON.parse(second[1]!.body).task as string, /^fix the login test now again$/m);
+    t.send("n\r");
+    at = await t.until(/you ›/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});

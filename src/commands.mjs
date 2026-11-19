@@ -13,6 +13,8 @@ import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, do
 import { browserCmd } from "./browser.mjs";
 import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
 import { createRequire } from "node:module";
+import { PassThrough } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
 
@@ -2727,7 +2729,7 @@ export function toolSummary(input) {
  * Set by foldrun code for the length of a turn: its live lines read as a
  * person would say them (● Run npm test  2.4s), with the sandbox's own
  * paths taken off and the main agent's name left out (19 Nov 2026).
- * @type {{ agent: string } | null}
+ * @type {{ agent: string, bareTools?: boolean } | null}
  */
 let codeView = null;
 
@@ -13557,6 +13559,212 @@ async function codeCmd(positional, flags, layout) {
  * @param {{ history: string[] }} state
  * @returns {Promise<string | null>}
  */
+/**
+ * The keyboard as a stream readline can read: what stdin sends, passed on
+ * unless route() keeps it; raw mode and pause/resume go to stdin itself.
+ * detach() lets stdin go again (paused, as readline leaves it).
+ */
+function keyboardThrough() {
+  const through = /** @type {any} */ (new PassThrough());
+  const write = (/** @type {string | Buffer} */ d) => {
+    if (d.length) through.write(d);
+  };
+  /** @type {(data: Buffer, write: (d: string | Buffer) => void) => void} */
+  let route = (d, w) => w(d);
+  const onData = (/** @type {Buffer} */ d) => route(d, write);
+  through.isTTY = true;
+  through.setRawMode = (/** @type {boolean} */ on) => {
+    process.stdin.setRawMode?.(on);
+    return through;
+  };
+  through.route = (/** @type {typeof route} */ fn) => (route = fn);
+  through.detach = () => {
+    process.stdin.off("data", onData);
+    process.stdin.setRawMode?.(false);
+    process.stdin.pause();
+  };
+  process.stdin.on("data", onData);
+  // A stream paused on purpose (detach, an earlier prompt) does not flow
+  // again because a listener is added: the next prompt saw no keys at all.
+  process.stdin.resume();
+  return through;
+}
+
+/**
+ * Ctrl-R in the code prompt: a search of what was typed before, newest
+ * first. Typing narrows it, Ctrl-R again goes older, Enter puts the match on
+ * the line (to edit or send), Esc / Ctrl-G / Ctrl-C leave the line as it was.
+ * The search line is drawn by us; history lines hold no control characters.
+ * @param {import("node:readline").Interface} rl
+ * @param {string[]} history newest first
+ * @param {string} ask the prompt
+ */
+function historySearch(rl, history, ask) {
+  let on = false;
+  let query = "";
+  let at = -1; // index into history of the match shown
+  const find = (/** @type {number} */ from) => {
+    const q = query.toLowerCase();
+    for (let i = from; i < history.length; i++) if (history[i].toLowerCase().includes(q)) return i;
+    return -1;
+  };
+  // One row, never wrapped: clear-line only reaches the row it is on (Codex).
+  // By the cells a character takes on screen: wide (CJK, emoji) 2,
+  // combining marks 0 (Codex: code points still wrapped).
+  const cells = (/** @type {string} */ ch) => {
+    const cp = /** @type {number} */ (ch.codePointAt(0));
+    if ((cp >= 0x300 && cp <= 0x36f) || (cp >= 0x200b && cp <= 0x200f) || (cp >= 0xfe00 && cp <= 0xfe0f)) return 0;
+    if ((cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x20000 && cp <= 0x3fffd)) return 2;
+    return 1;
+  };
+  const width = (/** @type {string} */ t) => [...t].reduce((n, ch) => n + cells(ch), 0);
+  const clip = (/** @type {string} */ t, /** @type {number} */ n) => {
+    if (n <= 0) return "";
+    if (width(t) <= n) return t;
+    let out = "";
+    let used = 0;
+    for (const ch of t) {
+      if (used + cells(ch) > n - 1) break;
+      out += ch;
+      used += cells(ch);
+    }
+    return `${out}…`;
+  };
+  const draw = () => {
+    const label = query && at < 0 ? "no match" : "search";
+    const cols = (process.stdout.columns || 80) - 1;
+    const tag = clip(`(${label})`, cols);
+    const q = clip(query, Math.floor((cols - width(tag) - 4) / 2));
+    const hit = clip(at >= 0 ? history[at] : "", cols - width(`${tag} ${q} › `));
+    writeControl("\r\x1b[2K");
+    process.stdout.write(`${c.dim(tag)}${width(tag) + 1 <= cols ? ` ${q}` : ""}${width(`${tag} ${q} › `) <= cols ? `${c.dim(" › ")}${hit}` : ""}`);
+  };
+  const leave = (/** @type {string | null} */ text) => {
+    on = false;
+    writeControl("\r\x1b[2K");
+    process.stdout.write(ask);
+    // Readline redraws its own line from here: clear it, then the match.
+    rl.write(null, { ctrl: true, name: "e" });
+    rl.write(null, { ctrl: true, name: "u" });
+    if (text !== null) rl.write(text);
+    else rl.write(saved);
+  };
+  let saved = "";
+  // The search took a \r: a \n right behind it is the same Enter, as
+  // readline's own crlfDelay (100 ms) treats it — not a second one that
+  // would send the match (Codex).
+  let enterAt = 0;
+  /** One key; true: it was the search's. */
+  const key = (/** @type {string} */ k) => {
+    if (enterAt) {
+      const same = k === "\n" && Date.now() - enterAt < 100;
+      enterAt = 0;
+      if (same) return true;
+    }
+    if (!on) {
+      if (k !== "\x12") return false;
+      on = true;
+      query = "";
+      saved = rl.line;
+      at = history.length ? 0 : -1;
+      draw();
+      return true;
+    }
+    if (k === "\x12") {
+      const next = find(at + 1);
+      if (next >= 0) at = next;
+    } else if (k === "\r" || k === "\n" || k === "\r\n") {
+      if (k === "\r") enterAt = Date.now();
+      leave(at >= 0 ? history[at] : saved);
+      return true;
+    } else if (k === "\x1b" || k === "\x07" || k === "\x03") {
+      leave(null);
+      return true;
+    } else if (k === "\x7f" || k === "\b") {
+      query = query.slice(0, -1);
+      at = query ? find(0) : history.length ? 0 : -1;
+    } else if (!/[\x00-\x1f\x7f-\x9f]/.test(k)) {
+      query += k;
+      at = find(0);
+    } else {
+      // Anything else (an arrow, a paste mark): take the match; readline has the key.
+      leave(at >= 0 ? history[at] : saved);
+      return false;
+    }
+    draw();
+    return true;
+  };
+  /** @type {string[]} */
+  const queue = [];
+  let carry = "";
+  // Across reads: a character split between two is joined, not garbled (Codex).
+  const decoder = new StringDecoder("utf8");
+  /** @type {NodeJS.Timeout | undefined} */
+  let carryTimer;
+  /** @type {(text: string) => void} */
+  let toReadline = () => {};
+  // In order: readline's keys before a key of the search are handed over
+  // first, and the search goes on once readline has had them (Codex: abc,
+  // Ctrl-R, Enter in one piece put abc after the match).
+  const drain = () => {
+    let pending = "";
+    while (queue.length) {
+      const k = /** @type {string} */ (queue[0]);
+      if (pending && (on || k === "\x12")) {
+        toReadline(pending);
+        setImmediate(drain);
+        return;
+      }
+      queue.shift();
+      if (!key(k)) pending += k;
+    }
+    if (pending) toReadline(pending);
+  };
+  // \r\n is one Enter (Codex: the \n after the search's \r sent the match).
+  const split = (/** @type {string} */ text) => text.match(/\r\n|\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b|[\s\S]/gu) ?? [];
+  return {
+    /**
+     * Keys as they came — several at once when typed fast, an escape
+     * sequence sometimes split across two reads.
+     * @param {Buffer} data
+     * @param {(text: string) => void} write hands keys to readline
+     */
+    feed(data, write) {
+      toReadline = write;
+      let text = carry + decoder.write(data);
+      carry = "";
+      clearTimeout(carryTimer);
+      if (!on && !queue.length && !enterAt && !text.includes("\x12")) {
+        if (text) write(text);
+        return;
+      }
+      // A sequence cut at the end of a read waits a moment for its rest; on
+      // its own after that, a lone Esc is Esc (Codex: a paste mark split
+      // after Esc cancelled the search and leaked the rest as text).
+      const cut = /\x1b(?:\[[0-?]*[ -/]*|O)?$/.exec(text);
+      if (cut && (on || queue.includes("\x12") || text.slice(0, cut.index).includes("\x12"))) {
+        carry = cut[0];
+        text = text.slice(0, cut.index);
+        carryTimer = setTimeout(() => {
+          const rest = carry;
+          carry = "";
+          // One key: a lone Esc cancels; an unfinished sequence ends the
+          // search and goes to readline whole, never as Esc plus text.
+          queue.push(rest);
+          drain();
+        }, 40);
+      }
+      queue.push(...split(text));
+      drain();
+    },
+    end() {
+      on = false;
+      clearTimeout(carryTimer);
+      queue.length = 0;
+    },
+  };
+}
+
 async function readCodeMessage(state, completer, s) {
   const { createInterface } = await import("node:readline");
   const ask = `${c.bold("you ›")} `;
@@ -13568,14 +13776,22 @@ async function readCodeMessage(state, completer, s) {
     // only what the person types and what is handed it here — history and
     // file names kept free of control characters (code-session.mjs).
     const guardAgain = unguardedWhile(process.stdout);
+    // On a terminal readline reads through a pass-through, so Ctrl-R can take
+    // the keys for a search of what was typed before (readline has none) and
+    // hand the match back with rl.write — public calls only.
+    const tty = Boolean(process.stdin.isTTY);
+    const input = tty ? keyboardThrough() : process.stdin;
     /** @type {import("node:readline").Interface} */
     let rl;
     try {
-      rl = createInterface({ input: process.stdin, output: process.stdout, history: [...state.history], historySize: 500, removeHistoryDuplicates: true, completer, terminal: Boolean(process.stdin.isTTY) });
+      rl = createInterface({ input, output: process.stdout, history: [...state.history], historySize: 500, removeHistoryDuplicates: true, completer, terminal: tty });
     } catch (err) {
+      if (tty) /** @type {any} */ (input).detach();
       guardAgain(); // never left unguarded (Codex)
       throw err;
     }
+    const search = tty ? historySearch(rl, state.history, ask) : null;
+    if (tty && search) /** @type {any} */ (input).route((/** @type {Buffer} */ data, /** @type {(t: string) => void} */ write) => search.feed(data, write));
     /** @type {string[]} */
     const lines = [];
     /** @type {NodeJS.Timeout | undefined} */
@@ -13601,7 +13817,7 @@ async function readCodeMessage(state, completer, s) {
       }
     };
     const offBracketed = () => {
-      process.stdin.off("keypress", onKey);
+      input.off("keypress", onKey);
       if (bracketed) writeControl("\x1b[?2004l");
       process.off("exit", offBracketed);
       process.off("SIGTERM", onTerm);
@@ -13618,6 +13834,8 @@ async function readCodeMessage(state, completer, s) {
       settled = true;
       clearTimeout(timer);
       offBracketed();
+      search?.end();
+      if (tty) /** @type {any} */ (input).detach();
       guardAgain();
       // Only our own listener: readline cleans up on its own "close" — it
       // takes its keypress handler off stdin there. removeAllListeners took
@@ -13666,7 +13884,7 @@ async function readCodeMessage(state, completer, s) {
       rl.prompt();
     });
     rl.once("close", onClose);
-    process.stdin.on("keypress", onKey);
+    input.on("keypress", onKey);
     if (bracketed) {
       writeControl("\x1b[?2004h");
       process.once("exit", offBracketed);

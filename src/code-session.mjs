@@ -29,6 +29,7 @@ export const CODE_TIPS = [
   "@<path>     Tab completes a file of the folder, to point the agent at it",
   "\\ at the end of a line goes on to the next; a paste of many lines is one message",
   "↑ ↓         what you typed before, in this folder and others",
+  "Ctrl-R      search what you typed before (Ctrl-R again: older; Enter: put it on the line)",
 ];
 
 export function helpText() {
