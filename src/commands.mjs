@@ -13887,7 +13887,7 @@ function engineModelError(/** @type {unknown} */ err, s) {
   }
   said = plainText(said).slice(0, 300);
   if (status === 402) s.creditsOk = false;
-  if (status === 402) return `the gateway would not pay for this: ${said} — foldrun keys ls shows this key's limit; Settings → Billing on ${s.url} shows your credits`;
+  if (status === 402) return `the gateway would not pay for this: ${said} — your credits: ${String(s.url).replace(/\/+$/, "")}/dashboard/billing · this key's limit: foldrun keys ls`;
   if (status === 401 && /^(invalid API key|API key revoked|API key expired)/.test(said) && s.keySlot) {
     saveLocalKey(path.join(credentialsDir(), "code-local-keys.json"), s.keySlot, null);
     return `this computer's model key was refused (${said}) — it is forgotten; your next message offers a new one`;
