@@ -12,7 +12,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { serve, raw } from "./fake-platform.ts";
 import {
   codeCompleter, joinMessage, shellNote, withNotes, colorPatch, helpText, readHistory, appendHistory, lastSession, rememberSession,
-  friendlyTool, folderRelative, formatSecs, formatBytes, formatCost, shortModel, homeTilde,
+  friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, homeTilde,
 } from "../src/code-session.mjs";
 
 const WS = "/api/workspaces/desk";
@@ -186,7 +186,11 @@ test("sessions: the last conversation of a folder, only for the same project", (
 test("appearance: verbs, folder paths, times, sizes, money, models", () => {
   assert.equal(friendlyTool("Bash"), "Run");
   assert.equal(friendlyTool("Grep"), "Search");
-  assert.equal(friendlyTool("mcp__github__create_issue"), "create issue");
+  assert.equal(friendlyTool("mcp__github__create_issue"), "Create issue");
+  assert.equal(friendlyTool("mcp__foldrun_install__install"), "Install");
+  assert.equal(friendlyError("Bash: Exit code 1 calc.py def add(a, b): return a - b\nhead: cannot open"), "Run failed · exit 1");
+  assert.equal(friendlyError("the sandbox stopped\nmore detail"), "the sandbox stopped");
+  assert.equal(shortModel("sonnet"), "Sonnet");
   assert.equal(friendlyTool("Thing"), "Thing");
   assert.equal(folderRelative("/work/agents/coder/snapshot/src/a.ts"), "src/a.ts");
   assert.equal(folderRelative("cd /work/agents/coder/snapshot && npm test"), "npm test");
@@ -214,4 +218,9 @@ test("help and diff colors", () => {
   assert.match(marked, /^Bdiff --git/m);
   assert.match(marked, /^G\+b$/m);
   assert.doesNotMatch(marked, /^G\+\+\+/m, "the file head is a head, not an added line");
+  const bin = "diff --git a/x.pyc b/x.pyc\nnew file mode 100644\nindex 0..5\nGIT binary patch\nliteral 350\nzcma)0Jx\n\nliteral 0\nHcmV\n\n" + PATCH;
+  const shown = colorPatch(bin, { green: id, red: id, bold: id, dim: id });
+  assert.match(shown, /a binary file — not shown/);
+  assert.doesNotMatch(shown, /zcma|literal/);
+  assert.match(shown, /^\+b$/m, "the next file is shown as usual");
 });

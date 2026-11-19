@@ -174,8 +174,20 @@ export function withNotes(notes, task) {
  */
 export function colorPatch(patch, c) {
   const cyan = c.cyan ?? c.dim;
+  // A binary file's body is base85 — noise on a screen: one line instead.
+  let binary = false;
   return patch
     .split("\n")
+    .flatMap((l) => {
+      if (l.startsWith("diff --git")) binary = false;
+      else if (l === "GIT binary patch" || /^Binary files .* differ$/.test(l)) {
+        if (binary) return [];
+        binary = true;
+        return [c.dim("  (a binary file — not shown)")];
+      }
+      if (binary) return [];
+      return [l];
+    })
     .map((l) => {
       if (/^(diff --git|index |--- |\+\+\+ |new file mode|deleted file mode|similarity|rename )/.test(l)) return c.bold(l);
       if (l.startsWith("@@")) return cyan(l);
@@ -237,8 +249,11 @@ const VERBS = /** @type {Record<string, string>} */ ({
 export function friendlyTool(/** @type {unknown} */ name) {
   const n = String(name ?? "").trim();
   if (VERBS[n]) return VERBS[n];
-  const mcp = /^mcp__[^_]+__(.+)$/.exec(n);
-  return mcp ? mcp[1].replace(/_/g, " ") : n;
+  // mcp__<server>__<tool>; a server's name may hold "_" (foldrun_install).
+  const mcp = /^mcp__.+?__(.+)$/.exec(n);
+  if (!mcp) return n;
+  const words = mcp[1].replace(/_/g, " ");
+  return `${words[0].toUpperCase()}${words.slice(1)}`;
 }
 
 /**
@@ -282,12 +297,28 @@ export function formatCost(/** @type {number} */ usd) {
 /** "claude-sonnet-5-5" → "Sonnet 5.5"; another model as it is named. */
 export function shortModel(/** @type {unknown} */ model) {
   const m = /^(?:anthropic\/)?claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?/.exec(String(model ?? ""));
+  if (/^(opus|sonnet|haiku|fable)$/i.test(String(model ?? ""))) return `${String(model)[0].toUpperCase()}${String(model).slice(1).toLowerCase()}`;
   if (!m) return String(model ?? "");
   return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ""}`;
 }
 
 /** 23456 → "23k". */
 export const formatTokens = (/** @type {number} */ n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+
+/**
+ * An error event in a turn, for a person: a failed tool as its verb and exit
+ * code ("Run failed · exit 1"), anything else as its first line — the agent
+ * usually reads the rest and goes on, so the full text is the run page's.
+ */
+export function friendlyError(/** @type {unknown} */ text) {
+  const t = String(text ?? "").trim();
+  const tool = /^([A-Za-z][\w]*):\s*([\s\S]*)$/.exec(t);
+  if (tool && (VERBS[tool[1]] || tool[1].startsWith("mcp__"))) {
+    const code = /exit code (\d+)/i.exec(tool[2]);
+    return `${friendlyTool(tool[1])} failed${code ? ` · exit ${code[1]}` : ""}`;
+  }
+  return t.split("\n")[0] ?? "";
+}
 
 /** A folder, with the home folder as ~. */
 export function homeTilde(/** @type {string} */ dir, home = process.env.HOME ?? "") {

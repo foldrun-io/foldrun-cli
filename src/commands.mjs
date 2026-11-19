@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, folderRelative, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
 import { createRequire } from "node:module";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
@@ -2753,7 +2753,7 @@ function eventLine(e, rawAgent, open) {
       return codeToolLine(start ?? e, e, agent);
     }
     if (e.type === "tool") return codeToolLine(e, e, agent);
-    if (e.type === "error") return `  ${c.red("✗")} ${clipLine(folderRelative(e.text))}`;
+    if (e.type === "error") return `  ${c.red("✗")} ${clipLine(folderRelative(friendlyError(e.text)))}`;
     const who = agent && agent !== codeView.agent ? `${c.dim(`[${agent}]`)} ` : "";
     return `  ${c.dim("·")} ${who}${clipLine(folderRelative(e.text))}`;
   }
