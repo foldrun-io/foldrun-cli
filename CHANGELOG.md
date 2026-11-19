@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.18.0] — 2026-11-19
+
+### New in the public API
+
+- the `--cloud` flag
+
+- feat(code): on this computer or in the cloud — asked once per folder; local runs Claude Code on your own Claude sign-in ([647d023](https://github.com/foldrun-io/foldrun-cli/commit/647d023))
+
 ## [26.17.1] — 2026-11-19
 
 ### deps
