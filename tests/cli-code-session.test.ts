@@ -74,17 +74,17 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
   const s = await platform();
   const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
   try {
-    let at = await t.until(/you ›/);
+    let at = await t.until(/\w ❯ /);
     assert.match(t.out(), /session code-me/);
 
     t.send("/help\r");
     at = await t.until(/\/undo\s+take back/, at);
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
 
     t.send("!echo hello-from-shell\r");
     at = await t.until(/goes with your next message/, at);
     assert.match(t.out(), /hello-from-shell/);
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
 
     // Two lines in one write: a paste — one message, one turn.
     t.send("add b\rand keep it short\r");
@@ -103,18 +103,18 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
     t.send("y\r");
     at = await t.until(/\/undo takes it back/, at);
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
 
     t.send("/undo\r");
     at = await t.until(/take back the last change/, at);
     t.send("y\r");
     at = await t.until(/taken back/, at);
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
 
     t.send("/nope\r");
     at = await t.until(/is not a command — \/help lists them/, at);
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
 
     t.send("/quit\r");
     await t.until(/foldrun code --continue/, at);
@@ -143,7 +143,7 @@ test("a bracketed paste is one message however slowly it arrives; Enter after it
   const s = await platform();
   const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1" });
   try {
-    let at = await t.until(/you ›/);
+    let at = await t.until(/\w ❯ /);
     assert.match(t.out(), /\x1b\[\?2004h/, "paste mode on while the prompt waits");
     t.send("\x1b[200~add b\r");
     await new Promise((r) => setTimeout(r, 200)); // far past the 30 ms grouping
@@ -157,7 +157,7 @@ test("a bracketed paste is one message however slowly it arrives; Enter after it
     assert.match(JSON.parse(posts[0]!.body).task as string, /add b\nand keep it short$/);
     assert.match(t.out(), /\x1b\[\?2004l[\s\S]*apply it to/, "paste mode off before the turn");
     t.send("n\r");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
     await t.done;
   } finally {
@@ -295,14 +295,14 @@ test("/model: shows the agent's model; /model max changes its file's model: line
   });
   const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
   try {
-    let at = await t.until(/you ›/);
+    let at = await t.until(/\w ❯ /);
     // The picker: the file's model ticked, Esc keeps it, nothing written.
     t.send("/model\r");
     at = await t.until(/Choose a model[\s\S]*1\. Default[^\n]*✔[\s\S]*Esc to cancel/, at);
     t.send("\x1b");
     at = await t.until(/kept Default \(Sonnet\)/, at);
     assert.equal(puts.length, 0);
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     t.send("/model max\r");
     at = await t.until(/Max \(Opus\) from your next message/, at);
     assert.equal(puts.length, 1);
@@ -310,7 +310,7 @@ test("/model: shows the agent's model; /model max changes its file's model: line
     assert.match(puts[0]!.content, /^model: max # cheap$/m, "a quoted key is the same key: replaced, not added beside");
     assert.equal((puts[0]!.content.match(/model/g) ?? []).length, 1);
     assert.match(puts[0]!.content, /^effort: medium$/m, "the rest of the file as it was");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     t.send("/model max\r");
     at = await t.until(/already max/, at);
     // ↓ then Enter in the picker: Max is ticked now, the next one is Fast.
@@ -341,7 +341,7 @@ test("Ctrl-R: search what was typed before, Ctrl-R again for older, Enter puts i
   const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1" });
   const pause = () => new Promise((r) => setTimeout(r, 150));
   try {
-    let at = await t.until(/you ›/);
+    let at = await t.until(/\w ❯ /);
     t.send("draft");
     await pause();
     t.send("\x12");
@@ -362,7 +362,7 @@ test("Ctrl-R: search what was typed before, Ctrl-R again for older, Enter puts i
     assert.equal(posts.length, 1);
     assert.match(JSON.parse(posts[0]!.body).task as string, /^fix the login test now$/m, "the older match, edited, then sent — the Esc'd search left 'draft' and Ctrl-R replaced it");
     t.send("n\r");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     // Typed, Ctrl-R, a query and Enter in one piece: the typed text reaches
     // the line first, and the match replaces it — never "match + abc" (Codex).
     t.send("abc\x12login\r");
@@ -373,7 +373,7 @@ test("Ctrl-R: search what was typed before, Ctrl-R again for older, Enter puts i
     assert.equal(second.length, 2);
     assert.match(JSON.parse(second[1]!.body).task as string, /^fix the login test now again$/m);
     t.send("n\r");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
     await t.done;
   } finally {
@@ -436,7 +436,7 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", url, "--token", "k"], home, { TERM: "xterm-256color" });
   try {
-    let at = await t.until(/you ›/);
+    let at = await t.until(/\w ❯ /);
     t.send("add b\r");
     at = await t.until(/the agent is on it/, at);
     await new Promise((r) => setTimeout(r, 300));
@@ -448,12 +448,12 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n", "nothing applied by what was typed during the turn");
     t.send("n\r");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     t.send("\r");
     at = await t.until(/apply it to/, at);
     assert.deepEqual(posts, ["add b", "y then add c"], "the typed text was on the line, and Enter sent it");
     t.send("n\r");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     // Ctrl-C mid-turn, with the keyboard in raw mode: still the turn's stop.
     t.send("go\r");
     at = await t.until(/the agent is on it/, at);
@@ -462,7 +462,7 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
     at = await t.until(/stopping/, at);
     at = await t.until(/before you stopped it[\s\S]*apply it to/, at); // what it had changed is offered
     t.send("n\r");
-    at = await t.until(/you ›/, at);
+    at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
     await t.done;
   } finally {

@@ -670,12 +670,12 @@ test("on a terminal: Ctrl-C at the apply prompt applies nothing and the session 
     return;
   }
   t.after(() => { term.child.kill("SIGKILL"); s.close(); });
-  await term.until(/you ›/);
+  await term.until(/\w ❯ /);
   term.type("greet the world\r");
   await term.until(/apply it to .*\[y\/N\]/);
   term.type("\x03");
   await term.until(/not applied — the patch is at/);
-  await term.until(/you ›[\s\S]*you ›/);
+  await term.until(/\w ❯ [\s\S]*\w ❯ /);
   term.type("\x04");
   const code = await term.done;
   assert.equal(code, 0, term.out());
@@ -693,12 +693,12 @@ test("on a terminal: y at the apply prompt applies it, and /quit leaves", LIVE, 
     return;
   }
   t.after(() => { term.child.kill("SIGKILL"); s.close(); });
-  await term.until(/you ›/);
+  await term.until(/\w ❯ /);
   term.type("greet the world\r");
   await term.until(/apply it to .*\[y\/N\]/);
   term.type("y\r");
   await term.until(/✓ applied/);
-  await term.until(/you ›[\s\S]*you ›/);
+  await term.until(/\w ❯ [\s\S]*\w ❯ /);
   term.type("/quit\r");
   assert.equal(await term.done, 0, term.out());
   assert.equal(fs.readFileSync(path.join(d, "greet.txt"), "utf8"), "hi\n");

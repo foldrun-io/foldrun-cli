@@ -14074,7 +14074,9 @@ function historySearch(rl, history, ask) {
 
 async function readCodeMessage(state, completer, s) {
   const { createInterface } = await import("node:readline");
-  const ask = `${c.bold(c.violet("you"))} ${c.cyan("›")} `;
+  // The project's name, then a chevron (owner, 19 Nov 2026): where you are
+  // talking, which tells two open sessions apart.
+  const ask = `${c.bold(c.cyan(clipCells(plainText(s.ws), 24)))} ${c.violet("❯")} `;
   return new Promise((resolve) => {
     // A copy: readline adds every line it reads, a paste's included; the
     // history kept is one entry per message, added by the caller.
