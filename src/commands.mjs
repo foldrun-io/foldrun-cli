@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -13099,7 +13099,8 @@ every path as snapshot/….
  * ifAbsent, so a project made meanwhile is used, never written over. True
  * when it was made now.
  */
-async function ensureCodeProject(url, flags, ws, agent) {
+/** @param {boolean} [chosen] picked as "+ New project" from the list: made without asking again */
+async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
   try {
     await remoteCall(url, flags, `/api/workspaces/${enc(ws)}`);
     return false;
@@ -13110,7 +13111,7 @@ async function ensureCodeProject(url, flags, ws, agent) {
   if (agent !== "coder") throw new Error(`no project "${ws}" on ${url}, so no agent "${agent}" in it — leave out --agent and foldrun code offers to make the project with a coder agent`);
   console.log(`\n  ${c.amber("!")} there is no project ${c.bold(ws)} on ${url}.`);
   console.log(`  ${c.dim("foldrun code can make it — blank, with a coder agent (agents/coder/agent.md: tools [write, code], model default) to edit like any other.")}`);
-  if (!(await confirmed(flags, "foldrun code", `create ${ws}? [y/N] `))) throw new Error(`nothing created — \`foldrun workspaces new ${ws} --platform\` makes it, or name one that exists with --to`);
+  if (!chosen && !(await confirmed(flags, "foldrun code", `create ${ws}? [y/N] `))) throw new Error(`nothing created — \`foldrun workspaces new ${ws} --platform\` makes it, or name one that exists with --to`);
   try {
     await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ name: ws, template: true, ifAbsent: true }) });
   } catch (err) {
@@ -13401,6 +13402,7 @@ function statusBlock(s, url) {
     row("spent", `${formatCost(s.costUsd ?? 0)} this session`),
     s.model ? row("model", shortModel(plainText(s.model))) : null,
     s.contextTokens !== undefined ? row("last turn", `read ${formatTokens(s.contextTokens)} tokens${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
+    row("works", s.mode === "local" ? "on this computer" : "in the cloud"),
     row("agent", `${s.agent} in project ${s.ws}`),
     row("platform", url),
     row("folder", homeTilde(s.dir)),
@@ -13654,16 +13656,27 @@ export function frontmatterModel(/** @type {string} */ text) {
  */
 function pickModel(/** @type {string} */ now) {
   const choices = MODEL_CHOICES.some((x) => x.v === now) ? MODEL_CHOICES : [{ v: now, name: plainText(shortModel(now)), note: "this agent's own model" }, ...MODEL_CHOICES];
-  let at = Math.max(0, choices.findIndex((x) => x.v === now));
+  return pickOne({ title: "Choose a model", subtitle: "from your next message on; kept for this project", choices, tick: now });
+}
+
+/**
+ * A list to choose one from, drawn in place: ↑/↓ (or j/k) to move, 1–9 or
+ * Enter to choose, Esc, q or Ctrl-C for none. `tick` is ticked and where
+ * the cursor starts.
+ * @param {{ title: string, subtitle?: string, choices: Array<{ v: string, name: string, note: string }>, tick?: string | null }} o
+ * @returns {Promise<string | null>}
+ */
+function pickOne({ title, subtitle = "", choices, tick = null }) {
+  let at = Math.max(0, choices.findIndex((x) => x.v === tick));
   const width = Math.max(...choices.map((x) => x.name.length));
   const fit = (/** @type {string} */ t) => clipCells(t, (process.stdout.columns || 80) - 3);
   const rows = () => [
-    `  ${c.bold(fit("Choose a model"))}`,
-    `  ${c.dim(fit("from your next message on; kept for this project"))}`,
+    `  ${c.bold(fit(title))}`,
+    ...(subtitle ? [`  ${c.dim(fit(subtitle))}`] : []),
     "",
     ...choices.map((x, i) => {
       // One screen row each, so redrawing goes up exactly as far (Codex).
-      const line = clipCells(`${i + 1}. ${x.name.padEnd(width)}   ${x.note}${x.v === now ? "  ✔" : ""}`, (process.stdout.columns || 80) - 5);
+      const line = clipCells(`${i + 1}. ${x.name.padEnd(width)}   ${x.note}${x.v === tick ? "  ✔" : ""}`, (process.stdout.columns || 80) - 5);
       return i === at ? `  ${c.cyan(`❯ ${line}`)}` : `    ${c.dim(line)}`;
     }),
     "",
@@ -13730,6 +13743,377 @@ function pickModel(/** @type {string} */ now) {
   });
 }
 
+/**
+ * Which project, from a list: this account's projects (the folder's guess
+ * first) and "+ New project", named after the folder.
+ * @returns {Promise<{ ws: string, isNew: boolean } | null>}
+ */
+async function pickProject(url, flags, dir, guess) {
+  // A list that cannot be read stops here: never a quiet "+ New project" (Codex).
+  const got = await remoteCall(url, flags, "/api/workspaces");
+  /** @type {string[]} */
+  const names = (Array.isArray(got?.workspaces) ? got.workspaces : []).map((w) => (typeof w === "string" ? w : w?.name)).filter((n) => typeof n === "string");
+  const rows = Math.max(3, Math.min(15, (process.stdout.rows || 24) - 9));
+  const ordered = [...(guess && names.includes(guess) ? [guess] : []), ...names.filter((n) => n !== guess)].slice(0, rows);
+  const base = projectNameFor(dir);
+  let fresh = base;
+  for (let i = 2; names.includes(fresh); i++) fresh = `${base}-${i}`;
+  const NEW = "\u0000new";
+  const v = await pickOne({
+    title: "Which project?",
+    subtitle: names.length > ordered.length ? `${names.length - ordered.length} more not shown — foldrun code --to <project> picks any` : "the agent, its settings and its history live in a project",
+    choices: [...ordered.map((n) => ({ v: n, name: plainText(n), note: n === guess ? "used here before" : "" })), { v: NEW, name: "+ New project", note: `named ${fresh}` }],
+    tick: ordered[0] ?? NEW,
+  });
+  if (v === null) return null;
+  return v === NEW ? { ws: fresh, isNew: true } : { ws: v, isNew: false };
+}
+
+/**
+ * The Claude Code program for this machine: the one the Agent SDK ships,
+ * else `claude` on PATH. One program for signing in and for the turns
+ * (Codex). Null when there is neither.
+ * @returns {string | null}
+ */
+function claudeProgram() {
+  const req = createRequire(import.meta.url);
+  const exe = process.platform === "win32" ? "claude.exe" : "claude";
+  for (const v of [`${process.platform}-${process.arch}`, `${process.platform}-${process.arch}-musl`]) {
+    try {
+      const bin = path.join(path.dirname(req.resolve(`@anthropic-ai/claude-agent-sdk-${v}/package.json`)), exe);
+      if (fs.existsSync(bin)) return bin;
+    } catch {
+      /* not installed for this platform */
+    }
+  }
+  const onPath = spawnSync(process.platform === "win32" ? "where" : "which", ["claude"], { encoding: "utf8" });
+  const found = String(onPath.stdout ?? "").split(/\r?\n/)[0]?.trim();
+  return onPath.status === 0 && found ? found : null;
+}
+
+/**
+ * The person's own Claude sign-in, for the turns on this computer (owner,
+ * 19 Nov 2026: "use their subscription … every thing done under the hood"):
+ * Claude Code's own login on this machine — a Pro or Max plan, or an API
+ * key they already use. Not signed in: offer the sign-in page. The login
+ * stays with Claude Code on this machine; foldrun never sees it.
+ * @returns {Promise<boolean>}
+ */
+async function claudeSignedIn(s, cancel) {
+  if (s.claudeOk) return true;
+  const bin = claudeProgram();
+  if (!bin) {
+    console.log(`  ${c.red("✗")} ${c.dim("Claude Code is not on this computer — npm i -g @anthropic-ai/claude-code puts it here, or use foldrun code --cloud")}\n`);
+    return false;
+  }
+  s.claudeBin = bin;
+  /** @returns {{ loggedIn?: boolean, authMethod?: string, subscriptionType?: string } | null} */
+  const status = () => {
+    const r = spawnSync(bin, ["auth", "status", "--json"], { encoding: "utf8", env: localEnv(), timeout: 30_000 });
+    if (r.error) return null;
+    try {
+      return JSON.parse(String(r.stdout || "{}"));
+    } catch {
+      return null;
+    }
+  };
+  let st = status();
+  if (!st) {
+    console.log(`  ${c.red("✗")} ${c.dim(`Claude Code (${plainText(bin)}) did not answer — check it runs (claude --version), or use foldrun code --cloud`)}\n`);
+    return false;
+  }
+  if (st.loggedIn !== true) {
+    console.log(`  ${c.violet("◆")} ${c.bold("Sign in to Claude")} ${c.grey("— on this computer the agent runs on your own Claude plan (Pro or Max) or Console account")}`);
+    const yes = ((await cancellablePrompt(`    open the sign-in page? [y/N] `, cancel)) ?? "").trim().toLowerCase();
+    if (cancel.asked) return false;
+    if (yes !== "y" && yes !== "yes") {
+      console.log(`  ${c.dim("not signed in — foldrun code --cloud runs on your foldrun credits instead")}\n`);
+      return false;
+    }
+    // Its own process, so Ctrl-C stops it and the turn alike.
+    await new Promise((resolve) => {
+      const child = spawn(bin, ["auth", "login"], { stdio: "inherit", env: localEnv() });
+      const stop = () => child.kill("SIGINT");
+      cancel.onAsk.add(stop);
+      child.on("error", resolve);
+      child.on("close", () => {
+        cancel.onAsk.delete(stop);
+        resolve(null);
+      });
+    });
+    if (cancel.asked) return false;
+    st = status();
+    if (st?.loggedIn !== true) {
+      console.log(`  ${c.red("✗")} ${c.dim("still not signed in to Claude — your next message offers it again, or use foldrun code --cloud")}\n`);
+      return false;
+    }
+  }
+  s.claudeOk = true;
+  s.claudeAs = st.authMethod === "claude.ai" ? `Claude ${typeof st.subscriptionType === "string" ? plainText(st.subscriptionType).replace(/^\w/, (x) => x.toUpperCase()) : ""} plan`.replace(/\s+/g, " ") : st.authMethod === "api_key" ? "your API key" : "your Claude login";
+  return true;
+}
+
+/** The environment Claude Code gets: the person's own, without foldrun's settings and keys. */
+function localEnv() {
+  /** @type {Record<string, string | undefined>} */
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (/^FOLDRUN_/.test(k)) delete env[k];
+  return env;
+}
+
+/** The folder's own CLAUDE.md, as words for the agent — never its settings or hooks. */
+function folderClaudeMd(/** @type {string} */ dir) {
+  const parts = [];
+  for (const f of ["CLAUDE.md", path.join(".claude", "CLAUDE.md")]) {
+    const p = path.join(dir, f);
+    try {
+      if (!insideFolder(dir, p) || !fs.statSync(p).isFile()) continue;
+      parts.push(`Contents of ${f} (this folder's notes for you):\n\n${fs.readFileSync(p, "utf8").slice(0, 40_000)}`);
+    } catch {
+      /* none */
+    }
+  }
+  return parts.join("\n\n");
+}
+
+/** Built-in tools that change files, by the path they name. */
+const FILE_CHANGES = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * One turn on this computer: Claude Code through the Agent SDK, in the
+ * person's folder, on their own Claude sign-in.
+ *
+ * What it may do without asking is Claude Code's own rule (reads in the
+ * folder, read-only commands) plus the person's own ~/.claude settings —
+ * never a project's .claude/settings*.json, whose allow rules and hooks
+ * would come from whoever wrote the repo (Codex; the SDK lets allow rules
+ * skip canUseTool). Everything else is asked here: y, a, n. "a" is scoped:
+ * file changes inside the folder, or this exact command — never a tool
+ * whose reach cannot be told. Answers are taken one at a time, with the
+ * keyboard read by the turn in between, so a key pressed early never
+ * answers a question it did not see.
+ */
+async function codeLocalTurn(s, text) {
+  const started = Date.now();
+  const abort = new AbortController();
+  const cancel = { asked: false, onAsk: new Set() };
+  let stopTicker = () => {};
+  const onInt = () => {
+    if (cancel.asked) {
+      stopTicker();
+      console.log(`\n  ${c.dim("stopped")}`);
+      process.exit(130);
+    }
+    cancel.asked = true;
+    for (const f of cancel.onAsk) f();
+    stopTicker();
+    console.log(`\n  ${c.amber("■")} ${c.dim("stopping … (Ctrl-C again leaves foldrun code)")}`);
+    abort.abort();
+  };
+  process.on("SIGINT", onInt);
+  let typeAhead = startTypeAhead(onInt);
+  const keyboardBack = async () => {
+    const t = await typeAhead.stop();
+    if (t) s.typeAhead = s.typeAhead ? `${s.typeAhead} ${t}` : t;
+  };
+  const changed = new Set();
+  /** @type {any} */
+  let result = null;
+  let reply = "";
+  try {
+    await keyboardBack();
+    if (!(await claudeSignedIn(s, cancel)) || cancel.asked) return;
+    typeAhead = startTypeAhead(onInt);
+    let model = "default";
+    try {
+      const cur = await remoteCall(s.url, s.flags, `/api/workspaces/${enc(s.ws)}/source?path=${enc(`agents/${s.agent}/agent.md`)}`);
+      model = frontmatterModel(String(cur?.content ?? "")) ?? "default";
+    } catch {
+      /* the default tier */
+    }
+    if (cancel.asked) return;
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    /** @type {{ kinds: Set<string>, commands: Set<string> }} */
+    const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
+    let gate = Promise.resolve();
+    stopTicker = startTicker(started);
+    /** @param {string} name @param {Record<string, unknown>} input @param {AbortSignal} [signal] */
+    const decide = async (name, input, signal) => {
+      if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
+      const file = input.file_path ?? input.notebook_path ?? input.path;
+      const inside = file !== undefined && insideFolder(s.dir, file);
+      const command = name === "Bash" ? String(input.command ?? "") : null;
+      // What "always" may cover: file changes inside the folder, or this
+      // exact command. Anything else is asked every time.
+      const scope = FILE_CHANGES.has(name) && inside ? "changes" : command !== null ? "command" : null;
+      const allowed = scope === "changes" ? allow.kinds.has("changes") : scope === "command" ? allow.commands.has(/** @type {string} */ (command)) : false;
+      if (allowed) {
+        if (scope === "changes") changed.add(localCallSummary("Write", { file_path: file }, s.dir));
+        return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      }
+      stopTicker();
+      await keyboardBack();
+      try {
+        if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
+        const width = Math.max(20, (process.stdout.columns || 80) - 10);
+        if (name === "Edit") {
+          const show = (/** @type {unknown} */ t, /** @type {string} */ sign, /** @type {(x: string) => string} */ paint) =>
+            String(t ?? "").split("\n").slice(0, 6).map((l) => `      ${paint(`${sign} ${clipCells(plainText(l), width)}`)}`).join("\n");
+          console.log(`${show(input.old_string, "-", c.red)}\n${show(input.new_string, "+", c.green)}`);
+        } else if (name === "Write") {
+          const body = String(input.content ?? "");
+          const lines = body ? body.replace(/\n$/, "").split("\n").length : 0;
+          console.log(`      ${c.grey(`${fs.existsSync(path.resolve(s.dir, String(file ?? ""))) ? "replaces the file" : "a new file"} · ${lines} line${lines === 1 ? "" : "s"}`)}`);
+        } else if (command !== null) {
+          // The whole command, as it will run: nothing clipped or joined (Codex).
+          // The whole command, as it will run: nothing clipped or joined (Codex).
+          // One too long to read on a screen is refused, never half shown.
+          // A control character could hide what runs from what is shown
+          // (an escape sequence with a line break in it): refused (Codex).
+          if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(command)) {
+            console.log(`      ${c.amber("a command with hidden control characters — not run")}`);
+            return { behavior: /** @type {const} */ ("deny"), message: "The command held control characters, so it could not be shown as it would run. Use plain text only." };
+          }
+          const lines = command.split("\n");
+          if (lines.length > 200 || command.length > 20_000) {
+            console.log(`      ${c.amber(`a command of ${lines.length} lines — too long to show, so not run`)}`);
+            return { behavior: /** @type {const} */ ("deny"), message: "The command was too long for the person to read. Write it to a script file in the folder first (that is asked separately), then run the script." };
+          }
+          for (const l of lines) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.white(`${i === 0 ? "$" : " "} ${l.slice(i, i + width)}`)}`);
+        } else {
+          const shown = plainText(JSON.stringify(input)).slice(0, 400);
+          console.log(`      ${c.grey(clipCells(shown, width))}`);
+        }
+        const always = scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : null;
+        const ask = `    ${c.bold("allow?")} ${c.grey("[")}${c.green("y")}${c.grey("]es · [")}${always ? `${c.cyan("a")}${c.grey(always)}` : ""}${c.red("n")}${c.grey("]o")} `;
+        // The SDK taking the request back closes the question too (Codex).
+        const settle = () => {
+          for (const f of cancel.onAsk) f();
+        };
+        signal?.addEventListener("abort", settle, { once: true });
+        // An abort while the keyboard came back is not replayed: looked at now.
+        if (signal?.aborted) {
+          signal.removeEventListener("abort", settle);
+          return { behavior: /** @type {const} */ ("deny"), message: "the request was withdrawn" };
+        }
+        const answer = ((await cancellablePrompt(ask, cancel).finally(() => signal?.removeEventListener("abort", settle))) ?? "").trim().toLowerCase();
+        if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
+        if (answer === "y" || answer === "yes" || (always && (answer === "a" || answer === "always"))) {
+          if (answer.startsWith("a")) {
+            if (scope === "changes") allow.kinds.add("changes");
+            else if (scope === "command") allow.commands.add(/** @type {string} */ (command));
+          }
+          if (FILE_CHANGES.has(name) && file !== undefined) changed.add(localCallSummary("Write", { file_path: file }, s.dir));
+          return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+        }
+        return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
+      } finally {
+        if (!cancel.asked) {
+          typeAhead = startTypeAhead(onInt);
+          stopTicker = startTicker(started);
+        }
+      }
+    };
+    /** @type {import("@anthropic-ai/claude-agent-sdk").CanUseTool} */
+    const canUseTool = (name, input, opts) => {
+      // One question at a time, in the order they came (Codex).
+      const next = gate.then(() => decide(name, input, opts?.signal));
+      gate = next.then(() => undefined, () => undefined);
+      return next;
+    };
+    const bin = s.claudeBin;
+    const q = query({
+      prompt: text,
+      options: {
+        cwd: s.dir,
+        env: localEnv(),
+        model: localModelOf(model),
+        // Claude Code as the person knows it: its tools, their own
+        // ~/.claude settings, the folder's CLAUDE.md as words.
+        systemPrompt: { type: "preset", preset: "claude_code", append: [localPrompt(s.dir), folderClaudeMd(s.dir)].filter(Boolean).join("\n\n") },
+        settingSources: ["user"],
+        permissionMode: "default",
+        canUseTool,
+        abortController: abort,
+        ...(bin ? { pathToClaudeCodeExecutable: bin } : {}),
+        ...(s.sdkSession ? { resume: s.sdkSession } : {}),
+      },
+    });
+    for await (const m of q) {
+      if (m.type === "system" && m.subtype === "init") {
+        if (m.model) s.model = String(m.model);
+        if (m.session_id) s.sdkSession = String(m.session_id);
+      }
+      // A slow or full plan says so, instead of a silent wait (19 Nov 2026:
+      // a busy Max plan took a minute to say "hi").
+      if (m.type === "system" && m.subtype === "api_retry") {
+        stopTicker();
+        console.log(`  ${c.amber("!")} ${c.grey(`Claude is slow to answer${m.error_status ? ` (${m.error_status})` : ""} — trying again, ${m.attempt} of ${m.max_retries}`)}`);
+        stopTicker = startTicker(started);
+      }
+      if (m.type === "rate_limit_event" && m.rate_limit_info && m.rate_limit_info.status !== "allowed") {
+        const info = m.rate_limit_info;
+        const when = typeof info.resetsAt === "number" ? new Date(info.resetsAt * 1000).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) : null;
+        stopTicker();
+        console.log(`  ${c.amber("!")} ${c.grey(`${info.status === "rejected" ? "your Claude plan's limit is reached" : "your Claude plan is near its limit"}${when ? ` — it resets ${when}` : ""}`)}`);
+        stopTicker = startTicker(started);
+      }
+      if (m.type === "assistant" && !m.parent_tool_use_id) {
+        const content = Array.isArray(m.message?.content) ? m.message.content : [];
+        const words = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
+        const calls = content.filter((b) => b.type === "tool_use");
+        if (calls.length) {
+          stopTicker();
+          if (words) console.log(`  ${c.violet("▸")} ${c.grey(clipLine(words))}`);
+          for (const b of calls) {
+            const label = friendlyTool(String(b.name));
+            const what = localCallSummary(String(b.name), /** @type {Record<string, unknown>} */ (b.input ?? {}), s.dir);
+            console.log(`  ${toolHue(label)("●")} ${c.bold(c.white(clipLine(label)))}${what ? ` ${c.grey(clipLine(what))}` : ""}`);
+          }
+          stopTicker = startTicker(started);
+        } else if (words) reply = words;
+      }
+      if (m.type === "user" && !m.parent_tool_use_id) {
+        const content = Array.isArray(m.message?.content) ? m.message.content : [];
+        for (const b of /** @type {any[]} */ (content)) {
+          const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");
+          if (b.type === "tool_result" && b.is_error && !/person said no|person stopped|user doesn't want/i.test(said)) console.log(`    ${c.red("✗")} ${c.grey(clipLine(plainText(said)))}`);
+        }
+      }
+      if (m.type === "result") {
+        result = m;
+        if (m.session_id) s.sdkSession = String(m.session_id);
+      }
+    }
+  } catch (err) {
+    stopTicker();
+    if (!cancel.asked) console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+  } finally {
+    stopTicker();
+    await keyboardBack();
+    process.off("SIGINT", onInt);
+  }
+  const ok = result?.subtype === "success" && !result?.is_error;
+  if (!ok && result && !cancel.asked) {
+    const why = plainText(String(result.result ?? (Array.isArray(result.errors) ? result.errors.join("; ") : result.subtype) ?? ""));
+    if (/login|log in|api key|authenticat|401/i.test(why)) {
+      s.claudeOk = false;
+      console.log(`  ${c.red("✗")} ${c.dim("Claude refused the sign-in on this computer — your next message signs you in again")}`);
+    } else if (why) console.log(`  ${c.red("✗")} ${c.grey(clipLine(why))}`);
+  }
+  if (!result && !cancel.asked && !s.claudeOk) return;
+  if (reply) console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}`);
+  const secs = (Date.now() - started) / 1000;
+  s.turns = (s.turns ?? 0) + 1;
+  s.secs = secs;
+  if (result?.usage) s.contextTokens = Number(result.usage.input_tokens ?? 0) + Number(result.usage.cache_read_input_tokens ?? 0) + Number(result.usage.cache_creation_input_tokens ?? 0);
+  const how = cancel.asked ? c.bold(c.amber("■ stopped")) : ok ? c.bold(c.green("✓ done")) : c.bold(c.red("✗ not finished"));
+  const parts = [c.white(formatSecs(secs)), s.model ? c.violet(shortModel(plainText(s.model))) : null, s.claudeAs ? c.grey(`on ${s.claudeAs}`) : null].filter(Boolean);
+  console.log(`\n  ${how} ${c.grey("·")} ${parts.join(` ${c.grey("·")} `)}`);
+  if (changed.size) console.log(`  ${c.grey(`changed ${[...changed].slice(0, 6).map((f) => plainText(f)).join(", ")}${changed.size > 6 ? ` and ${changed.size - 6} more` : ""} — /diff shows it`)}`);
+  console.log();
+}
+
 async function codeCmd(positional, flags, layout) {
   const dir = path.resolve(positional[0] ?? ".");
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
@@ -13741,19 +14125,72 @@ async function codeCmd(positional, flags, layout) {
     throw new Error(`${dir} is not in a git repository — foldrun code sends what git would commit and applies the agent's patch with git, so \`git init\` it first`);
   }
   const url = platformFor(flags, "code");
-  const ws = platformWorkspace(flags, layout, "code");
   const agent = typeof flags.agent === "string" ? flags.agent : "coder";
   // Usage first: a call that cannot run must not add an agent on its way out (Codex).
   if (typeof flags.task === "string" && !flags.task.trim()) throw new Error('--task needs the instruction, e.g. --task "add a test for the parser"');
   if (typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
-  await ensureCodeAgent(url, flags, ws, agent, await ensureCodeProject(url, flags, ws, agent));
-  const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
+  if (flags.local === true && flags.cloud === true) throw new Error("--local or --cloud, not both");
+  if (flags.local === true && typeof flags.task === "string") throw new Error("on this computer the agent asks before each change, so it needs you at a terminal — a script's turn runs in the cloud (--cloud --task …)");
+  if (flags.local === true && !process.stdin.isTTY) throw new Error("on this computer the agent asks before each change, so it needs you at a terminal");
   const sessionsFile = path.join(credentialsDir(), "code-sessions.json");
+  // Where and with which project (owner, 19 Nov 2026: "keep it as simple as
+  // possible"): flags first, then what this folder used last; a person at a
+  // terminal is asked the first time, once; a script gets the old answers.
+  const chosen = folderChoice(sessionsFile, dir);
+  const asking = typeof flags.task !== "string" && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  /** @type {"local" | "cloud" | null} */
+  let mode = flags.local === true ? "local" : flags.cloud === true ? "cloud" : chosen?.mode ?? null;
+  // A script's turn runs in the cloud: never for a folder that chose this
+  // computer, unless --cloud says so (Codex: no silent upload).
+  if (typeof flags.task === "string" && mode === "local") throw new Error("this folder works on this computer, which needs you at a terminal — --cloud --task sends it to the cloud for this one turn");
+  if (!mode && asking) {
+    console.log(`\n  ${c.bold(c.sweep("◆ foldrun code"))}\n`);
+    mode = /** @type {"local" | "cloud" | null} */ (await pickOne({
+      title: "Where should the agent work?",
+      subtitle: "asked once for this folder — foldrun code --cloud or --local changes it",
+      choices: [
+        { v: "local", name: "On this computer", note: "Claude Code in your folder, on your own Claude plan; asks before changes" },
+        { v: "cloud", name: "In the cloud", note: "works on a copy on foldrun credits; you apply what comes back" },
+      ],
+      tick: "local",
+    }));
+    if (!mode) throw new Error("nothing started");
+    console.log(`  ${c.dim("works")}  ${mode === "local" ? c.green("on this computer") : c.cyan("in the cloud")}\n`);
+  }
+  mode ??= "cloud";
+  const guess = (() => {
+    try {
+      return platformWorkspace(flags, layout, "code");
+    } catch {
+      return null;
+    }
+  })();
+  let ws = typeof flags.to === "string" ? flags.to : chosen?.ws ?? null;
+  let picked = false;
+  if (!ws && asking) {
+    const p = await pickProject(url, flags, dir, guess);
+    if (!p) throw new Error("nothing started");
+    ws = p.ws;
+    picked = p.isNew;
+    console.log(`  ${c.dim("project")}  ${c.cyan(plainText(ws))}${p.isNew ? c.grey(" · new") : ""}\n`);
+  }
+  ws ??= platformWorkspace(flags, layout, "code");
+  await ensureCodeAgent(url, flags, ws, agent, await ensureCodeProject(url, flags, ws, agent, picked));
+  const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
   // --continue: the last conversation of this folder (19 Nov 2026).
-  const resumed = typeof flags.context !== "string" && flags.continue === true ? lastSession(sessionsFile, dir, ws) : null;
+  const last = typeof flags.context !== "string" && flags.continue === true ? lastSession(sessionsFile, dir, ws) : null;
+  // The same conversation only on the same server, agent and place (Codex).
+  const resumed = last && (last.url === undefined || last.url === url) && (last.agent === undefined || last.agent === agent) && (last.mode ?? "cloud") === mode ? last : null;
   if (flags.continue === true && !resumed && typeof flags.context !== "string") console.log(`  ${c.dim("no earlier conversation of this folder to continue — starting a fresh one")}`);
-  const s = { url, flags, ws, agent, dir, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]) };
-  const remember = () => rememberSession(sessionsFile, dir, { context: s.context, ws, agent });
+  const s = { url, flags, ws, agent, dir, mode, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]), sdkSession: typeof resumed?.sdkSession === "string" ? resumed.sdkSession : undefined };
+  // A script's --cloud turn in a folder that works on this computer is one
+  // turn: the folder keeps its choice and its conversation (Codex).
+  const oneTurn = typeof flags.task === "string" && chosen?.mode === "local";
+  const remember = () => {
+    if (!oneTurn) rememberSession(sessionsFile, dir, { context: s.context, ws, agent, url, mode: s.mode, ...(s.sdkSession ? { sdkSession: s.sdkSession } : {}) });
+  };
+  // The answers are kept now, not after a first turn: asked once (owner).
+  remember();
 
   if (typeof flags.task === "string") {
     console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
@@ -13774,9 +14211,10 @@ async function codeCmd(positional, flags, layout) {
     ["project", c.cyan(plainText(ws)), plainText(ws)],
     ["server", c.white(plainText(host)), plainText(host)],
     ["folder", c.white(plainText(homeTilde(dir))), plainText(homeTilde(dir))],
+    ["works", mode === "local" ? c.green("on this computer") : c.cyan("in the cloud"), mode === "local" ? "on this computer" : "in the cloud"],
     ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
   ])}`);
-  console.log(`    ${c.grey("each message takes your folder to the agent; you apply what comes back")}`);
+  console.log(`    ${c.grey(mode === "local" ? "Claude Code works in this folder on your own Claude sign-in; it asks before a change or command your Claude Code settings do not already allow" : "each message takes your folder to the agent; you apply what comes back")}`);
   console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
   const prompt = { history: readHistory(historyFile), files: folderFiles(dir) };
@@ -13810,7 +14248,8 @@ async function codeCmd(positional, flags, layout) {
       continue;
     }
     if (line === "/undo") {
-      await undoLastPatch(s);
+      if (s.mode === "local") console.log(`  ${c.dim("on this computer the changes are already in your folder — /diff shows them; git checkout -- <file> puts a file back")}\n`);
+      else await undoLastPatch(s);
       continue;
     }
     if (line === "/send" || line.startsWith("/send ")) {
@@ -13852,9 +14291,13 @@ async function codeCmd(positional, flags, layout) {
     }
     if (line === "/new") {
       s.context = newContext();
+      delete s.sdkSession;
+      delete s.localAllow;
       // Nothing of the old conversation stays in the count (Codex).
       for (const k of ["turns", "costUsd", "model", "contextTokens", "secs"]) delete s[k];
       s.notes = [];
+      // Kept now: /new then /quit must not bring the old one back (Codex).
+      remember();
       console.log(`  ${c.dim("a fresh conversation — the agent no longer reads the earlier turns")}\n`);
       continue;
     }
@@ -13866,7 +14309,8 @@ async function codeCmd(positional, flags, layout) {
     try {
       const notes = s.notes;
       s.notes = [];
-      await codeTurn(s, withNotes(notes, line), await messagesForTurn(s, true));
+      if (s.mode === "local") await codeLocalTurn(s, withNotes(notes, line));
+      else await codeTurn(s, withNotes(notes, line), await messagesForTurn(s, true));
       remember();
     } catch (err) {
       console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);

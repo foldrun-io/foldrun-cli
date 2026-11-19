@@ -663,7 +663,7 @@ function onTerminal(args: string[]) {
 test("on a terminal: Ctrl-C at the apply prompt applies nothing and the session goes on to its next prompt; Ctrl-D leaves (Codex)", LIVE, async (t) => {
   const d = repo(BASE);
   const s = await platform({ patch: patchFor(BASE, AFTER) });
-  const term = onTerminal(["code", d, "--to", "desk", "--url", s.url, "--token", "k"]);
+  const term = onTerminal(["code", d, "--cloud", "--to", "desk", "--url", s.url, "--token", "k"]);
   if (!term) {
     s.close();
     t.skip("no python3 to give the CLI a terminal");
@@ -686,7 +686,7 @@ test("on a terminal: Ctrl-C at the apply prompt applies nothing and the session 
 test("on a terminal: y at the apply prompt applies it, and /quit leaves", LIVE, async (t) => {
   const d = repo(BASE);
   const s = await platform({ patch: patchFor(BASE, AFTER) });
-  const term = onTerminal(["code", d, "--to", "desk", "--url", s.url, "--token", "k"]);
+  const term = onTerminal(["code", d, "--cloud", "--to", "desk", "--url", s.url, "--token", "k"]);
   if (!term) {
     s.close();
     t.skip("no python3 to give the CLI a terminal");

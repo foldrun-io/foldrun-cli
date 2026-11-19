@@ -79,7 +79,7 @@ export function appendHistory(file, entry) {
  * over the old one — never readable in between, and a link planted at the
  * path is replaced, not followed (Codex).
  */
-function writePrivate(/** @type {string} */ file, /** @type {string} */ text) {
+export function writePrivate(/** @type {string} */ file, /** @type {string} */ text) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });
@@ -525,4 +525,112 @@ export function replyPaths(/** @type {unknown} */ text) {
         .replace(/(^|[\s(])snapshot\/(?=[\s.,;:)]|$)/g, "$1your folder");
     })
     .join("\n");
+}
+
+// ------------------------------------------------------------ local mode
+// foldrun code on this computer (owner, 19 Nov 2026): Claude Code, through
+// the Agent SDK, in the person's own folder, on their own Claude sign-in.
+
+/** What a folder was last worked on with: its project and where. */
+export function folderChoice(/** @type {string} */ file, /** @type {string} */ dir) {
+  const s = readSessions(file)[path.resolve(dir)];
+  if (!s || typeof s !== "object") return null;
+  return {
+    ws: typeof s.ws === "string" ? s.ws : null,
+    mode: s.mode === "local" || s.mode === "cloud" ? s.mode : null,
+  };
+}
+
+/** A project name from a folder's name: lower case, letters, digits and dashes. */
+export function projectNameFor(/** @type {string} */ dir) {
+  const base = path.basename(path.resolve(dir)).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return /^[a-z]/.test(base) ? base : `code-${base || "project"}`;
+}
+
+/** The tiers foldrun's agents name, as the model Claude Code is asked for. */
+export function localModelOf(/** @type {string | null} */ v) {
+  const tier = { fast: "haiku", default: "sonnet", max: "opus" }[String(v ?? "default")];
+  return tier ?? String(v);
+}
+
+/** What the agent is told when it works in the person's own folder. */
+export function localPrompt(/** @type {string} */ dir) {
+  return [
+    "You are foldrun code, a coding agent working directly in the person's own folder on their computer:",
+    dir,
+    "",
+    "Work in that folder. Read before you change; make the smallest change that does the job; run the project's own checks (tests, a build, a quick run) when there are any, and say what you ran and what it showed.",
+    "Every change and command is shown to the person and may need their yes; if they say no, do not try the same thing another way — say what you wanted and why.",
+    "Never read or print secrets (.env files, keys, tokens), and do not run commands that delete outside the folder, push, deploy or publish unless the person asked for exactly that.",
+    "When you finish, say in a few plain sentences what you changed and how they can see it. Name files by their path inside the folder.",
+  ].join("\n");
+}
+
+/** One local tool call, in a few words: the file inside the folder, the pattern, the command. */
+export function localCallSummary(/** @type {string} */ name, /** @type {Record<string, unknown>} */ input, /** @type {string} */ dir) {
+  const rel = (/** @type {unknown} */ p) => {
+    const abs = path.resolve(dir, String(p ?? ""));
+    const r = path.relative(dir, abs);
+    return r && !r.startsWith("..") && !path.isAbsolute(r) ? r : abs;
+  };
+  if (name === "Read" || name === "Write" || name === "Edit") return rel(input.file_path);
+  if (name === "Glob") return String(input.pattern ?? "");
+  if (name === "Grep") return `${String(input.pattern ?? "")}${input.path ? ` in ${rel(input.path)}` : ""}`;
+  if (name === "Bash") return String(input.command ?? "").replace(/\s+/g, " ").trim();
+  if (name === "WebFetch") return String(input.url ?? "");
+  if (name === "WebSearch") return String(input.query ?? "");
+  if (name === "Task" || name === "Agent") return String(input.description ?? "");
+  if (name === "NotebookEdit") return rel(input.notebook_path);
+  return "";
+}
+
+/**
+ * Whether a path is inside the folder, read the way the file system reads
+ * it: one part at a time, each link followed before a ".." goes up from it
+ * (Codex). A part that does not exist yet keeps its name; a link that leads
+ * nowhere, or any other error, is outside.
+ */
+export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p) {
+  if (typeof p !== "string" || !p || p.includes("\0")) return false;
+  let root;
+  try {
+    root = fs.realpathSync(path.resolve(dir));
+  } catch {
+    return false;
+  }
+  const abs = path.isAbsolute(p) ? p : `${root}${path.sep}${p}`;
+  const parsed = path.parse(abs);
+  let cur = parsed.root;
+  let missing = false;
+  // POSIX: a backslash is part of a name, never a separator (Codex).
+  for (const part of abs.slice(parsed.root.length).split(process.platform === "win32" ? /[\\/]+/ : /\/+/)) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      cur = path.dirname(cur);
+      continue;
+    }
+    const next = path.join(cur, part);
+    if (missing) {
+      cur = next;
+      continue;
+    }
+    let st;
+    try {
+      st = fs.lstatSync(next);
+    } catch (e) {
+      if (/** @type {NodeJS.ErrnoException} */ (e).code !== "ENOENT") return false;
+      missing = true;
+      cur = next;
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      try {
+        cur = fs.realpathSync(next);
+      } catch {
+        return false;
+      }
+    } else cur = next;
+  }
+  const rel = path.relative(root, cur);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
