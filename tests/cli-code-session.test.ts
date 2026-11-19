@@ -296,11 +296,15 @@ test("/model: shows the agent's model; /model max changes its file's model: line
   const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
   try {
     let at = await t.until(/you ›/);
+    // The picker: the file's model ticked, Esc keeps it, nothing written.
     t.send("/model\r");
-    at = await t.until(/no turn yet/, at);
+    at = await t.until(/Choose a model[\s\S]*1\. Default[^\n]*✔[\s\S]*Esc to cancel/, at);
+    t.send("\x1b");
+    at = await t.until(/kept Default \(Sonnet\)/, at);
+    assert.equal(puts.length, 0);
     at = await t.until(/you ›/, at);
     t.send("/model max\r");
-    at = await t.until(/coder now uses max from the next turn/, at);
+    at = await t.until(/Max \(Opus\) from your next message/, at);
     assert.equal(puts.length, 1);
     assert.equal(puts[0]!.ifMatch, "sha-0", "written over exactly what was read");
     assert.match(puts[0]!.content, /^model: max # cheap$/m, "a quoted key is the same key: replaced, not added beside");
@@ -309,6 +313,16 @@ test("/model: shows the agent's model; /model max changes its file's model: line
     at = await t.until(/you ›/, at);
     t.send("/model max\r");
     at = await t.until(/already max/, at);
+    // ↓ then Enter in the picker: Max is ticked now, the next one is Fast.
+    t.send("/model\r");
+    at = await t.until(/2\. Max[^\n]*✔[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    // An arrow cut across two reads, the rest with Enter in one: keys, not reads.
+    t.send("\x1b");
+    await new Promise((r) => setTimeout(r, 5));
+    t.send("[B\r");
+    at = await t.until(/Fast \(Haiku\) from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^model: fast # cheap$/m);
     t.send("/model bad name!\r");
     at = await t.until(/is not a model/, at);
     t.send("/quit\r");
@@ -456,4 +470,24 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
     server.closeAllConnections();
     server.close();
   }
+});
+
+test("the reply: markdown drawn, wrapped to the screen, words already shown left out, the sandbox's folder name gone", async () => {
+  const { formatReply, withoutSaid, replyPaths } = await import("../src/code-session.mjs");
+  const c = { bold: (x: string) => `<b>${x}</b>`, cyan: (x: string) => `<c>${x}</c>`, dim: (x: string) => `<d>${x}</d>` };
+  const out = formatReply("- **`calc.py`:** `add` now returns `a + b` instead of `a - b`, which is what the test checks for.\n## Next\n```\nx = 1\n```\nlone * star", 40, c);
+  const lines = out.split("\n");
+  assert.equal(lines[0], "  • <c><b>calc.py</b></c><b>:</b> <c>add</c> now returns <c>a + b</c>");
+  assert.match(lines[1]!, /^ {4}instead of/, "a list item's next line sits under its text");
+  for (const l of lines) assert.ok(l.replace(/<\/?[bcd]>/g, "").length <= 38, `within the screen: ${l}`);
+  assert.ok(lines.includes("  <b>Next</b>"), "a heading is bold, its # gone");
+  assert.ok(lines.includes("    <d>x = 1</d>") && !out.includes("```"), "fenced code kept, its fences gone");
+  assert.ok(lines.includes("  lone * star"), "a lone mark is shown as written");
+  const said = "The folder holds one file with an obvious bug. I'll fix it.";
+  assert.equal(withoutSaid(`${said}\nI fixed the bug.`, [said]), "I fixed the bug.");
+  assert.equal(replyPaths("built in `snapshot/site/`; open snapshot/site/index.html"), "built in `site/`; open site/index.html");
+  assert.equal(replyPaths("what to change in `snapshot/`. The snapshot holds one file"), "what to change in your folder. The snapshot holds one file");
+  assert.equal(replyPaths("wrote /work/agents/coder/snapshot/test.py"), "wrote test.py");
+  assert.equal(replyPaths("see https://example.com/snapshot/report"), "see https://example.com/snapshot/report", "a web address is left alone");
+  assert.equal(replyPaths("```\ncd snapshot/site\n```"), "```\ncd snapshot/site\n```", "fenced code is left as written");
 });

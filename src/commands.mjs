@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -2729,7 +2729,7 @@ export function toolSummary(input) {
  * Set by foldrun code for the length of a turn: its live lines read as a
  * person would say them (● Run npm test  2.4s), with the sandbox's own
  * paths taken off and the main agent's name left out (19 Nov 2026).
- * @type {{ agent: string, bareTools?: boolean } | null}
+ * @type {{ agent: string, bareTools?: boolean, said?: string[] } | null}
  */
 let codeView = null;
 
@@ -2740,7 +2740,44 @@ function codeToolLine(start, done, agent) {
   if (!what && codeView) codeView.bareTools = true;
   const secs = Number(done?.ms) / 1000;
   const mark = done?.err ? c.red("●") : c.cyan("●");
-  return `  ${mark} ${who}${c.bold(clipLine(friendlyTool(start?.text ?? done?.text)))}${what ? ` ${c.dim(clipLine(what))}` : ""}${secs >= 1 ? `  ${c.dim(formatSecs(secs))}` : ""}`;
+  const name = friendlyTool(start?.text ?? done?.text);
+  const base = `  ${mark} ${who}${c.bold(clipLine(name))}${what ? ` ${c.dim(clipLine(what))}` : ""}`;
+  const line = `${base}${secs >= 1 ? `  ${c.dim(formatSecs(secs))}` : ""}`;
+  // Nothing to tell this call from the one before (no file or command
+  // shown): a row of them prints as one line with a count (19 Nov 2026,
+  // five "● Run" lines in a row).
+  if (codeView && !what && !done?.err) BARE.set(line, { key: `${who}${name}`, base, label: `${who ? `[${agent}] ` : ""}${name}` });
+  return line;
+}
+
+/** Live lines that are a bare tool call, by their text: what liveLog folds. */
+const BARE = new Map();
+/** @type {{ key: string, base: string, label: string, line: string, n: number } | null} */
+let bareRow = null;
+
+/** Print a live line; in the code view a row of the same bare call is one line, with ×n. */
+function liveLog(/** @type {string | null} */ line) {
+  if (line == null) return;
+  const bare = BARE.get(line);
+  BARE.delete(line);
+  if (bare && bareRow && bareRow.key === bare.key) {
+    bareRow.n++;
+    return;
+  }
+  flushBare();
+  if (bare) {
+    bareRow = { ...bare, line, n: 1 };
+    return;
+  }
+  console.log(line);
+}
+
+/** The row of bare calls being counted is printed: something else comes next. */
+function flushBare() {
+  if (!bareRow) return;
+  const { line, base, n } = bareRow;
+  bareRow = null;
+  console.log(n > 1 ? `${base} ${c.dim(`×${n}`)}` : line);
 }
 
 function eventLine(e, rawAgent, open) {
@@ -2758,7 +2795,12 @@ function eventLine(e, rawAgent, open) {
     if (e.type === "tool") return codeToolLine(e, e, agent);
     if (e.type === "error") return `  ${c.red("✗")} ${clipLine(folderRelative(friendlyError(e.text)))}`;
     const who = agent && agent !== codeView.agent ? `${c.dim(`[${agent}]`)} ` : "";
-    return `  ${c.dim("·")} ${who}${clipLine(folderRelative(e.text))}`;
+    // Its words on the way, already on screen whole (one line, not cut):
+    // the reply leaves them out. Cut ones stay in it (Codex).
+    const words = String(e.text ?? "").trim();
+    const shown = replyPaths(folderRelative(words));
+    if (!who && e.type === "text" && !words.includes("\n") && clipLine(shown) === shown) (codeView.said ??= []).push(words);
+    return `  ${c.dim("·")} ${who}${clipLine(replyPaths(folderRelative(e.text)))}`;
   }
   if (e.type === "tool" && e.call != null) {
     if (e.ms == null) {
@@ -2807,7 +2849,7 @@ export function printNew(run, seen, open = new Map(), { skipResult = false, quie
       // The result came in this frame and holds it: it is printed with the
       // result, once (Codex).
       const result = run.steps[j]?.result;
-      if (!(result && String(result).includes(String(h.text).trim()))) console.log(eventLine(h, run.steps[j]?.agent, open));
+      if (!(result && String(result).includes(String(h.text).trim()))) liveLog(eventLine(h, run.steps[j]?.agent, open));
       held.delete(j);
     }
   };
@@ -2839,7 +2881,7 @@ export function printNew(run, seen, open = new Map(), { skipResult = false, quie
     // print the reply as a line, then again in full (seen 19 Nov 2026).
     if (!note && !(step === replying && e.type === "error")) release(e);
     const line = eventLine(e, step.agent, open);
-    if (line !== null) console.log(line);
+    liveLog(line);
   }
 }
 
@@ -2856,8 +2898,9 @@ const REFUSED_NOTE = /\(\S+ refused\)|^refused path:|\bwas refused\b|\b(denied|b
 export function flushHeld(seen, open) {
   if (!seen) return;
   const held = heldText(seen);
-  for (const [, h] of held) console.log(eventLine(h, h.__agent ?? "", open ?? new Map()));
+  for (const [, h] of held) liveLog(eventLine(h, h.__agent ?? "", open ?? new Map()));
   held.clear();
+  flushBare();
 }
 
 /** printNew's held text, per step, kept beside `seen` across polls and reconnects. */
@@ -2879,7 +2922,7 @@ export function dropHeldReply(run, seen, open) {
     // The result holds the step's words, so a held text inside it is
     // printed with it, not on its own as well.
     const text = String(e.text).trim();
-    if (!(reply && reply.includes(text))) console.log(eventLine(e, run.steps[i]?.agent, open));
+    if (!(reply && reply.includes(text))) liveLog(eventLine(e, run.steps[i]?.agent, open));
   }
   held.clear();
 }
@@ -2887,9 +2930,10 @@ export function dropHeldReply(run, seen, open) {
 /** The stream is over: print a start line for each call that never completed. */
 function flushCalls(open) {
   for (const { agent, e } of open.values()) {
-    console.log(codeView ? codeToolLine(e, null, agent) : `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`);
+    liveLog(codeView ? codeToolLine(e, null, agent) : `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`);
   }
   open.clear();
+  flushBare();
 }
 
 function finishLine(run) {
@@ -13157,7 +13201,7 @@ async function codeTurn(s, task, include = []) {
     const { packed, left, unscanned } = await packFolder(dir);
     if (cancel.asked) return "cancelled";
     const snap = await pushPacked(url, flags, ws, packed);
-    console.log(`  ${c.dim(`↑ sent the folder · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}${snap.reused ? " · unchanged since the last turn" : ""}`)}`);
+    console.log(`  ${c.dim(`↑ sent the folder · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}${snap.reused && s.turns ? " · unchanged since the last turn" : ""}`)}`);
     sentNotes(left, unscanned);
     if (cancel.asked) return "cancelled";
     let started;
@@ -13190,6 +13234,7 @@ async function codeTurn(s, task, include = []) {
     open = new Map();
     const view = { skipResult: true, quiet: flags.verbose !== true };
     codeView = { agent };
+    bareRow = null;
     stopTicker = startTicker(Date.now(), () => typeAhead.text());
     printNew(run, seen, open, view);
     if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view })) ?? run;
@@ -13204,8 +13249,13 @@ async function codeTurn(s, task, include = []) {
 
     const own = (run.steps ?? []).filter((x) => !x.subagentOf);
     const reply = own.at(-1)?.result;
-    // The agent's words, right before the apply prompt: no terminal control (Codex).
-    if (reply) console.log(`\n${plainText(String(reply)).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
+    // The agent's words, right before the apply prompt: no terminal control
+    // (Codex); what it already said on the way left out; wrapped to the
+    // screen with its markdown drawn (19 Nov 2026: raw **, edge wraps).
+    if (reply) {
+      const text = replyPaths(withoutSaid(plainText(String(reply)).trim(), codeView?.said ?? []));
+      if (text) console.log(`\n${formatReply(text, process.stdout.columns || 80, c)}`);
+    }
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
     noteSessionTurn(s, run, cost);
     console.log(`\n${turnLine(s, run, cost, cancel.asked)}`);
@@ -13259,6 +13309,7 @@ async function codeTurn(s, task, include = []) {
     }
     return run.status;
   } finally {
+    flushBare();
     stopTicker();
     await keyboardBack();
     // The success path has printed or dropped any held text already; an
@@ -13388,7 +13439,8 @@ function startTicker(since, typed = () => "") {
     // The guard on stdout strips every control but colours: the CLI's own
     // line-clear goes past it, the text through it.
     writeControl("\r\x1b[2K");
-    const head = `  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}`)}`;
+    const doing = bareRow ? ` · ${bareRow.label}${bareRow.n > 1 ? ` ×${bareRow.n}` : ""}` : "";
+    const head = `  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}${doing}`)}`;
     // What is being typed for the next message, its end, on the same row.
     const t = typed();
     const room = (process.stdout.columns || 80) - 32;
@@ -13446,11 +13498,22 @@ const CODE_MODEL = /^[A-Za-z0-9][\w.:/-]{0,99}$/;
  */
 async function codeModel(url, flags, ws, agent, want, s) {
   const file = `agents/${agent}/agent.md`;
+  if (!want && codeInteractive && process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+    // A list to choose from, as Claude Code's /model (19 Nov 2026).
+    const cur = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=${enc(file)}`).catch(() => null);
+    const now = frontmatterModel(String(cur?.content ?? "")) ?? "default";
+    const picked = await pickModel(now);
+    if (!picked || picked === now) {
+      console.log(`  ${c.dim(picked ? `still ${modelLabel(now)}` : `kept ${modelLabel(now)}`)}\n`);
+      return;
+    }
+    want = picked;
+  }
   if (!want) {
     // What a turn actually ran on — the file's model: may be a tier or an
     // alias the platform resolves, so the run record is the honest answer.
-    console.log(`  ${c.dim("model")}  ${s?.model ? `${plainText(shortModel(s.model))} ${c.dim("(the last turn)")}` : c.dim("no turn yet — the agent's model: decides")}`);
-    console.log(`  ${c.dim(`/model fast · default · max · <a model id> changes model: in ${file} of ${plainText(ws)}, from the next turn`)}\n`);
+    console.log(`  ${c.dim("model")}  ${s?.model ? `${plainText(shortModel(s.model))} ${c.dim("(the last message)")}` : c.dim("set by the agent until you choose one")}`);
+    console.log(`  ${c.dim("/model fast · default · max changes it from your next message")}\n`);
     return;
   }
   if (!CODE_MODEL.test(want)) throw new Error(`"${want}" is not a model — fast, default, max, or a model id`);
@@ -13481,7 +13544,111 @@ async function codeModel(url, flags, ws, agent, want, s) {
     if (err instanceof HttpError && err.status === 409) throw new Error(`${file} changed while saving — nothing was written; /model again`);
     throw err;
   }
-  console.log(`  ${c.green("✓")} ${plainText(agent)} now uses ${c.bold(plainText(want))} from the next turn ${c.dim(`— ${file} in ${plainText(ws)}, so every run of this agent does`)}\n`);
+  console.log(`  ${c.green("✓")} ${c.bold(modelLabel(want))} from your next message ${c.dim(`— kept for ${plainText(ws)}`)}\n`);
+}
+
+/** The tiers foldrun code offers, and what each runs on foldrun's own models. */
+const MODEL_CHOICES = [
+  { v: "default", name: "Default", note: "Sonnet · right for most work" },
+  { v: "max", name: "Max", note: "Opus · the strongest, costs more" },
+  { v: "fast", name: "Fast", note: "Haiku · the quickest and cheapest" },
+];
+
+/** "max" → "Max (Opus)"; a model id as it is. */
+function modelLabel(/** @type {string} */ v) {
+  const t = MODEL_CHOICES.find((x) => x.v === v);
+  return t ? `${t.name} (${t.note.split(" · ")[0]})` : plainText(shortModel(v));
+}
+
+/** The model: an agent file sets, as the platform reads it (quoted or not). */
+export function frontmatterModel(/** @type {string} */ text) {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+  const m = fm && /^["']?model["']?[ \t]*:[ \t]*["']?([^"'\s#]+)["']?/m.exec(fm);
+  return m ? m[1] : null;
+}
+
+/**
+ * The model picker: ↑/↓ (or j/k) to move, 1–n or Enter to choose, Esc, q
+ * or Ctrl-C to keep what is there. Drawn in place; on the way out it folds
+ * to nothing, and the caller says what happened.
+ * @returns {Promise<string | null>}
+ */
+function pickModel(/** @type {string} */ now) {
+  const choices = MODEL_CHOICES.some((x) => x.v === now) ? MODEL_CHOICES : [{ v: now, name: plainText(shortModel(now)), note: "this agent's own model" }, ...MODEL_CHOICES];
+  let at = Math.max(0, choices.findIndex((x) => x.v === now));
+  const width = Math.max(...choices.map((x) => x.name.length));
+  const fit = (/** @type {string} */ t) => clipCells(t, (process.stdout.columns || 80) - 3);
+  const rows = () => [
+    `  ${c.bold(fit("Choose a model"))}`,
+    `  ${c.dim(fit("from your next message on; kept for this project"))}`,
+    "",
+    ...choices.map((x, i) => {
+      // One screen row each, so redrawing goes up exactly as far (Codex).
+      const line = clipCells(`${i + 1}. ${x.name.padEnd(width)}   ${x.note}${x.v === now ? "  ✔" : ""}`, (process.stdout.columns || 80) - 5);
+      return i === at ? `  ${c.cyan(`❯ ${line}`)}` : `    ${c.dim(line)}`;
+    }),
+    "",
+    `  ${c.dim(fit("↑↓ to move · Enter to choose · Esc to cancel"))}`,
+  ];
+  let drawn = 0;
+  const draw = () => {
+    if (drawn) writeControl(`\x1b[${drawn}A\r\x1b[J`);
+    const r = rows();
+    console.log(r.join("\n"));
+    drawn = r.length;
+  };
+  return new Promise((resolve) => {
+    const decoder = new StringDecoder("utf8");
+    let buf = "";
+    /** @type {NodeJS.Timeout | undefined} */
+    let lone;
+    let over = false;
+    const done = (/** @type {string | null} */ v) => {
+      over = true;
+      clearTimeout(lone);
+      process.stdin.off("data", onData);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      if (drawn) writeControl(`\x1b[${drawn}A\r\x1b[J`);
+      resolve(v);
+    };
+    /** One key; true when the picker is over. */
+    const key = (/** @type {string} */ k) => {
+      if (k === "\x1b[A" || k === "\x1bOA" || k === "k") at = (at + choices.length - 1) % choices.length;
+      else if (k === "\x1b[B" || k === "\x1bOB" || k === "j") at = (at + 1) % choices.length;
+      else if (k === "\r" || k === "\n") return done(/** @type {{ v: string }} */ (choices[at]).v), true;
+      else if (k === "\x1b" || k === "\x03" || k === "q") return done(null), true;
+      else if (/^[1-9]$/.test(k) && Number(k) <= choices.length) return done(/** @type {{ v: string }} */ (choices[Number(k) - 1]).v), true;
+      else return false;
+      draw();
+      return false;
+    };
+    // Keys, not reads: several may come in one read, an arrow may be cut
+    // across two, and Esc alone is Esc only when nothing follows it (Codex).
+    const onData = (/** @type {Buffer} */ d) => {
+      clearTimeout(lone);
+      buf += decoder.write(d);
+      while (buf && !over) {
+        const seq = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|O.)/.exec(buf);
+        if (seq) {
+          buf = buf.slice(seq[0].length);
+          key(seq[0]);
+        } else if (buf[0] === "\x1b" && /^\x1b(?:\[[0-?]*[ -/]*|O)?$/.test(buf)) {
+          lone = setTimeout(() => !over && (buf = "", key("\x1b")), 40);
+          return;
+        } else {
+          const ch = /** @type {string} */ ([...buf][0]);
+          buf = buf.slice(ch.length);
+          if (ch === "\r" && buf[0] === "\n") buf = buf.slice(1);
+          key(ch);
+        }
+      }
+    };
+    draw();
+    process.stdin.setRawMode(true);
+    process.stdin.on("data", onData);
+    process.stdin.resume();
+  });
 }
 
 async function codeCmd(positional, flags, layout) {

@@ -657,13 +657,16 @@ choice.
 | `/diff` | what is changed in the folder now |
 | `/undo` | take back the last patch this session applied (refused if the folder changed since) |
 | `/status` | the session: id, turns, spend, model, agent, platform, last run |
-| `/model`, `/model max` | the agent's model; with a name (`fast`, `default`, `max`, a model id) it changes the `model:` line of the agent's file from the next turn — for every run of that agent, as an edit and deploy would |
+| `/model`, `/model max` | `/model` opens a list — Default (Sonnet), Max (Opus), Fast (Haiku), the current one ticked; ↑/↓ and Enter choose, Esc keeps it. With a name (`fast`, `default`, `max`, a model id) it is set straight away. Either changes the `model:` line of the agent's file from the next message — for every run of that agent, as an edit and deploy would |
 | `/new` | a fresh conversation |
 | `/send <conversation> <text>`, `/messages` | [session messages](runs#session-messages) |
 | `/quit`, Ctrl-D | leave; `foldrun code --continue` comes back to the same conversation |
 | `!<command>` | run it in the folder (`!npm test`); what it printed goes with your next message |
 | `@<path>` | Tab completes a file of the folder, to point the agent at it |
 
+The agent's reply is drawn for the terminal: bold, code and lists rendered,
+wrapped to the window, and what it already said on the way not repeated.
+Tool calls with nothing to tell them apart fold into one line (`● Read ×3`).
 While a turn runs you can type your next message: it shows on the
 working line (`next: …`), is never sent mid-turn, and is on the line at the
 next prompt to edit or send — and nothing typed then can answer the apply

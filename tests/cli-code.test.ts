@@ -53,7 +53,7 @@ const record = (status: string, result = "Added a greeting.", snapshot: boolean 
   ...(snapshot ? { snapshot: { id: ID } } : {}),
   startedAt: "2026-11-18T01:00:00.000Z",
   finishedAt: "2026-11-18T01:02:00.000Z",
-  steps: [{ agent: "coder", group: 1, status: status === "completed" ? "completed" : "failed", attempts: 1, costUsd: 0.05, events: [{ type: "tool", text: "Bash", call: "c1" }, { type: "tool", text: "Bash", call: "c1", ms: 5 }, ...(result ? [{ type: "text", text: result }] : [])], result, startedAt: "2026-11-18T01:00:00.000Z", finishedAt: "2026-11-18T01:02:00.000Z" }],
+  steps: [{ agent: "coder", group: 1, status: status === "completed" ? "completed" : "failed", attempts: 1, costUsd: 0.05, events: [{ type: "tool", text: "Bash", call: "c1" }, { type: "tool", text: "Bash", call: "c1", ms: 5 }, { type: "tool", text: "Read", call: "c2" }, { type: "tool", text: "Read", call: "c2", ms: 5 }, { type: "tool", text: "Read", call: "c3" }, { type: "tool", text: "Read", call: "c3", ms: 5 }, { type: "tool", text: "Read", call: "c4" }, { type: "tool", text: "Read", call: "c4", ms: 5 }, ...(result ? [{ type: "text", text: result }] : [])], result, startedAt: "2026-11-18T01:00:00.000Z", finishedAt: "2026-11-18T01:02:00.000Z" }],
 });
 
 /** A platform with a coder agent whose run changed the folder. */
@@ -97,6 +97,8 @@ test("code --task: the folder goes as a snapshot, the agent runs on it in a conv
   assert.match(r.out, /Added a greeting\./, "the agent's reply is shown");
   assert.equal((r.out.match(/Added a greeting\./g) ?? []).length, 1, "the reply is shown once, not also as a live line");
   assert.match(r.out, /● Run\n/, "the agent's steps are shown as they happen, as a verb (a call under a second has no time)");
+  assert.match(r.out, /● Read ×3\n/, "the same bare call in a row is one line with a count");
+  assert.equal((r.out.match(/● Read/g) ?? []).length, 1);
   assert.equal(r.out.match(/add capture: full to desk's AGENTS\.md — runs then keep each tool's input and output too/g)?.length, 1, "with no inputs recorded, how to see them is said once, with what it stores");
   assert.doesNotMatch(r.out, /run-code-1/, "the run's id is not on the turn's lines — /status has it");
   assert.match(r.out, /✓ done · 2m 00s · \$0\.050/, "the turn ends with how long and what it cost");

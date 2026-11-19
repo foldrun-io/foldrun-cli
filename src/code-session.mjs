@@ -16,7 +16,7 @@ export const CODE_COMMANDS = [
   ["/diff", "what is changed in the folder now (git diff)"],
   ["/undo", "take back the last patch this session applied"],
   ["/status", "this session: turns, cost, model, conversation"],
-  ["/model [name]", "the agent's model; fast, default, max or an id changes it"],
+  ["/model", "choose the model: Default, Max or Fast (/model max sets it straight away)"],
   ["/new", "a fresh conversation — the agent forgets the earlier turns"],
   ["/send <conversation> <text>", "message another session"],
   ["/messages", "what other sessions sent this one"],
@@ -371,4 +371,154 @@ export function clipCellsEnd(/** @type {string} */ t, /** @type {number} */ n) {
     used += cells(ch);
   }
   return `…${out}`;
+}
+
+// ---------------------------------------------------------- the reply
+
+/**
+ * The reply without the words the agent already said on the way (printed
+ * live as "· …"): each one found whole in it is taken out, once.
+ */
+export function withoutSaid(/** @type {string} */ reply, /** @type {string[]} */ said) {
+  let out = reply;
+  for (const t of said) {
+    if (t.length < 12) continue;
+    const at = out.indexOf(t);
+    if (at >= 0) out = out.slice(0, at) + out.slice(at + t.length);
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * The agent's reply for the terminal (19 Nov 2026): **bold**, `code` and
+ * headings drawn instead of shown as marks, lists as •, every paragraph
+ * wrapped to the screen with a two-space margin (a list item's lines under
+ * its text). Fenced code and tables are kept as written.
+ * @param {string} text plain text, no terminal control in it
+ * @param {number} columns
+ * @param {{ bold: (s: string) => string, cyan: (s: string) => string, dim: (s: string) => string }} c
+ */
+export function formatReply(text, columns, c) {
+  const width = Math.max(20, columns - 4);
+  const out = [];
+  let fenced = false;
+  for (const raw of text.split("\n")) {
+    if (/^\s*```/.test(raw)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced || /^\s*\|/.test(raw)) {
+      out.push(`  ${fenced ? "  " : ""}${fenced ? c.dim(raw) : raw}`);
+      continue;
+    }
+    if (!raw.trim()) {
+      out.push("");
+      continue;
+    }
+    const heading = /^\s{0,3}#{1,6}\s+(.*)$/.exec(raw);
+    const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(raw);
+    let lead = "";
+    let body = raw.trim();
+    if (heading) body = `**${heading[1].replace(/\*\*/g, "")}**`;
+    else if (item) {
+      const depth = Math.min(3, Math.floor(item[1].replace(/\t/g, "  ").length / 2));
+      lead = `${"  ".repeat(depth)}${/^\d/.test(item[2]) ? item[2] : "•"} `;
+      body = item[3];
+    }
+    const words = styledWords(body);
+    const room = Math.max(10, width - displayWidth(lead));
+    const lines = [];
+    let line = [];
+    let used = 0;
+    for (const w of words) {
+      const len = displayWidth(w.map((x) => x.t).join(""));
+      if (line.length && used + 1 + len > room) {
+        lines.push(line);
+        line = [];
+        used = 0;
+      }
+      line.push(w);
+      used += (line.length > 1 ? 1 : 0) + len;
+    }
+    if (line.length) lines.push(line);
+    lines.forEach((ws, k) => {
+      const pad = k === 0 ? lead : " ".repeat(displayWidth(lead));
+      out.push(`  ${pad}${ws.map((w) => w.map((x) => paint(x, c)).join("")).join(" ")}`);
+    });
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+/** One run of characters and how it is drawn. @typedef {{ t: string, bold: boolean, code: boolean }} Piece */
+
+/** @param {Piece} x @param {{ bold: (s: string) => string, cyan: (s: string) => string }} c */
+const paint = (x, c) => (x.code ? c.cyan(x.bold ? c.bold(x.t) : x.t) : x.bold ? c.bold(x.t) : x.t);
+
+/**
+ * A line's words, each a list of pieces: ** and ` turn bold and code on and
+ * off — only when they come in pairs; a lone one is shown as it is.
+ * @returns {Piece[][]}
+ */
+function styledWords(/** @type {string} */ line) {
+  const ticks = (line.match(/`/g) ?? []).length;
+  const stars = (line.replace(/`[^`]*`/g, "").match(/\*\*/g) ?? []).length;
+  const useTicks = ticks > 0 && ticks % 2 === 0;
+  const useStars = stars > 0 && stars % 2 === 0;
+  /** @type {Piece[][]} */
+  const words = [];
+  /** @type {Piece[]} */
+  let word = [];
+  let bold = false;
+  let code = false;
+  const put = (/** @type {string} */ ch) => {
+    const last = word.at(-1);
+    if (last && last.bold === bold && last.code === code) last.t += ch;
+    else word.push({ t: ch, bold, code });
+  };
+  for (let i = 0; i < line.length; i++) {
+    const ch = /** @type {string} */ (line[i]);
+    if (useTicks && ch === "`") {
+      code = !code;
+      continue;
+    }
+    if (useStars && !code && ch === "*" && line[i + 1] === "*") {
+      bold = !bold;
+      i++;
+      continue;
+    }
+    if (ch === " " && !code) {
+      if (word.length) words.push(word);
+      word = [];
+      continue;
+    }
+    put(ch);
+  }
+  if (word.length) words.push(word);
+  return words;
+}
+
+/**
+ * The agent's words with the sandbox's folder name taken out: to the person
+ * it is their folder (19 Nov 2026: "I built it in `snapshot/site/`").
+ * snapshot/site/x → site/x; `snapshot/` alone → your folder.
+ */
+export function replyPaths(/** @type {unknown} */ text) {
+  // Fenced code is left as written, and only a path — never a web address
+  // — loses its sandbox part (Codex).
+  let fenced = false;
+  return String(text ?? "")
+    .split("\n")
+    .map((line) => {
+      if (/^\s*```/.test(line)) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced) return line;
+      return line
+        .replace(/(^|[\s`'"(\[])\/[^\s'"`:]*?\/snapshot\/(?=[^\s'"`)\]])/g, "$1")
+        .replace(/(^|[\s`'"(\[])snapshot\/(?=[^\s`'")\],;:])/g, "$1")
+        .replace(/`snapshot\/?`/g, "your folder")
+        .replace(/(^|[\s(])snapshot\/(?=[\s.,;:)]|$)/g, "$1your folder");
+    })
+    .join("\n");
 }
