@@ -582,6 +582,35 @@ The run page shows a run's **Conversation**, linked to the runs list filtered
 to it; `foldrun runs --context order-42` and `GET …/runs?context=order-42`
 list them.
 
+
+### Session messages
+
+One conversation can send another a message: a person in `foldrun code`
+asks the session working on the API what it changed, a script tells a
+session that the build is green. The message waits with the conversation it
+was sent to; nothing reaches that conversation's agent until its person
+includes it in a turn.
+
+- **Send:** `POST …/sessions/<context>/messages` with `{text, from?}` —
+  in `foldrun code`, `/send <conversation> <text>`; from a script,
+  `foldrun sessions send <conversation> "<text>" --to <project>`. Whoever
+  may start runs in the project may send, the same right that already lets
+  them join the conversation by its id.
+- **Read and include:** before each turn `foldrun code` shows what is
+  waiting and asks whether to include it; only an explicit `y` does. A turn
+  includes messages by id (`messages` on `POST …/agents/<agent>/run`): if
+  one is no longer waiting, none is taken (409, `refused`); each is taken by
+  one turn only. Those that do not fit in one turn's block (about 16,000
+  characters together) wait again and the answer names them in `left`. The step reads them after the earlier turns, as
+  data from other sessions, never as instructions; its trail says how many
+  it was given, and a re-run reads the same ones.
+- **Not live:** a message is never put into a running step. To say
+  something to a step while it runs, use `foldrun message <run>`
+  (`POST …/runs/<id>/message`).
+
+At most 100 wait for one conversation; they are kept 30 days. Deleting a
+project deletes them; renaming it moves them with it.
+
 ## Inputs
 
 A run may be handed **files**: storage paths, as the project's storage lists

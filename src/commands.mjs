@@ -8422,6 +8422,64 @@ async function messageCmd(positional, flags, layout) {
   return 0;
 }
 
+/**
+ * `foldrun sessions send <conversation> "…"` and `foldrun sessions messages
+ * <conversation>` (19 Nov 2026): a message to another conversation of the
+ * project, which waits until its person includes it in a turn; and what a
+ * conversation was sent. Session messages: foldrun-docs runs.md.
+ */
+async function sessionsCmd(positional, flags, layout) {
+  const url = platformFor(flags, "sessions");
+  const verb = positional[0];
+  const context = positional[1];
+  const ws = typeof flags.to === "string" ? flags.to : (layout?.kind === "empty" ? null : takeWorkspace([], layout)) ?? savedDefault(flags);
+  if (!ws) throw new Error("which project? `--to <project>` (or run it in the project's folder)");
+  const base = (ctx) => `/api/workspaces/${encodeURIComponent(ws)}/sessions/${encodeURIComponent(ctx)}/messages`;
+  if (verb === "send") {
+    const text = positional.slice(2).join(" ").trim();
+    if (!context || !text) throw new Error('`foldrun sessions send <conversation> "…"` — the conversation id `foldrun code` shows in its session line');
+    const from = typeof flags.from === "string" ? flags.from : undefined;
+    const sent = await remoteCall(url, flags, base(context), { method: "POST", body: JSON.stringify({ text, ...(from ? { from } : {}) }) });
+    if (flags.json === true) {
+      console.log(JSON.stringify(sent?.message ?? sent, null, 2));
+      return 0;
+    }
+    console.log(`\n  ${c.green("✓")} sent to ${plainText(context)} ${c.dim(`in ${ws} — it waits until that conversation's person includes it in a turn`)}\n`);
+    return 0;
+  }
+  if (verb === "messages" || verb === "ls") {
+    if (!context) throw new Error("`foldrun sessions messages <conversation>` — the conversation id `foldrun code` shows in its session line");
+    const q = flags.waiting === true ? "?waiting=1" : "";
+    const got = await remoteCall(url, flags, `${base(context)}${q}`);
+    const messages = Array.isArray(got?.messages) ? got.messages : [];
+    if (flags.json === true) {
+      console.log(JSON.stringify(messages, null, 2));
+      return 0;
+    }
+    if (!messages.length) {
+      console.log(`\n  ${c.dim(flags.waiting === true ? `nothing waiting for ${plainText(context)}` : `nothing sent to ${plainText(context)}`)}\n`);
+      return 0;
+    }
+    console.log();
+    for (const m of messages) console.log(sessionMessageLine(m));
+    console.log();
+    return 0;
+  }
+  throw new Error('`foldrun sessions send <conversation> "…"` or `foldrun sessions messages <conversation> [--waiting]`');
+}
+
+/** Unicode direction controls out: a preview must read as what the agent gets. */
+const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "");
+
+/** One session message, for the terminal: who, when, whether used, what. */
+function sessionMessageLine(m) {
+  const who = plainText(String(m?.from ?? "someone"));
+  const where = m?.fromContext ? c.dim(` (${plainText(String(m.fromContext))})`) : "";
+  const used = m?.run ? c.dim(` · in ${plainText(String(m.run))}`) : c.dim(" · waiting");
+  const text = noBidi(plainText(String(m?.text ?? ""))).replace(/\s+/g, " ").trim();
+  return `  ${c.bold(noBidi(who))}${where}${used}\n    ${text}`;
+}
+
 async function workspaceOfRun(url, flags, layout, runId) {
   if (typeof flags.to === "string") return flags.to;
   const names = await remoteWorkspaceNames(url, flags);
@@ -12938,7 +12996,46 @@ async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
  * happen, and the patch it leaves is offered to apply. Ctrl-C stops the run
  * on the platform. Answers the run's status.
  */
-async function codeTurn(s, task) {
+/**
+ * Session messages waiting for this conversation, shown, and which to
+ * include in the turn about to start (19 Nov 2026). On a terminal the
+ * person is asked; with --task only `--include-messages` includes them —
+ * `--yes` means "apply the patch", never "read what others sent". A
+ * failure to read them never blocks the turn.
+ * @returns {Promise<string[]>}
+ */
+async function messagesForTurn(s, interactive) {
+  const { url, flags, ws } = s;
+  let waiting = [];
+  try {
+    const got = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
+    waiting = Array.isArray(got?.messages) ? got.messages : [];
+  } catch {
+    return [];
+  }
+  if (!waiting.length) return [];
+  const shown = waiting.slice(0, 20);
+  console.log(`  ${c.amber(`${waiting.length} message${waiting.length === 1 ? "" : "s"} from other sessions`)}${waiting.length > 20 ? c.dim(" (the first 20 can go in this turn)") : ""}`);
+  for (const m of shown) console.log(sessionMessageLine(m));
+  let yes;
+  // Only an explicit yes from a person: what another session sent can steer
+  // the agent, so an empty line, Ctrl-D or no terminal never includes it
+  // (Codex, 19 Nov 2026).
+  if (interactive && process.stdin.isTTY) {
+    const answer = (await promptVisible(`  include ${shown.length === 1 ? "it" : `these ${shown.length}`} in this turn? [y/N] `)).trim();
+    yes = /^y(es)?$/i.test(answer);
+  } else {
+    yes = flags["include-messages"] === true;
+    if (!yes) console.log(`  ${c.dim("not included — --include-messages includes them")}`);
+  }
+  if (!yes) {
+    console.log(`  ${c.dim("left waiting")}`);
+    return [];
+  }
+  return shown.map((m) => String(m.id));
+}
+
+async function codeTurn(s, task, include = []) {
   const { url, flags, ws, agent, dir } = s;
   // Ctrl-C is recorded the moment it is pressed, before the run even has an
   // id, and an interrupted turn never applies a patch — however the race
@@ -13004,7 +13101,7 @@ async function codeTurn(s, task) {
     try {
       started = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/${enc(agent)}/run`, {
         method: "POST",
-        body: JSON.stringify({ task, snapshot: String(snap.snapshotId), context: s.context, ...(flags.test === true ? { test: true } : {}) }),
+        body: JSON.stringify({ task, snapshot: String(snap.snapshotId), context: s.context, ...(include.length ? { messages: include } : {}), ...(flags.test === true ? { test: true } : {}) }),
       });
     } catch (err) {
       // The platform may have taken the run before the answer was lost.
@@ -13012,6 +13109,9 @@ async function codeTurn(s, task) {
       throw err;
     }
     runId = started?.runId;
+    if (Array.isArray(started?.left) && started.left.length) {
+      console.log(`  ${c.dim(`${started.left.length} message${started.left.length === 1 ? "" : "s"} did not fit in this turn — ${started.left.length === 1 ? "it waits" : "they wait"} for the next`)}`);
+    }
     // Refused, not cleaned: an id with anything else in it is not used for
     // a stop, a read or a patch, which a cleaned one could aim at another
     // run (Codex). A refused id is shown as JSON, so it cannot drive the terminal.
@@ -13119,13 +13219,13 @@ async function codeCmd(positional, flags, layout) {
 
   if (typeof flags.task === "string") {
     console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} · ${dir}`)}\n`);
-    const status = await codeTurn(s, flags.task.trim());
+    const status = await codeTurn(s, flags.task.trim(), await messagesForTurn(s, false));
     return status === "completed" ? 0 : status === "cancelled" ? 130 : 1;
   }
   const { createInterface } = await import("node:readline/promises");
   console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} on ${url}`)}`);
   console.log(`  ${c.dim(`${dir} — each message sends it to a sandbox; you apply what comes back`)}`);
-  console.log(`  ${c.dim("/new  a fresh conversation    /status  this session    /quit  leave")}\n`);
+  console.log(`  ${c.dim("/send <conversation> <text>  message another session    /messages  what waits here    /new  a fresh conversation    /status  this session    /quit  leave")}\n`);
   for (;;) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     // Closing the input (Ctrl-D) leaves question() unsettled on Node 26 —
@@ -13141,6 +13241,31 @@ async function codeCmd(positional, flags, layout) {
       console.log();
       return 0;
     }
+    if (line === "/send" || line.startsWith("/send ")) {
+      const m = /^\/send\s+(\S+)\s+([\s\S]+)$/.exec(line);
+      if (!m) {
+        console.log(`  ${c.dim("/send <conversation> <text> — the conversation id another session's line shows")}\n`);
+        continue;
+      }
+      try {
+        await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/sessions/${enc(m[1])}/messages`, { method: "POST", body: JSON.stringify({ text: m[2].trim(), from: s.context }) });
+        console.log(`  ${c.green("✓")} sent to ${plainText(m[1])} ${c.dim("— it waits until that session's person includes it in a turn")}\n`);
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      }
+      continue;
+    }
+    if (line === "/messages") {
+      try {
+        const got = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
+        const list = Array.isArray(got?.messages) ? got.messages : [];
+        if (!list.length) console.log(`  ${c.dim(`nothing waiting — others send here with /send ${s.context} <text>`)}\n`);
+        else console.log(`${list.map(sessionMessageLine).join("\n")}\n  ${c.dim("your next message asks whether to include them")}\n`);
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      }
+      continue;
+    }
     if (line === "/status") {
       console.log(`  ${c.dim(`${sessionLine(s)} · ${agent} · ${ws} on ${url}`)}\n`);
       continue;
@@ -13153,11 +13278,11 @@ async function codeCmd(positional, flags, layout) {
       continue;
     }
     if (line.startsWith("/")) {
-      console.log(`  ${c.dim("/new  a fresh conversation    /status  this session    /quit  leave")}\n`);
+      console.log(`  ${c.dim("/send <conversation> <text>  message another session    /messages  what waits here    /new  a fresh conversation    /status  this session    /quit  leave")}\n`);
       continue;
     }
     try {
-      await codeTurn(s, line);
+      await codeTurn(s, line, await messagesForTurn(s, true));
     } catch (err) {
       console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
     }
@@ -17083,6 +17208,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return answerCmd(positional, flags);
     case "message":
       return messageCmd(positional, flags, layout);
+    case "sessions":
+      return sessionsCmd(positional, flags, layout);
     case "rerun":
       if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("rerun", flags, layout);
       if (positional.length > 1) return bulkIdsCmd("rerun", positional, flags, layout);
