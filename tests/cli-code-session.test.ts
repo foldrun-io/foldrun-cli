@@ -367,3 +367,93 @@ test("Ctrl-R: search what was typed before, Ctrl-R again for older, Enter puts i
     s.close();
   }
 });
+
+test("typing during a turn: kept for the next message, never answers 'apply it?', Ctrl-C still stops", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const http = await import("node:http");
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const posts: string[] = [];
+  let done = false;
+  let runs = 0;
+  const record = () => ({
+    id: `run-ta-${runs}`, flow: "adhoc:coder", status: done ? "completed" : "running", snapshot: { id: ID }, startedAt: "2026-11-19T01:00:00.000Z", ...(done ? { finishedAt: "2026-11-19T01:00:05.000Z" } : {}),
+    steps: [{ agent: "coder", group: 1, status: done ? "completed" : "running", attempts: 1, costUsd: 0.01, events: [], ...(done ? { result: "Done." } : {}) }],
+  });
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (x) => (body += x));
+    req.on("end", () => {
+      const [u, q] = (req.url ?? "").split("?");
+      const json = (v: unknown) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(v));
+      };
+      if (u === WS) return json({ name: "desk" });
+      if (u === `${WS}/agents`) return json({ agents: [{ name: "coder" }] });
+      if (u === `${WS}/snapshots`) return json({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false });
+      if (u === `${WS}/sessions/code-me/messages`) return json({ messages: [] });
+      if (u === `${WS}/agents/coder/run`) {
+        posts.push(JSON.parse(body).task);
+        runs++;
+        done = false;
+        return json({ ok: true, runId: `run-ta-${runs}`, snapshot: ID, context: "code-me" });
+      }
+      if (u === `${WS}/runs/run-ta-${runs}`) return json(record());
+      if (u === `${WS}/runs/run-ta-${runs}/stream`) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`event: run\ndata: ${JSON.stringify(record())}\n\n`);
+        setTimeout(() => {
+          done = true;
+          res.write(`event: run\ndata: ${JSON.stringify(record())}\n\nevent: done\ndata: {}\n\n`);
+          res.end();
+        }, 1500);
+        return;
+      }
+      if (u === `${WS}/runs/run-ta-${runs}/archive`) {
+        const meta = new URLSearchParams(q).get("path") === "snapshot.json";
+        res.writeHead(200, { "content-type": meta ? "application/json" : "text/x-diff" });
+        return res.end(meta ? JSON.stringify({ status: "changed" }) : PATCH);
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end("{}");
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", url, "--token", "k"], home, { TERM: "xterm-256color" });
+  try {
+    let at = await t.until(/you ›/);
+    t.send("add b\r");
+    at = await t.until(/the agent is on it/, at);
+    await new Promise((r) => setTimeout(r, 300));
+    // Mid-turn: a "y" and Enter (which once answered the apply prompt), more
+    // words, a Backspace, an arrow — all for the next message.
+    t.send("y\rthen add cx\x7f\x1b[A");
+    at = await t.until(/next: y then add c/, at);
+    at = await t.until(/apply it to/, at);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n", "nothing applied by what was typed during the turn");
+    t.send("n\r");
+    at = await t.until(/you ›/, at);
+    t.send("\r");
+    at = await t.until(/apply it to/, at);
+    assert.deepEqual(posts, ["add b", "y then add c"], "the typed text was on the line, and Enter sent it");
+    t.send("n\r");
+    at = await t.until(/you ›/, at);
+    // Ctrl-C mid-turn, with the keyboard in raw mode: still the turn's stop.
+    t.send("go\r");
+    at = await t.until(/the agent is on it/, at);
+    await new Promise((r) => setTimeout(r, 200));
+    t.send("\x03");
+    at = await t.until(/stopping/, at);
+    at = await t.until(/before you stopped it[\s\S]*apply it to/, at); // what it had changed is offered
+    t.send("n\r");
+    at = await t.until(/you ›/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    server.closeAllConnections();
+    server.close();
+  }
+});

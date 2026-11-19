@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -12766,7 +12766,7 @@ function patchSummaryLines(meta) {
  * every path the patch names, because patch paths read from the top.
  * Answers whether it was applied.
  */
-/** @param {{ asked: boolean, onAsk?: Set<() => void> } | null} [cancel] a turn's Ctrl-C state: pressed means "do not apply" */
+/** @param {{ asked: boolean, onAsk?: Set<() => void>, beforeAsk?: () => Promise<void> } | null} [cancel] a turn's Ctrl-C state: pressed means "do not apply" */
 async function applyPatch(dir, patch, flags, label, cancel = null) {
   const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
   const pre = spawnSync("git", ["-C", dir, "rev-parse", "--show-prefix"], { encoding: "utf8" });
@@ -12818,6 +12818,10 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
   if (flags.yes !== true) {
     // d shows the whole change and asks again (19 Nov 2026): a --stat is
     // not enough to say yes to.
+    // A code turn holds the keyboard until here — after the checks above,
+    // which run without reading it — so keys pressed before the question
+    // are the next message's, never its answer (Codex).
+    if (cancel?.beforeAsk) await cancel.beforeAsk();
     let answer = "";
     for (;;) {
       answer = ((await cancellablePrompt(`  apply it to ${dir}? [y/N] ${c.dim("(d shows the diff)")} `, cancel)) ?? "").trim();
@@ -13093,7 +13097,7 @@ async function codeTurn(s, task, include = []) {
   // stop lets a further Ctrl-C leave: never while the stop is still on its
   // way (Codex). After the run ended (phase "patch"), Ctrl-C means "do not
   // apply", and the session goes on.
-  /** @type {{ asked: boolean, runId: string | null, stop: "none" | "inflight" | "acked", phase: "run" | "patch", stopPromise: Promise<unknown> | null, onAsk: Set<() => void> }} */
+  /** @type {{ asked: boolean, runId: string | null, stop: "none" | "inflight" | "acked", phase: "run" | "patch", stopPromise: Promise<unknown> | null, onAsk: Set<() => void>, beforeAsk?: () => Promise<void> }} */
   const cancel = { asked: false, runId: null, stop: "none", phase: "run", stopPromise: null, onAsk: new Set() };
   const stop = () => {
     if (!cancel.runId || cancel.stop !== "none") return;
@@ -13131,6 +13135,17 @@ async function codeTurn(s, task, include = []) {
     stop();
   };
   process.on("SIGINT", onInt);
+  // From the first moment of the turn the keyboard is read here: nothing
+  // typed while the folder packs, uploads or runs waits in the terminal for
+  // a prompt to read later (Codex).
+  const typeAhead = startTypeAhead(onInt);
+  /** Hands the keyboard back, keys already pressed taken in first. */
+  const keyboardBack = async () => {
+    const t = await typeAhead.stop();
+    if (t) s.typeAhead = s.typeAhead ? `${s.typeAhead} ${t}` : t;
+  };
+  // applyPatch hands the keyboard over only right before it asks.
+  cancel.beforeAsk = keyboardBack;
   let run;
   let runId;
   let stopTicker = () => {};
@@ -13175,7 +13190,7 @@ async function codeTurn(s, task, include = []) {
     open = new Map();
     const view = { skipResult: true, quiet: flags.verbose !== true };
     codeView = { agent };
-    stopTicker = startTicker(Date.now());
+    stopTicker = startTicker(Date.now(), () => typeAhead.text());
     printNew(run, seen, open, view);
     if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view })) ?? run;
     if (isLive(run)) {
@@ -13245,6 +13260,7 @@ async function codeTurn(s, task, include = []) {
     return run.status;
   } finally {
     stopTicker();
+    await keyboardBack();
     // The success path has printed or dropped any held text already; an
     // error on the way out has not (Codex).
     flushHeld(seen, open);
@@ -13307,7 +13323,62 @@ function turnLine(s, run, cost, stopped) {
  * line prints and put back after. Only on a terminal; a script's output
  * stays line by line. Returns the stop.
  */
-function startTicker(since) {
+/** The longest a message typed during a turn may grow. */
+const TYPE_AHEAD_MAX = 4000;
+
+/**
+ * While a turn runs in an interactive session: the keyboard read here, in
+ * raw mode — Ctrl-C goes to the turn's own handler, printable keys and
+ * Backspace build the next message, everything else (Enter included) is
+ * not acted on. Nothing is sent mid-turn. stop() hands the terminal back
+ * and returns what was typed.
+ * @param {() => void} onInt
+ */
+function startTypeAhead(onInt) {
+  if (!codeInteractive || !process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") return { text: () => "", stop: async () => "" };
+  const decoder = new StringDecoder("utf8");
+  let text = "";
+  let carry = "";
+  const onData = (/** @type {Buffer} */ d) => {
+    // Escape sequences (arrows, paste marks) are dropped whole — one cut at
+    // the end of a read waits for its rest (Codex); a line break becomes a
+    // space, so a paste stays one message.
+    let raw = carry + decoder.write(d);
+    const cut = /\x1b(?:\[[0-?]*[ -/]*|O)?$/.exec(raw);
+    carry = cut ? cut[0] : "";
+    if (cut) raw = raw.slice(0, cut.index);
+    const keys = raw.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b/g, "");
+    for (const k of keys) {
+      if (k === "\x03") onInt();
+      else if (k === "\x7f" || k === "\b") text = [...text].slice(0, -1).join("");
+      else if (k === "\r" || k === "\n") text = text && !text.endsWith(" ") ? `${text} ` : text;
+      else if (!/[\x00-\x1f\x7f-\x9f]/.test(k) && text.length < TYPE_AHEAD_MAX) text += k;
+    }
+  };
+  process.stdin.setRawMode(true);
+  process.stdin.on("data", onData);
+  process.stdin.resume();
+  let stopped = false;
+  return {
+    text: () => text,
+    async stop() {
+      if (stopped) return "";
+      stopped = true;
+      // Keys already pressed are read before the terminal is handed back —
+      // left in it, a "y" and Enter would answer the next prompt.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setTimeout(r, 15));
+      process.stdin.off("data", onData);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      const t = text.trim();
+      text = "";
+      return t;
+    },
+  };
+}
+
+function startTicker(since, typed = () => "") {
   if (!process.stdout.isTTY || process.env.FOLDRUN_NO_TICKER) return () => {};
   const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
   const log = console.log;
@@ -13317,7 +13388,12 @@ function startTicker(since) {
     // The guard on stdout strips every control but colours: the CLI's own
     // line-clear goes past it, the text through it.
     writeControl("\r\x1b[2K");
-    process.stdout.write(`  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}`)}`);
+    const head = `  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}`)}`;
+    // What is being typed for the next message, its end, on the same row.
+    const t = typed();
+    const room = (process.stdout.columns || 80) - 32;
+    const shownText = t && room > 8 ? clipCellsEnd(t, room) : "";
+    process.stdout.write(shownText ? `${head}${c.dim(" · next: ")}${shownText}` : head);
     shown = true;
   };
   const clear = () => {
@@ -13609,27 +13685,8 @@ function historySearch(rl, history, ask) {
     return -1;
   };
   // One row, never wrapped: clear-line only reaches the row it is on (Codex).
-  // By the cells a character takes on screen: wide (CJK, emoji) 2,
-  // combining marks 0 (Codex: code points still wrapped).
-  const cells = (/** @type {string} */ ch) => {
-    const cp = /** @type {number} */ (ch.codePointAt(0));
-    if ((cp >= 0x300 && cp <= 0x36f) || (cp >= 0x200b && cp <= 0x200f) || (cp >= 0xfe00 && cp <= 0xfe0f)) return 0;
-    if ((cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x20000 && cp <= 0x3fffd)) return 2;
-    return 1;
-  };
-  const width = (/** @type {string} */ t) => [...t].reduce((n, ch) => n + cells(ch), 0);
-  const clip = (/** @type {string} */ t, /** @type {number} */ n) => {
-    if (n <= 0) return "";
-    if (width(t) <= n) return t;
-    let out = "";
-    let used = 0;
-    for (const ch of t) {
-      if (used + cells(ch) > n - 1) break;
-      out += ch;
-      used += cells(ch);
-    }
-    return `${out}…`;
-  };
+  const width = displayWidth;
+  const clip = clipCells;
   const draw = () => {
     const label = query && at < 0 ? "no match" : "search";
     const cols = (process.stdout.columns || 80) - 1;
@@ -13892,6 +13949,11 @@ async function readCodeMessage(state, completer, s) {
     }
     rl.setPrompt(ask);
     rl.prompt();
+    // What was typed while the last turn ran: on the line, to edit or send.
+    if (s?.typeAhead) {
+      rl.write(s.typeAhead);
+      s.typeAhead = "";
+    }
   });
 }
 

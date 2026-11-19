@@ -30,6 +30,7 @@ export const CODE_TIPS = [
   "\\ at the end of a line goes on to the next; a paste of many lines is one message",
   "↑ ↓         what you typed before, in this folder and others",
   "Ctrl-R      search what you typed before (Ctrl-R again: older; Enter: put it on the line)",
+  "typing while a turn runs keeps it for your next message (never sent mid-turn)",
 ];
 
 export function helpText() {
@@ -327,4 +328,47 @@ export function friendlyError(/** @type {unknown} */ text) {
 /** A folder, with the home folder as ~. */
 export function homeTilde(/** @type {string} */ dir, home = process.env.HOME ?? "") {
   return home && (dir === home || dir.startsWith(`${home}/`)) ? `~${dir.slice(home.length)}` : dir;
+}
+
+// ---------------------------------------------------------- screen width
+
+/** The cells a character takes on screen: wide (CJK, emoji) 2, combining marks 0. */
+function cells(/** @type {string} */ ch) {
+  const cp = /** @type {number} */ (ch.codePointAt(0));
+  if ((cp >= 0x300 && cp <= 0x36f) || (cp >= 0x200b && cp <= 0x200f) || (cp >= 0xfe00 && cp <= 0xfe0f)) return 0;
+  if ((cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x20000 && cp <= 0x3fffd)) return 2;
+  return 1;
+}
+
+/** How many cells a text takes on screen. */
+export const displayWidth = (/** @type {string} */ t) => [...t].reduce((n, ch) => n + cells(ch), 0);
+
+/** At most n cells of a text, its start kept, … where cut. */
+export function clipCells(/** @type {string} */ t, /** @type {number} */ n) {
+  if (n <= 0) return "";
+  if (displayWidth(t) <= n) return t;
+  let out = "";
+  let used = 0;
+  for (const ch of t) {
+    if (used + cells(ch) > n - 1) break;
+    out += ch;
+    used += cells(ch);
+  }
+  return `${out}…`;
+}
+
+/** At most n cells of a text, its END kept (what is being typed), … where cut. */
+export function clipCellsEnd(/** @type {string} */ t, /** @type {number} */ n) {
+  if (n <= 0) return "";
+  if (displayWidth(t) <= n) return t;
+  const chars = [...t];
+  let out = "";
+  let used = 0;
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const ch = /** @type {string} */ (chars[i]);
+    if (used + cells(ch) > n - 1) break;
+    out = ch + out;
+    used += cells(ch);
+  }
+  return `…${out}`;
 }

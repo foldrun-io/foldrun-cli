@@ -664,7 +664,11 @@ choice.
 | `!<command>` | run it in the folder (`!npm test`); what it printed goes with your next message |
 | `@<path>` | Tab completes a file of the folder, to point the agent at it |
 
-At the apply prompt `d` shows the whole diff before you answer. A turn you
+While a turn runs you can type your next message: it shows on the
+working line (`next: …`), is never sent mid-turn, and is on the line at the
+next prompt to edit or send — and nothing typed then can answer the apply
+prompt, which only reads keys pressed after it asks. Ctrl-C still stops the
+turn. At the apply prompt `d` shows the whole diff before you answer. A turn you
 stop with Ctrl-C, or one that fails, still offers what it had changed. ↑ and
 ↓ bring back what you typed before (kept in `~/.foldrun/code-history`), and
 Ctrl-R searches it — type to narrow, Ctrl-R again for older, Enter puts the
