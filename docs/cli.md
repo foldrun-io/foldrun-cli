@@ -619,7 +619,10 @@ Each message is one turn:
    with its cost and every tool call. The turns of a session share a
    [conversation](runs#conversations), so it reads what it did before.
 3. **The patch comes back** — made by the platform, not the agent, against
-   a fresh copy of what was sent. `git apply --check` first; git's stat; then
+   a fresh copy of what was sent. What tools leave behind when the agent
+   runs them (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`,
+   `.ruff_cache/`, `node_modules/`, `.venv/`) is left out even when your
+   `.gitignore` does not say so; files you already track there still count. `git apply --check` first; git's stat; then
    you say yes. A folder you edited meanwhile so the patch no longer fits is
    refused whole, never half-applied, and the patch is kept for you.
 
