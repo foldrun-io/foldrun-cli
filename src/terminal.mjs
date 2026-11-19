@@ -83,3 +83,38 @@ export function writeExact(chunk, stream = process.stdout) {
   if (stream.isTTY || !stream.__foldrunRawWrite) return stream.write(chunk);
   return stream.__foldrunRawWrite(chunk);
 }
+
+/** The cursor and mode controls this CLI writes itself, and nothing else:
+ *  go to the line's start, clear the line, bracketed paste on and off. */
+const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[\?2004[hl])+$/;
+
+/**
+ * One of the CLI's own terminal controls (OUR_CONTROLS), past the guard —
+ * which would strip it like any other. Anything else is refused, not written.
+ * @param {string} seq
+ * @param {Guardable} [stream]
+ */
+export function writeControl(seq, stream = process.stdout) {
+  if (!OUR_CONTROLS.test(seq)) throw new Error("writeControl: not one of the CLI's own controls");
+  return (stream.__foldrunRawWrite ?? stream.write.bind(stream))(seq);
+}
+
+/**
+ * The stream unguarded until the returned function is called — for a
+ * readline prompt, which moves the cursor to redraw the line (↑ history,
+ * a deleted character, Tab's list) and draws only what the person types and
+ * what the prompt's caller gives it. The caller keeps what it hands readline
+ * (prompt, history, completions) free of control characters.
+ * @param {Guardable} [stream]
+ */
+export function unguardedWhile(stream = process.stdout) {
+  if (!stream.__foldrunGuarded || !stream.__foldrunRawWrite) return () => {};
+  const guarded = stream.write;
+  stream.write = /** @type {typeof stream.write} */ (/** @type {unknown} */ (stream.__foldrunRawWrite));
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    stream.write = guarded;
+  };
+}

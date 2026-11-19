@@ -47,10 +47,10 @@ function platform() {
 }
 
 /** The CLI on a pty: send() types, until() waits for output to match. */
-function onTerminal(args: string[], home: string) {
+function onTerminal(args: string[], home: string, extraEnv: Record<string, string> = {}) {
   const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
   const child = spawn("python3", ["-c", "import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)", process.execPath, cli, ...args], {
-    env: { ...process.env, FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb" },
+    env: { ...process.env, FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", ...extraEnv },
   });
   let out = "";
   child.stdout.on("data", (x) => (out += x));
@@ -137,6 +137,35 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
   }
 });
 
+test("a bracketed paste is one message however slowly it arrives; Enter after it sends it; the terminal's paste mode is off again after", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1" });
+  try {
+    let at = await t.until(/you ›/);
+    assert.match(t.out(), /\x1b\[\?2004h/, "paste mode on while the prompt waits");
+    t.send("\x1b[200~add b\r");
+    await new Promise((r) => setTimeout(r, 200)); // far past the 30 ms grouping
+    t.send("and keep it short\x1b[201~");
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run")).length, 0, "nothing sent before Enter");
+    t.send("\r");
+    at = await t.until(/apply it to/, at);
+    const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
+    assert.equal(posts.length, 1);
+    assert.match(JSON.parse(posts[0]!.body).task as string, /add b\nand keep it short$/);
+    assert.match(t.out(), /\x1b\[\?2004l[\s\S]*apply it to/, "paste mode off before the turn");
+    t.send("n\r");
+    at = await t.until(/you ›/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("completion: /commands at the start, @paths anywhere, a folder at a time", () => {
   const complete = codeCompleter(() => ["src/a.ts", "src/b/c.ts", "README.md"]);
   assert.deepEqual(complete("/un"), [["/undo"], "/un"]);
@@ -166,6 +195,8 @@ test("history: one entry per message, newest first, no repeats, private", () => 
   appendHistory(f, "two\nlines");
   appendHistory(f, "one");
   assert.deepEqual(readHistory(f), ["one", "two lines"]);
+  fs.appendFileSync(f, "evil \x1b]52;c;eA==\x07\n");
+  assert.deepEqual(readHistory(f), ["one", "two lines"], "a line with a control character is never handed to readline");
   if (process.platform !== "win32") assert.equal(fs.statSync(f).mode & 0o777, 0o600);
   if (process.platform !== "win32") {
     const old = path.join(path.dirname(f), "old");
@@ -223,4 +254,24 @@ test("help and diff colors", () => {
   assert.match(shown, /a binary file — not shown/);
   assert.doesNotMatch(shown, /zcma|literal/);
   assert.match(shown, /^\+b$/m, "the next file is shown as usual");
+});
+
+test("the CLI's own controls pass the terminal guard; nothing else does through writeControl", async () => {
+  const { writeControl, unguardedWhile, guardStream } = await import("../src/terminal.mjs");
+  let got = "";
+  const stream = { write: (x: string) => ((got += x), true) } as unknown as NodeJS.WriteStream;
+  guardStream(stream);
+  stream.write("\r\x1b[2Kx");
+  assert.equal(got, "x", "the guard strips controls");
+  got = "";
+  writeControl("\r\x1b[2K", stream);
+  writeControl("\x1b[?2004h", stream);
+  assert.equal(got, "\r\x1b[2K\x1b[?2004h");
+  assert.throws(() => writeControl("\x1b]52;c;eA==\x07", stream), /not one of the CLI's own controls/);
+  got = "";
+  const again = unguardedWhile(stream);
+  stream.write("\x1b[1G");
+  again();
+  stream.write("\x1b[1G");
+  assert.equal(got, "\x1b[1G", "unguarded only until put back");
 });

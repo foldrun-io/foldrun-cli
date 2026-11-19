@@ -42,7 +42,9 @@ const HISTORY_MAX = 500;
 /** What was typed before, newest first, as readline wants it. */
 export function readHistory(file) {
   try {
-    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    // readline draws these unguarded (↑): a line holding a control
+    // character is dropped, never shown.
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l && !/[\x00-\x1f\x7f-\x9f]/.test(l));
     return lines.slice(-HISTORY_MAX).reverse();
   } catch {
     return [];

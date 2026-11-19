@@ -1,7 +1,7 @@
 // CLI commands. Kept separate from bin/ so the environment is set before the
 // core is imported — single-workspace mode is read at module load.
 
-import { writeExact } from "./terminal.mjs";
+import { writeExact, writeControl, unguardedWhile } from "./terminal.mjs";
 import dns from "node:dns";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -13303,11 +13303,14 @@ function startTicker(since) {
   let shown = false;
   let i = 0;
   const draw = () => {
-    process.stdout.write(`\r\x1b[2K  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}`)}`);
+    // The guard on stdout strips every control but colours: the CLI's own
+    // line-clear goes past it, the text through it.
+    writeControl("\r\x1b[2K");
+    process.stdout.write(`  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}`)}`);
     shown = true;
   };
   const clear = () => {
-    if (shown) process.stdout.write("\r\x1b[2K");
+    if (shown) writeControl("\r\x1b[2K");
     shown = false;
   };
   console.log = (...args) => {
@@ -13494,18 +13497,62 @@ async function readCodeMessage(state, completer, s) {
   return new Promise((resolve) => {
     // A copy: readline adds every line it reads, a paste's included; the
     // history kept is one entry per message, added by the caller.
-    const rl = createInterface({ input: process.stdin, output: process.stdout, history: [...state.history], historySize: 500, removeHistoryDuplicates: true, completer, terminal: Boolean(process.stdin.isTTY) });
+    // readline redraws the line with cursor moves (↑, a deletion, Tab), which
+    // the guard on stdout would strip: unguarded while it waits. It draws
+    // only what the person types and what is handed it here — history and
+    // file names kept free of control characters (code-session.mjs).
+    const guardAgain = unguardedWhile(process.stdout);
+    /** @type {import("node:readline").Interface} */
+    let rl;
+    try {
+      rl = createInterface({ input: process.stdin, output: process.stdout, history: [...state.history], historySize: 500, removeHistoryDuplicates: true, completer, terminal: Boolean(process.stdin.isTTY) });
+    } catch (err) {
+      guardAgain(); // never left unguarded (Codex)
+      throw err;
+    }
     /** @type {string[]} */
     const lines = [];
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
     let settled = false;
     let lastInterrupt = 0;
+    // Bracketed paste: the terminal marks where a paste starts and ends, so
+    // a paste of many lines is one message however slowly it arrives (over
+    // ssh the 30 ms grouping alone can split it). On only while this prompt
+    // waits — a !command or the next program never sees the marks.
+    const bracketed = Boolean(process.stdin.isTTY && process.stdout.isTTY && process.env.TERM !== "dumb");
+    let pasting = false;
+    const onKey = (/** @type {unknown} */ _s, /** @type {{ name?: string } | undefined} */ key) => {
+      if (key?.name === "paste-start") {
+        pasting = true;
+        clearTimeout(timer); // a send due before the paste waits for it (Codex)
+      }
+      else if (key?.name === "paste-end") {
+        pasting = false;
+        // A paste that ended on a newline is a whole message; one that did
+        // not waits on the line for more, and Enter sends it all.
+        if (lines.length && !rl.line) schedule();
+      }
+    };
+    const offBracketed = () => {
+      process.stdin.off("keypress", onKey);
+      if (bracketed) writeControl("\x1b[?2004l");
+      process.off("exit", offBracketed);
+      process.off("SIGTERM", onTerm);
+    };
+    // Killed while waiting: paste mode off first, or the shell the person
+    // returns to gets every paste wrapped in marks (Codex). 128 + 15.
+    const onTerm = () => {
+      offBracketed();
+      process.exit(143);
+    };
     const onClose = () => finish(null);
     const finish = (/** @type {string | null} */ v) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      offBracketed();
+      guardAgain();
       // Only our own listener: readline cleans up on its own "close" — it
       // takes its keypress handler off stdin there. removeAllListeners took
       // that too, and every closed prompt went on echoing what was typed.
@@ -13513,8 +13560,7 @@ async function readCodeMessage(state, completer, s) {
       rl.close();
       resolve(v);
     };
-    rl.on("line", (l) => {
-      lines.push(l);
+    const schedule = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
         const msg = joinMessage(lines);
@@ -13525,11 +13571,17 @@ async function readCodeMessage(state, completer, s) {
         }
         finish(msg);
       }, PASTE_GAP_MS);
+    };
+    rl.on("line", (l) => {
+      lines.push(l);
+      clearTimeout(timer);
+      if (!pasting) schedule();
     });
     rl.on("SIGINT", () => {
       const now = Date.now();
       if (rl.line || lines.length) {
         clearTimeout(timer);
+        pasting = false;
         lines.length = 0;
         rl.write(null, { ctrl: true, name: "u" });
         process.stdout.write("\n");
@@ -13548,6 +13600,12 @@ async function readCodeMessage(state, completer, s) {
       rl.prompt();
     });
     rl.once("close", onClose);
+    process.stdin.on("keypress", onKey);
+    if (bracketed) {
+      writeControl("\x1b[?2004h");
+      process.once("exit", offBracketed);
+      process.once("SIGTERM", onTerm);
+    }
     rl.setPrompt(ask);
     rl.prompt();
   });
