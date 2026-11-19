@@ -167,7 +167,8 @@ test("a run that finished while the stream was quiet is reported from the record
 test("a tool call — a start then a completion sharing its id — prints one line, with the duration", async () => {
   const p = await fakePlatform(["tools"]);
   try {
-    const r = await run(["invoke", "daily", "--to", "ws", "--watch", "--url", p.url, "--token", "k"], QUICK);
+    // No stall here, so no short clock: 0.25 s a request failed it on a busy machine.
+    const r = await run(["invoke", "daily", "--to", "ws", "--watch", "--url", p.url, "--token", "k"]);
     assert.equal(r.code, 0, r.out);
     // The bug printed every call twice, once per event; now the paired
     // events of `bash` collapse to a single line, and it carries the ms.
@@ -189,7 +190,8 @@ test("a frame whose JSON spans many data: lines — as the platform sends it —
   // dropped every frame silently: no live run ever showed its tool calls.
   const p = await fakePlatform(["pretty"]);
   try {
-    const r = await run(["invoke", "daily", "--to", "ws", "--watch", "--url", p.url, "--token", "k"], QUICK);
+    // No stall here, so no short clock: 0.25 s a request failed it on a busy machine.
+    const r = await run(["invoke", "daily", "--to", "ws", "--watch", "--url", p.url, "--token", "k"]);
     assert.equal(r.code, 0, r.out);
     assert.equal((r.out.match(/^.*\bbash\b.*1200ms.*$/gm) ?? []).length, 1, r.out);
     assert.match(r.out, /✓.*completed/);

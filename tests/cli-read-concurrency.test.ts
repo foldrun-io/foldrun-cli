@@ -32,7 +32,13 @@ const foldrunAsync = (cwd: string, ...args: string[]) =>
 async function slowPlatform(files: Map<string, Map<string, string>>) {
   let inFlight = 0;
   let peak = 0;
+  // When the first request came and the last answer went: the time the
+  // reads took, without the CLI's own start-up (slow on a busy machine).
+  let first = 0;
+  let last = 0;
   const server = http.createServer((req, res) => {
+    first ||= Date.now();
+    res.on("finish", () => (last = Date.now()));
     inFlight++;
     peak = Math.max(peak, inFlight);
     const url = new URL(req.url!, "http://x");
@@ -56,7 +62,17 @@ async function slowPlatform(files: Map<string, Map<string, string>>) {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
   const { port } = server.address() as { port: number };
-  return { url: `http://127.0.0.1:${port}`, peak: () => peak, reset: () => (peak = 0), close: () => server.close() };
+  return {
+    url: `http://127.0.0.1:${port}`,
+    peak: () => peak,
+    span: () => last - first,
+    reset: () => {
+      peak = 0;
+      first = 0;
+      last = 0;
+    },
+    close: () => server.close(),
+  };
 }
 
 /**
@@ -78,15 +94,16 @@ test("pull reads a project's files together, and writes every one of them intact
   const p = await slowPlatform(files);
   const here = folder();
   try {
-    const t0 = Date.now();
     const r = await foldrunAsync(here, "pull", "--url", p.url, "--token", "k");
-    const took = Date.now() - t0;
+    const took = p.span();
     assert.equal(r.status, 0, r.stdout + r.stderr);
     for (const [ws, own] of files) for (const [rel, text] of own) assert.equal(fs.readFileSync(path.join(here, "workspaces", ws, rel), "utf8"), text, `${ws}/${rel}`);
     assert.ok(p.peak() > 1, `requests went out one at a time (peak ${p.peak()})`);
     assert.ok(p.peak() <= 16, `more than two projects' worth of readers at once (peak ${p.peak()})`);
-    // 34 reads one after another would be 34 × 60 ms = 2 s before the CLI even starts.
-    assert.ok(took < 34 * DELAY_MS, `pull took ${took} ms — as slow as one request per file in a row`);
+    // 34 reads one after another take 34 × 60 ms at least. Measured at the
+    // server, first request to last answer: the CLI's start-up is not in it,
+    // so a busy machine does not fail it (it did, at 2.5 s, 19 Nov 2026).
+    assert.ok(took < 34 * DELAY_MS, `the reads took ${took} ms — as slow as one request per file in a row`);
   } finally {
     p.close();
   }
