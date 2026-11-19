@@ -139,7 +139,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a project package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun snapshot push [dir]` | send a folder for an agent on foldrun to work on (a snapshot). What goes is what git would commit — tracked files and untracked ones `.gitignore` does not exclude, as they are on disk; links and submodules are left out and named. A secret in any file stops it before anything leaves the machine (remove it, or leave the file out with `.gitignore`); the platform checks again. Answers the snapshot id, kept 7 days from the last send and while a run uses it. `--to <workspace>`, `--dry-run` packs and checks only, `--out <file.tar.gz>` keeps the archive (`--force` over a file that is there), `--json` (`POST …/snapshots`) |
 | `foldrun code [dir] --local` → `cloud_agents` | on this computer, the agent may hand long or heavy jobs to up to four agents on the platform at once. Each runs on a copy of the folder sent as a snapshot, and its patch comes back. Sending is asked first (y / a / n), and each patch is asked again (git's stat, d for the diff) before `git apply`. Ctrl-C tells the runs to stop. See [Cloud agents, from this computer](#cloud-agents-from-this-computer) |
-| `foldrun code [dir] --local` / `--cloud` | where the agent works: foldrun's own agent in your folder, its model calls paid from your foldrun credits, asking before each change and command, or a sandbox on the platform on foldrun credits. `--engine claude` is gone (Claude Code is no longer an engine). With neither, the first run in a folder asks (and which project), then remembers — see [Where the agent works](#where-the-agent-works) |
+| `foldrun code [dir] --local` / `--cloud` | where the agent works: foldrun's own agent in your folder, its model calls paid from your foldrun credits, asking before each change and command, or a sandbox on the platform on foldrun credits. `--engine claude` is gone (Claude Code is no longer an engine). With neither, each new session asks, last time's answer ticked (and, the first time in a folder, which project) — see [Where the agent works](#where-the-agent-works) |
 | `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it (its tool calls and words, and any refusal or failure; the platform's other notes on the step stay on the run page, `--verbose` shows them too), and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; a dropped connection is followed again, not the end of the turn. After each turn a session line gives the turns so far, the spend, the model, how many tokens the agent read last turn, the time and the conversation id; `/status` prints it, `/new` starts a fresh conversation (and count), `/quit` leaves, `--continue` picks up the folder's last conversation; `/help` lists the rest ([in the session](#in-the-session)). `/send <conversation> <text>` messages another session; before each turn, messages other sessions sent this one are shown and you are asked whether to include them — only `y` does (with `--task`, only `--include-messages` includes them — `--yes` does not); those that do not fit in one turn wait for the next, and `/messages` shows what waits. `--to <workspace>` (a project that does not exist is made, blank with its `coder` agent, after a yes), `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` applies without asking (required with no terminal), `--test`, `--context <id>`, `--verbose` |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
 | `foldrun status --platform` | is the platform up: overall, each component (dashboard and API, run workers, scheduler, model providers, email, storage) and any incident or maintenance the operator posted, with its latest update. Reads the open `/api/status` — no key needed; the signed-in platform, `--url` / `FOLDRUN_URL`, or the default, dash.foldrun.io. `--json` prints the answer as is. Exits 1, saying *status unavailable — the platform may be down*, when it does not answer. Plain `foldrun status` opens with the same one-line verdict |
@@ -600,10 +600,10 @@ trail, and `--follow` tails a live one. `open` always needs a platform.
 
 ## Where the agent works
 
-The first time you run `foldrun code` in a folder it asks two things, then
-remembers them for that folder:
+`foldrun code` asks where each new session works, with last time's answer
+ticked so Enter keeps it, and the first time in a folder which project:
 
-1. **Where should the agent work?**
+1. **Where should this session work?**
    - **On this computer**: foldrun's own agent works directly in your
      folder, with Read, Write, Edit, Glob, Grep and Bash, plus
      [cloud agents](#cloud-agents-from-this-computer). Its model calls are
@@ -627,12 +627,14 @@ remembers them for that folder:
    folder. The project holds the agent (`coder`) and its model (`/model`).
 
 `--local` or `--cloud` (and `--to <project>`) answer the questions ahead
-of time and change what the folder remembers. A script (`--task`) runs in
+of time and change what the folder remembers. `--continue` goes on where its
+conversation was, without asking. `exit`, `quit`, `/exit` or `/quit` (or
+Ctrl-D) leaves the session. A script (`--task`) runs in
 the cloud. In a folder that works on this computer it needs `--cloud`, and
 that one turn leaves the folder's choice as it was.
 
 ```sh
-foldrun code            # the first time: asks where, and which project
+foldrun code            # asks where this session works (and, the first time, which project)
 foldrun code --local    # on this computer, in your folder
 foldrun code --cloud    # in a sandbox on the platform
 ```

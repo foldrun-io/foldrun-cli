@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave } from "./code-session.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -14608,8 +14608,11 @@ async function codeCmd(positional, flags, layout) {
   if (flags.local === true && !process.stdin.isTTY) throw new Error("on this computer the agent asks before each change, so it needs you at a terminal");
   const sessionsFile = path.join(credentialsDir(), "code-sessions.json");
   // Where and with which project (owner, 19 Nov 2026: "keep it as simple as
-  // possible"): flags first, then what this folder used last; a person at a
-  // terminal is asked the first time, once; a script gets the old answers.
+  // possible"): flags first. A person at a terminal is asked where at every
+  // new session, what this folder used last ticked so Enter keeps it (owner,
+  // 20 Nov 2026: "ask them if this session want to run on cloud or local");
+  // --continue goes on where its conversation was; a script gets the old
+  // answer. The project is asked once per folder.
   const chosen = folderChoice(sessionsFile, dir);
   const asking = typeof flags.task !== "string" && Boolean(process.stdin.isTTY && process.stdout.isTTY);
   /** @type {"local" | "cloud" | null} */
@@ -14617,16 +14620,17 @@ async function codeCmd(positional, flags, layout) {
   // A script's turn runs in the cloud: never for a folder that chose this
   // computer, unless --cloud says so (Codex: no silent upload).
   if (typeof flags.task === "string" && mode === "local") throw new Error("this folder works on this computer, which needs you at a terminal — --cloud --task sends it to the cloud for this one turn");
-  if (!mode && asking) {
+  if (asking && flags.local !== true && flags.cloud !== true && !(flags.continue === true && mode)) {
     console.log(`\n  ${c.bold(c.sweep("◆ foldrun code"))}\n`);
+    const before = mode;
     mode = /** @type {"local" | "cloud" | null} */ (await pickOne({
-      title: "Where should the agent work?",
-      subtitle: "asked once for this folder — foldrun code --cloud or --local changes it",
+      title: "Where should this session work?",
+      subtitle: before ? `Enter keeps ${before === "local" ? "this computer" : "the cloud"}, as last time — --local or --cloud answers ahead` : "--local or --cloud answers ahead",
       choices: [
         { v: "local", name: "On this computer", note: "foldrun's agent in your folder, on your foldrun plan; asks before changes" },
         { v: "cloud", name: "In the cloud", note: "works on a copy on foldrun credits; you apply what comes back" },
       ],
-      tick: "local",
+      tick: before ?? "local",
     }));
     if (!mode) throw new Error("nothing started");
     console.log(`  ${c.dim("works")}  ${mode === "local" ? c.green("on this computer") : c.cyan("in the cloud")}\n`);
@@ -14697,7 +14701,7 @@ async function codeCmd(positional, flags, layout) {
   const completer = codeCompleter(() => prompt.files);
   for (;;) {
     const line = await readCodeMessage(prompt, completer, s);
-    if (line === null || line === "/quit" || line === "/exit") {
+    if (isLeave(line)) {
       console.log(`\n  ${c.dim(s.turns ? `to go on later: foldrun code --continue${dir === process.cwd() ? "" : ` ${plainText(dir)}`}` : "bye")}\n`);
       return 0;
     }

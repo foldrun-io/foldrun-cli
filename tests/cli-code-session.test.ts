@@ -497,7 +497,7 @@ test("the reply: markdown drawn, wrapped to the screen, words already shown left
 // … existing project or new one — as simple as possible". Asked once per
 // folder, remembered; flags skip it.
 
-import { folderChoice, projectNameFor, localModelOf, localCallSummary, insideFolder } from "../src/code-session.mjs";
+import { folderChoice, projectNameFor, localModelOf, localCallSummary, insideFolder, isLeave } from "../src/code-session.mjs";
 
 test("local mode helpers: names, tiers, call summaries, inside the folder, the folder's choice", () => {
   assert.equal(projectNameFor("/x/My App_2"), "my-app-2");
@@ -559,7 +559,7 @@ function sse(content: Array<{ type: "text"; text: string } | { type: "tool_use";
   return raw(out, "text/event-stream");
 }
 
-test("first run in a folder: asks where and which project, once; the next run asks nothing", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+test("every new session asks where (last answer ticked, Enter keeps it); the project is asked once per folder; --continue and --cloud ask nothing; exit leaves", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const s = await serve({
@@ -569,7 +569,7 @@ test("first run in a folder: asks where and which project, once; the next run as
   });
   const t = onTerminal(["code", d, "--url", s.url, "--token", "k"], home);
   try {
-    let at = await t.until(/Where should the agent work\?[\s\S]*On this computer[\s\S]*In the cloud[\s\S]*Esc to cancel/);
+    let at = await t.until(/Where should this session work\?[\s\S]*On this computer[\s\S]*In the cloud[\s\S]*Esc to cancel/);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\x1b[B\r");
     at = await t.until(/works\s+in the cloud/, at);
@@ -585,15 +585,29 @@ test("first run in a folder: asks where and which project, once; the next run as
   }
   const again = onTerminal(["code", d, "--url", s.url, "--token", "k"], home);
   try {
-    await again.until(/\w ❯ /);
-    assert.doesNotMatch(again.out(), /Where should|Which project/);
+    let at = await again.until(/Where should this session work\?[\s\S]*Enter keeps the cloud[\s\S]*Esc to cancel/);
+    await new Promise((r) => setTimeout(r, 100));
+    again.send("\r");
+    at = await again.until(/\w ❯ /, at);
+    assert.doesNotMatch(again.out(), /Which project/);
     assert.match(again.out(), /project\s+desk[\s\S]*works\s+in the cloud/);
-    again.send("/quit\r");
-    await again.done;
+    again.send("exit\r");
+    assert.equal(await again.done, 0);
   } finally {
     again.child.kill();
-    s.close();
   }
+  for (const extra of [["--continue"], ["--cloud"]]) {
+    const third = onTerminal(["code", d, ...extra, "--url", s.url, "--token", "k"], home);
+    try {
+      await third.until(/\w ❯ /);
+      assert.doesNotMatch(third.out(), /Where should|Which project/, extra.join(" "));
+      third.send("quit\r");
+      assert.equal(await third.done, 0);
+    } finally {
+      third.child.kill();
+    }
+  }
+  s.close();
 });
 
 test("a folder that works on this computer is never sent to the cloud by a script's --task; --cloud --task is", async () => {
@@ -860,6 +874,11 @@ test("--engine claude is refused, naming why; a folder that used Claude Code is 
   assert.match(r.stderr + r.stdout, /Claude Code is no longer an engine for foldrun code/);
   rememberSession(path.join(home, "s.json"), d, { context: "c", ws: "desk", agent: "coder", mode: "local", engine: "claude" });
   assert.equal(folderChoice(path.join(home, "s.json"), d)?.engine, null, "an old Claude Code choice reads as none");
+});
+
+test("leaving: exit, quit, /exit, /quit and Ctrl-D end the session; a sentence with the word does not", () => {
+  for (const w of ["exit", "quit", "/exit", "/quit", " Exit ", "QUIT", null]) assert.equal(isLeave(w), true, String(w));
+  for (const w of ["exit the loop early", "quit?", "exits", "/exits", "", "please exit"]) assert.equal(isLeave(w), false, w);
 });
 
 test("validConversation: alternating, nothing empty, every tool call answered next", async () => {

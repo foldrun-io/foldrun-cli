@@ -20,8 +20,16 @@ export const CODE_COMMANDS = [
   ["/new", "a fresh conversation — the agent forgets the earlier turns"],
   ["/send <conversation> <text>", "message another session"],
   ["/messages", "what other sessions sent this one"],
-  ["/quit", "leave (Ctrl-D too)"],
+  ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
 ];
+
+/** Whether a message is a way out of the session: /quit, /exit, or the bare
+ *  word exit or quit on its own, as Claude Code takes them (owner, 20 Nov
+ *  2026). Only the whole message: "exit the loop early" is a message. */
+export function isLeave(/** @type {string | null} */ line) {
+  if (line === null) return true;
+  return /^\/?(exit|quit)$/i.test(line.trim());
+}
 
 /** The tips under the commands. */
 export const CODE_TIPS = [
