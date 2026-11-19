@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.15.1] — 2026-11-19
+
+### deps
+
+- @foldrun/core ^24.4.2 ([0f71db2](https://github.com/foldrun-io/foldrun-cli/commit/0f71db2))
+
 ## [26.15.0] — 2026-11-19
 
 - feat(code): /model is a picker; the reply is drawn for the terminal ([c63ccc3](https://github.com/foldrun-io/foldrun-cli/commit/c63ccc3))
