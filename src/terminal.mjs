@@ -20,9 +20,60 @@
 // stays exact) and still filtered when they land on a terminal. `--json` needs
 // no exception: JSON.stringify writes control characters as \u escapes.
 
-/** The SGR parameters paint() in commands.mjs uses. Nothing else is needed:
- *  conceal (8) or reverse (7) from a platform could hide or fake text. */
-const OUR_SGR = new Set(["", "0", "1", "2", "31", "32", "33"]);
+/** The SGR parameters paint() in commands.mjs uses: reset, bold, dim,
+ *  italic, underline and their ends, and TEXT colours — 16, 256 (38;5;n) or
+ *  true colour (38;2;r;g;b). Never a background, conceal (8) or reverse (7):
+ *  from a platform they could hide or fake text. */
+const OUR_SGR = new Set(["", "0", "1", "2", "3", "4", "22", "23", "24", "39", "31", "32", "33", "36"]);
+
+/** The CLI's palette: a violet → cyan brand sweep, and a colour per kind of
+ *  thing. Every colour reads on a dark and a light background alike. */
+/** @type {Record<"violet" | "cyan" | "blue" | "green" | "red" | "amber" | "pink" | "grey", [number, number, number]>} */
+export const HUE = {
+  violet: [167, 139, 250],
+  cyan: [34, 211, 238],
+  blue: [96, 165, 250],
+  green: [74, 222, 128],
+  red: [248, 113, 113],
+  amber: [251, 191, 36],
+  pink: [244, 114, 182],
+  grey: [128, 136, 152],
+};
+/** How many shades a sweep has between its two ends. */
+export const SWEEP_STEPS = 12;
+const cube = (/** @type {number} */ v) => (v < 48 ? 0 : v < 115 ? 1 : Math.min(5, Math.floor((v - 35) / 40)));
+/** One colour as SGR parameters: true colour, or its place in the 256-colour cube. */
+export const rgbSgr = (/** @type {[number, number, number]} */ [r, g, b], /** @type {boolean} */ trueColour) =>
+  trueColour ? `38;2;${r};${g};${b}` : `38;5;${16 + 36 * cube(r) + 6 * cube(g) + cube(b)}`;
+/** Shade k of SWEEP_STEPS between two colours. */
+export const sweepShade = (/** @type {[number, number, number]} */ a, /** @type {[number, number, number]} */ b, /** @type {number} */ k) =>
+  /** @type {[number, number, number]} */ ([0, 1, 2].map((j) => Math.round(a[j] + ((b[j] - a[j]) * k) / SWEEP_STEPS)));
+
+// Text colours pass only as the palette's own — never any colour a
+// platform's text picks, which could match the background and hide words
+// (Codex, 19 Nov 2026). Backgrounds, reverse and conceal never pass.
+const PALETTE_SGR = new Set(
+  [...Object.values(HUE), ...[...Array(SWEEP_STEPS + 1)].map((_, k) => sweepShade(HUE.violet, HUE.cyan, k))].flatMap((rgb) => [rgbSgr(rgb, true), rgbSgr(rgb, false)]),
+);
+
+/** Whether every parameter of one SGR sequence is one of ours. */
+function ourSgr(/** @type {string} */ params) {
+  const ps = params.split(";");
+  for (let i = 0; i < ps.length; i++) {
+    const p = /** @type {string} */ (ps[i]);
+    if (OUR_SGR.has(p)) continue;
+    if (p === "38" && ps[i + 1] === "5" && PALETTE_SGR.has(ps.slice(i, i + 3).join(";"))) {
+      i += 2;
+      continue;
+    }
+    if (p === "38" && ps[i + 1] === "2" && PALETTE_SGR.has(ps.slice(i, i + 5).join(";"))) {
+      i += 4;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
 // ESC [ … final byte (CSI); ESC ] … BEL or ESC \ (OSC); ESC P / ^ / _ … ESC \
 // (DCS, PM, APC); ESC and one more character (everything else); a lone ESC.
@@ -41,7 +92,7 @@ export function terminalSafe(text) {
   return String(text)
     .replace(/\r\n/g, "\n")
     .replace(UNSAFE, (seq, params, final) => {
-      if (final === "m" && seq.startsWith("\u001b[") && String(params).split(";").every((p) => OUR_SGR.has(p))) return seq;
+      if (final === "m" && seq.startsWith("\u001b[") && ourSgr(String(params))) return seq;
       return "";
     });
 }

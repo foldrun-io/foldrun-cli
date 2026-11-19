@@ -1,7 +1,7 @@
 // CLI commands. Kept separate from bin/ so the environment is set before the
 // core is imported — single-workspace mode is read at module load.
 
-import { writeExact, writeControl, unguardedWhile } from "./terminal.mjs";
+import { writeExact, writeControl, unguardedWhile, HUE, SWEEP_STEPS, rgbSgr, sweepShade } from "./terminal.mjs";
 import dns from "node:dns";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -25,14 +25,40 @@ import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profil
 // FORCE_COLOR asks for them.
 const colour = !process.env.NO_COLOR && (Boolean(process.env.FORCE_COLOR) || Boolean(process.stdout.isTTY));
 const paint = (code) => (s) => (colour ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+// Colour by numbers (19 Nov 2026, "more colours, high-tech"): true colour
+// where the terminal says it has it (COLORTERM), else the 256-colour cube —
+// Apple Terminal has no true colour. The palette lives in terminal.mjs, the
+// guard lets only it through.
+const trueColour = /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? "");
+const hue = (/** @type {keyof typeof HUE} */ k) => paint(rgbSgr(HUE[k], trueColour));
+/** Text that sweeps from one colour to another and back, letter by letter, in the palette's shades. */
+const sweep = (/** @type {string} */ text, from = HUE.violet, to = HUE.cyan, phase = 0) => {
+  if (!colour) return text;
+  const chars = [...text];
+  const n = Math.max(1, chars.length - 1);
+  return `${chars
+    .map((ch, i) => {
+      const t = ((((i / n) + phase) % 2) + 2) % 2;
+      const k = Math.round((t > 1 ? 2 - t : t) * SWEEP_STEPS);
+      return ch === " " ? ch : `\x1b[${rgbSgr(sweepShade(from, to, k), trueColour)}m${ch}`;
+    })
+    .join("")}\x1b[0m`;
+};
 const c = {
   dim: paint(2),
   bold: paint(1),
-  green: paint(32),
-  red: paint(31),
-  yellow: paint(33),
-  amber: paint(33),
-  cyan: paint(36),
+  green: hue("green"),
+  red: hue("red"),
+  yellow: hue("amber"),
+  amber: hue("amber"),
+  cyan: hue("cyan"),
+  violet: hue("violet"),
+  blue: hue("blue"),
+  pink: hue("pink"),
+  grey: hue("grey"),
+  // The terminal's own text colour: always readable, dark or light.
+  white: (/** @type {unknown} */ x) => String(x),
+  sweep,
 };
 
 // The published runtime, not a relative reach into a sibling directory. It was
@@ -2733,21 +2759,60 @@ export function toolSummary(input) {
  */
 let codeView = null;
 
+/** A git --stat line in colour: the file white, + green, - red, the total grey. */
+function statLine(/** @type {string} */ line) {
+  const m = /^(.*?)(\s*\|\s*)(\d+|Bin[^]*?)\s*(\+*)(-*)$/.exec(line);
+  if (!m) return c.grey(line);
+  return `${c.white(m[1] ?? "")}${c.grey(m[2] ?? "")}${c.white(m[3] ?? "")} ${c.green(m[4] ?? "")}${c.red(m[5] ?? "")}`;
+}
+
 /** One tool call, the code view's way. */
 function codeToolLine(start, done, agent) {
   const who = agent && agent !== codeView?.agent ? `${c.dim(`[${agent}]`)} ` : "";
   const what = folderRelative(toolSummary(start?.io?.input ?? done?.io?.input));
   if (!what && codeView) codeView.bareTools = true;
   const secs = Number(done?.ms) / 1000;
-  const mark = done?.err ? c.red("●") : c.cyan("●");
   const name = friendlyTool(start?.text ?? done?.text);
-  const base = `  ${mark} ${who}${c.bold(clipLine(name))}${what ? ` ${c.dim(clipLine(what))}` : ""}`;
-  const line = `${base}${secs >= 1 ? `  ${c.dim(formatSecs(secs))}` : ""}`;
+  const mark = done?.err ? c.red("●") : toolHue(name)("●");
+  const base = `  ${mark} ${who}${c.bold(c.white(clipLine(name)))}${what ? ` ${c.grey(clipLine(what))}` : ""}`;
+  const line = `${base}${secs >= 1 ? `  ${c.grey(formatSecs(secs))}` : ""}`;
   // Nothing to tell this call from the one before (no file or command
   // shown): a row of them prints as one line with a count (19 Nov 2026,
   // five "● Run" lines in a row).
   if (codeView && !what && !done?.err) BARE.set(line, { key: `${who}${name}`, base, label: `${who ? `[${agent}] ` : ""}${name}` });
   return line;
+}
+
+/** A tool's colour by what it does: reading blue, changing amber, running violet, the web pink. */
+function toolHue(/** @type {string} */ name) {
+  const n = name.toLowerCase();
+  if (/read|search|glob|grep|list|find|view|ls/.test(n)) return c.blue;
+  if (/edit|write|patch|create|delete|move|update/.test(n)) return c.amber;
+  if (/run|bash|shell|exec|install|test/.test(n)) return c.violet;
+  if (/web|fetch|browse|http/.test(n)) return c.pink;
+  return c.cyan;
+}
+
+/** foldrun code's header: a framed panel, its title in the brand sweep. */
+function codeHeader(/** @type {Array<[string, string, string]>} */ rows) {
+  const cols = process.stdout.columns || 80;
+  // Too narrow for a frame: the same rows, unframed (Codex).
+  if (cols < 40) return [`  ${c.bold(c.sweep("◆ foldrun code"))}`, ...rows.map(([k, painted, plain]) => `  ${c.grey(k.padEnd(7))} ${displayWidth(plain) <= cols - 11 ? painted : c.white(clipCells(plain, cols - 11))}`)].join("\n");
+  const inner = Math.min(64, cols - 6);
+  // │ + 2 spaces + the label in 7 and a space + the value + a space + │ = inner + 2.
+  const room = inner - 11;
+  const title = " ◆ foldrun code ";
+  const top = `  ${c.grey("╭─")}${c.bold(c.sweep(title))}${c.grey(`${"─".repeat(Math.max(0, inner - displayWidth(title) - 1))}╮`)}`;
+  const body = rows.map(([k, painted, plain]) => {
+    const fits = displayWidth(plain) <= room;
+    const cut = fits ? plain : clipCells(plain, room);
+    const shown = fits ? painted : c.white(cut);
+    // Padded by what is shown: a wide glyph that did not fit leaves a cell.
+    const pad = " ".repeat(Math.max(0, room - displayWidth(cut)));
+    return `  ${c.grey("│")}  ${c.grey(k.padEnd(7))} ${shown}${pad} ${c.grey("│")}`;
+  });
+  const bottom = `  ${c.grey(`╰${"─".repeat(inner)}╯`)}`;
+  return [top, ...body, bottom].join("\n");
 }
 
 /** Live lines that are a bare tool call, by their text: what liveLog folds. */
@@ -2800,7 +2865,7 @@ function eventLine(e, rawAgent, open) {
     const words = String(e.text ?? "").trim();
     const shown = replyPaths(folderRelative(words));
     if (!who && e.type === "text" && !words.includes("\n") && clipLine(shown) === shown) (codeView.said ??= []).push(words);
-    return `  ${c.dim("·")} ${who}${clipLine(replyPaths(folderRelative(e.text)))}`;
+    return `  ${c.violet("▸")} ${who}${c.grey(clipLine(replyPaths(folderRelative(e.text))))}`;
   }
   if (e.type === "tool" && e.call != null) {
     if (e.ms == null) {
@@ -4013,7 +4078,7 @@ async function remoteLogs(url, positional, flags) {
     for (const r of runs) {
       const cost = r.steps.reduce((s, x) => s + (x.costUsd ?? 0), 0);
       const mark = r.status === "completed" ? c.green("✓") : r.status === "failed" ? c.red("✗") : c.amber("…");
-      console.log(`  ${mark} ${c.bold(r.id)}  ${r.flow}  ${c.dim(`${r.status} · $${cost.toFixed(4)} · ${r.startedAt}`)}${r.summary ? `\n      ${c.dim(r.summary)}` : ""}`);
+      console.log(`  ${mark} ${c.bold(plainText(r.id))}  ${plainText(r.flow)}  ${c.dim(plainText(`${r.status} · $${cost.toFixed(4)} · ${r.startedAt}`))}${r.summary ? `\n      ${c.dim(plainText(r.summary))}` : ""}`);
     }
     console.log(`\n  ${c.dim("foldrun logs <run-id> --to " + ws + " for the full trail; --follow tails a live one")}\n`);
     return 0;
@@ -12854,7 +12919,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
   if (odd.length) {
     throw new Error(`the patch makes or changes a link, a submodule, a rename or a copy, which foldrun's patches never do — not applied:\n${plainText(odd.join("\n"))}\nThe patch is kept at ${keepPatch(patch, label)}`);
   }
-  for (const line of String(git("--stat").stdout).trimEnd().split("\n")) if (line.trim()) console.log(`  ${line.trim()}`);
+  for (const line of String(git("--stat").stdout).trimEnd().split("\n")) if (line.trim()) console.log(`  ${statLine(plainText(line.trim()))}`);
   if (flags.yes !== true && !process.stdin.isTTY) {
     console.log(`  ${c.dim(`not applied — no terminal to ask, and --yes applies without asking. The patch is at ${keepPatch(patch, label)}`)}`);
     return false;
@@ -12868,7 +12933,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
     if (cancel?.beforeAsk) await cancel.beforeAsk();
     let answer = "";
     for (;;) {
-      answer = ((await cancellablePrompt(`  apply it to ${dir}? [y/N] ${c.dim("(d shows the diff)")} `, cancel)) ?? "").trim();
+      answer = ((await cancellablePrompt(`  ${c.bold(c.white("apply it"))} ${c.grey(`to ${plainText(homeTilde(dir))}?`)} ${c.grey("[")}${c.green("y")}${c.grey("/")}${c.red("N")}${c.grey("]")} ${c.grey("(")}${c.cyan("d")}${c.grey(" shows the diff)")} `, cancel)) ?? "").trim();
       if (!/^d(iff)?$/i.test(answer)) break;
       console.log(`\n${colorPatch(plainText(String(patch)), c).split("\n").map((l) => `  ${l}`).join("\n")}\n`);
     }
@@ -12888,7 +12953,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
   }
   const done = git();
   if (done.status !== 0 || done.error) throw new Error(`git apply failed: ${plainText(String(done.stderr)).trim()} — the patch is kept at ${keepPatch(patch, label)}`);
-  console.log(`  ${c.green("✓")} applied ${c.dim("— review it with git diff, and commit it when you are happy")}`);
+  console.log(`  ${c.bold(c.green("✓ applied"))} ${c.grey("— review it with git diff, and commit it when you are happy")}`);
   return true;
 }
 
@@ -13201,7 +13266,7 @@ async function codeTurn(s, task, include = []) {
     const { packed, left, unscanned } = await packFolder(dir);
     if (cancel.asked) return "cancelled";
     const snap = await pushPacked(url, flags, ws, packed);
-    console.log(`  ${c.dim(`↑ sent the folder · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}${snap.reused && s.turns ? " · unchanged since the last turn" : ""}`)}`);
+    console.log(`  ${c.cyan("↑")} ${c.grey(`sent the folder · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}${snap.reused && s.turns ? " · unchanged since the last turn" : ""}`)}`);
     sentNotes(left, unscanned);
     if (cancel.asked) return "cancelled";
     let started;
@@ -13228,7 +13293,7 @@ async function codeTurn(s, task, include = []) {
     cancel.runId = runId;
     if (cancel.asked) stop(); // pressed while the run was being started
     s.lastRun = runId;
-    console.log(`  ${c.dim(`${started.test ? "a test turn — " : ""}the agent is on it · Ctrl-C stops it`)}\n`);
+    console.log(`  ${c.violet("◆")} ${c.grey(`${started.test ? "a test turn — " : ""}the agent is on it · Ctrl-C stops it`)}\n`);
     run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
     seen = new Map();
     open = new Map();
@@ -13254,7 +13319,7 @@ async function codeTurn(s, task, include = []) {
     // screen with its markdown drawn (19 Nov 2026: raw **, edge wraps).
     if (reply) {
       const text = replyPaths(withoutSaid(plainText(String(reply)).trim(), codeView?.said ?? []));
-      if (text) console.log(`\n${formatReply(text, process.stdout.columns || 80, c)}`);
+      if (text) console.log(`\n${formatReply(text, process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}`);
     }
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
     noteSessionTurn(s, run, cost);
@@ -13357,15 +13422,15 @@ function turnLine(s, run, cost, stopped) {
   const a = Date.parse(run.startedAt ?? "");
   const b = Date.parse(run.finishedAt ?? "") || Date.now();
   const took = Number.isFinite(a) ? formatSecs((b - a) / 1000) : "";
-  const how = stopped ? c.amber("■ stopped") : run.status === "completed" ? c.green("✓ done") : c.red(`✗ ${plainText(run.status)}`);
+  const how = stopped ? c.bold(c.amber("■ stopped")) : run.status === "completed" ? c.bold(c.green("✓ done")) : c.bold(c.red(`✗ ${plainText(run.status)}`));
   const parts = [
-    took ? `${took}` : null,
-    formatCost(cost),
-    (s.turns ?? 0) > 1 ? `${formatCost(s.costUsd ?? 0)} this session` : null,
-    s.model ? shortModel(plainText(s.model)) : null,
-    s.contextTokens !== undefined ? `read ${formatTokens(s.contextTokens)} tokens` : null,
+    took ? c.white(took) : null,
+    c.amber(formatCost(cost)),
+    (s.turns ?? 0) > 1 ? `${c.amber(formatCost(s.costUsd ?? 0))} ${c.grey("this session")}` : null,
+    s.model ? c.violet(shortModel(plainText(s.model))) : null,
+    s.contextTokens !== undefined ? c.grey(`read ${formatTokens(s.contextTokens)} tokens`) : null,
   ].filter(Boolean);
-  return `  ${how} ${c.dim(`· ${parts.join(" · ")}`)}`;
+  return `  ${how} ${c.grey("·")} ${parts.join(` ${c.grey("·")} `)}`;
 }
 
 /**
@@ -13439,11 +13504,25 @@ function startTicker(since, typed = () => "") {
     // The guard on stdout strips every control but colours: the CLI's own
     // line-clear goes past it, the text through it.
     writeControl("\r\x1b[2K");
-    const doing = bareRow ? ` · ${bareRow.label}${bareRow.n > 1 ? ` ×${bareRow.n}` : ""}` : "";
-    const head = `  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}${doing}`)}`;
+    const cols = (process.stdout.columns || 80) - 1;
+    const secs = formatSecs((Date.now() - since) / 1000);
+    // Everything on one row, measured (Codex): spinner, word, time first;
+    // then the rail, what it is doing, and the next message, as room allows.
+    let left = cols - displayWidth(`  ⠋ working ${secs}`);
+    const doingFull = bareRow ? ` · ${bareRow.label}${bareRow.n > 1 ? ` ×${bareRow.n}` : ""}` : "";
+    const doing = doingFull && left > 12 ? clipCells(doingFull, Math.min(displayWidth(doingFull), left - 12)) : "";
+    left -= displayWidth(doing);
+    const frame = i++;
+    // A scanner sweeping across a rail: still at work, at a glance.
+    const rail = 10;
+    const at = frame % (rail * 2 - 2);
+    const pos = at < rail ? at : rail * 2 - 2 - at;
+    const bar = colour && left >= rail + 1 + 12 ? [...Array(rail)].map((_, k) => (Math.abs(k - pos) <= 1 ? c.sweep("━", HUE.violet, HUE.cyan, (k / rail)) : c.grey("─"))).join("") : "";
+    if (bar) left -= rail + 1;
+    const head = `  ${c.sweep(frames[frame % frames.length], HUE.violet, HUE.cyan, (frame % 10) / 5)} ${c.cyan("working")} ${bar ? `${bar} ` : ""}${c.grey(`${secs}${doing}`)}`;
     // What is being typed for the next message, its end, on the same row.
     const t = typed();
-    const room = (process.stdout.columns || 80) - 32;
+    const room = left - displayWidth(" · next: ");
     const shownText = t && room > 8 ? clipCellsEnd(t, room) : "";
     process.stdout.write(shownText ? `${head}${c.dim(" · next: ")}${shownText}` : head);
     shown = true;
@@ -13690,11 +13769,15 @@ async function codeCmd(positional, flags, layout) {
       return url;
     }
   })();
-  console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${host}`))}`);
-  console.log(`  ${c.dim("folder ")} ${plainText(homeTilde(dir))}`);
-  console.log(`  ${c.dim("session")} ${plainText(s.context)} ${c.dim(resumed ? "· continuing — the agent reads the earlier turns" : "· new")}`);
-  console.log(`  ${c.dim("each message sends the folder to the agent's sandbox; you apply what comes back")}`);
-  console.log(`  ${c.dim("/help commands · !cmd runs in the folder · @ + Tab points at a file · Ctrl-C stops a turn")}\n`);
+  console.log(`\n${codeHeader([
+    ["agent", c.violet(plainText(agent)), plainText(agent)],
+    ["project", c.cyan(plainText(ws)), plainText(ws)],
+    ["server", c.white(plainText(host)), plainText(host)],
+    ["folder", c.white(plainText(homeTilde(dir))), plainText(homeTilde(dir))],
+    ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
+  ])}`);
+  console.log(`    ${c.grey("each message takes your folder to the agent; you apply what comes back")}`);
+  console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
   const prompt = { history: readHistory(historyFile), files: folderFiles(dir) };
   const completer = codeCompleter(() => prompt.files);
@@ -13991,7 +14074,7 @@ function historySearch(rl, history, ask) {
 
 async function readCodeMessage(state, completer, s) {
   const { createInterface } = await import("node:readline");
-  const ask = `${c.bold("you ›")} `;
+  const ask = `${c.bold(c.violet("you"))} ${c.cyan("›")} `;
   return new Promise((resolve) => {
     // A copy: readline adds every line it reads, a paste's included; the
     // history kept is one entry per message, added by the caller.

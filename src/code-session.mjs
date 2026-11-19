@@ -396,7 +396,7 @@ export function withoutSaid(/** @type {string} */ reply, /** @type {string[]} */
  * its text). Fenced code and tables are kept as written.
  * @param {string} text plain text, no terminal control in it
  * @param {number} columns
- * @param {{ bold: (s: string) => string, cyan: (s: string) => string, dim: (s: string) => string }} c
+ * @param {{ bold: (s: string) => string, cyan: (s: string) => string, dim: (s: string) => string, head?: (s: string) => string, mark?: (s: string) => string }} c
  */
 export function formatReply(text, columns, c) {
   const width = Math.max(20, columns - 4);
@@ -419,6 +419,10 @@ export function formatReply(text, columns, c) {
     const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(raw);
     let lead = "";
     let body = raw.trim();
+    if (heading && c.head) {
+      out.push(`  ${c.head(heading[1].replace(/\*\*|`/g, ""))}`);
+      continue;
+    }
     if (heading) body = `**${heading[1].replace(/\*\*/g, "")}**`;
     else if (item) {
       const depth = Math.min(3, Math.floor(item[1].replace(/\t/g, "  ").length / 2));
@@ -442,7 +446,7 @@ export function formatReply(text, columns, c) {
     }
     if (line.length) lines.push(line);
     lines.forEach((ws, k) => {
-      const pad = k === 0 ? lead : " ".repeat(displayWidth(lead));
+      const pad = k === 0 ? (lead && c.mark ? c.mark(lead) : lead) : " ".repeat(displayWidth(lead));
       out.push(`  ${pad}${ws.map((w) => w.map((x) => paint(x, c)).join("")).join(" ")}`);
     });
   }

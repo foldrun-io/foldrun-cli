@@ -103,3 +103,13 @@ test("the CLI guards its terminal before anything else runs", () => {
   assert.ok(guard < bin.indexOf("console."), "before the first print");
   assert.ok(guard < bin.indexOf("await import"), "before any command module loads");
 });
+
+test("the guard keeps the palette's text colours (256 and true colour) and drops any other colour, backgrounds, reverse and conceal", async () => {
+  const { terminalSafe } = await import("../src/terminal.mjs");
+  const { HUE, rgbSgr } = await import("../src/terminal.mjs");
+  const violet256 = rgbSgr(HUE.violet, false);
+  const violet24 = rgbSgr(HUE.violet, true);
+  for (const ok of ["\x1b[36mx\x1b[0m", `\x1b[${violet256}mx\x1b[0m`, `\x1b[${violet24}mx\x1b[0m`, `\x1b[1;${violet256}mx\x1b[22;39m`]) assert.equal(terminalSafe(ok), ok);
+  // Not the palette's: a colour a platform picks could match the background and hide words.
+  for (const bad of ["\x1b[7mx", "\x1b[8mx", "\x1b[41mx", "\x1b[30mx", "\x1b[48;5;1mx", "\x1b[38;5;16mx", "\x1b[38;2;0;0;0mx", "\x1b[38;5;300mx", "\x1b[38;2;1;2mx", "\x1b[38;5mx", `\x1b[${violet256};7mx`]) assert.equal(terminalSafe(bad), "x", JSON.stringify(bad));
+});
