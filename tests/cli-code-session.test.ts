@@ -275,3 +275,46 @@ test("the CLI's own controls pass the terminal guard; nothing else does through 
   stream.write("\x1b[1G");
   assert.equal(got, "\x1b[1G", "unguarded only until put back");
 });
+
+test("/model: shows the agent's model; /model max changes its file's model: line, with the version it read", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = '---\nname: coder\n"model": default # cheap\neffort: medium\n---\n\nYou code.\n';
+  const puts: Array<{ content: string; ifMatch: unknown }> = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: file, sha256: `sha-${puts.length}` }),
+    [`PUT ${WS}/source`]: (b) => {
+      const body = JSON.parse(String(b));
+      puts.push(body);
+      file = body.content;
+      return { ok: true };
+    },
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/you ›/);
+    t.send("/model\r");
+    at = await t.until(/no turn yet/, at);
+    at = await t.until(/you ›/, at);
+    t.send("/model max\r");
+    at = await t.until(/coder now uses max from the next turn/, at);
+    assert.equal(puts.length, 1);
+    assert.equal(puts[0]!.ifMatch, "sha-0", "written over exactly what was read");
+    assert.match(puts[0]!.content, /^model: max # cheap$/m, "a quoted key is the same key: replaced, not added beside");
+    assert.equal((puts[0]!.content.match(/model/g) ?? []).length, 1);
+    assert.match(puts[0]!.content, /^effort: medium$/m, "the rest of the file as it was");
+    at = await t.until(/you ›/, at);
+    t.send("/model max\r");
+    at = await t.until(/already max/, at);
+    t.send("/model bad name!\r");
+    at = await t.until(/is not a model/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});

@@ -649,6 +649,7 @@ the rest, the last run's id included.
 | `/diff` | what is changed in the folder now |
 | `/undo` | take back the last patch this session applied (refused if the folder changed since) |
 | `/status` | the session: id, turns, spend, model, agent, platform, last run |
+| `/model`, `/model max` | the agent's model; with a name (`fast`, `default`, `max`, a model id) it changes the `model:` line of the agent's file from the next turn — for every run of that agent, as an edit and deploy would |
 | `/new` | a fresh conversation |
 | `/send <conversation> <text>`, `/messages` | [session messages](runs#session-messages) |
 | `/quit`, Ctrl-D | leave; `foldrun code --continue` comes back to the same conversation |
@@ -659,7 +660,8 @@ At the apply prompt `d` shows the whole diff before you answer. A turn you
 stop with Ctrl-C, or one that fails, still offers what it had changed. ↑ and
 ↓ bring back what you typed before (kept in `~/.foldrun/code-history`); a
 line ending in `\` goes on to the next, and a paste of many lines is one
-message. Ctrl-C on an empty prompt twice leaves. A turn longer than 20
+message. Ctrl-C on an empty prompt twice leaves. A paste is one message
+however slowly it arrives (bracketed paste, where the terminal has it). A turn longer than 20
 seconds ends with the terminal's bell (`--no-beep` for none).
 
 `--task "…"` runs one turn and exits, for a script; with no terminal,

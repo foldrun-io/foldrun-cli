@@ -16,6 +16,7 @@ export const CODE_COMMANDS = [
   ["/diff", "what is changed in the folder now (git diff)"],
   ["/undo", "take back the last patch this session applied"],
   ["/status", "this session: turns, cost, model, conversation"],
+  ["/model [name]", "the agent's model; fast, default, max or an id changes it"],
   ["/new", "a fresh conversation — the agent forgets the earlier turns"],
   ["/send <conversation> <text>", "message another session"],
   ["/messages", "what other sessions sent this one"],

@@ -13348,6 +13348,55 @@ function startTicker(since) {
  * 130 when you stopped it, 1 otherwise); with no terminal it needs --yes to
  * apply. /new starts a fresh conversation, /quit leaves.
  */
+/** A tier or a model id, as the eval comparisons take one. */
+const CODE_MODEL = /^[A-Za-z0-9][\w.:/-]{0,99}$/;
+
+/**
+ * `/model` in a code session: the agent's model, and — with a name — the
+ * `model:` line of its file changed through the source route, as an edit
+ * and deploy would (the same rights; the next turn runs it). Read then
+ * written with ifMatch, so an edit someone made meanwhile is never lost.
+ */
+async function codeModel(url, flags, ws, agent, want, s) {
+  const file = `agents/${agent}/agent.md`;
+  if (!want) {
+    // What a turn actually ran on — the file's model: may be a tier or an
+    // alias the platform resolves, so the run record is the honest answer.
+    console.log(`  ${c.dim("model")}  ${s?.model ? `${plainText(shortModel(s.model))} ${c.dim("(the last turn)")}` : c.dim("no turn yet — the agent's model: decides")}`);
+    console.log(`  ${c.dim(`/model fast · default · max · <a model id> changes model: in ${file} of ${plainText(ws)}, from the next turn`)}\n`);
+    return;
+  }
+  if (!CODE_MODEL.test(want)) throw new Error(`"${want}" is not a model — fast, default, max, or a model id`);
+  const at = `/api/workspaces/${enc(ws)}/source`;
+  /** @type {{ content?: string, sha256?: string }} */
+  let cur;
+  try {
+    cur = await remoteCall(url, flags, `${at}?path=${enc(file)}`);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) throw new Error(`${agent} is not in ${file} — set model: in its own file`);
+    throw err;
+  }
+  const raw = String(cur.content ?? "");
+  // Core finds the key as the platform reads it (quoted or not); the file
+  // coming out the same is the only "already" (Codex).
+  const { setFrontmatterScalar } = await patterns();
+  const next = setFrontmatterScalar(raw, "model", want);
+  if (next === raw) {
+    console.log(`  ${c.dim(`already ${plainText(want)}`)}\n`);
+    return;
+  }
+  try {
+    await remoteCall(url, flags, at, {
+      method: "PUT",
+      body: JSON.stringify({ path: file, content: next, message: `foldrun code: model ${want}`, ifMatch: cur.sha256 ?? null }),
+    });
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 409) throw new Error(`${file} changed while saving — nothing was written; /model again`);
+    throw err;
+  }
+  console.log(`  ${c.green("✓")} ${plainText(agent)} now uses ${c.bold(plainText(want))} from the next turn ${c.dim(`— ${file} in ${plainText(ws)}, so every run of this agent does`)}\n`);
+}
+
 async function codeCmd(positional, flags, layout) {
   const dir = path.resolve(positional[0] ?? ".");
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
@@ -13454,6 +13503,14 @@ async function codeCmd(positional, flags, layout) {
     }
     if (line === "/status") {
       console.log(statusBlock(s, url));
+      continue;
+    }
+    if (line === "/model" || line.startsWith("/model ")) {
+      try {
+        await codeModel(url, flags, ws, agent, line.slice("/model".length).trim(), s);
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      }
       continue;
     }
     if (line === "/new") {
