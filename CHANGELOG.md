@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.11.0] — 2026-11-19
+
+### New in the public API
+
+- the `--continue` flag
+- the `--no-beep` flag
+
+- feat(code): a session that is easy to work in, and says what is going on ([841443e](https://github.com/foldrun-io/foldrun-cli/commit/841443e))
+
 ## [26.10.1] — 2026-11-19
 
 ### deps
