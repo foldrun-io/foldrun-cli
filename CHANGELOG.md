@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.20.0] — 2026-11-19
+
+- feat(code): cloud agents from this computer; the turn line names the foldrun plan ([4194210](https://github.com/foldrun-io/foldrun-cli/commit/4194210))
+
 ## [26.19.0] — 2026-11-19
 
 - feat(code): on this computer, choose the engine — Claude Code or the foldrun engine ([77d463a](https://github.com/foldrun-io/foldrun-cli/commit/77d463a))
