@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.16.0] — 2026-11-19
+
+- feat(code): colour — a framed header, a brand sweep, a colour per kind of thing ([0fac278](https://github.com/foldrun-io/foldrun-cli/commit/0fac278))
+
 ## [26.15.1] — 2026-11-19
 
 ### deps
