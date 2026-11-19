@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.12.0] — 2026-11-19
+
+- feat(code): /model — the agent's model, and change it from the session ([487c13f](https://github.com/foldrun-io/foldrun-cli/commit/487c13f))
+- fix(code): the working line and line editing on a real terminal; bracketed paste ([dc4f95a](https://github.com/foldrun-io/foldrun-cli/commit/dc4f95a))
+
+### docs
+
+- sync (code patch leaves out tool caches) ([d7d23e8](https://github.com/foldrun-io/foldrun-cli/commit/d7d23e8))
+
 ## [26.11.1] — 2026-11-19
 
 - fix(code): what a live turn on staging showed — failed tools, tool names, binary diffs ([146810a](https://github.com/foldrun-io/foldrun-cli/commit/146810a))
