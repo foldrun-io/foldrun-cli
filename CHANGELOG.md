@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.1.0] — 2026-11-19
+
+- feat(code): every session asks where it works; exit or quit leaves, as in Claude Code ([49f83d8](https://github.com/foldrun-io/foldrun-cli/commit/49f83d8))
+
 ## [27.0.0] — 2026-11-19
 
 ### Breaking changes
