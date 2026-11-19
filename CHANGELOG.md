@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.14.1] — 2026-11-19
+
+### test
+
+- two timing tests that failed on a busy machine measure what they mean ([abd6ac0](https://github.com/foldrun-io/foldrun-cli/commit/abd6ac0))
+
 ## [26.14.0] — 2026-11-19
 
 - feat(code): type your next message while a turn runs — and it never answers 'apply it?' ([b683ab6](https://github.com/foldrun-io/foldrun-cli/commit/b683ab6))
