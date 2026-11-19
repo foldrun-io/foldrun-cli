@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.13.0] — 2026-11-19
+
+- feat(code): Ctrl-R searches what you typed before ([f3d96c6](https://github.com/foldrun-io/foldrun-cli/commit/f3d96c6))
+- feat(code): say once how to see file names and commands, and what that keeps ([082bf84](https://github.com/foldrun-io/foldrun-cli/commit/082bf84))
+
 ## [26.12.1] — 2026-11-19
 
 ### deps
