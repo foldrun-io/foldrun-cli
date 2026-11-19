@@ -538,6 +538,7 @@ export function folderChoice(/** @type {string} */ file, /** @type {string} */ d
   return {
     ws: typeof s.ws === "string" ? s.ws : null,
     mode: s.mode === "local" || s.mode === "cloud" ? s.mode : null,
+    engine: s.engine === "claude" || s.engine === "foldrun" ? s.engine : null,
   };
 }
 
@@ -545,6 +546,77 @@ export function folderChoice(/** @type {string} */ file, /** @type {string} */ d
 export function projectNameFor(/** @type {string} */ dir) {
   const base = path.basename(path.resolve(dir)).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   return /^[a-z]/.test(base) ? base : `code-${base || "project"}`;
+}
+
+/** The gateway key this computer's foldrun-engine turns use on a platform, if one was made. */
+export function readLocalKey(/** @type {string} */ file, /** @type {string} */ url) {
+  try {
+    const all = JSON.parse(fs.readFileSync(file, "utf8"));
+    const k = all?.[url];
+    return k && typeof k.key === "string" && typeof k.gatewayUrl === "string" ? { id: String(k.id ?? ""), key: k.key, gatewayUrl: k.gatewayUrl } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keep (or, with null, forget) this computer's key for a platform; only its owner reads the file. */
+export function saveLocalKey(/** @type {string} */ file, /** @type {string} */ url, /** @type {{ id: string, key: string, gatewayUrl: string } | null} */ entry) {
+  let all = {};
+  try {
+    all = JSON.parse(fs.readFileSync(file, "utf8")) ?? {};
+  } catch {
+    /* none yet */
+  }
+  if (entry) all[url] = entry;
+  else delete all[url];
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  writePrivate(file, JSON.stringify(all, null, 2));
+}
+
+/**
+ * Whether a conversation can be sent as it is: turns alternate from the
+ * person's, none is empty, and every tool call the model made is answered
+ * in the very next turn (Codex: a cut-off reply can hold a call with no
+ * result, and the API refuses that).
+ * @param {Array<{ role: string, content: Array<Record<string, unknown>> }>} list
+ */
+export function validConversation(list) {
+  if (!Array.isArray(list) || list.length % 2 !== 0) return false;
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i];
+    if (!m || m.role !== (i % 2 === 0 ? "user" : "assistant") || !Array.isArray(m.content) || !m.content.length) return false;
+    if (!m.content.every((b) => b && typeof b.type === "string")) return false;
+    if (m.role === "assistant") {
+      const calls = m.content.filter((b) => b.type === "tool_use").map((b) => b.id);
+      const next = list[i + 1];
+      if (calls.length && !next) return false;
+      const answered = new Set((next?.content ?? []).filter((b) => b.type === "tool_result").map((b) => b.tool_use_id));
+      if (!calls.every((id) => answered.has(id))) return false;
+    }
+    if (m.role === "user" && i > 0) {
+      const asked = new Set(list[i - 1].content.filter((b) => b.type === "tool_use").map((b) => b.id));
+      if (!m.content.filter((b) => b.type === "tool_result").every((b) => asked.has(b.tool_use_id))) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * A conversation for the foldrun engine, cut from the front to fit in
+ * bytes: whole turns go (a turn starts where the person said something),
+ * so what is left still begins with the person and alternates. One turn
+ * too big on its own leaves nothing.
+ * @param {Array<{ role: string, content: Array<Record<string, unknown>> }>} list
+ */
+export function trimConversation(list, maxBytes = 1_500_000) {
+  const size = (/** @type {unknown} */ x) => Buffer.byteLength(JSON.stringify(x));
+  if (size(list) <= maxBytes) return list;
+  const starts = list.map((m, i) => (m.role === "user" && m.content.some((b) => b.type === "text") ? i : -1)).filter((i) => i > 0);
+  for (const at of starts) {
+    const rest = list.slice(at);
+    if (size(rest) <= maxBytes) return rest;
+  }
+  return [];
 }
 
 /** The tiers foldrun's agents name, as the model Claude Code is asked for. */

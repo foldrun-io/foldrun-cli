@@ -138,6 +138,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun export [workspace]` | a deployed project as a `.zip` — agents, flows, tools, skills, scripts, evals, knowledge; never memory, state, storage or a secret's value. `--flow <name>` exports that flow with every flow and agent it runs and the tools, skills and scripts they grant; `--agent <name>` that agent and what it grants. Written under the name the platform gives it (`<ws>.zip`, `<ws>-flow-<name>.zip`); `--file <path>` (`-` for stdout), `--force` to replace (`GET …/export`) |
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a project package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun snapshot push [dir]` | send a folder for an agent on foldrun to work on (a snapshot). What goes is what git would commit — tracked files and untracked ones `.gitignore` does not exclude, as they are on disk; links and submodules are left out and named. A secret in any file stops it before anything leaves the machine (remove it, or leave the file out with `.gitignore`); the platform checks again. Answers the snapshot id, kept 7 days from the last send and while a run uses it. `--to <workspace>`, `--dry-run` packs and checks only, `--out <file.tar.gz>` keeps the archive (`--force` over a file that is there), `--json` (`POST …/snapshots`) |
+| `foldrun code [dir] --local --engine claude` / `foldrun` | which engine runs the agent on this computer: Claude Code on your own Claude plan, or foldrun's own engine on your foldrun credits (a key made for this computer after a yes) — asked once per folder when not given; see [Where the agent works](#where-the-agent-works) |
 | `foldrun code [dir] --local` / `--cloud` | where the agent works: Claude Code in your folder on your own Claude sign-in, asking before each change, or a sandbox on the platform on foldrun credits. With neither, the first run in a folder asks (and which project), then remembers — see [Where the agent works](#where-the-agent-works) |
 | `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it (its tool calls and words, and any refusal or failure; the platform's other notes on the step stay on the run page, `--verbose` shows them too), and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; a dropped connection is followed again, not the end of the turn. After each turn a session line gives the turns so far, the spend, the model, how many tokens the agent read last turn, the time and the conversation id; `/status` prints it, `/new` starts a fresh conversation (and count), `/quit` leaves, `--continue` picks up the folder's last conversation; `/help` lists the rest ([in the session](#in-the-session)). `/send <conversation> <text>` messages another session; before each turn, messages other sessions sent this one are shown and you are asked whether to include them — only `y` does (with `--task`, only `--include-messages` includes them — `--yes` does not); those that do not fit in one turn wait for the next, and `/messages` shows what waits. `--to <workspace>` (a project that does not exist is made, blank with its `coder` agent, after a yes), `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` applies without asking (required with no terminal), `--test`, `--context <id>`, `--verbose` |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
@@ -620,6 +621,15 @@ remembers them for that folder:
    - **In the cloud**: the agent works on a copy of the folder in a
      sandbox on the platform, on your foldrun credits, and you apply the
      patch it hands back. See [Coding in a sandbox](#coding-in-a-sandbox).
+   - **Which engine runs the agent?** (asked after "On this computer")
+     **Claude Code**, as above, or the **foldrun engine**: foldrun's own
+     agent, with Read, Write, Edit, Glob, Grep and Bash, paid from your
+     foldrun credits through a key made for this computer after a yes
+     (limit $20, kept only on this computer; `foldrun keys ls` shows what
+     it spent). It reads inside the folder without asking and asks before
+     every change and every command. The commands it runs never see that
+     key. Its conversation is kept on this computer, so `--continue` goes
+     on with it. `--engine claude` or `--engine foldrun` answers ahead.
 2. **Which project?** One of yours, or **+ New project**, named after the
    folder. The project holds the agent (`coder`) and its model (`/model`).
 
@@ -632,6 +642,7 @@ that one turn leaves the folder's choice as it was.
 foldrun code            # the first time: asks where, and which project
 foldrun code --local    # on this computer, on your Claude sign-in
 foldrun code --cloud    # in a sandbox on the platform
+foldrun code --local --engine foldrun   # foldrun's own engine, on foldrun credits
 ```
 
 ## Coding in a sandbox

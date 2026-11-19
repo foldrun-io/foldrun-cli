@@ -535,7 +535,9 @@ test("local mode helpers: names, tiers, call summaries, inside the folder, the f
     assert.equal(insideFolder(d, `${d}\\escape/file`), false);
   }
   rememberSession(path.join(home, "s.json"), d, { context: "c", ws: "desk", agent: "coder", mode: "local" });
-  assert.deepEqual(folderChoice(path.join(home, "s.json"), d), { ws: "desk", mode: "local" });
+  assert.deepEqual(folderChoice(path.join(home, "s.json"), d), { ws: "desk", mode: "local", engine: null });
+  rememberSession(path.join(home, "s.json"), d, { context: "c", ws: "desk", agent: "coder", mode: "local", engine: "foldrun" });
+  assert.equal(folderChoice(path.join(home, "s.json"), d)?.engine, "foldrun");
   assert.equal(folderChoice(path.join(home, "s.json"), "/elsewhere"), null);
 });
 
@@ -623,7 +625,7 @@ test("--local, not signed in to Claude: offers the sign-in page; no is no, and n
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
   });
-  const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home, claudeEnv());
+  const t = onTerminal(["code", d, "--local", "--engine", "claude", "--to", "desk", "--url", s.url, "--token", "k"], home, claudeEnv());
   try {
     let at = await t.until(/works\s+on this computer/);
     at = await t.until(/\w ❯ /, at);
@@ -673,7 +675,7 @@ test("--local: Claude Code in the folder on the person's own sign-in; a change i
   });
   const env = claudeEnv({ ANTHROPIC_BASE_URL: s.url, ANTHROPIC_API_KEY: "sk-ant-test" });
   try {
-  const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home, env);
+  const t = onTerminal(["code", d, "--local", "--engine", "claude", "--to", "desk", "--url", s.url, "--token", "k"], home, env);
   try {
     let at = await t.until(/works\s+on this computer/);
     at = await t.until(/\w ❯ /, at);
@@ -743,4 +745,129 @@ test("a folder that works on this computer is never sent to the cloud by a scrip
   } finally {
     s.close();
   }
+});
+
+test("--local, foldrun engine: asked once which engine; a key for this computer after a yes; reads run, changes and commands are asked; the key never reaches a command; --continue carries the conversation", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "text", text: "Looking first." }, { type: "tool_use", id: "t1", name: "Read", input: { file_path: path.join(d, "a.txt") } }]),
+    () => sse([{ type: "tool_use", id: "t2", name: "Write", input: { file_path: path.join(d, "b.txt"), content: "bee\n" } }]),
+    () => sse([{ type: "tool_use", id: "t3", name: "Bash", input: { command: "echo key=${ANTHROPIC_AUTH_TOKEN:-none} > k.txt" } }]),
+    () => sse([{ type: "text", text: "Wrote **b.txt**." }]),
+    () => sse([{ type: "text", text: "Yes, b.txt." }]),
+    () => sse([{ type: "text", text: "Still here." }]),
+  ];
+  let keysMade = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme" }),
+    "POST /api/keys": (b) => {
+      keysMade++;
+      const body = JSON.parse(String(b));
+      assert.equal(body.purpose, "gateway");
+      assert.ok(body.capUsd > 0, "a key with a limit");
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: body.capUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return turns[asked.length - 1]!();
+    },
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/Which engine runs the agent\?[\s\S]*Claude Code[\s\S]*foldrun engine[\s\S]*Esc to cancel/);
+      await new Promise((r) => setTimeout(r, 100));
+      t.send("\x1b[B\r");
+      at = await t.until(/works\s+on this computer · foldrun engine/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("add b\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/Read a\.txt/, at);
+      at = await t.until(/Write b\.txt[\s\S]*a new file · 1 line[\s\S]*allow\?/, at);
+      assert.doesNotMatch(t.out().slice(0, at), /Read a\.txt[\s\S]*allow\?[\s\S]*Write/, "a read in the folder is not asked");
+      assert.equal(fs.existsSync(path.join(d, "b.txt")), false, "nothing written before the yes");
+      t.send("y\r");
+      at = await t.until(/\$ echo key=[\s\S]*allow\?/, at);
+      t.send("y\r");
+      at = await t.until(/✓ done[\s\S]*on foldrun credits[\s\S]*changed b\.txt/, at);
+      assert.equal(fs.readFileSync(path.join(d, "b.txt"), "utf8"), "bee\n");
+      assert.equal(fs.readFileSync(path.join(d, "k.txt"), "utf8").trim(), "key=none", "the commands never see the model key");
+      at = await t.until(/\w ❯ /, at);
+      t.send("did you?\r");
+      at = await t.until(/Yes, b\.txt\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    assert.equal(keysMade, 1);
+    assert.match(String(asked[0].model), /haiku/);
+    const seen = s.seen.filter((x: any) => x.url === "/v1/messages");
+    assert.equal(seen[0]!.headers.authorization, "Bearer fr_gw_test", "the computer's key, not the person's token");
+    assert.match(JSON.stringify(asked[4].messages), /add b[\s\S]*bee[\s\S]*did you\?/, "the next turn carries the first");
+    assert.equal(fs.statSync(path.join(home, "code-local-keys.json")).mode & 0o777, 0o600);
+    const kept = fs.readdirSync(path.join(home, "code-engine"));
+    assert.equal(kept.length, 1);
+    assert.equal(fs.statSync(path.join(home, "code-engine", kept[0]!)).mode & 0o777, 0o600);
+    assert.doesNotMatch(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"), /fr_gw_test/);
+
+    // The next day: no questions, the same engine, the conversation goes on.
+    const again = onTerminal(["code", d, "--to", "desk", "--continue", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await again.until(/works\s+on this computer · foldrun engine[\s\S]*continuing/);
+      assert.doesNotMatch(again.out(), /Which engine|make it\?/);
+      at = await again.until(/\w ❯ /, at);
+      again.send("still?\r");
+      at = await again.until(/Still here\./, at);
+      again.send("/quit\r");
+      await again.done;
+    } finally {
+      again.child.kill();
+    }
+    assert.match(JSON.stringify(asked[5].messages), /add b[\s\S]*did you\?[\s\S]*still\?/);
+  } finally {
+    s.close();
+  }
+});
+
+test("validConversation: alternating, nothing empty, every tool call answered next", async () => {
+  const { validConversation } = await import("../src/code-session.mjs");
+  const u = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
+  const a = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+  const call = { role: "assistant", content: [{ type: "tool_use", id: "x", name: "Read", input: {} }] };
+  const res = { role: "user", content: [{ type: "tool_result", tool_use_id: "x", content: "ok" }] };
+  assert.equal(validConversation([]), true);
+  assert.equal(validConversation([u("a"), a("b")]), true);
+  assert.equal(validConversation([u("a"), call, res, a("done")]), true);
+  assert.equal(validConversation([u("a"), call]), false, "a call with no result");
+  assert.equal(validConversation([u("a"), call, u("no result"), a("b")]), false);
+  assert.equal(validConversation([u("a"), a("b"), { role: "user", content: [{ type: "tool_result", tool_use_id: "zz", content: "" }] }, a("c")]), false, "a result for no call");
+  assert.equal(validConversation([a("b"), u("a")]), false);
+  assert.equal(validConversation([u("a"), { role: "assistant", content: [] }]), false);
+});
+
+test("trimConversation: whole turns from the front, still starting with the person", async () => {
+  const { trimConversation } = await import("../src/code-session.mjs");
+  const big = "x".repeat(400);
+  const list = [
+    { role: "user", content: [{ type: "text", text: `one ${big}` }] },
+    { role: "assistant", content: [{ type: "tool_use", id: "a", name: "Read", input: {} }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: big }] },
+    { role: "assistant", content: [{ type: "text", text: "done" }] },
+    { role: "user", content: [{ type: "text", text: "two" }] },
+    { role: "assistant", content: [{ type: "text", text: "ok" }] },
+  ];
+  assert.equal(trimConversation(list).length, 6);
+  const cut = trimConversation(list, 200);
+  assert.equal(cut.length, 2);
+  assert.equal((cut[0]!.content[0] as any).text, "two");
+  assert.deepEqual(trimConversation(list, 10), [], "one turn too big on its own leaves nothing");
+  assert.equal(trimConversation([{ role: "user", content: [{ type: "text", text: "é".repeat(150) }] }, { role: "assistant", content: [{ type: "text", text: "ok" }] }], 200).length, 0, "bytes, not characters");
 });

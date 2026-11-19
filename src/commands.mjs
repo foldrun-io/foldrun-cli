@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -13876,6 +13876,128 @@ function folderClaudeMd(/** @type {string} */ dir) {
   return parts.join("\n\n");
 }
 
+/** The foldrun engine's tools on this computer. */
+const ENGINE_TOOLS_LOCAL = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
+/** The limit a key made for one computer starts with (foldrun keys changes it). */
+const LOCAL_KEY_CAP_USD = 20;
+
+/**
+ * The gateway key the foldrun engine's model calls use on this computer:
+ * kept in the CLI's own folder (only its owner reads it), made once after
+ * a yes. Null when there is none.
+ * @returns {Promise<{ id: string, key: string, gatewayUrl: string } | null>}
+ */
+async function localKeyFor(s, cancel) {
+  const file = path.join(credentialsDir(), "code-local-keys.json");
+  // One key per account on a platform: a second account signed in on the
+  // same platform never spends the first one's (Codex).
+  if (!s.keySlot) {
+    const me = await remoteCall(s.url, s.flags, "/api/me");
+    if (typeof me?.account !== "string" || !me.account) throw new Error("could not tell which account this is — foldrun whoami");
+    s.keySlot = `${s.url}#${me.account}`;
+  }
+  const have = readLocalKey(file, s.keySlot);
+  if (have) return have;
+  console.log(`  ${c.violet("◆")} ${c.bold("The foldrun engine's model calls are paid from your foldrun credits")}`);
+  console.log(`    ${c.grey(`with a key made for this computer — limit $${LOCAL_KEY_CAP_USD}, kept only here; foldrun keys ls shows what it spent`)}`);
+  const yes = ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
+  if (cancel.asked) return null;
+  if (yes !== "y" && yes !== "yes") {
+    console.log(`  ${c.dim("nothing made — foldrun code --engine claude runs on your own Claude plan instead")}\n`);
+    return null;
+  }
+  const label = `foldrun code · ${os.hostname().replace(/[^\w.-]+/g, "-")}`.slice(0, 60);
+  let made;
+  try {
+    made = await remoteCall(s.url, s.flags, "/api/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", capUsd: LOCAL_KEY_CAP_USD, expires: "365d" }) });
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 403) throw new Error("only an admin of every project may make a model key — ask one, or use foldrun code --engine claude");
+    throw err;
+  }
+  if (typeof made?.key !== "string" || typeof made?.gatewayUrl !== "string") throw new Error("the platform made no usable key (no gateway on it?) — foldrun code --engine claude works without one");
+  const entry = { id: String(made.id ?? ""), key: made.key, gatewayUrl: made.gatewayUrl };
+  saveLocalKey(file, s.keySlot, entry);
+  console.log(`  ${c.green("✓")} ${c.grey(`made — ${label}`)}\n`);
+  return entry;
+}
+
+/**
+ * What the gateway said, to the person — its own words, not a guess from a
+ * number (Codex). The kept key is forgotten only when the gateway itself
+ * says that key is unknown, revoked or expired. Null for anything else.
+ */
+function engineModelError(/** @type {unknown} */ err, s) {
+  const m = /the model endpoint answered (\d{3}): ([\s\S]*)/.exec(String(/** @type {Error} */ (err)?.message ?? ""));
+  if (!m) return null;
+  const status = Number(m[1]);
+  let said = m[2].replace(/ \(after \d+ tries\)$/, "").trim();
+  try {
+    const body = JSON.parse(said);
+    if (typeof body?.error?.message === "string") said = body.error.message;
+  } catch {
+    /* the text as it came */
+  }
+  said = plainText(said).slice(0, 300);
+  if (status === 402) return `the gateway would not pay for this: ${said} — foldrun keys ls shows this key's limit; Settings → Billing on ${s.url} shows your credits`;
+  if (status === 401 && /^(invalid API key|API key revoked|API key expired)/.test(said) && s.keySlot) {
+    saveLocalKey(path.join(credentialsDir(), "code-local-keys.json"), s.keySlot, null);
+    return `this computer's model key was refused (${said}) — it is forgotten; your next message offers a new one`;
+  }
+  return `the model endpoint answered ${status}: ${said}`;
+}
+
+/** Where a foldrun-engine conversation is kept between runs (owner-only). */
+// Named by everything that makes it this conversation — server, project,
+// agent, folder and session — so another folder or account never reads it,
+// whatever --context says (Codex).
+function engineConversationFile(s) {
+  let dir = path.resolve(s.dir);
+  try {
+    dir = fs.realpathSync(dir);
+  } catch {
+    /* as given */
+  }
+  // keySlot is the platform and the account (localKeyFor sets it first).
+  const id = crypto.createHash("sha256").update(JSON.stringify([s.keySlot ?? s.url, s.ws, s.agent, dir, s.context])).digest("hex");
+  return path.join(credentialsDir(), "code-engine", `${id}.json`);
+}
+
+function readEngineConversation(s) {
+  try {
+    const list = JSON.parse(fs.readFileSync(engineConversationFile(s), "utf8"));
+    return validConversation(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveEngineConversation(s, /** @type {unknown[]} */ list) {
+  try {
+    const file = engineConversationFile(s);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    writePrivate(file, JSON.stringify(list));
+  } catch {
+    /* the next run starts fresh */
+  }
+}
+
+/** A regular expression whose matching time can explode: a quantified
+ *  group that itself holds a quantifier or an alternation, a
+ *  back-reference, a lookaround, or one far too long to read. */
+function riskyPattern(/** @type {string} */ p) {
+  return p.length > 300 || /\([^)]*[*+?{|][^)]*\)\s*[*+?{]/.test(p) || /\\[1-9]|\\k</.test(p) || /\(\?<?[=!]/.test(p);
+}
+
+/**
+ * Inside the folder however the path is read: parts and links one by one
+ * (the file system's way), and ".." first then links (how core's tools and
+ * Claude Code resolve it). Outside by either reading is outside (Codex).
+ */
+function bothInside(/** @type {string} */ dir, /** @type {unknown} */ p) {
+  if (typeof p !== "string" || !p) return false;
+  return insideFolder(dir, p) && insideFolder(dir, path.resolve(dir, p));
+}
+
 /** Built-in tools that change files, by the path they name. */
 const FILE_CHANGES = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
@@ -13922,7 +14044,22 @@ async function codeLocalTurn(s, text) {
   let reply = "";
   try {
     await keyboardBack();
-    if (!(await claudeSignedIn(s, cancel)) || cancel.asked) return;
+    // The CLI's own keys must not be in reach of what the agent reads
+    // without asking (Codex).
+    // As the CLI itself reads it: a relative FOLDRUN_HOME is from where the
+    // CLI was started, not from the folder (Codex).
+    const creds = path.resolve(credentialsDir());
+    if (bothInside(s.dir, creds) || insideFolder(s.dir, creds)) {
+      console.log(`  ${c.red("✗")} ${c.dim(`foldrun keeps its sign-in in ${homeTilde(credentialsDir())}, inside this folder — the agent could read it; work from a folder that does not hold it, or move FOLDRUN_HOME`)}\n`);
+      return;
+    }
+    /** @type {{ id: string, key: string, gatewayUrl: string } | null} */
+    let engineKey = null;
+    if (s.engine === "foldrun") {
+      engineKey = await localKeyFor(s, cancel);
+      if (!engineKey || cancel.asked) return;
+      s.claudeAs = "foldrun credits";
+    } else if (!(await claudeSignedIn(s, cancel)) || cancel.asked) return;
     typeAhead = startTypeAhead(onInt);
     let model = "default";
     try {
@@ -13941,7 +14078,7 @@ async function codeLocalTurn(s, text) {
     const decide = async (name, input, signal) => {
       if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
       const file = input.file_path ?? input.notebook_path ?? input.path;
-      const inside = file !== undefined && insideFolder(s.dir, file);
+      const inside = file !== undefined && bothInside(s.dir, file);
       const command = name === "Bash" ? String(input.command ?? "") : null;
       // What "always" may cover: file changes inside the folder, or this
       // exact command. Anything else is asked every time.
@@ -14016,13 +14153,69 @@ async function codeLocalTurn(s, text) {
     };
     /** @type {import("@anthropic-ai/claude-agent-sdk").CanUseTool} */
     const canUseTool = (name, input, opts) => {
+      // The foldrun engine asks about every call: what only looks inside
+      // the folder runs, as Claude Code would let it.
+      // Each tool's own field, read as core reads it (Codex).
+      if (s.engine === "foldrun" && (name === "Read" || name === "Glob" || name === "Grep")) {
+        let ok;
+        if (name === "Read") ok = typeof input.file_path === "string" && bothInside(s.dir, input.file_path);
+        else {
+          const base = input.path === undefined ? s.dir : input.path;
+          ok = typeof base === "string" && bothInside(s.dir, base);
+          if (ok && name === "Glob") {
+            // The folders a pattern names before its first wildcard are
+            // where core starts the walk, links followed.
+            // A bracket or brace that core reads differently is asked about,
+            // not guessed at (Codex): the lead stops where core's does.
+            const pattern = String(input.pattern ?? "");
+            const segs = pattern.replace(/^\.\//, "").split("/");
+            const lead = [];
+            for (const g of segs) {
+              if (/[*?{]/.test(g)) break;
+              lead.push(g);
+            }
+            ok = !/[[\]{}\\]/.test(pattern) && !path.isAbsolute(pattern) && !segs.includes("..") && bothInside(s.dir, path.join(path.resolve(s.dir, /** @type {string} */ (base)), ...lead));
+          }
+        }
+        // A pattern that can take minutes to match (a repeat inside a
+        // repeat, a back-reference) blocks the whole CLI while core runs
+        // it, Ctrl-C included: asked, never run silently (Codex).
+        if (ok && name === "Grep" && riskyPattern(String(input.pattern ?? ""))) ok = false;
+        if (ok) return Promise.resolve({ behavior: /** @type {const} */ ("allow"), updatedInput: input });
+      }
       // One question at a time, in the order they came (Codex).
       const next = gate.then(() => decide(name, input, opts?.signal));
       gate = next.then(() => undefined, () => undefined);
       return next;
     };
     const bin = s.claudeBin;
-    const q = query({
+    const history = s.engine === "foldrun" ? (s.localHistory ??= readEngineConversation(s)) : [];
+    /** @type {Array<{ role: string, content: Array<Record<string, unknown>> }>} */
+    const turn = [{ role: "user", content: [{ type: "text", text }] }];
+    /** @type {Record<string, string | undefined>} */
+    const own = localEnv();
+    for (const k of Object.keys(own)) if (/^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)) delete own[k];
+    const q = s.engine === "foldrun" && engineKey
+      ? (await import("@foldrun/core/engine-loop")).foldrunQuery({
+          prompt: text,
+          options: {
+            cwd: s.dir,
+            // The model's key stays with the loop; the commands the agent
+            // runs get the person's own environment without it.
+            env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key },
+            shellEnv: own,
+            model: localModelOf(model),
+            systemPrompt: [localPrompt(s.dir), folderClaudeMd(s.dir)].filter(Boolean).join("\n\n"),
+            tools: ENGINE_TOOLS_LOCAL,
+            engineHostShell: true,
+            sandbox: { enabled: false },
+            maxTurns: 80,
+            history,
+            canUseTool,
+            abortController: abort,
+          },
+        })
+      : query({
       prompt: text,
       options: {
         cwd: s.dir,
@@ -14039,7 +14232,7 @@ async function codeLocalTurn(s, text) {
         ...(s.sdkSession ? { resume: s.sdkSession } : {}),
       },
     });
-    for await (const m of q) {
+    for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
       if (m.type === "system" && m.subtype === "init") {
         if (m.model) s.model = String(m.model);
         if (m.session_id) s.sdkSession = String(m.session_id);
@@ -14060,6 +14253,7 @@ async function codeLocalTurn(s, text) {
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) {
         const content = Array.isArray(m.message?.content) ? m.message.content : [];
+        if (s.engine === "foldrun") turn.push({ role: "assistant", content });
         const words = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
         const calls = content.filter((b) => b.type === "tool_use");
         if (calls.length) {
@@ -14075,6 +14269,7 @@ async function codeLocalTurn(s, text) {
       }
       if (m.type === "user" && !m.parent_tool_use_id) {
         const content = Array.isArray(m.message?.content) ? m.message.content : [];
+        if (s.engine === "foldrun") turn.push({ role: "user", content });
         for (const b of /** @type {any[]} */ (content)) {
           const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");
           if (b.type === "tool_result" && b.is_error && !/person said no|person stopped|user doesn't want/i.test(said)) console.log(`    ${c.red("✗")} ${c.grey(clipLine(plainText(said)))}`);
@@ -14082,12 +14277,25 @@ async function codeLocalTurn(s, text) {
       }
       if (m.type === "result") {
         result = m;
-        if (m.session_id) s.sdkSession = String(m.session_id);
+        if (m.session_id && s.engine !== "foldrun") s.sdkSession = String(m.session_id);
       }
+    }
+    if (s.engine === "foldrun") {
+      // The conversation goes on from here: the whole turn when it
+      // finished, else the message and a note (turns must alternate).
+      const whole = [...history, ...turn];
+      const done = result?.subtype === "success" && !result?.is_error && validConversation(whole);
+      s.localHistory = trimConversation(done ? whole : [...history, turn[0], { role: "assistant", content: [{ type: "text", text: cancel.asked ? "(stopped by the person before I finished)" : "(this turn did not finish)" }] }]);
+      saveEngineConversation(s, s.localHistory);
     }
   } catch (err) {
     stopTicker();
-    if (!cancel.asked) console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+    if (s.engine === "foldrun" && s.localHistory) {
+      s.localHistory = trimConversation([...s.localHistory, { role: "user", content: [{ type: "text", text }] }, { role: "assistant", content: [{ type: "text", text: "(this turn did not finish)" }] }]);
+      saveEngineConversation(s, s.localHistory);
+    }
+    const said = s.engine === "foldrun" ? engineModelError(err, s) : null;
+    if (!cancel.asked) console.log(`  ${c.red("✗")} ${plainText(said ?? explain(err))}\n`);
   } finally {
     stopTicker();
     await keyboardBack();
@@ -14096,7 +14304,9 @@ async function codeLocalTurn(s, text) {
   const ok = result?.subtype === "success" && !result?.is_error;
   if (!ok && result && !cancel.asked) {
     const why = plainText(String(result.result ?? (Array.isArray(result.errors) ? result.errors.join("; ") : result.subtype) ?? ""));
-    if (/login|log in|api key|authenticat|401/i.test(why)) {
+    const said = s.engine === "foldrun" ? engineModelError(new Error(why), s) : null;
+    if (said) console.log(`  ${c.red("✗")} ${c.dim(said)}`);
+    else if (/login|log in|api key|authenticat|401/i.test(why)) {
       s.claudeOk = false;
       console.log(`  ${c.red("✗")} ${c.dim("Claude refused the sign-in on this computer — your next message signs you in again")}`);
     } else if (why) console.log(`  ${c.red("✗")} ${c.grey(clipLine(why))}`);
@@ -14158,6 +14368,24 @@ async function codeCmd(positional, flags, layout) {
     console.log(`  ${c.dim("works")}  ${mode === "local" ? c.green("on this computer") : c.cyan("in the cloud")}\n`);
   }
   mode ??= "cloud";
+  if (flags.engine !== undefined && flags.engine !== "claude" && flags.engine !== "foldrun") throw new Error(`--engine is claude or foldrun — got ${JSON.stringify(flags.engine)}`);
+  if (flags.engine !== undefined && mode !== "local") throw new Error("--engine is for work on this computer (--local); in the cloud the platform runs the agent");
+  /** @type {"claude" | "foldrun"} */
+  let engine = flags.engine === "claude" || flags.engine === "foldrun" ? flags.engine : chosen?.mode === "local" && chosen?.engine ? chosen.engine : "claude";
+  if (mode === "local" && flags.engine === undefined && !chosen?.engine && asking) {
+    const e = await pickOne({
+      title: "Which engine runs the agent?",
+      subtitle: "asked once for this folder — foldrun code --engine claude or foldrun changes it",
+      choices: [
+        { v: "claude", name: "Claude Code", note: "on your own Claude plan (Pro or Max) or your API key" },
+        { v: "foldrun", name: "foldrun engine", note: "foldrun's own agent, paid from your foldrun credits" },
+      ],
+      tick: "claude",
+    });
+    if (!e) throw new Error("nothing started");
+    engine = /** @type {"claude" | "foldrun"} */ (e);
+    console.log(`  ${c.dim("engine")}  ${engine === "foldrun" ? c.violet("foldrun engine") : c.cyan("Claude Code")}\n`);
+  }
   const guess = (() => {
     try {
       return platformWorkspace(flags, layout, "code");
@@ -14180,14 +14408,14 @@ async function codeCmd(positional, flags, layout) {
   // --continue: the last conversation of this folder (19 Nov 2026).
   const last = typeof flags.context !== "string" && flags.continue === true ? lastSession(sessionsFile, dir, ws) : null;
   // The same conversation only on the same server, agent and place (Codex).
-  const resumed = last && (last.url === undefined || last.url === url) && (last.agent === undefined || last.agent === agent) && (last.mode ?? "cloud") === mode ? last : null;
+  const resumed = last && (last.url === undefined || last.url === url) && (last.agent === undefined || last.agent === agent) && (last.mode ?? "cloud") === mode && (mode !== "local" || (last.engine ?? "claude") === engine) ? last : null;
   if (flags.continue === true && !resumed && typeof flags.context !== "string") console.log(`  ${c.dim("no earlier conversation of this folder to continue — starting a fresh one")}`);
-  const s = { url, flags, ws, agent, dir, mode, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]), sdkSession: typeof resumed?.sdkSession === "string" ? resumed.sdkSession : undefined };
+  const s = { url, flags, ws, agent, dir, mode, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]), sdkSession: typeof resumed?.sdkSession === "string" ? resumed.sdkSession : undefined, engine: mode === "local" ? engine : undefined };
   // A script's --cloud turn in a folder that works on this computer is one
   // turn: the folder keeps its choice and its conversation (Codex).
   const oneTurn = typeof flags.task === "string" && chosen?.mode === "local";
   const remember = () => {
-    if (!oneTurn) rememberSession(sessionsFile, dir, { context: s.context, ws, agent, url, mode: s.mode, ...(s.sdkSession ? { sdkSession: s.sdkSession } : {}) });
+    if (!oneTurn) rememberSession(sessionsFile, dir, { context: s.context, ws, agent, url, mode: s.mode, ...(s.engine ? { engine: s.engine } : {}), ...(s.sdkSession ? { sdkSession: s.sdkSession } : {}) });
   };
   // The answers are kept now, not after a first turn: asked once (owner).
   remember();
@@ -14211,10 +14439,10 @@ async function codeCmd(positional, flags, layout) {
     ["project", c.cyan(plainText(ws)), plainText(ws)],
     ["server", c.white(plainText(host)), plainText(host)],
     ["folder", c.white(plainText(homeTilde(dir))), plainText(homeTilde(dir))],
-    ["works", mode === "local" ? c.green("on this computer") : c.cyan("in the cloud"), mode === "local" ? "on this computer" : "in the cloud"],
+    ["works", mode === "local" ? `${c.green("on this computer")} ${c.grey(`· ${engine === "foldrun" ? "foldrun engine" : "Claude Code"}`)}` : c.cyan("in the cloud"), mode === "local" ? `on this computer · ${engine === "foldrun" ? "foldrun engine" : "Claude Code"}` : "in the cloud"],
     ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
   ])}`);
-  console.log(`    ${c.grey(mode === "local" ? "Claude Code works in this folder on your own Claude sign-in; it asks before a change or command your Claude Code settings do not already allow" : "each message takes your folder to the agent; you apply what comes back")}`);
+  console.log(`    ${c.grey(mode === "local" ? (engine === "foldrun" ? "the foldrun engine works in this folder on your foldrun credits; it asks before every change and command" : "Claude Code works in this folder on your own Claude sign-in; it asks before a change or command your Claude Code settings do not already allow") : "each message takes your folder to the agent; you apply what comes back")}`);
   console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
   const prompt = { history: readHistory(historyFile), files: folderFiles(dir) };
@@ -14293,6 +14521,7 @@ async function codeCmd(positional, flags, layout) {
       s.context = newContext();
       delete s.sdkSession;
       delete s.localAllow;
+      delete s.localHistory;
       // Nothing of the old conversation stays in the count (Codex).
       for (const k of ["turns", "costUsd", "model", "contextTokens", "secs"]) delete s[k];
       s.notes = [];
