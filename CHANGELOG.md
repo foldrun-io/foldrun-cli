@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.0.0] — 2026-11-19
+
+### Breaking changes
+
+- `foldrun code --engine claude` is refused, and a folder (fc354a8)
+
+- feat(code)!: foldrun's own agent is the only engine on this computer; Claude Code is gone ([fc354a8](https://github.com/foldrun-io/foldrun-cli/commit/fc354a8))
+
 ## [26.20.0] — 2026-11-19
 
 - feat(code): cloud agents from this computer; the turn line names the foldrun plan ([4194210](https://github.com/foldrun-io/foldrun-cli/commit/4194210))
