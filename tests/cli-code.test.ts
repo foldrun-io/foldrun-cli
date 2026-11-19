@@ -96,7 +96,10 @@ test("code --task: the folder goes as a snapshot, the agent runs on it in a conv
   assert.ok(s.seen.some((x) => x.method === "POST" && x.url === `${WS}/snapshots`), "the folder was sent");
   assert.match(r.out, /Added a greeting\./, "the agent's reply is shown");
   assert.equal((r.out.match(/Added a greeting\./g) ?? []).length, 1, "the reply is shown once, not also as a live line");
-  assert.match(r.out, /→ coder\s+Bash\s+5ms/, "the agent's steps are shown as they happen");
+  assert.match(r.out, /● Run\n/, "the agent's steps are shown as they happen, as a verb (a call under a second has no time)");
+  assert.doesNotMatch(r.out, /run-code-1/, "the run's id is not on the turn's lines — /status has it");
+  assert.match(r.out, /✓ done · 2m 00s · \$0\.050/, "the turn ends with how long and what it cost");
+  assert.match(r.out, /session code-[0-9a-f]{16}/, "the header names the session");
   assert.match(r.out, /✓ applied/);
   assert.equal(fs.readFileSync(path.join(d, "hello.txt"), "utf8"), "hello, world\n");
   assert.equal(fs.readFileSync(path.join(d, "greet.txt"), "utf8"), "hi\n");
@@ -952,7 +955,7 @@ test("code: a dropped stream mid-run is followed again — the turn ends with th
     const run = codeChild(p.url, d);
     const code = await run.done;
     assert.equal(code, 0, run.out());
-    assert.match(run.out(), /completed/);
+    assert.match(run.out(), /✓ done/);
     assert.match(run.out(), /applied/);
     assert.equal(fs.readFileSync(path.join(d, "greet.txt"), "utf8"), "hi\n");
   } finally {

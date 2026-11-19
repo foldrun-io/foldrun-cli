@@ -138,7 +138,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun export [workspace]` | a deployed project as a `.zip` — agents, flows, tools, skills, scripts, evals, knowledge; never memory, state, storage or a secret's value. `--flow <name>` exports that flow with every flow and agent it runs and the tools, skills and scripts they grant; `--agent <name>` that agent and what it grants. Written under the name the platform gives it (`<ws>.zip`, `<ws>-flow-<name>.zip`); `--file <path>` (`-` for stdout), `--force` to replace (`GET …/export`) |
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a project package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun snapshot push [dir]` | send a folder for an agent on foldrun to work on (a snapshot). What goes is what git would commit — tracked files and untracked ones `.gitignore` does not exclude, as they are on disk; links and submodules are left out and named. A secret in any file stops it before anything leaves the machine (remove it, or leave the file out with `.gitignore`); the platform checks again. Answers the snapshot id, kept 7 days from the last send and while a run uses it. `--to <workspace>`, `--dry-run` packs and checks only, `--out <file.tar.gz>` keeps the archive (`--force` over a file that is there), `--json` (`POST …/snapshots`) |
-| `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it (its tool calls and words, and any refusal or failure; the platform's other notes on the step stay on the run page, `--verbose` shows them too), and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; a dropped connection is followed again, not the end of the turn. After each turn a session line gives the turns so far, the spend, the model, how many tokens the agent read last turn, the time and the conversation id; `/status` prints it, `/new` starts a fresh conversation (and count), `/quit` leaves. `/send <conversation> <text>` messages another session; before each turn, messages other sessions sent this one are shown and you are asked whether to include them — only `y` does (with `--task`, only `--include-messages` includes them — `--yes` does not); those that do not fit in one turn wait for the next, and `/messages` shows what waits. `--to <workspace>` (a project that does not exist is made, blank with its `coder` agent, after a yes), `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` applies without asking (required with no terminal), `--test`, `--context <id>`, `--verbose` |
+| `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it (its tool calls and words, and any refusal or failure; the platform's other notes on the step stay on the run page, `--verbose` shows them too), and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; a dropped connection is followed again, not the end of the turn. After each turn a session line gives the turns so far, the spend, the model, how many tokens the agent read last turn, the time and the conversation id; `/status` prints it, `/new` starts a fresh conversation (and count), `/quit` leaves, `--continue` picks up the folder's last conversation; `/help` lists the rest ([in the session](#in-the-session)). `/send <conversation> <text>` messages another session; before each turn, messages other sessions sent this one are shown and you are asked whether to include them — only `y` does (with `--task`, only `--include-messages` includes them — `--yes` does not); those that do not fit in one turn wait for the next, and `/messages` shows what waits. `--to <workspace>` (a project that does not exist is made, blank with its `coder` agent, after a yes), `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` applies without asking (required with no terminal), `--test`, `--context <id>`, `--verbose` |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
 | `foldrun status --platform` | is the platform up: overall, each component (dashboard and API, run workers, scheduler, model providers, email, storage) and any incident or maintenance the operator posted, with its latest update. Reads the open `/api/status` — no key needed; the signed-in platform, `--url` / `FOLDRUN_URL`, or the default, dash.foldrun.io. `--json` prints the answer as is. Exits 1, saying *status unavailable — the platform may be down*, when it does not answer. Plain `foldrun status` opens with the same one-line verdict |
 | `foldrun status --platform --history` | what the status page draws as bars: each component's uptime over the window and a mark per day — up, degraded or maintenance, an outage, or no samples — then the incidents and maintenance in it, from the open `GET /api/status/history?days=<n>`. `--days 1-90` (default 90), `--json` |
@@ -630,6 +630,34 @@ it is frontmatter: `tools:`, `model:`, `effort:`, `size:` and `resources:`
 for the sandbox, `runtime:` for what the project needs installed, `hooks:`
 at every tool call, `limits:`, `network:`, `budget:`. Edit it, deploy, and
 the next turn runs the new one.
+
+### In the session
+
+The header names the agent, the project, the folder and the session's id;
+each turn shows what the agent is doing as it does it (`● Edit src/a.ts`,
+`● Run npm test  2.4s`, paths as your folder knows them) under a line that
+says it is still working, and ends with how long it took, what it cost, what
+the session has cost so far, the model and how much it read. `/status` has
+the rest, the last run's id included.
+
+| Type | What it does |
+|---|---|
+| `/help` | the commands |
+| `/diff` | what is changed in the folder now |
+| `/undo` | take back the last patch this session applied (refused if the folder changed since) |
+| `/status` | the session: id, turns, spend, model, agent, platform, last run |
+| `/new` | a fresh conversation |
+| `/send <conversation> <text>`, `/messages` | [session messages](runs#session-messages) |
+| `/quit`, Ctrl-D | leave; `foldrun code --continue` comes back to the same conversation |
+| `!<command>` | run it in the folder (`!npm test`); what it printed goes with your next message |
+| `@<path>` | Tab completes a file of the folder, to point the agent at it |
+
+At the apply prompt `d` shows the whole diff before you answer. A turn you
+stop with Ctrl-C, or one that fails, still offers what it had changed. ↑ and
+↓ bring back what you typed before (kept in `~/.foldrun/code-history`); a
+line ending in `\` goes on to the next, and a paste of many lines is one
+message. Ctrl-C on an empty prompt twice leaves. A turn longer than 20
+seconds ends with the terminal's bell (`--no-beep` for none).
 
 `--task "…"` runs one turn and exits, for a script; with no terminal,
 `--yes` applies the patch. The same three steps by hand:

@@ -11,8 +11,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, folderRelative, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde } from "./code-session.mjs";
 import { createRequire } from "node:module";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
@@ -29,6 +30,7 @@ const c = {
   red: paint(31),
   yellow: paint(33),
   amber: paint(33),
+  cyan: paint(36),
 };
 
 // The published runtime, not a relative reach into a sibling directory. It was
@@ -2721,8 +2723,40 @@ export function toolSummary(input) {
  * A start whose completion never lands — the stream ended mid-call — is
  * printed later by flushCalls. Every other event prints as it arrives.
  */
+/**
+ * Set by foldrun code for the length of a turn: its live lines read as a
+ * person would say them (● Run npm test  2.4s), with the sandbox's own
+ * paths taken off and the main agent's name left out (19 Nov 2026).
+ * @type {{ agent: string } | null}
+ */
+let codeView = null;
+
+/** One tool call, the code view's way. */
+function codeToolLine(start, done, agent) {
+  const who = agent && agent !== codeView?.agent ? `${c.dim(`[${agent}]`)} ` : "";
+  const what = folderRelative(toolSummary(start?.io?.input ?? done?.io?.input));
+  const secs = Number(done?.ms) / 1000;
+  const mark = done?.err ? c.red("●") : c.cyan("●");
+  return `  ${mark} ${who}${c.bold(clipLine(friendlyTool(start?.text ?? done?.text)))}${what ? ` ${c.dim(clipLine(what))}` : ""}${secs >= 1 ? `  ${c.dim(formatSecs(secs))}` : ""}`;
+}
+
 function eventLine(e, rawAgent, open) {
   const agent = plainText(rawAgent ?? "");
+  if (codeView) {
+    if (e.type === "tool" && e.call != null) {
+      if (e.ms == null) {
+        open.set(e.call, { agent, e });
+        return null;
+      }
+      const start = open.get(e.call)?.e;
+      open.delete(e.call);
+      return codeToolLine(start ?? e, e, agent);
+    }
+    if (e.type === "tool") return codeToolLine(e, e, agent);
+    if (e.type === "error") return `  ${c.red("✗")} ${clipLine(folderRelative(e.text))}`;
+    const who = agent && agent !== codeView.agent ? `${c.dim(`[${agent}]`)} ` : "";
+    return `  ${c.dim("·")} ${who}${clipLine(folderRelative(e.text))}`;
+  }
   if (e.type === "tool" && e.call != null) {
     if (e.ms == null) {
       open.set(e.call, { agent, e });
@@ -2850,7 +2884,7 @@ export function dropHeldReply(run, seen, open) {
 /** The stream is over: print a start line for each call that never completed. */
 function flushCalls(open) {
   for (const { agent, e } of open.values()) {
-    console.log(`  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`);
+    console.log(codeView ? codeToolLine(e, null, agent) : `  ${EVENT_MARK(e)} ${c.dim(agent)}  ${clipLine(e.text)}`);
   }
   open.clear();
 }
@@ -12778,9 +12812,19 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
     console.log(`  ${c.dim(`not applied — no terminal to ask, and --yes applies without asking. The patch is at ${keepPatch(patch, label)}`)}`);
     return false;
   }
-  if (flags.yes !== true && !/^y(es)?$/i.test((await cancellablePrompt(`  apply it to ${dir}? [y/N] `, cancel)) ?? "")) {
-    console.log(`  ${c.dim(`not applied — the patch is at ${keepPatch(patch, label)}`)}`);
-    return false;
+  if (flags.yes !== true) {
+    // d shows the whole change and asks again (19 Nov 2026): a --stat is
+    // not enough to say yes to.
+    let answer = "";
+    for (;;) {
+      answer = ((await cancellablePrompt(`  apply it to ${dir}? [y/N] ${c.dim("(d shows the diff)")} `, cancel)) ?? "").trim();
+      if (!/^d(iff)?$/i.test(answer)) break;
+      console.log(`\n${colorPatch(plainText(String(patch)), c).split("\n").map((l) => `  ${l}`).join("\n")}\n`);
+    }
+    if (!/^y(es)?$/i.test(answer)) {
+      console.log(`  ${c.dim(`not applied — the patch is at ${keepPatch(patch, label)}`)}`);
+      return false;
+    }
   }
   // The checks above run git synchronously, and a Ctrl-C pressed meanwhile
   // reaches its handler only when the event loop turns — which --yes would
@@ -13080,21 +13124,22 @@ async function codeTurn(s, task, include = []) {
       return;
     }
     cancel.asked = true;
-    console.log(`\n  ${c.amber("stopping")}${cancel.runId ? ` ${cancel.runId}` : ""} …`);
+    console.log(`\n  ${c.amber("stopping")} …`);
     stop();
   };
   process.on("SIGINT", onInt);
   let run;
   let runId;
+  let stopTicker = () => {};
   /** @type {Map<number, number> | null} */
   let seen = null;
   /** @type {Map<string, unknown> | null} */
   let open = null;
   try {
-    const { packed, left, unscanned, summary } = await packFolder(dir);
+    const { packed, left, unscanned } = await packFolder(dir);
     if (cancel.asked) return "cancelled";
     const snap = await pushPacked(url, flags, ws, packed);
-    console.log(`  ${c.dim(`sent ${summary}${snap.reused ? " (already there)" : ""}`)}`);
+    console.log(`  ${c.dim(`↑ sent the folder · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}${snap.reused ? " · unchanged since the last turn" : ""}`)}`);
     sentNotes(left, unscanned);
     if (cancel.asked) return "cancelled";
     let started;
@@ -13120,11 +13165,14 @@ async function codeTurn(s, task, include = []) {
     }
     cancel.runId = runId;
     if (cancel.asked) stop(); // pressed while the run was being started
-    console.log(`  ${c.dim(`run ${plainText(runId)}${started.test ? " (test)" : ""} — Ctrl-C stops it; the dashboard shows it live`)}\n`);
+    s.lastRun = runId;
+    console.log(`  ${c.dim(`${started.test ? "a test turn — " : ""}the agent is on it · Ctrl-C stops it`)}\n`);
     run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
     seen = new Map();
     open = new Map();
     const view = { skipResult: true, quiet: flags.verbose !== true };
+    codeView = { agent };
+    stopTicker = startTicker(Date.now());
     printNew(run, seen, open, view);
     if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view })) ?? run;
     if (isLive(run)) {
@@ -13133,6 +13181,7 @@ async function codeTurn(s, task, include = []) {
     }
     dropHeldReply(run, seen, open);
     flushCalls(open);
+    stopTicker();
     cancel.phase = "patch";
 
     const own = (run.steps ?? []).filter((x) => !x.subagentOf);
@@ -13140,16 +13189,32 @@ async function codeTurn(s, task, include = []) {
     // The agent's words, right before the apply prompt: no terminal control (Codex).
     if (reply) console.log(`\n${plainText(String(reply)).trim().split("\n").map((l) => `  ${l}`).join("\n")}`);
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
-    console.log(`\n  ${run.status === "completed" ? c.green("✓") : c.red("✗")} ${plainText(run.status)} ${c.dim(`· $${cost.toFixed(4)} · ${plainText(runId)}`)}`);
     noteSessionTurn(s, run, cost);
-    console.log(`  ${c.dim(sessionLine(s))}`);
-    if (cancel.asked) {
-      console.log(`  ${c.dim(`stopped by you — nothing applied. What it made, if anything: foldrun report ${runId} patch --to ${ws}`)}\n`);
-      return "cancelled";
-    }
-    if (run.status !== "completed") {
-      console.log(`  ${c.dim(`foldrun report ${runId} --to ${ws} — what happened; a patch it made anyway: foldrun report ${runId} patch --to ${ws}`)}\n`);
-      return run.status;
+    console.log(`\n${turnLine(s, run, cost, cancel.asked)}`);
+    if (cancel.asked || run.status !== "completed") {
+      // Stopping never loses the work (19 Nov 2026): what it changed before
+      // it stopped or failed is offered too — always asked, never --yes.
+      const stoppedByYou = cancel.asked;
+      // The run is over: from here Ctrl-C means "do not apply", through the
+      // turn's own handler — while the patch is fetched too (Codex).
+      cancel.phase = "patch";
+      cancel.asked = false;
+      const left = process.stdin.isTTY ? await runPatch(url, flags, ws, run, agent).catch(() => null) : null;
+      if (left?.status === "changed" && cancel.asked) {
+        console.log(`  ${c.dim("not applied — you pressed Ctrl-C")}`);
+      } else if (left?.status === "changed") {
+        console.log(`  ${c.dim(stoppedByYou ? "it had changed some files before you stopped it:" : "it changed some files before it ended:")}`);
+        if (await applyPatch(dir, left.patch, { ...flags, yes: false }, runId, cancel)) {
+          (s.applied ??= []).push({ patch: String(left.patch), runId });
+          console.log(`  ${c.dim("/diff shows it · /undo takes it back")}`);
+        }
+      } else if (stoppedByYou) {
+        console.log(`  ${c.dim("stopped by you — nothing applied")}`);
+      } else {
+        console.log(`  ${c.dim(`what went wrong, step by step: foldrun report ${runId} --to ${ws}`)}`);
+      }
+      console.log();
+      return stoppedByYou ? "cancelled" : run.status;
     }
     const p = await runPatch(url, flags, ws, run, agent);
     if (cancel.asked) {
@@ -13160,14 +13225,19 @@ async function codeTurn(s, task, include = []) {
     else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${plainText(p.reason ?? p.status)}\n`);
     else {
       console.log();
-      await applyPatch(dir, p.patch, flags, runId, cancel);
+      if (await applyPatch(dir, p.patch, flags, runId, cancel)) {
+        (s.applied ??= []).push({ patch: String(p.patch), runId });
+        if (codeInteractive) console.log(`  ${c.dim("/diff shows it · /undo takes it back")}`);
+      }
       console.log();
     }
     return run.status;
   } finally {
+    stopTicker();
     // The success path has printed or dropped any held text already; an
     // error on the way out has not (Codex).
     flushHeld(seen, open);
+    codeView = null;
     // A stop still on its way is waited for on every way out — a thrown
     // follower included — so the turn never ends before the platform was
     // told, and says so when it cannot tell (Codex).
@@ -13177,6 +13247,84 @@ async function codeTurn(s, task, include = []) {
     }
     process.off("SIGINT", onInt);
   }
+}
+
+/** /status: the session in full — what the footer leaves out included. */
+function statusBlock(s, url) {
+  const row = (k, v) => `  ${c.dim(k.padEnd(13))}${v}`;
+  return [
+    row("session", s.context),
+    row("turns", String(s.turns ?? 0)),
+    row("spent", `${formatCost(s.costUsd ?? 0)} this session`),
+    s.model ? row("model", shortModel(plainText(s.model))) : null,
+    s.contextTokens !== undefined ? row("last turn", `read ${formatTokens(s.contextTokens)} tokens${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
+    row("agent", `${s.agent} in project ${s.ws}`),
+    row("platform", url),
+    row("folder", homeTilde(s.dir)),
+    s.applied?.length ? row("applied", `${s.applied.length} patch${s.applied.length === 1 ? "" : "es"} this session (/undo takes back the last)`) : null,
+    s.notes?.length ? row("waiting", `${s.notes.length} command output${s.notes.length === 1 ? "" : "s"} go with your next message`) : null,
+    s.lastRun ? row("last run", `${s.lastRun} — foldrun report ${s.lastRun} --to ${s.ws}`) : null,
+  ].filter(Boolean).join("\n") + "\n";
+}
+
+/** Whether the session loop is running (not --task): its own commands can be named. */
+let codeInteractive = false;
+
+/**
+ * The line that ends a turn: how it went, how long, what it cost, what the
+ * session has cost, the model and how much it read. The run's id is kept
+ * for /status.
+ */
+function turnLine(s, run, cost, stopped) {
+  const a = Date.parse(run.startedAt ?? "");
+  const b = Date.parse(run.finishedAt ?? "") || Date.now();
+  const took = Number.isFinite(a) ? formatSecs((b - a) / 1000) : "";
+  const how = stopped ? c.amber("■ stopped") : run.status === "completed" ? c.green("✓ done") : c.red(`✗ ${plainText(run.status)}`);
+  const parts = [
+    took ? `${took}` : null,
+    formatCost(cost),
+    (s.turns ?? 0) > 1 ? `${formatCost(s.costUsd ?? 0)} this session` : null,
+    s.model ? shortModel(plainText(s.model)) : null,
+    s.contextTokens !== undefined ? `read ${formatTokens(s.contextTokens)} tokens` : null,
+  ].filter(Boolean);
+  return `  ${how} ${c.dim(`· ${parts.join(" · ")}`)}`;
+}
+
+/**
+ * While the agent works: one line, kept at the bottom, saying it is still
+ * at it and for how long — redrawn each second, cleared before any other
+ * line prints and put back after. Only on a terminal; a script's output
+ * stays line by line. Returns the stop.
+ */
+function startTicker(since) {
+  if (!process.stdout.isTTY || process.env.FOLDRUN_NO_TICKER) return () => {};
+  const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  const log = console.log;
+  let shown = false;
+  let i = 0;
+  const draw = () => {
+    process.stdout.write(`\r\x1b[2K  ${c.cyan(frames[i++ % frames.length])} ${c.dim(`working · ${formatSecs((Date.now() - since) / 1000)}`)}`);
+    shown = true;
+  };
+  const clear = () => {
+    if (shown) process.stdout.write("\r\x1b[2K");
+    shown = false;
+  };
+  console.log = (...args) => {
+    clear();
+    log(...args);
+    draw();
+  };
+  const timer = setInterval(draw, 250);
+  draw();
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    clear();
+    console.log = log;
+  };
 }
 
 /**
@@ -13215,31 +13363,66 @@ async function codeCmd(positional, flags, layout) {
   if (typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
   await ensureCodeAgent(url, flags, ws, agent, await ensureCodeProject(url, flags, ws, agent));
   const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
-  const s = { url, flags, ws, agent, dir, context: typeof flags.context === "string" ? flags.context : newContext() };
+  const sessionsFile = path.join(credentialsDir(), "code-sessions.json");
+  // --continue: the last conversation of this folder (19 Nov 2026).
+  const resumed = typeof flags.context !== "string" && flags.continue === true ? lastSession(sessionsFile, dir, ws) : null;
+  if (flags.continue === true && !resumed && typeof flags.context !== "string") console.log(`  ${c.dim("no earlier conversation of this folder to continue — starting a fresh one")}`);
+  const s = { url, flags, ws, agent, dir, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]) };
+  const remember = () => rememberSession(sessionsFile, dir, { context: s.context, ws, agent });
 
   if (typeof flags.task === "string") {
-    console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} · ${dir}`)}\n`);
+    console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
     const status = await codeTurn(s, flags.task.trim(), await messagesForTurn(s, false));
+    remember();
     return status === "completed" ? 0 : status === "cancelled" ? 130 : 1;
   }
-  const { createInterface } = await import("node:readline/promises");
-  console.log(`\n  ${c.bold("foldrun code")} ${c.dim(`· ${agent} · ${ws} on ${url}`)}`);
-  console.log(`  ${c.dim(`${dir} — each message sends it to a sandbox; you apply what comes back`)}`);
-  console.log(`  ${c.dim("/send <conversation> <text>  message another session    /messages  what waits here    /new  a fresh conversation    /status  this session    /quit  leave")}\n`);
+  codeInteractive = true;
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  })();
+  console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${host}`))}`);
+  console.log(`  ${c.dim("folder ")} ${plainText(homeTilde(dir))}`);
+  console.log(`  ${c.dim("session")} ${plainText(s.context)} ${c.dim(resumed ? "· continuing — the agent reads the earlier turns" : "· new")}`);
+  console.log(`  ${c.dim("each message sends the folder to the agent's sandbox; you apply what comes back")}`);
+  console.log(`  ${c.dim("/help commands · !cmd runs in the folder · @ + Tab points at a file · Ctrl-C stops a turn")}\n`);
+  const historyFile = path.join(credentialsDir(), "code-history");
+  const prompt = { history: readHistory(historyFile), files: folderFiles(dir) };
+  const completer = codeCompleter(() => prompt.files);
   for (;;) {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    // Closing the input (Ctrl-D) leaves question() unsettled on Node 26 —
-    // it neither resolves nor rejects — so the close is raced with it.
-    const answer = await new Promise((resolve) => {
-      rl.once("close", () => resolve(null));
-      rl.question(`${c.bold("you ›")} `).then(resolve, () => resolve(null));
-    });
-    rl.close();
-    const line = answer === null ? "/quit" : String(answer).trim();
-    if (!line) continue;
-    if (line === "/quit" || line === "/exit") {
-      console.log();
+    const line = await readCodeMessage(prompt, completer, s);
+    if (line === null || line === "/quit" || line === "/exit") {
+      console.log(`\n  ${c.dim(s.turns ? `to go on later: foldrun code --continue${dir === process.cwd() ? "" : ` ${plainText(dir)}`}` : "bye")}\n`);
       return 0;
+    }
+    if (!line) continue;
+    appendHistory(historyFile, line);
+    prompt.history = [line.replace(/\s*\n\s*/g, " "), ...prompt.history.filter((h) => h !== line)].slice(0, 500);
+    if (line.startsWith("!")) {
+      const command = line.slice(1).trim();
+      if (!command) {
+        console.log(`  ${c.dim("!<command> runs it in the folder, e.g. !npm test — its output goes with your next message")}\n`);
+        continue;
+      }
+      const result = await runShellLive(dir, command);
+      s.notes.push(shellNote(command, result));
+      console.log(`  ${c.dim(`exit ${result.code} — its output goes with your next message${s.notes.length > 1 ? ` (${s.notes.length} so far)` : ""}`)}\n`);
+      continue;
+    }
+    if (line === "/help" || line === "/?") {
+      console.log(`${helpText().split("\n").map((l) => `  ${c.dim(l)}`).join("\n")}\n`);
+      continue;
+    }
+    if (line === "/diff") {
+      showFolderDiff(dir);
+      continue;
+    }
+    if (line === "/undo") {
+      await undoLastPatch(s);
+      continue;
     }
     if (line === "/send" || line.startsWith("/send ")) {
       const m = /^\/send\s+(\S+)\s+([\s\S]+)$/.exec(line);
@@ -13267,26 +13450,189 @@ async function codeCmd(positional, flags, layout) {
       continue;
     }
     if (line === "/status") {
-      console.log(`  ${c.dim(`${sessionLine(s)} · ${agent} · ${ws} on ${url}`)}\n`);
+      console.log(statusBlock(s, url));
       continue;
     }
     if (line === "/new") {
       s.context = newContext();
       // Nothing of the old conversation stays in the count (Codex).
       for (const k of ["turns", "costUsd", "model", "contextTokens", "secs"]) delete s[k];
+      s.notes = [];
       console.log(`  ${c.dim("a fresh conversation — the agent no longer reads the earlier turns")}\n`);
       continue;
     }
-    if (line.startsWith("/")) {
-      console.log(`  ${c.dim("/send <conversation> <text>  message another session    /messages  what waits here    /new  a fresh conversation    /status  this session    /quit  leave")}\n`);
+    if (/^\/\S*$/.test(line) || /^\/[a-z]+\s/.test(line)) {
+      console.log(`  ${c.dim(`${plainText(line.split(/\s/)[0])} is not a command — /help lists them (to start a message with /, put a space before it)`)}\n`);
       continue;
     }
+    const started = Date.now();
     try {
-      await codeTurn(s, line, await messagesForTurn(s, true));
+      const notes = s.notes;
+      s.notes = [];
+      await codeTurn(s, withNotes(notes, line), await messagesForTurn(s, true));
+      remember();
     } catch (err) {
       console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
     }
+    // A long turn ends with the terminal's bell, for whoever looked away.
+    if (Date.now() - started > 20_000 && flags["no-beep"] !== true && process.stdout.isTTY) process.stdout.write("\u0007");
+    prompt.files = folderFiles(dir);
   }
+}
+
+/**
+ * One message from the person: ↑/↓ history, Tab completion, a paste of
+ * many lines kept as one message, a trailing \ going on to the next line.
+ * Ctrl-C clears what is typed; on an empty line, twice leaves. Null when
+ * they leave.
+ * @param {{ history: string[] }} state
+ * @returns {Promise<string | null>}
+ */
+async function readCodeMessage(state, completer, s) {
+  const { createInterface } = await import("node:readline");
+  const ask = `${c.bold("you ›")} `;
+  return new Promise((resolve) => {
+    // A copy: readline adds every line it reads, a paste's included; the
+    // history kept is one entry per message, added by the caller.
+    const rl = createInterface({ input: process.stdin, output: process.stdout, history: [...state.history], historySize: 500, removeHistoryDuplicates: true, completer, terminal: Boolean(process.stdin.isTTY) });
+    /** @type {string[]} */
+    const lines = [];
+    /** @type {NodeJS.Timeout | undefined} */
+    let timer;
+    let settled = false;
+    let lastInterrupt = 0;
+    const onClose = () => finish(null);
+    const finish = (/** @type {string | null} */ v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Only our own listener: readline cleans up on its own "close" — it
+      // takes its keypress handler off stdin there. removeAllListeners took
+      // that too, and every closed prompt went on echoing what was typed.
+      rl.off("close", onClose);
+      rl.close();
+      resolve(v);
+    };
+    rl.on("line", (l) => {
+      lines.push(l);
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const msg = joinMessage(lines);
+        if (msg === null) {
+          rl.setPrompt(c.dim("    … "));
+          rl.prompt();
+          return;
+        }
+        finish(msg);
+      }, PASTE_GAP_MS);
+    });
+    rl.on("SIGINT", () => {
+      const now = Date.now();
+      if (rl.line || lines.length) {
+        clearTimeout(timer);
+        lines.length = 0;
+        rl.write(null, { ctrl: true, name: "u" });
+        process.stdout.write("\n");
+        rl.setPrompt(ask);
+        rl.prompt();
+        lastInterrupt = 0;
+        return;
+      }
+      if (now - lastInterrupt < 2_000) {
+        process.stdout.write("\n");
+        return finish(null);
+      }
+      lastInterrupt = now;
+      process.stdout.write(`\n  ${c.dim(`Ctrl-C again to leave${s?.turns ? " (foldrun code --continue comes back)" : ""}`)}\n`);
+      rl.setPrompt(ask);
+      rl.prompt();
+    });
+    rl.once("close", onClose);
+    rl.setPrompt(ask);
+    rl.prompt();
+  });
+}
+
+/**
+ * `!command`: run by the person's shell in the folder, its output shown as
+ * it comes and kept. Ctrl-C stops the command, never the session.
+ * @returns {Promise<{ output: string, code: number, error: string | null }>}
+ */
+function runShellLive(dir, command) {
+  return new Promise((resolve) => {
+    let output = "";
+    const keep = (/** @type {Buffer} */ b) => {
+      const t = b.toString("utf8");
+      output += t;
+      if (output.length > 2_000_000) output = output.slice(-1_000_000);
+      return t;
+    };
+    const ignore = () => {};
+    process.on("SIGINT", ignore);
+    const child = spawn(process.env.SHELL || "/bin/sh", ["-c", command], { cwd: dir, stdio: ["inherit", "pipe", "pipe"], env: process.env });
+    child.stdout.on("data", (b) => process.stdout.write(keep(b)));
+    child.stderr.on("data", (b) => process.stderr.write(keep(b)));
+    const done = (/** @type {number} */ code, /** @type {string | null} */ error) => {
+      process.off("SIGINT", ignore);
+      resolve({ output, code, error });
+    };
+    child.on("error", (err) => done(127, err.message));
+    child.on("close", (code, signal) => done(code ?? (signal ? 130 : 1), null));
+  });
+}
+
+/** /diff: what is changed in the folder now, as git sees it. */
+function showFolderDiff(dir) {
+  const status = spawnSync("git", ["-C", dir, "status", "--short", "--", "."], { encoding: "utf8" });
+  if (status.status !== 0) {
+    console.log(`  ${c.red("✗")} git status: ${plainText(String(status.stderr)).trim()}\n`);
+    return;
+  }
+  if (!String(status.stdout).trim()) {
+    console.log(`  ${c.dim("nothing changed since the last commit")}\n`);
+    return;
+  }
+  // Against the last commit: staged and unstaged alike (Codex). A folder
+  // with no commit yet has no HEAD — then what is staged, then the rest.
+  const run = (/** @type {string[]} */ args) => spawnSync("git", ["-C", dir, "--no-pager", "diff", ...args, "--", "."], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const head = spawnSync("git", ["-C", dir, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" }).status === 0;
+  const diff = head ? run(["HEAD"]) : { stdout: `${run(["--cached"]).stdout ?? ""}${run([]).stdout ?? ""}` };
+  const text = plainText(String(diff.stdout)).trimEnd();
+  if (text) console.log(`\n${colorPatch(text, c).split("\n").map((l) => `  ${l}`).join("\n")}`);
+  const untracked = String(status.stdout).split("\n").filter((l) => l.startsWith("??")).map((l) => l.slice(3));
+  if (untracked.length) console.log(`\n  ${c.dim("new, not yet in git:")} ${plainText(untracked.join(", "))}`);
+  console.log();
+}
+
+/** /undo: the last patch this session applied, taken back — if the folder still holds it as applied. */
+async function undoLastPatch(s) {
+  const last = s.applied?.at(-1);
+  if (!last) {
+    console.log(`  ${c.dim("nothing applied in this session to undo")}\n`);
+    return;
+  }
+  const top = spawnSync("git", ["-C", s.dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  const pre = spawnSync("git", ["-C", s.dir, "rev-parse", "--show-prefix"], { encoding: "utf8" });
+  const root = String(top.stdout).replace(/\r?\n$/, "");
+  const prefix = String(pre.stdout).replace(/\r?\n$/, "").replace(/\/$/, "");
+  const git = (...more) => spawnSync("git", ["-C", root, "apply", "-R", ...(prefix ? [`--directory=${prefix}`] : []), ...more], { input: last.patch, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const check = git("--check");
+  if (check.status !== 0 || check.error) {
+    console.log(`  ${c.red("✗")} the folder has changed since that change was applied, so it cannot be taken back as a whole. git said:\n  ${plainText(String(check.stderr)).trim()}\n  ${c.dim(`the patch is at ${keepPatch(last.patch, last.runId)} — git apply -R takes back what still matches`)}\n`);
+    return;
+  }
+  for (const l of String(git("--stat").stdout).trimEnd().split("\n")) if (l.trim()) console.log(`  ${l.trim()}`);
+  if (!/^y(es)?$/i.test((await promptVisible(`  take back the last change you applied? [y/N] `)).trim())) {
+    console.log(`  ${c.dim("left as it is")}\n`);
+    return;
+  }
+  const done = git();
+  if (done.status !== 0 || done.error) {
+    console.log(`  ${c.red("✗")} git apply -R: ${plainText(String(done.stderr)).trim()}\n`);
+    return;
+  }
+  s.applied.pop();
+  console.log(`  ${c.green("✓")} taken back ${c.dim("— the agent sees the folder as it is now on your next message")}\n`);
 }
 
 /**
