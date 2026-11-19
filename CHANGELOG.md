@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.17.0] — 2026-11-19
+
+- feat(code): the prompt is the project's name and ❯, not "you ›" ([e272fc5](https://github.com/foldrun-io/foldrun-cli/commit/e272fc5))
+
 ## [26.16.0] — 2026-11-19
 
 - feat(code): colour — a framed header, a brand sweep, a colour per kind of thing ([0fac278](https://github.com/foldrun-io/foldrun-cli/commit/0fac278))
