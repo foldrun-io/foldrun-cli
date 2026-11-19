@@ -247,7 +247,7 @@ export function rememberSession(file, dir, entry) {
 const VERBS = /** @type {Record<string, string>} */ ({
   Bash: "Run", bash: "Run", Read: "Read", Edit: "Edit", MultiEdit: "Edit", Write: "Write", NotebookEdit: "Edit",
   Grep: "Search", Glob: "Find", LS: "List", WebFetch: "Fetch", WebSearch: "Search the web", web: "Web",
-  Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you",
+  Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you", cloud_agents: "Cloud agents",
 });
 
 /** A tool's name as a verb a person reads; unknown ones as they are. */
@@ -634,6 +634,7 @@ export function localPrompt(/** @type {string} */ dir) {
     "Work in that folder. Read before you change; make the smallest change that does the job; run the project's own checks (tests, a build, a quick run) when there are any, and say what you ran and what it showed.",
     "Every change and command is shown to the person and may need their yes; if they say no, do not try the same thing another way — say what you wanted and why.",
     "Never read or print secrets (.env files, keys, tokens), and do not run commands that delete outside the folder, push, deploy or publish unless the person asked for exactly that.",
+    "For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can hand it to agents in the cloud with the cloud_agents tool: each works on a copy of this folder, and its changes come back for the person to accept. Give each a complete task; it does not see this conversation.",
     "When you finish, say in a few plain sentences what you changed and how they can see it. Name files by their path inside the folder.",
   ].join("\n");
 }
@@ -653,6 +654,10 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "WebSearch") return String(input.query ?? "");
   if (name === "Task" || name === "Agent") return String(input.description ?? "");
   if (name === "NotebookEdit") return rel(input.notebook_path);
+  if (name === "cloud_agents" || name === "mcp__foldrun__cloud_agents") {
+    const n = Array.isArray(input.tasks) ? input.tasks.length : 0;
+    return `${n} task${n === 1 ? "" : "s"} in the cloud`;
+  }
   return "";
 }
 

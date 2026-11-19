@@ -662,6 +662,7 @@ test("--local: Claude Code in the folder on the person's own sign-in; a change i
   fs.writeFileSync(path.join(d, "CLAUDE.md"), "House rule: say FOLDRUN-NOTES-SEEN.\n");
   const s = await serve({
     [`GET ${WS}`]: () => ({ name: "desk" }),
+    "GET /api/usage/rates": () => ({ plan: { id: "pro", name: "Pro", status: "active" } }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
     "POST /v1/messages": (b) => {
@@ -689,7 +690,8 @@ test("--local: Claude Code in the folder on the person's own sign-in; a change i
     at = await t.until(/Wrote b\.txt/, at, 30_000);
     assert.equal(fs.existsSync(path.join(d, "c.txt")), false, "no is no");
     assert.equal(fs.existsSync(path.join(d, "pwn")), false, "a command that hides a line never runs");
-    at = await t.until(/✓ done[\s\S]*on your API key[\s\S]*changed b\.txt/, at);
+    at = await t.until(/✓ done[\s\S]*on foldrun Pro plan[\s\S]*changed b\.txt/, at);
+    assert.doesNotMatch(t.out(), /on your API key|on Claude/, "the person's foldrun plan, not their Anthropic one");
     assert.equal(fs.readFileSync(path.join(d, "b.txt"), "utf8"), "bee\n");
     at = await t.until(/\w ❯ /, at);
     t.send("did you?\r");
@@ -795,7 +797,7 @@ test("--local, foldrun engine: asked once which engine; a key for this computer 
       t.send("y\r");
       at = await t.until(/\$ echo key=[\s\S]*allow\?/, at);
       t.send("y\r");
-      at = await t.until(/✓ done[\s\S]*on foldrun credits[\s\S]*changed b\.txt/, at);
+      at = await t.until(/✓ done[\s\S]*on foldrun\s[\s\S]*changed b\.txt/, at);
       assert.equal(fs.readFileSync(path.join(d, "b.txt"), "utf8"), "bee\n");
       assert.equal(fs.readFileSync(path.join(d, "k.txt"), "utf8").trim(), "key=none", "the commands never see the model key");
       at = await t.until(/\w ❯ /, at);
@@ -832,6 +834,176 @@ test("--local, foldrun engine: asked once which engine; a key for this computer 
       again.child.kill();
     }
     assert.match(JSON.stringify(asked[5].messages), /add b[\s\S]*did you\?[\s\S]*still\?/);
+  } finally {
+    s.close();
+  }
+});
+
+test("--local, cloud_agents: sending the folder is asked (no sends nothing); after a yes the run's patch is asked again and put into the folder; the agent hears what became of it", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "c1", name: "cloud_agents", input: { tasks: ["add b"] } }]),
+    () => sse([{ type: "text", text: "Fine, not then." }]),
+    () => sse([{ type: "tool_use", id: "c2", name: "cloud_agents", input: { tasks: ["add b to a.txt\nthen run the tests"] } }]),
+    () => sse([{ type: "text", text: "The cloud agent added b." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme" }),
+    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: 20 }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID }),
+    [`GET ${WS}/runs/${RUN}`]: () => ({
+      id: RUN, flow: "adhoc:coder", status: "completed", snapshot: { id: ID },
+      steps: [{ agent: "coder", group: 1, status: "completed", attempts: 1, costUsd: 0.07, result: "Added b; tests pass." }],
+    }),
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "changed", modified: ["a.txt"] }), "application/json") : raw(PATCH, "text/x-diff")),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return turns[asked.length - 1]!();
+    },
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("use the cloud\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/Cloud agents[\s\S]*sends a copy of this folder to desk[\s\S]*1\. add b[\s\S]*\[a\]lways for cloud agents this session[\s\S]*allow\?|allow\?[\s\S]*cloud agents this session/, at);
+      t.send("n\r");
+      at = await t.until(/Fine, not then\./, at);
+      assert.equal(s.seen.filter((x: any) => x.url === `${WS}/snapshots`).length, 0, "no: nothing sent");
+      at = await t.until(/\w ❯ /, at);
+      t.send("ok go\r");
+      at = await t.until(/1\. add b to a\.txt[\s\S]*then run the tests[\s\S]*allow\?/, at);
+      t.send("y\r");
+      at = await t.until(/sent the folder to desk[\s\S]*cloud agent 1 · run-sess-1/, at);
+      at = await t.until(/✓ cloud agent 1 · completed[\s\S]*cloud agent 1's changes, into this folder:[\s\S]*a\.txt \|\s+1 \+[\s\S]*\[a\]lways for cloud agents' changes this session[\s\S]*\[d\]iff/, at);
+      assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n", "nothing applied before the yes");
+      t.send("d\r");
+      at = await t.until(/\+b[\s\S]*allow\?/, at);
+      t.send("y\r");
+      at = await t.until(/applied[\s\S]*The cloud agent added b\.[\s\S]*✓ done[\s\S]*changed a\.txt/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
+    assert.ok(asked[0].tools.some((x: any) => x.name === "cloud_agents"), "the model is offered the tool");
+    assert.match(JSON.stringify(asked[1].messages), /person said no/);
+    const result = JSON.stringify(asked[3].messages.at(-1));
+    assert.match(result, /Cloud agent 1 \(run run-sess-1\): completed/);
+    assert.match(result, /Added b; tests pass\./);
+    assert.match(result, /Put into the folder/);
+    const runs = s.seen.filter((x: any) => x.method === "POST" && x.url === `${WS}/agents/coder/run`);
+    assert.equal(runs.length, 1);
+    const sent = JSON.parse(runs[0]!.body);
+    assert.equal(sent.snapshot, ID);
+    assert.equal(sent.task, "add b to a.txt\nthen run the tests");
+    assert.equal(sent.context, undefined, "its own conversation, not this one");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local, Claude Code: cloud_agents reaches the model as mcp__foldrun__cloud_agents, is asked, runs, and its patch is put into the folder after a yes", { skip: localSkip, timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const main: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "c1", name: "mcp__foldrun__cloud_agents", input: { tasks: ["add b to a.txt"] } }]),
+    () => sse([{ type: "text", text: "The cloud agent added b." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID }),
+    [`GET ${WS}/runs/${RUN}`]: () => ({ id: RUN, status: "completed", snapshot: { id: ID }, steps: [{ agent: "coder", status: "completed", costUsd: 0.05, result: "Added b." }] }),
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "changed", modified: ["a.txt"] }), "application/json") : raw(PATCH, "text/x-diff")),
+    "POST /v1/messages": (b) => {
+      const body = JSON.parse(String(b));
+      if (!JSON.stringify(body.system ?? "").includes("You are foldrun code")) return sse([{ type: "text", text: "ok" }]);
+      main.push(body);
+      return turns[main.length - 1]!();
+    },
+  });
+  const env = claudeEnv({ ANTHROPIC_BASE_URL: s.url, ANTHROPIC_API_KEY: "sk-ant-test" });
+  // The person's own Claude settings allow every foldrun MCP tool: sending
+  // the folder is still asked (always_ask, and the tool's own check).
+  fs.writeFileSync(path.join(env.CLAUDE_CONFIG_DIR, "settings.json"), JSON.stringify({ permissions: { allow: ["mcp__foldrun", "mcp__foldrun__cloud_agents"] } }));
+  try {
+    const t = onTerminal(["code", d, "--local", "--engine", "claude", "--to", "desk", "--url", s.url, "--token", "k"], home, env);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("use the cloud\r");
+      at = await t.until(/sends a copy of this folder to desk[\s\S]*1\. add b to a\.txt[\s\S]*allow\?/, at, 60_000);
+      t.send("y\r");
+      at = await t.until(/cloud agent 1's changes, into this folder:[\s\S]*allow\?/, at, 30_000);
+      t.send("y\r");
+      at = await t.until(/The cloud agent added b\./, at, 30_000);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
+    assert.ok(main[0].tools.some((x: any) => x.name === "mcp__foldrun__cloud_agents"));
+    assert.match(JSON.stringify(main[1].messages), /Cloud agent 1 \(run run-sess-1\): completed[\s\S]*Put into the folder/);
+  } finally {
+    s.close();
+  }
+});
+
+test("--local, cloud_agents: Ctrl-C while they work stops every run on the platform and applies nothing", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let n = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme" }),
+    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: 20 }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: `run-c-${++n}`, snapshot: ID }),
+    [`GET ${WS}/runs/run-c-1`]: () => ({ timedOut: true }),
+    [`GET ${WS}/runs/run-c-2`]: () => ({ timedOut: true }),
+    [`POST ${WS}/runs/run-c-1/stop`]: () => ({ ok: true }),
+    [`POST ${WS}/runs/run-c-2/stop`]: () => ({ ok: true }),
+    "POST /v1/messages": () => sse([{ type: "tool_use", id: "c1", name: "cloud_agents", input: { tasks: ["one", "two"] } }]),
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("go\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/2 at once[\s\S]*allow\?/, at);
+      t.send("y\r");
+      at = await t.until(/cloud agent 2 · run-c-2/, at);
+      await new Promise((r) => setTimeout(r, 300));
+      t.send("\x03");
+      at = await t.until(/stopping/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    const stops = s.seen.filter((x: any) => x.method === "POST" && /\/runs\/run-c-\d\/stop$/.test(x.url)).map((x: any) => x.url).sort();
+    assert.deepEqual(stops, [`${WS}/runs/run-c-1/stop`, `${WS}/runs/run-c-2/stop`]);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n");
   } finally {
     s.close();
   }
