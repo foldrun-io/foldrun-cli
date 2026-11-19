@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.12.1] — 2026-11-19
+
+### deps
+
+- @foldrun/core ^24.4.1 ([b64e147](https://github.com/foldrun-io/foldrun-cli/commit/b64e147))
+
 ## [26.12.0] — 2026-11-19
 
 - feat(code): /model — the agent's model, and change it from the session ([487c13f](https://github.com/foldrun-io/foldrun-cli/commit/487c13f))
