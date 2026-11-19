@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.17.1] — 2026-11-19
+
+### deps
+
+- @foldrun/core ^24.5.0 ([d50e713](https://github.com/foldrun-io/foldrun-cli/commit/d50e713))
+
 ## [26.17.0] — 2026-11-19
 
 - feat(code): the prompt is the project's name and ❯, not "you ›" ([e272fc5](https://github.com/foldrun-io/foldrun-cli/commit/e272fc5))
