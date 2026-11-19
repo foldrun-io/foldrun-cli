@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.19.0] — 2026-11-19
+
+- feat(code): on this computer, choose the engine — Claude Code or the foldrun engine ([77d463a](https://github.com/foldrun-io/foldrun-cli/commit/77d463a))
+
 ## [26.18.0] — 2026-11-19
 
 ### New in the public API
