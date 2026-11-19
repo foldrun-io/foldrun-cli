@@ -12,6 +12,17 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.10.0] — 2026-11-19
+
+### New in the public API
+
+- `foldrun sessions send`
+- `foldrun sessions messages`
+- the `--include-messages` flag
+- the `--waiting` flag
+
+- feat(code): /send and /messages; foldrun sessions send|messages ([972b61b](https://github.com/foldrun-io/foldrun-cli/commit/972b61b))
+
 ## [26.9.0] — 2026-11-18
 
 - feat(cli): foldrun code shows the session (turns, spend, model, context) and survives a dropped connection ([bd98b8b](https://github.com/foldrun-io/foldrun-cli/commit/bd98b8b))
