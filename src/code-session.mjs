@@ -528,8 +528,9 @@ export function replyPaths(/** @type {unknown} */ text) {
 }
 
 // ------------------------------------------------------------ local mode
-// foldrun code on this computer (owner, 19 Nov 2026): Claude Code, through
-// the Agent SDK, in the person's own folder, on their own Claude sign-in.
+// foldrun code on this computer: foldrun's own agent (core's engine loop)
+// in the person's own folder, its model calls through a gateway key made for
+// this computer (owner, 20 Nov 2026: one engine, foldrun's; Claude Code gone).
 
 /** What a folder was last worked on with: its project and where. */
 export function folderChoice(/** @type {string} */ file, /** @type {string} */ dir) {
@@ -538,7 +539,8 @@ export function folderChoice(/** @type {string} */ file, /** @type {string} */ d
   return {
     ws: typeof s.ws === "string" ? s.ws : null,
     mode: s.mode === "local" || s.mode === "cloud" ? s.mode : null,
-    engine: s.engine === "claude" || s.engine === "foldrun" ? s.engine : null,
+    // Claude Code was an engine until 20 Nov 2026: such a folder reads as none.
+    engine: s.engine === "foldrun" ? "foldrun" : null,
   };
 }
 
@@ -619,7 +621,7 @@ export function trimConversation(list, maxBytes = 1_500_000) {
   return [];
 }
 
-/** The tiers foldrun's agents name, as the model Claude Code is asked for. */
+/** The tiers foldrun's agents name, as the model the engine asks the gateway for. */
 export function localModelOf(/** @type {string | null} */ v) {
   const tier = { fast: "haiku", default: "sonnet", max: "opus" }[String(v ?? "default")];
   return tier ?? String(v);
@@ -654,7 +656,7 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "WebSearch") return String(input.query ?? "");
   if (name === "Task" || name === "Agent") return String(input.description ?? "");
   if (name === "NotebookEdit") return rel(input.notebook_path);
-  if (name === "cloud_agents" || name === "mcp__foldrun__cloud_agents") {
+  if (name === "cloud_agents") {
     const n = Array.isArray(input.tasks) ? input.tasks.length : 0;
     return `${n} task${n === 1 ? "" : "s"} in the cloud`;
   }
