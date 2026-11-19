@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [26.14.0] — 2026-11-19
+
+- feat(code): type your next message while a turn runs — and it never answers 'apply it?' ([b683ab6](https://github.com/foldrun-io/foldrun-cli/commit/b683ab6))
+
 ## [26.13.0] — 2026-11-19
 
 - feat(code): Ctrl-R searches what you typed before ([f3d96c6](https://github.com/foldrun-io/foldrun-cli/commit/f3d96c6))
