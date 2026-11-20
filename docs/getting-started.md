@@ -90,8 +90,8 @@ becomes a role on the platform.
 
 ```sh
 foldrun login                            # approve it in the browser, once
-foldrun deploy                           # pushes this workspace
-foldrun invoke publish --wait            # runs it there
+foldrun deploy                           # pushes this project
+foldrun invoke publish --to main --wait  # runs it there (main: the project init made — the name deploy printed)
 ```
 
 `foldrun login` signs in to the hosted platform; `foldrun login --url
@@ -152,7 +152,7 @@ where it is done. Hide an item, or the card, for yourself.
 
 ```sh
 foldrun onboarding                       # the same steps, in the terminal
-foldrun onboarding --to my-desk          # and that workspace's checklist
+foldrun onboarding --to main             # and that project's checklist
 ```
 
 The API is `GET /api/me/onboarding` (`?workspace=` for the checklist);

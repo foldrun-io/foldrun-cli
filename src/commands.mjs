@@ -4305,8 +4305,15 @@ async function invoke(target, flags, layout) {
     );
   }
   if (!target) throw new Error("which flow? try `foldrun invoke <flow> --to <workspace>`");
-  const ws = flags.to ?? (inProjectFolder(layout) ? undefined : savedDefault(flags));
-  if (!ws) throw new Error("which project is it in? pass --to <workspace>");
+  if (flags.to === true) throw new Error("--to needs a project name: `foldrun invoke <flow> --to <workspace>`");
+  // invoke starts real work, so a project folder never stands in for --to:
+  // a deploy may have gone to another name (`deploy --to main-try`), and
+  // guessing could start the flow in the live one (Codex, 20 Nov 2026). The
+  // refusal names the account's projects, so the fix is one copy away.
+  const ws = typeof flags.to === "string" ? flags.to : inProjectFolder(layout) ? undefined : savedDefault(flags);
+  if (!ws) {
+    throw new Error(`which project is it in? pass --to <workspace>, the name \`foldrun deploy\` printed${layout?.workspaces?.length ? ` (this folder's projects: ${layout.workspaces.join(", ")} — deployed under those names unless deploy had --to)` : ""}`);
+  }
 
   // --wait asks in short pieces, not one long request: whatever sits in
   // front of the platform cuts a request that stays silent too long

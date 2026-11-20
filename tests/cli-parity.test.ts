@@ -694,3 +694,27 @@ test("a saved view's flow names a direct agent or an eval as the dashboard does 
   assert.match(r.out, /r-agent/);
   assert.doesNotMatch(r.out, /r-flow/);
 });
+
+test("invoke in an account folder asks for --to and names its projects; a bare --to is refused (customer bench, 20 Nov 2026)", async () => {
+  const s = await serve({ "POST /api/workspaces/main/flows/publish/run": () => ({ runId: "run-gs" }) });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-invoke-"));
+  try {
+    const made = await cli(["init", "my-account"], { cwd: dir });
+    assert.equal(made.code, 0, made.out);
+    const acct = path.join(dir, "my-account");
+    // As getting-started now writes it.
+    const r = await cli(["invoke", "publish", "--to", "main", "--url", s.url, "--token", "k"], { cwd: acct });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /queued run-gs/);
+    // Without --to: never guessed (a deploy may have gone to another name).
+    const none = await cli(["invoke", "publish", "--url", s.url, "--token", "k"], { cwd: acct });
+    assert.notEqual(none.code, 0);
+    assert.match(none.out, /which project is it in\? pass --to <workspace>, the name `foldrun deploy` printed \(this folder's projects: main/);
+    const bare = await cli(["invoke", "publish", "--to", "--url", s.url, "--token", "k"], { cwd: acct });
+    assert.notEqual(bare.code, 0);
+    assert.equal(posts(s).length, 1);
+  } finally {
+    s.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
