@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.4.0] — 2026-11-20
+
+### New in the public API
+
+- the `--wallet` flag
+
+- feat(keys): account keys — keys create --account/--wallet, keys set --wallet; foldrun code makes one (FOL-208) ([b7fbb15](https://github.com/foldrun-io/foldrun-cli/commit/b7fbb15))
+
 ## [27.3.0] — 2026-11-20
 
 - feat(code): local sessions are paid by the foldrun plan first, on foldrun's tiers (FOL-208) ([a3e52b8](https://github.com/foldrun-io/foldrun-cli/commit/a3e52b8))
