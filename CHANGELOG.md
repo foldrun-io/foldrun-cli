@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.4.3] — 2026-11-20
+
+- fix(cli): each command's --help lists --to, --task and connect's --provider; every docs example is checked against the help ([e0ac796](https://github.com/foldrun-io/foldrun-cli/commit/e0ac796))
+
 ## [27.4.2] — 2026-11-20
 
 - fix(cli): invoke's bare --to check reads as a value check, not a switch (BOOLEAN_FLAGS test) ([45bca46](https://github.com/foldrun-io/foldrun-cli/commit/45bca46))
