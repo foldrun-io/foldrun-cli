@@ -13851,7 +13851,7 @@ async function localKeyFor(s, cancel) {
   }
   const have = readLocalKey(file, s.keySlot);
   if (have) return have;
-  console.log(`  ${c.violet("◆")} ${c.bold("The agent's model calls are paid from your foldrun credits")}`);
+  console.log(`  ${c.violet("◆")} ${c.bold("The agent's model calls are paid by your foldrun plan, or your foldrun credits")}`);
   console.log(`    ${c.grey(`with a key made for this computer — limit $${LOCAL_KEY_CAP_USD}, kept only here; foldrun keys ls shows what it spent`)}`);
   const yes = ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
   if (cancel.asked) return null;
@@ -13891,7 +13891,12 @@ function engineModelError(/** @type {unknown} */ err, s) {
     /* the text as it came */
   }
   said = plainText(said).slice(0, 300);
-  if (status === 402) s.creditsOk = false;
+  // A billing refusal: the wallet and the plan are both read again next
+  // turn, not trusted from the last read (Codex review).
+  if (status === 402) {
+    s.creditsOk = false;
+    s.planReadAt = 0;
+  }
   if (status === 402) return `the gateway would not pay for this: ${said} — your credits: ${String(s.url).replace(/\/+$/, "")}/dashboard/billing · this key's limit: foldrun keys ls`;
   if (status === 401 && /^(invalid API key|API key revoked|API key expired)/.test(said) && s.keySlot) {
     saveLocalKey(path.join(credentialsDir(), "code-local-keys.json"), s.keySlot, null);
@@ -13953,7 +13958,110 @@ function bothInside(/** @type {string} */ dir, /** @type {unknown} */ p) {
  * Answers true when the platform does not say (no billing on the install,
  * or the read failed): the gateway still has the last word.
  */
-async function creditsReady(/** @type {any} */ s) {
+/** The models the engine asks for on a foldrun plan: foldrun's tier words,
+ *  each the model the platform's plans pay for at that tier. */
+const PLAN_TIERS = { ANTHROPIC_DEFAULT_HAIKU_MODEL: "foldrun/fast", ANTHROPIC_DEFAULT_SONNET_MODEL: "foldrun/default", ANTHROPIC_DEFAULT_OPUS_MODEL: "foldrun/max" };
+
+/**
+ * The account's foldrun Pro or Max plan as the platform reports it, read
+ * again at most once a minute so a plan bought, used up or ended during a
+ * session is seen (Codex review, 20 Nov 2026). Null: no plan, or none
+ * reported (a platform without plans); a failed read keeps the last answer.
+ */
+async function codingPlanOf(/** @type {any} */ s, fresh = false) {
+  // "No plan" is kept a few seconds only: a plan bought mid-session is
+  // seen on the next turn (Codex review).
+  if (!fresh && s.planReadAt && Date.now() - s.planReadAt < (s.codingPlan ? 60_000 : 10_000)) return s.codingPlan ?? null;
+  /** @type {any} */
+  let got;
+  try {
+    got = await remoteCall(s.url, s.flags, "/api/billing/coding-plan");
+  } catch (err) {
+    // Not offered here (no billing, no database): no plan, said once.
+    if (err instanceof HttpError && (err.status === 404 || err.status === 501)) {
+      s.planReadAt = Date.now();
+      if (s.onPlan) s.planLabel = null;
+      s.codingPlan = null;
+      s.onPlan = false;
+      return null;
+    }
+    // Asked fresh and not answered: undefined — not known, which is not
+    // "no plan" (null) (Codex review).
+    return fresh ? undefined : s.codingPlan ?? null;
+  }
+  s.planReadAt = Date.now();
+  const plan = got?.plan && typeof got.plan === "object" ? got.plan : null;
+  const room = got?.allowance && typeof got.allowance === "object" ? got.allowance : null;
+  if (!plan || !room) {
+    // A plan that ended: its name goes from the turn line with it (Codex).
+    if (s.onPlan) s.planLabel = null;
+    s.codingPlan = null;
+    s.onPlan = false;
+    return null;
+  }
+  const name = { pro: "Pro", max: "Max" }[String(plan.plan)] ?? oneLine(String(plan.plan ?? "")).slice(0, 20);
+  // Which of foldrun code's tiers the plan pays for, as the gateway decides
+  // it (models.code.tiers → a provider the plan covers). Unsaid: all three.
+  const tiers = got?.codeTiers && typeof got.codeTiers === "object" ? got.codeTiers : null;
+  const covers = Object.fromEntries(["fast", "default", "max"].map((t) => [t, tiers ? tiers[t]?.covered === true : true]));
+  s.codingPlan = { name, covers, room: room.room === true, extraUsage: room.extraUsage === true, freeAt: typeof room.freeAt === "string" && !Number.isNaN(Date.parse(room.freeAt)) ? room.freeAt : null };
+  // On a plan the agent asks for foldrun's tiers, which the platform maps
+  // to the models its plans pay for (models.code.tiers); without a plan,
+  // Claude's own, as before (a self-hosted platform knows no tier words).
+  s.onPlan = true;
+  if (name) s.planLabel = `foldrun ${name} plan`;
+  return s.codingPlan;
+}
+
+/** The foldrun tier a model the agent names stands for — core's own
+ *  resolver, so every synonym an agent may write (`cheap`, `large`, …) is
+ *  read as the runner reads it (Codex review) — or null for an exact id. */
+let resolveTierFn = /** @type {((v: unknown) => string | null) | null} */ (null);
+function tierOf(/** @type {string} */ m) {
+  const w = String(m).trim().replace(/^foldrun\//i, "");
+  return resolveTierFn ? resolveTierFn(w) : null;
+}
+const isTierWord = (/** @type {string} */ m) => tierOf(m) !== null;
+
+async function creditsReady(/** @type {any} */ s, /** @type {string | null} */ tier = "default") {
+  // A Pro or Max plan stands behind the agent's calls (owner, 20 Nov 2026:
+  // one platform plan for AI and compute): with room, no bought credit is
+  // needed. Asked first, and whether or not the wallet can be read.
+  const found = await codingPlanOf(s);
+  // A model named outright: whether the plan pays for it is the gateway's
+  // to say (by its provider), so with room left the call goes to it.
+  if (found?.room && !tier) return true;
+  // A tier counts on the plan only when the plan pays for it; anything else
+  // is the wallet's, by the wallet's rule below (Codex review, 20 Nov 2026).
+  const plan = found && tier && found.covers[tier] ? found : null;
+  if (plan?.room) return true;
+  const billing = c.cyan(`${String(s.url).replace(/\/+$/, "")}/dashboard/billing`);
+  // Past the allowance with extra usage off: the agent's tiers are the
+  // plan's, and the plan waits for its reset — said now, whatever the wallet
+  // holds, not as a refusal after a key is made (Codex review, 20 Nov 2026).
+  // Extra usage on lets the wallet pay, and the wallet's own rule follows.
+  // A refusal is never from a cached read: asked again first — the reset
+  // may have passed, or extra usage been turned on (Codex review).
+  if (plan && !plan.extraUsage) {
+    const now = await codingPlanOf(s, true);
+    // Not answered now: nothing to refuse on — the gateway decides. No plan
+    // any more: the wallet's rule below.
+    if (now === undefined) return true;
+    if (now === null) return walletReady(s, tier, billing);
+    const still = tier && now.covers[tier] ? now : null;
+    if (still?.room) return true;
+    if (still && !still.extraUsage) {
+      const at = still.freeAt ? ` — it resets ${new Date(still.freeAt).toLocaleString()}` : "";
+      console.log(`  ${c.red("✗")} ${c.white(`you've used your foldrun ${still.name} plan's allowance${at}; turn on extra usage (Billing) to carry on from bought credits:`)} ${billing}\n`);
+      return false;
+    }
+  }
+  return walletReady(s, tier, billing);
+}
+
+/** The wallet's rule, when no plan stands behind the call: bought credits,
+ *  or a plan that pays for tokens. */
+async function walletReady(/** @type {any} */ s, /** @type {string | null} */ tier, /** @type {string} */ billing) {
   if (s.creditsOk) return true;
   /** @type {any} */
   let cr;
@@ -13966,14 +14074,21 @@ async function creditsReady(/** @type {any} */ s) {
     s.creditsOk = true;
     return true;
   }
-  if (typeof cr.plan?.name === "string" && cr.plan.name.trim()) s.planLabel = `foldrun ${oneLine(cr.plan.name).trim().replace(/\s+plan$/i, "").slice(0, 40)} plan`;
+  if (!s.onPlan && typeof cr.plan?.name === "string" && cr.plan.name.trim()) s.planLabel = `foldrun ${oneLine(cr.plan.name).trim().replace(/\s+plan$/i, "").slice(0, 40)} plan`;
   // Stopped only on the platform's own explicit word: no bought credits and
   // a plan that does not pay for tokens. A missing field is not a zero (Codex).
   if (!(typeof cr.pots?.boughtUsd === "number" && cr.pots.boughtUsd <= 0 && cr.plan?.paysForTokens === false)) {
     s.creditsOk = true;
     return true;
   }
-  console.log(`  ${c.red("✗")} ${c.white("the agent's model calls need bought credits — this account has none:")} ${c.cyan(`${String(s.url).replace(/\/+$/, "")}/dashboard/billing`)}\n`);
+  // Before refusing on the wallet's word: the plan again, read now — one
+  // bought or reset since the last read pays (Codex review).
+  const now = await codingPlanOf(s, true);
+  // Not answered: whether a plan pays is not known — the gateway decides,
+  // as on the allowance path (Codex review).
+  if (now === undefined) return true;
+  if (now && now.room && (!tier || now.covers[tier])) return true;
+  console.log(`  ${c.red("✗")} ${c.white("the agent's model calls need bought credits — this account has none:")} ${billing}\n`);
   return false;
 }
 
@@ -14288,11 +14403,8 @@ async function codeLocalTurn(s, text) {
     }
     /** @type {{ id: string, key: string, gatewayUrl: string } | null} */
     let engineKey = null;
-    if (!(await creditsReady(s)) || cancel.asked) return;
-    engineKey = await localKeyFor(s, cancel);
-    if (!engineKey || cancel.asked) return;
-    await foldrunPlanLabel(s);
-    typeAhead = startTypeAhead(onInt);
+    // The agent's model first: a tier word is the plan's to pay for, a
+    // model named outright is the wallet's (Codex review, 20 Nov 2026).
     let model = "default";
     try {
       const cur = await remoteCall(s.url, s.flags, `/api/workspaces/${enc(s.ws)}/source?path=${enc(`agents/${s.agent}/agent.md`)}`);
@@ -14301,6 +14413,15 @@ async function codeLocalTurn(s, text) {
       /* the default tier */
     }
     if (cancel.asked) return;
+    // One spelling of the tier for the plan check and for the model sent:
+    // `FAST`, `cheap` or `foldrun/fast` is fast (Codex review).
+    resolveTierFn ??= (await core()).resolveTier;
+    model = tierOf(model) ?? model;
+    if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
+    engineKey = await localKeyFor(s, cancel);
+    if (!engineKey || cancel.asked) return;
+    await foldrunPlanLabel(s);
+    typeAhead = startTypeAhead(onInt);
     /** @type {{ kinds: Set<string>, commands: Set<string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
@@ -14502,7 +14623,7 @@ async function codeLocalTurn(s, text) {
             cwd: s.dir,
             // The model's key stays with the loop; the commands the agent
             // runs get the person's own environment without it.
-            env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key },
+            env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
             shellEnv: own,
             model: localModelOf(model),
             systemPrompt: [localPrompt(s.dir), folderClaudeMd(s.dir)].filter(Boolean).join("\n\n"),

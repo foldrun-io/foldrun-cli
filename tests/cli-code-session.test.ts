@@ -884,6 +884,98 @@ test("--local with no bought credits: says so in one line before any key is made
   }
 });
 
+test("--local on a foldrun Pro plan with room: no bought credit needed, and the agent asks for foldrun's tier, not a Claude model", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: FAST\n---\nYou code.\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme" }),
+    // The wallet cannot be read: the plan is asked all the same (Codex review).
+    "GET /api/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: true, freeAt: null } }),
+    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: 20 }),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return sse([{ type: "text", text: "Hello." }]);
+    },
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("hi\r");
+      at = await t.until(/paid by your foldrun plan[\s\S]*make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/Hello\.[\s\S]*on foldrun Pro plan/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    assert.equal(asked[0]?.model, "foldrun/fast");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local on a foldrun Pro plan whose tier the plan does not pay for: the wallet's rule, not the plan's room", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: max\n---\nYou code.\n", sha256: "x" }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 0, boughtUsd: 0 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /api/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: true, freeAt: null }, codeTiers: { fast: { covered: true }, default: { covered: true }, max: { covered: false } } }),
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("hi\r");
+      at = await t.until(/need bought credits — this account has none: \S+\/dashboard\/billing\r?\n/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/api\/keys|\/v1\/messages/, "no key made, no model asked");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local on a foldrun Pro plan past its allowance, extra usage off: the limit and its reset, no key made, whatever the wallet holds", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 0, boughtUsd: 9 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /api/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: false, freeAt: "2026-11-27T00:00:00Z" } }),
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("hi\r");
+      at = await t.until(/used your foldrun Pro plan's allowance — it resets [^;]+; turn on extra usage \(Billing\) to carry on from bought credits: \S+\/dashboard\/billing\r?\n/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/api\/keys|\/v1\/messages/, "no key made, no model asked");
+  } finally {
+    s.close();
+  }
+});
+
 test("--engine claude is refused, naming why; a folder that used Claude Code is not resumed as one", () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

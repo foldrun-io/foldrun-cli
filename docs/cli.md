@@ -139,7 +139,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a project package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun snapshot push [dir]` | send a folder for an agent on foldrun to work on (a snapshot). What goes is what git would commit — tracked files and untracked ones `.gitignore` does not exclude, as they are on disk; links and submodules are left out and named. A secret in any file stops it before anything leaves the machine (remove it, or leave the file out with `.gitignore`); the platform checks again. Answers the snapshot id, kept 7 days from the last send and while a run uses it. `--to <workspace>`, `--dry-run` packs and checks only, `--out <file.tar.gz>` keeps the archive (`--force` over a file that is there), `--json` (`POST …/snapshots`) |
 | `foldrun code [dir] --local` → `cloud_agents` | on this computer, the agent may hand long or heavy jobs to up to four agents on the platform at once. Each runs on a copy of the folder sent as a snapshot, and its patch comes back. Sending is asked first (y / a / n), and each patch is asked again (git's stat, d for the diff) before `git apply`. Ctrl-C tells the runs to stop. See [Cloud agents, from this computer](#cloud-agents-from-this-computer) |
-| `foldrun code [dir] --local` / `--cloud` | where the agent works: foldrun's own agent in your folder, its model calls paid from your foldrun credits, asking before each change and command, or a sandbox on the platform on foldrun credits. `--engine claude` is gone (Claude Code is no longer an engine). With neither, each new session asks, last time's answer ticked (and, the first time in a folder, which project) — see [Where the agent works](#where-the-agent-works) |
+| `foldrun code [dir] --local` / `--cloud` | where the agent works: foldrun's own agent in your folder, its model calls paid by your foldrun plan or credits, asking before each change and command, or a sandbox on the platform on foldrun credits. `--engine claude` is gone (Claude Code is no longer an engine). With neither, each new session asks, last time's answer ticked (and, the first time in a folder, which project) — see [Where the agent works](#where-the-agent-works) |
 | `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it (its tool calls and words, and any refusal or failure; the platform's other notes on the step stay on the run page, `--verbose` shows them too), and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; a dropped connection is followed again, not the end of the turn. After each turn a session line gives the turns so far, the spend, the model, how many tokens the agent read last turn, the time and the conversation id; `/status` prints it, `/new` starts a fresh conversation (and count), `/quit` leaves, `--continue` picks up the folder's last conversation; `/help` lists the rest ([in the session](#in-the-session)). `/send <conversation> <text>` messages another session; before each turn, messages other sessions sent this one are shown and you are asked whether to include them — only `y` does (with `--task`, only `--include-messages` includes them — `--yes` does not); those that do not fit in one turn wait for the next, and `/messages` shows what waits. `--to <workspace>` (a project that does not exist is made, blank with its `coder` agent, after a yes), `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` applies without asking (required with no terminal), `--test`, `--context <id>`, `--verbose` |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
 | `foldrun status --platform` | is the platform up: overall, each component (dashboard and API, run workers, scheduler, model providers, email, storage) and any incident or maintenance the operator posted, with its latest update. Reads the open `/api/status` — no key needed; the signed-in platform, `--url` / `FOLDRUN_URL`, or the default, dash.foldrun.io. `--json` prints the answer as is. Exits 1, saying *status unavailable — the platform may be down*, when it does not answer. Plain `foldrun status` opens with the same one-line verdict |
@@ -608,11 +608,20 @@ ticked so Enter keeps it, and the first time in a folder which project:
    - **On this computer**: foldrun's own agent works directly in your
      folder, with Read, Write, Edit, Glob, Grep and Bash, plus
      [cloud agents](#cloud-agents-from-this-computer). Its model calls are
-     paid from your foldrun credits through a key made for this computer
-     after a yes (limit $20, kept only on this computer; `foldrun keys ls`
-     shows what it spent). Model calls need bought credits, or a plan that
-     pays for them: with none, it says so in one line before a key is made
-     or a model is asked. It reads inside the folder without asking.
+     paid by your foldrun plan's allowance while it has room, through a key
+     made for this computer after a yes (limit $20, kept only on this
+     computer; `foldrun keys ls` shows what it spent). On a plan the agent
+     asks for foldrun's tiers (`foldrun/fast`, `foldrun/default`,
+     `foldrun/max`, from the agent's `model:`), each the model the platform
+     serves at that tier. Bought credits pay for a tier the plan does not
+     cover, for any call when there is no plan, and, past the allowance,
+     only when extra usage is on (Billing). With extra usage off a covered
+     tier waits for the reset: the session says so in one line, with when
+     the plan resets, before a key is made. With no plan and no bought
+     credits it says that instead. A model named outright is left to the
+     gateway: the plan pays when it covers the model's provider and has
+     room, otherwise bought credits by the same rule, and a call it will
+     not pay for is refused with the reason. It reads inside the folder without asking.
      Anything else (a change, a command, anything outside the folder) is
      shown in full first and needs **y** (yes), **a** (always, for this
      session) or **n** (no). **a** covers file changes inside the folder,
