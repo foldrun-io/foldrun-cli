@@ -101,7 +101,10 @@ test("the CLI guards its terminal before anything else runs", () => {
   const guard = bin.indexOf("guardTerminal();");
   assert.ok(guard > 0, "bin/foldrun.mjs calls guardTerminal()");
   assert.ok(guard < bin.indexOf("console."), "before the first print");
-  assert.ok(guard < bin.indexOf("await import"), "before any command module loads");
+  // Before it, only the auto-update's hand-over: self-update.mjs (prints
+  // nothing) and a staged foldrun, which guards its own terminal first.
+  const before = [...bin.slice(0, guard).matchAll(/await import\((.*?)\);/g)].map((m) => m[1]);
+  assert.deepEqual(before, ['"../src/self-update.mjs"', "pathToFileURL(staged).href"], "no command module loads before the guard");
 });
 
 test("the guard keeps the palette's text colours (256 and true colour) and drops any other colour, backgrounds, reverse and conceal", async () => {

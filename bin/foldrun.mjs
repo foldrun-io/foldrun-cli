@@ -73,17 +73,43 @@
 // `check` is the one to run in CI: it catches the mistakes that otherwise only
 // show up as a confidently wrong answer at 3am.
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { guardTerminal } from "../src/terminal.mjs";
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+const ownVersion = () => {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(HERE, "../package.json"), "utf8")).version);
+  } catch {
+    return "";
+  }
+};
+
+// A newer foldrun staged by the auto-update (~/.foldrun/versions/<v>,
+// src/self-update.mjs) runs this command instead, in this same process and
+// before this copy hooks anything process-wide: it reads process.argv as
+// this copy would and keeps this copy's place as the global install, so it
+// updates itself later. When it is done, the process ends with its exit
+// code; nothing below runs. FOLDRUN_NO_AUTO_UPDATE=1 skips it — the way
+// back if a release misbehaves.
+{
+  const { activeBin, HANDED_OVER } = await import("../src/self-update.mjs");
+  const staged = activeBin(ownVersion());
+  if (staged) {
+    process.env[HANDED_OVER] = path.resolve(HERE, "..");
+    process.once("beforeExit", (code) => process.exit(code));
+    await import(pathToFileURL(staged).href);
+    await new Promise(() => {});
+  }
+}
+
 // Before anything prints: a platform's text never writes escape sequences to
 // a person's terminal (src/terminal.mjs). Pipes and files are untouched.
 guardTerminal();
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Node warns about stripping types from a package without "type": "module".
 // True, and not the user's problem — they asked to run an agent.
@@ -92,15 +118,45 @@ process.on("warning", () => {});
 
 const [, , command, ...rest] = process.argv;
 
+// `foldrun update`: take the latest release now (a new major too — the
+// person asked), or `--check` only to ask. Before the imports below.
+if (command === "update") {
+  const { checkAndUpdate, announcement, isGlobalInstall } = await import("../src/self-update.mjs");
+  const current = ownVersion();
+  const check = rest.includes("--check");
+  if (!check && !isGlobalInstall()) {
+    console.error(`\n  this foldrun (${current}) is not the one npm i -g installed (a git checkout, an npx cache or a project's own copy), so it is not updated — npm i -g foldrun@latest installs one\n`);
+    process.exit(1);
+  }
+  const r = checkAndUpdate({ current, install: !check, major: true });
+  const say = {
+    busy: "an update is already running — try again in a minute",
+    unreachable: `npm could not be asked for the latest foldrun: ${r.error ?? ""}`,
+    current: r.running && r.running !== r.latest ? `foldrun ${r.running} runs here; npm's latest is ${r.latest}, not newer` : `foldrun ${r.running ?? current} is the latest`,
+    available: `foldrun ${r.latest} is out (this is ${current})${r.major ? " — a major version" : ""}: foldrun update takes it`,
+    failed: `updating to ${r.latest} failed: ${r.error ?? ""} — npm i -g foldrun@latest installs it by hand`,
+    updated: `foldrun updated ${current} → ${r.latest} — your next command runs it`,
+    major: `foldrun ${r.latest} is out`,
+  }[r.did];
+  console.log(`\n  ${String(say).replace(/[\u0000-\u001f\u007f-\u009f]/g, "")}\n`);
+  // updated: said now, not again at the next start.
+  if (r.did === "updated") announcement(String(r.latest));
+  process.exit(r.did === "failed" || r.did === "unreachable" || r.did === "busy" ? 1 : 0);
+}
+
+// Every other command: say what the last update did, and once a day look
+// for a newer one in the background (never in CI or without a terminal).
+// `--version` stays offline: it only prints.
+if (command && !["--help", "-h", "help", "--version", "-v"].includes(command)) {
+  const { autoUpdate } = await import("../src/self-update.mjs");
+  autoUpdate(ownVersion());
+}
+
 // `foldrun --version`: the package's own number and nothing else — no core,
 // no network, no account. Before every import below, so it stays instant.
 // `foldrun version` is the long form that also asks the platform.
 if (command === "--version" || command === "-v") {
-  try {
-    console.log(`foldrun ${JSON.parse(fs.readFileSync(path.join(HERE, "../package.json"), "utf8")).version}`);
-  } catch {
-    console.log("foldrun (unknown version)");
-  }
+  console.log(ownVersion() ? `foldrun ${ownVersion()}` : "foldrun (unknown version)");
   process.exit(0);
 }
 
@@ -337,6 +393,7 @@ Signing in
   foldrun customers         your own users, by the id on their runs and gateway calls: the limits each is held to and who is blocked — block <id> [--reason], unblock <id>, usage [--days 7] (model spend per customer), limits --starts-per-minute N --max-open-runs N --gateway-rpm N --gateway-concurrency N --daily-model-usd D (default / none puts one back), --json
   foldrun audit             the account's audit log, newest first: sign-ins, keys, invites, secrets by name, deploys, support views (--since 7d, --action, --actor, --to, --all, --csv)
   foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
+  foldrun update [--check]  take the latest foldrun now (a new major too); --check only asks. On its own the CLI updates itself once a day in the background to a newer minor or patch and announces a new major (FOLDRUN_NO_AUTO_UPDATE=1 turns it off)
   foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)
 
 Options

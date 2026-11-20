@@ -142,4 +142,45 @@ newest commands. Each platform version records the CLI released with it
   the CLI version to install instead. See
   [API versions](api-usage#versions).
 
-To update: `npm i -g foldrun@latest`.
+### The CLI keeps itself current
+
+A CLI installed with `npm i -g foldrun` updates itself:
+
+- A command run in a terminal (not help or the version flags) looks for a
+  newer release when the last look was more than a day ago. The look runs in the background and never holds
+  the command up. It asks npm for `foldrun@latest`, so your own registry,
+  proxy and certificates apply.
+- A newer **minor or patch** release is installed beside the one you run,
+  in `updates/` under `~/.foldrun` (or `FOLDRUN_HOME`), one folder per
+  installation, with install scripts off. It is made active only once it
+  names its own version and its commands load. The copy you run is never
+  replaced.
+- The next command runs the new version (unless `FOLDRUN_NO_AUTO_UPDATE=1`
+  is set). A later command in a terminal
+  says so, at most once: `foldrun updated 27.1.0 → 27.2.0`. The `foldrun code` header names the
+  version it runs.
+- A newer **major** release can change what worked, so it is only
+  announced, at most once, with the command that takes it.
+- A failed install is announced at most once, and you keep the version you
+  had.
+- The version before the current one stays on disk. Any other replaced
+  version may be deleted by a later update once it has been replaced for a
+  week, so a session left open on it longer than that may fail.
+- `FOLDRUN_NO_AUTO_UPDATE=1` stops the background look and runs the copy
+  npm installed. That is the way back if a release misbehaves.
+- The background look never runs in CI (`CI` set to anything but empty,
+  `0` or `false`) or when output does not go to a terminal. A newer version already installed this
+  way is used by every command that starts that installation, scripts
+  included. It only applies to the copy `npm i -g` installed: a git
+  checkout, an `npx` cache and a version a project pins in its own
+  `node_modules` always run themselves.
+- `foldrun update` installs a newer release now, a new major included, and
+  says at once what it did. It never moves back to an older one. `foldrun update
+  --check` only asks.
+
+A self-hosted platform older than the newest CLI may not answer the API
+version that CLI speaks. The CLI then stops and names the version to
+install: `npm i -g foldrun@<version>` with `FOLDRUN_NO_AUTO_UPDATE=1` keeps
+you on it.
+
+To update by hand: `npm i -g foldrun@latest`.

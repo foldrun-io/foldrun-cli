@@ -47,10 +47,20 @@ function platform() {
 }
 
 /** The CLI on a pty: send() types, until() waits for output to match. */
+/** The test's environment without what makes bash run a file before every
+ *  command (CI sets BASH_ENV to its own setup script, which failed inside
+ *  the agent's commands — dev-deploy 44642683485). */
+function outerEnv() {
+  const env = { ...process.env };
+  delete env.BASH_ENV;
+  delete env.ENV;
+  return env;
+}
+
 function onTerminal(args: string[], home: string, extraEnv: Record<string, string> = {}) {
   const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
   const child = spawn("python3", ["-c", "import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)", process.execPath, cli, ...args], {
-    env: { ...process.env, FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", ...extraEnv },
+    env: { ...outerEnv(), FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", ...extraEnv },
   });
   let out = "";
   child.stdout.on("data", (x) => (out += x));
@@ -661,18 +671,18 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
     },
   });
   try {
-    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    // A startup file bash would run before every command: never for the agent's.
+    const hook = path.join(home, "bash-env.sh");
+    fs.writeFileSync(hook, `echo sourced > ${JSON.stringify(path.join(home, "hook-ran"))}\n`);
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home, { BASH_ENV: hook, ENV: hook });
     try {
       let at = await t.until(/works\s+on this computer/);
       assert.doesNotMatch(t.out(), /Which engine|Claude/);
       at = await t.until(/\w ❯ /, at);
       t.send("add b\r");
-      // An answer a moment after its question, as a person gives it: a key
-      // sent the same millisecond the question prints raced the prompt in CI.
-      const answer = async (k: string) => {
-        await new Promise((r) => setTimeout(r, 150));
-        t.send(k);
-      };
+      // Answered the moment each question shows: the prompt listens before
+      // it prints, so an instant reply is the question's.
+      const answer = async (k: string) => t.send(k);
       at = await t.until(/make it\? \[y\/N\]/, at);
       await answer("y\r");
       at = await t.until(/Read a\.txt/, at);
@@ -688,6 +698,7 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
       const ran = JSON.stringify(asked[3]?.messages?.at(-1)?.content ?? null).slice(0, 600);
       assert.ok(fs.existsSync(path.join(d, "k.txt")), `the allowed command ran: ${ran}`);
       assert.equal(fs.readFileSync(path.join(d, "k.txt"), "utf8").trim(), "key=none", "the commands never see the model key");
+      assert.equal(fs.existsSync(path.join(home, "hook-ran")), false, "BASH_ENV is not run before the agent's commands");
       at = await t.until(/\w ❯ /, at);
       t.send("did you?\r");
       at = await t.until(/Yes, b\.txt\./, at);

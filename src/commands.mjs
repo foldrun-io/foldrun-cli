@@ -2805,11 +2805,11 @@ function toolHue(/** @type {string} */ name) {
 function codeHeader(/** @type {Array<[string, string, string]>} */ rows) {
   const cols = process.stdout.columns || 80;
   // Too narrow for a frame: the same rows, unframed (Codex).
-  if (cols < 40) return [`  ${c.bold(c.sweep("◆ foldrun code"))}`, ...rows.map(([k, painted, plain]) => `  ${c.grey(k.padEnd(7))} ${displayWidth(plain) <= cols - 11 ? painted : c.white(clipCells(plain, cols - 11))}`)].join("\n");
+  if (cols < 40) return [`  ${c.bold(c.sweep(`◆ foldrun code ${CLI_VERSION}`))}`, ...rows.map(([k, painted, plain]) => `  ${c.grey(k.padEnd(7))} ${displayWidth(plain) <= cols - 11 ? painted : c.white(clipCells(plain, cols - 11))}`)].join("\n");
   const inner = Math.min(64, cols - 6);
   // │ + 2 spaces + the label in 7 and a space + the value + a space + │ = inner + 2.
   const room = inner - 11;
-  const title = " ◆ foldrun code ";
+  const title = ` ◆ foldrun code ${CLI_VERSION} `;
   const top = `  ${c.grey("╭─")}${c.bold(c.sweep(title))}${c.grey(`${"─".repeat(Math.max(0, inner - displayWidth(title) - 1))}╮`)}`;
   const body = rows.map(([k, painted, plain]) => {
     const fits = displayWidth(plain) <= room;
@@ -13037,13 +13037,18 @@ function cancellablePrompt(question, cancel) {
       process.stdout.write("\n");
       done(null);
     };
-    process.stdout.write(question);
-    if (cancel?.asked) return done(null);
+    if (cancel?.asked) {
+      process.stdout.write(question);
+      return done(null);
+    }
+    // Listening before the question shows, so an answer typed the moment
+    // it appears is this question's (Codex).
     cancel?.onAsk?.add(onCancel);
     stdin.setEncoding("utf8");
     stdin.once("data", onData);
     stdin.once("end", onEnd);
     stdin.resume();
+    process.stdout.write(question);
   });
 }
 
@@ -14487,6 +14492,10 @@ async function codeLocalTurn(s, text) {
     /** @type {Record<string, string | undefined>} */
     const own = localEnv();
     for (const k of Object.keys(own)) if (/^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)) delete own[k];
+    // bash runs the file BASH_ENV (sh: ENV) names before every command: code
+    // the person never saw in the allow? question. Not for the agent (Codex).
+    delete own.BASH_ENV;
+    delete own.ENV;
     const q = (await import("@foldrun/core/engine-loop")).foldrunQuery({
           prompt: text,
           options: {
