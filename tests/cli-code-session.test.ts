@@ -667,18 +667,26 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
       assert.doesNotMatch(t.out(), /Which engine|Claude/);
       at = await t.until(/\w ❯ /, at);
       t.send("add b\r");
+      // An answer a moment after its question, as a person gives it: a key
+      // sent the same millisecond the question prints raced the prompt in CI.
+      const answer = async (k: string) => {
+        await new Promise((r) => setTimeout(r, 150));
+        t.send(k);
+      };
       at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      await answer("y\r");
       at = await t.until(/Read a\.txt/, at);
       at = await t.until(/Write b\.txt[\s\S]*a new file · 1 line[\s\S]*allow\?/, at);
       assert.doesNotMatch(t.out().slice(0, at), /Read a\.txt[\s\S]*allow\?[\s\S]*Write/, "a read in the folder is not asked");
       assert.equal(fs.existsSync(path.join(d, "b.txt")), false, "nothing written before the yes");
-      t.send("y\r");
+      await answer("y\r");
       at = await t.until(/\$ echo key=[\s\S]*allow\?/, at);
-      t.send("y\r");
+      await answer("y\r");
       at = await t.until(/hidden control characters — not run[\s\S]*✓ done[\s\S]*on foldrun Pro plan[\s\S]*changed b\.txt/, at);
       assert.equal(fs.existsSync(path.join(d, "pwn")), false, "a command that hides a line never runs");
       assert.equal(fs.readFileSync(path.join(d, "b.txt"), "utf8"), "bee\n");
+      const ran = JSON.stringify(asked[3]?.messages?.at(-1)?.content ?? null).slice(0, 600);
+      assert.ok(fs.existsSync(path.join(d, "k.txt")), `the allowed command ran: ${ran}`);
       assert.equal(fs.readFileSync(path.join(d, "k.txt"), "utf8").trim(), "key=none", "the commands never see the model key");
       at = await t.until(/\w ❯ /, at);
       t.send("did you?\r");
