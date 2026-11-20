@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.4.5] — 2026-11-20
+
+### docs
+
+- sync self-hosting (stable after production, old images removed) ([8083dc0](https://github.com/foldrun-io/foldrun-cli/commit/8083dc0))
+
 ## [27.4.4] — 2026-11-20
 
 ### deps
