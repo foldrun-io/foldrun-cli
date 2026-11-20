@@ -119,8 +119,10 @@ process.on("warning", () => {});
 const [, , command, ...rest] = process.argv;
 
 // `foldrun update`: take the latest release now (a new major too — the
-// person asked), or `--check` only to ask. Before the imports below.
-if (command === "update") {
+// person asked), or `--check` only to ask. Before the imports below — but
+// not for `update --help`, which the help below answers without running it
+// (the customer bench, 20 Nov 2026: `--help` installed the update).
+if (command === "update" && !rest.includes("--help") && !rest.includes("-h")) {
   const { checkAndUpdate, announcement, isGlobalInstall } = await import("../src/self-update.mjs");
   const current = ownVersion();
   const check = rest.includes("--check");
@@ -146,8 +148,11 @@ if (command === "update") {
 
 // Every other command: say what the last update did, and once a day look
 // for a newer one in the background (never in CI or without a terminal).
-// `--version` stays offline: it only prints.
-if (command && !["--help", "-h", "help", "--version", "-v"].includes(command)) {
+// `--version` stays offline: it only prints, and so does help, asked for
+// anywhere on the line (`foldrun deploy --help`, `update -h`: docs/cli.md,
+// "not help or the version flags"; Codex, 20 Nov 2026).
+const askedHelp = rest.includes("--help") || rest.includes("-h");
+if (command && !askedHelp && !["--help", "-h", "help", "--version", "-v"].includes(command)) {
   const { autoUpdate } = await import("../src/self-update.mjs");
   autoUpdate(ownVersion());
 }

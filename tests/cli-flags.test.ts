@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { serve, at, failing } from "./fake-platform.ts";
+import { serve, at, failing, cli } from "./fake-platform.ts";
 
 const flags = [
   { name: "example-flag", description: "The registered example.", owner: "platform", default: false, on: false, source: "default", rollout: null },
@@ -58,4 +58,14 @@ test("--help names the verb and never calls the platform", async () => {
   assert.match(r.out, /foldrun flags\s+the feature flags for this account/);
   assert.match(r.out, /--json/);
   assert.equal(s.seen.length, 0);
+});
+
+test("update --help and -h answer with the help line and never update (customer bench, 20 Nov 2026)", async () => {
+  // `update` is handled before the other commands; --help used to run it.
+  for (const h of ["--help", "-h"]) {
+    const r = await cli(["update", h]);
+    assert.equal(r.code, 0, h);
+    assert.match(r.out, /foldrun update \[--check\]\s+take the latest foldrun now/, h);
+    assert.doesNotMatch(r.out, /is the latest|is out|foldrun updated|could not be asked/, h);
+  }
 });
