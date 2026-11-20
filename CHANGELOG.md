@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.4.1] — 2026-11-20
+
+- fix(cli): `update --help` shows help instead of updating; no background update on any help ([bf443b3](https://github.com/foldrun-io/foldrun-cli/commit/bf443b3))
+
 ## [27.4.0] — 2026-11-20
 
 ### New in the public API
