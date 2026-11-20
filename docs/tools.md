@@ -1962,7 +1962,10 @@ the team is covered:
 | Connect from the dashboard | `<dashboard URL>/api/oauth/callback` — the form shows the exact value |
 
 ```sh
-foldrun connect LINKEDIN_OAUTH --provider linkedin --to linkedin-desk
+foldrun connect LINKEDIN_OAUTH --to linkedin-desk \
+  --authorize-url https://www.linkedin.com/oauth/v2/authorization \
+  --token-url https://www.linkedin.com/oauth/v2/accessToken \
+  --scopes "openid profile r_organization_admin r_organization_social w_organization_social"
 ```
 
 opens the provider's consent screen, catches the redirect on this machine,

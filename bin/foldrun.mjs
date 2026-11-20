@@ -410,7 +410,7 @@ Options
   --starter                 new, workspaces new: include the example researcher, writer and publish flow (a new project is blank)
   --transport <k>           tool new: script (default), http or mcp
   --language <l>            tool new, source new, library new: the script's language — javascript, python, bash
-  --task "<text>"           the instruction for a manual run; code: one turn, then exit
+  --task "<text>"           run, invoke, flow run, agent run: the instruction for a manual run; code: one turn, then exit
   --no-task                 agent run: start it with no instruction — the agent works from its own prompt alone
   --task "<text>"           flow inputs save: the task the saved set holds (--file <path> reads it from a file)
   --snapshot [dir|id]       agent run: a folder for the agent to work on — sent first (this folder when bare), or a snapshot id foldrun snapshot push answered
@@ -541,7 +541,7 @@ Options
   --print                   open: print the URL only
   --from <n>                invoke, flow run, rerun: start at step n; earlier steps are recorded as skipped (a bulk rerun defaults to 1)
   --no-browser              login, connect, billing top-up/card/plan: print the address instead of opening it
-  --provider <name>         (deprecated — use --authorize-url, --token-url and --authorize-param) connect: google, github, microsoft or linkedin
+  --provider <name>         connect: (deprecated — use --authorize-url, --token-url and --authorize-param) google, github, microsoft or linkedin
   --no-pkce                 connect, secrets clients add: leave PKCE off (only for an app with a secret whose provider refuses it)
   --issuer <url>            secrets clients add: the provider's issuer, checked against the iss it sends back (RFC 9207)
   --scopes "<a b c>"        connect: space-separated scopes (default: the provider's example; with --client, the saved client's default — the connection keeps the ones asked for)
@@ -564,7 +564,7 @@ Options
   --card <url>              a2a status, a2a cancel: the agent card of the agent that holds the task
 
 Platform options (deploy, invoke, secrets, logs, keys)
-  --to <workspace>          project on the platform (deploy default: folder name); flow add/show, agent link: edit or show the deployed copy instead of this folder; hook test: run the deployed hook on the platform; hook ls: list the deployed project's hooks and what they did lately; restore <ws>: the commit, date or age to put it back to (3d, 2026-09-28T14:00)
+  --to <workspace>          deploy: the project on the platform to deploy to (default: the folder name); invoke, flow run, agent run, connect, secrets, storage, runs, logs: the project on the platform it acts on; flow add/show, agent link: edit or show the deployed copy instead of this folder; hook test: run the deployed hook on the platform; hook ls: list the deployed project's hooks and what they did lately; restore <ws>: the commit, date or age to put it back to (3d, 2026-09-28T14:00)
   --tenant <name>           account to deploy into (default: default, local only)
   --data <dir>              the installation's data directory
   --url <url>               a running platform (or FOLDRUN_URL, or where you last signed in)
