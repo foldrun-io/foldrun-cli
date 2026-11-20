@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.4.2] — 2026-11-20
+
+- fix(cli): invoke's bare --to check reads as a value check, not a switch (BOOLEAN_FLAGS test) ([45bca46](https://github.com/foldrun-io/foldrun-cli/commit/45bca46))
+- fix(cli): invoke refuses a bare --to and names the folder's projects when it asks ([877b312](https://github.com/foldrun-io/foldrun-cli/commit/877b312))
+
 ## [27.4.1] — 2026-11-20
 
 - fix(cli): `update --help` shows help instead of updating; no background update on any help ([bf443b3](https://github.com/foldrun-io/foldrun-cli/commit/bf443b3))
