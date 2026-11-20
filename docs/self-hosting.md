@@ -133,9 +133,14 @@ Run the installer again. It keeps `.env` (the secret key, your settings),
 moves `FOLDRUN_VERSION` to the newest `stable`, pulls and restarts; your
 data stays in its volume. With a version pinned, a re-run keeps it.
 
-`stable` is the newest version built for both amd64 and arm64, so the same
-command works on an Intel server and an Apple Silicon Mac. It moves forward
-once a day at most; each version is tested on foldrun's own servers first.
+`stable` is a release that has already run in foldrun's own production,
+built for both amd64 and arm64, so the same command works on an Intel server
+and an Apple Silicon Mac. It moves forward once a newer release is live and
+healthy in production, and never back.
+
+An update removes the earlier versions' foldrun images once the new one
+answers, so the disk does not fill with old releases; an image a container
+still uses is kept.
 
 ### Backups
 
