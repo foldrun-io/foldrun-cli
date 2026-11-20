@@ -326,3 +326,114 @@ test("gateway with no subcommand says what it does", async () => {
   assert.equal(r.code, 1);
   assert.match(r.out, /gateway status-line/);
 });
+
+test("keys create --gateway --account posts credential account with its wallet budget (0 when not given) and says plan first", async () => {
+  const s = await serve({
+    "POST /api/keys": (body: string) => {
+      const b = JSON.parse(body);
+      return { ok: true, key: "fr_gw_acct", id: "a1", purpose: "gateway", credential: "account", walletUsd: b.walletUsd, capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" };
+    },
+  });
+  const withWallet = await at(s.url, "keys", "create", "laptop", "--gateway", "--account", "--daily", "50", "--wallet", "15");
+  const planOnly = await at(s.url, "keys", "create", "desk", "--gateway", "--account", "--daily", "50");
+  s.close();
+  assert.equal(withWallet.code, 0, withWallet.out);
+  assert.deepEqual(JSON.parse(s.seen[0].body), { label: "laptop", purpose: "gateway", credential: "account", walletUsd: 15, dailyUsd: 50, expires: "90d" });
+  assert.match(withWallet.out, /plan first · credits \$0\.00 of \$15\.00/);
+  assert.equal(JSON.parse(s.seen[1].body).walletUsd, 0, "no --wallet: the plan only, never bought credits by default");
+  assert.match(planOnly.out, /plan only/);
+});
+
+test("--wallet goes with --account; --account and --login are refused together; a bad --wallet is refused — all before any request", async () => {
+  const s = await serve({ "POST /api/keys": () => ({ ok: true }) });
+  const lone = await at(s.url, "keys", "create", "x", "--gateway", "--daily", "5", "--wallet", "3");
+  const both = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--login");
+  const bad = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "5", "--wallet", "-1");
+  s.close();
+  for (const r of [lone, both, bad]) assert.equal(r.code, 1, r.out);
+  assert.match(lone.out, /--wallet goes with --account/);
+  assert.match(both.out, /--account or --login, not both/);
+  assert.match(bad.out, /--wallet is a number of dollars from 0/);
+  assert.equal(s.seen.length, 0);
+});
+
+test("keys set <id> --wallet <usd> sends walletUsd alone; keys ls shows an account key's credits against its budget", async () => {
+  const s = await serve({
+    "PATCH /api/keys/a1": (body: string) => ({ ok: true, id: "a1", walletUsd: JSON.parse(body).walletUsd }),
+    "/api/keys": () => ({
+      keys: [{ id: "a1", prefix: "fr_gw_acct", label: "laptop", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: null, dailyUsd: 50, spentUsd: 9, todayUsd: 2, credential: "account", walletUsd: 20, walletSpentUsd: 4.5 }, createdAt: "2026-11-20T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }],
+      gatewayUrl: "https://gateway.example.test",
+    }),
+  });
+  const set = await at(s.url, "keys", "set", "a1", "--wallet", "30");
+  const ls = await at(s.url, "keys", "ls");
+  s.close();
+  assert.equal(set.code, 0, set.out);
+  assert.deepEqual(JSON.parse(s.seen[0].body), { walletUsd: 30 });
+  assert.match(set.out, /bought credits may pay up to \$30\.00/);
+  assert.match(ls.out, /plan first · credits \$4\.50 of \$20\.00/);
+});
+
+test("--account or --wallet without --gateway, and keys set --wallet with another change, are refused before any request", async () => {
+  const s = await serve({ "POST /api/keys": () => ({ ok: true }), "PATCH /api/keys/a1": () => ({ ok: true }) });
+  const noGw = await at(s.url, "keys", "create", "x", "--account");
+  const walletOnly = await at(s.url, "keys", "create", "x", "--wallet", "3");
+  const both = await at(s.url, "keys", "set", "a1", "--customer", "required", "--wallet", "0");
+  s.close();
+  for (const r of [noGw, walletOnly, both]) assert.equal(r.code, 1, r.out);
+  assert.match(noGw.out, /add --gateway/);
+  assert.match(both.out, /set the wallet budget on its own/);
+  assert.equal(s.seen.length, 0);
+});
+
+test("keys create --gateway --account on a platform that ignores the kind: the key it made is revoked and never shown", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "fr_gw_plain", id: "p1", purpose: "gateway", capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" }),
+    "DELETE /api/keys": () => ({ ok: true }),
+  });
+  const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
+  s.close();
+  assert.equal(r.code, 1, r.out);
+  assert.doesNotMatch(r.out, /fr_gw_plain/, "the key is never printed");
+  assert.match(r.out, /does not make plan-first keys at those limits/);
+  const del = s.seen.find((x) => x.method === "DELETE");
+  assert.deepEqual(JSON.parse(del!.body), { id: "p1" });
+});
+
+test("keys set --wallet succeeds only when the platform confirms the budget (an explicit 0 included)", async () => {
+  const s = await serve({
+    "PATCH /api/keys/a1": () => ({ ok: true, id: "a1" }),
+    "PATCH /api/keys/a2": () => ({ ok: true, id: "a2", walletUsd: 0 }),
+  });
+  const ignored = await at(s.url, "keys", "set", "a1", "--wallet", "0");
+  const zero = await at(s.url, "keys", "set", "a2", "--wallet", "0");
+  s.close();
+  assert.equal(ignored.code, 1, ignored.out);
+  assert.match(ignored.out, /did not confirm the wallet budget/);
+  assert.equal(zero.code, 0, zero.out);
+  assert.match(zero.out, /the plan alone pays/);
+});
+
+test("keys create --gateway --account: a key back with other limits than asked is revoked too", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "fr_gw_x", id: "p2", purpose: "gateway", credential: "account", walletUsd: 5, capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
+    "DELETE /api/keys": () => ({ ok: true }),
+  });
+  const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
+  s.close();
+  assert.equal(r.code, 1, r.out);
+  assert.doesNotMatch(r.out, /fr_gw_x/);
+  assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "DELETE")!.body), { id: "p2" });
+});
+
+test("keys create --gateway --account: the right kind at other limits is revoked and said so (not taken for an older platform)", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "fr_gw_y", id: "p3", purpose: "gateway", credential: "account", walletUsd: 1, capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" }),
+    "DELETE /api/keys": () => ({ ok: true }),
+  });
+  const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
+  s.close();
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /other limits than asked/);
+  assert.doesNotMatch(r.out, /fr_gw_y/);
+});

@@ -5072,6 +5072,8 @@ async function doctor(flags) {
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
+ *   keys create <label> --gateway --account --daily <usd> [--wallet <usd>]  the foldrun plan first, then bought credits up to --wallet (0, the default: the plan only)
+ *   keys set <id> --wallet <usd>     an account key's wallet budget
  *   keys create <label> --gateway --login   on the account's plan (where it has one): not billed per call
  *   keys create <label> --gateway --login --plan max   five times a pro key's usage limits (pro is the default)
  *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings (its status line too)
@@ -5127,6 +5129,8 @@ async function keysCmd(positional, flags) {
     // An A2A key's caller is one outside agent: requiring a customer is for
     // API and gateway keys (Codex review: never silently dropped).
     if (flags.a2a === true && flags["require-customer"] === true) throw new Error("--require-customer is for API and gateway keys, not --a2a");
+    // An account key's flags are a gateway key's: never dropped on another kind (Codex review).
+    if (flags.gateway !== true && (flags.account === true || flags.wallet !== undefined)) throw new Error("--account and --wallet make a gateway key: add --gateway");
     if (flags.a2a === true) return keysCreateA2a(url, arg, flags);
     if (flags.gateway === true) return keysCreateGateway(url, arg, flags);
     const body = { label: arg };
@@ -5206,6 +5210,10 @@ async function keysCmd(positional, flags) {
     console.log(`  ${c.dim(`Shown once. The old key ${grace === "0" ? "is revoked" : `keeps working until ${String(ends).slice(0, 16).replace("T", " ")} UTC`}.`)}\n`);
     return 0;
   }
+  // One change a command: a second flag is refused before anything is sent (Codex review).
+  if (verb === "set" && flags.wallet !== undefined && (flags.customer !== undefined || ["opus", "sonnet", "haiku"].some((t) => flags[t] !== undefined) || flags.clear === true)) {
+    throw new Error("set the wallet budget on its own: keys set <id> --wallet <usd>");
+  }
   if (verb === "set" && flags.customer !== undefined) {
     // `keys set <id> --customer required|optional` (FOL-168): whether its
     // runs and gateway calls must name an end customer.
@@ -5214,6 +5222,18 @@ async function keysCmd(positional, flags) {
     if (flags.customer !== "required" && flags.customer !== "optional") throw new Error("--customer is required or optional");
     const r = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ requireCustomer: flags.customer === "required" }) });
     console.log(`\n  ${c.green("✓")} ${arg}: a customer is ${r.requireCustomer ? "required on every run and gateway call" : "no longer required"}\n`);
+    return 0;
+  }
+  if (verb === "set" && flags.wallet !== undefined) {
+    // `keys set <id> --wallet <usd>` (FOL-208): what bought credits may pay
+    // for an account key's calls; 0, the plan only.
+    if (!arg) throw new Error("which key? foldrun keys set <id> --wallet <usd>");
+    if (["opus", "sonnet", "haiku", "customer"].some((t) => flags[t] !== undefined) || flags.clear === true) throw new Error("set the wallet budget on its own: keys set <id> --wallet <usd>");
+    const walletUsd = walletFlag(flags.wallet);
+    const r = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ walletUsd }) });
+    // Success only when the platform says the budget is what was asked (Codex).
+    if (r?.walletUsd !== walletUsd) throw new Error("the platform did not confirm the wallet budget — it may not offer it yet; foldrun keys ls shows what the key has");
+    console.log(`\n  ${c.green("✓")} ${arg}: ${r.walletUsd ? `bought credits may pay up to $${Number(r.walletUsd).toFixed(2)} of its calls` : "the plan alone pays for its calls"}\n`);
     return 0;
   }
   if (verb === "set") return keysSetModels(url, arg, flags);
@@ -5294,10 +5314,20 @@ function gatewayLine(g) {
   if (g?.credential === "login") return `gateway · Claude Code · ${g.plan === "max" ? "max" : "pro"} plan · not billed per call${tail}`;
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const parts = ["gateway · Claude Code"];
+  // An account key: the plan first, then bought credits up to its budget.
+  if (g?.credential === "account") parts.push(g.walletUsd ? `plan first · credits ${usd(g.walletSpentUsd)} of ${usd(g.walletUsd)}` : "plan only");
   if (g?.capUsd != null) parts.push(`${usd(g.spentUsd)} of ${usd(g.capUsd)}`);
   else if (g?.spentUsd != null) parts.push(`${usd(g.spentUsd)} spent`);
   if (g?.dailyUsd != null) parts.push(`${usd(g.todayUsd)} of ${usd(g.dailyUsd)} today`);
   return parts.join(" · ") + tail;
+}
+
+/** An account key's wallet budget from --wallet: 0 (the plan only) to 100000. */
+function walletFlag(v) {
+  // The range is checked on the number as given, before cents (Codex): -0.001 is refused, never 0.
+  const raw = typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  if (!Number.isFinite(raw) || raw < 0 || raw > 100_000) throw new Error("--wallet is a number of dollars from 0 (the plan only) to 100000");
+  return Math.round(raw * 100) / 100;
 }
 
 /** A dollar limit from a flag: above 0, at most 100000 (what the platform takes). */
@@ -5322,6 +5352,8 @@ async function keysCreateGateway(url, label, flags) {
   // --login: the operator's own Claude login, for an account the operator
   // allows it (its desks' accounts) — not metered, so it takes no limit.
   if (flags.login === true && (flags.cap !== undefined || flags.daily !== undefined)) throw new Error("--login takes no --cap or --daily — a key on the account's plan is not billed per call, so a dollar limit could not hold it");
+  if (flags.login === true && flags.account === true) throw new Error("--account or --login, not both");
+  if (flags.wallet !== undefined && flags.account !== true) throw new Error("--wallet goes with --account: the most bought credits may pay for that key's calls");
   const capUsd = flags.login === true ? undefined : usdFlag(flags.cap, "--cap");
   const dailyUsd = flags.login === true ? undefined : usdFlag(flags.daily, "--daily");
   if (flags.login !== true && capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both) — or --login, on an account that has a plan");
@@ -5332,6 +5364,12 @@ async function keysCreateGateway(url, label, flags) {
   if (flags.plan !== undefined && flags.login !== true) throw new Error("--plan goes with --login: a key with --cap or --daily has those limits");
   if (flags.plan !== undefined && flags.plan !== "pro" && flags.plan !== "max") throw new Error(`--plan is pro or max — got ${JSON.stringify(flags.plan)}`);
   if (flags.login === true) body.credential = "login";
+  // --account (FOL-208): the foldrun plan pays first; bought credits only
+  // up to --wallet (0 when not given: the plan alone).
+  if (flags.account === true) {
+    body.credential = "account";
+    body.walletUsd = flags.wallet === undefined ? 0 : walletFlag(flags.wallet);
+  }
   if (flags.login === true && flags.plan !== undefined) body.plan = flags.plan;
   // --require-customer (FOL-168): every call must send x-foldrun-customer.
   if (flags["require-customer"] === true) body.requireCustomer = true;
@@ -5342,7 +5380,9 @@ async function keysCreateGateway(url, label, flags) {
   if (flags.expires !== undefined && typeof flags.expires !== "string") throw new Error("--expires needs a span: 30d, 90d, 365d or never");
   body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
   const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
-  console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential, plan: made.plan }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+  // Asked for an account key: never show or install one of another kind.
+  if (body.credential === "account" && (await checkAccountKey(url, flags, made, { walletUsd: body.walletUsd, dailyUsd: body.dailyUsd, capUsd: body.capUsd })) === "revoked") throw new Error(OTHER_KIND);
+  console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential, plan: made.plan, walletUsd: made.walletUsd, walletSpentUsd: 0 }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
   if (made.key == null) return lostSecret(made.id);
   console.log(`  ${made.key}\n`);
   const base = made.gatewayUrl ?? "<the gateway URL — not set on this platform yet>";
@@ -13831,8 +13871,15 @@ function folderClaudeMd(/** @type {string} */ dir) {
 
 /** The foldrun engine's tools on this computer. */
 const ENGINE_TOOLS_LOCAL = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
-/** The limit a key made for one computer starts with (foldrun keys changes it). */
-const LOCAL_KEY_CAP_USD = 20;
+/** A key made for one computer (FOL-208: an account key): its daily limit
+ *  on every call, and what bought credits may pay in all — the plan pays
+ *  first. `foldrun keys set <id> --wallet <usd>` changes the second. */
+const LOCAL_KEY_DAILY_USD = 100;
+const LOCAL_KEY_WALLET_USD = 20;
+/** What makeLocalKey answers when the platform cannot make an account key. */
+const OLDER_PLATFORM = Symbol("older platform");
+/** The older kind's limit, on a platform from before plan-first keys. */
+const LOCAL_OLDER_KEY_CAP_USD = 20;
 
 /**
  * The gateway key the foldrun engine's model calls use on this computer:
@@ -13849,29 +13896,358 @@ async function localKeyFor(s, cancel) {
     if (typeof me?.account !== "string" || !me.account) throw new Error("could not tell which account this is — foldrun whoami");
     s.keySlot = `${s.url}#${me.account}`;
   }
+  if (s.rejectedKeyPending) {
+    const gone = await withLocalKeyLock(file, cancel, async () => {
+      const kept = readLocalKey(file, s.keySlot);
+      if (kept && (s.rejectedKey === null || kept.key === s.rejectedKey)) saveLocalKey(file, s.keySlot, null);
+      return true;
+    });
+    if (!gone) return null;
+    s.rejectedKeyPending = false;
+  }
   const have = readLocalKey(file, s.keySlot);
-  if (have) return have;
+  if (have?.kind === "account" || have?.upgradeAsked) return have;
+  if (have) {
+    // A key kept before CLI 27.3: $20 in all, its wallet budget not settable.
+    // It keeps working; the person is asked once whether to swap it (Codex).
+    console.log(`  ${c.violet("◆")} ${c.bold("This computer's model key is the older kind: $20 in all, whoever pays")}`);
+    console.log(`    ${c.grey(`a new one is paid by the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all); the old one is revoked`)}`);
+    const swap = ((await cancellablePrompt(`    swap it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
+    if (cancel.asked) return null;
+    const yes = swap === "y" || swap === "yes";
+    // Every check-then-write of the kept keys under one lock, and only of
+    // the key still kept: another session may have swapped it while this
+    // one asked, and two yeses make one new key, not two (Codex).
+    return withLocalKeyLock(file, cancel, async () => {
+      const now = readLocalKey(file, s.keySlot);
+      if (now?.key !== have.key) return now;
+      if (!yes) {
+        saveLocalKey(file, s.keySlot, { ...have, upgradeAsked: true });
+        console.log(`  ${c.dim("kept — not asked again; foldrun keys rm <id> and the next session offers the new kind")}\n`);
+        return have;
+      }
+      const made = await makeLocalKey(s, file);
+      // The platform cannot make the new kind: keep the key there is, and do
+      // not ask again — the turn goes on with it (Codex).
+      if (made === OLDER_PLATFORM) {
+        saveLocalKey(file, s.keySlot, { ...have, upgradeAsked: true });
+        console.log(`  ${c.dim("this platform does not make plan-first keys yet — your key is kept as it is, and not asked about again")}\n`);
+        return have;
+      }
+      // Ctrl-C while the new key was being made: it is kept, and the old one
+      // is left for the person to remove (Codex).
+      if (made && have.id && cancel.asked) {
+        console.log(`  ${c.dim(`the old key was not revoked — foldrun keys rm ${have.id}`)}`);
+        return made;
+      }
+      if (made && have.id) await remoteCall(s.url, s.flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: have.id }) }).catch(() => console.log(`  ${c.dim(`the old key was not revoked — foldrun keys rm ${have.id}`)}`));
+      return made;
+    });
+  }
   console.log(`  ${c.violet("◆")} ${c.bold("The agent's model calls are paid by your foldrun plan, or your foldrun credits")}`);
-  console.log(`    ${c.grey(`with a key made for this computer — limit $${LOCAL_KEY_CAP_USD}, kept only here; foldrun keys ls shows what it spent`)}`);
+  console.log(`    ${c.grey(`with a key made for this computer — the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all), kept only here; foldrun keys ls shows what it spent`)}`);
   const yes = ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
   if (cancel.asked) return null;
   if (yes !== "y" && yes !== "yes") {
     console.log(`  ${c.dim("nothing made — the agent needs it to work on this computer; foldrun code --cloud works without one")}\n`);
     return null;
   }
-  const label = `foldrun code · ${os.hostname().replace(/[^\w.-]+/g, "-")}`.slice(0, 60);
-  let made;
-  try {
-    made = await remoteCall(s.url, s.flags, "/api/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", capUsd: LOCAL_KEY_CAP_USD, expires: "365d" }) });
-  } catch (err) {
-    if (err instanceof HttpError && err.status === 403) throw new Error("only an admin of every project may make a model key — ask one, or use foldrun code --cloud");
-    throw err;
+  // Another session may have made one while this one asked.
+  const made = await withLocalKeyLock(file, cancel, async () => readLocalKey(file, s.keySlot) ?? makeLocalKey(s, file));
+  if (made !== OLDER_PLATFORM) return made;
+  // A platform from before plan-first keys: the older kind is asked about
+  // on its own terms, outside the lock (an unanswered question never holds
+  // other sessions up), then made under it if the slot is still empty (Codex).
+  if (!(await askOlderKind(cancel))) return null;
+  return withLocalKeyLock(file, cancel, async () => readLocalKey(file, s.keySlot) ?? mintOlderLocalKey(s, file));
+}
+
+/** The lock beside the kept keys: a directory (made or not, at once) with
+ *  its owner inside. The owner renews it every 10 s while it holds it, so
+ *  only a lock left by a session that died (not renewed for a minute, or
+ *  its process gone) is taken over; a holder releases only its own (Codex). */
+function tryLocalKeyLock(file) {
+  const dir = `${file}.lock`;
+  // A lock goes away in one step — renamed aside, then deleted — so a
+  // session killed while deleting never leaves a lock without its owner
+  // that nothing can clear (Codex).
+  const drop = () => {
+    const gone = `${dir}.gone-${crypto.randomUUID()}`;
+    try {
+      fs.renameSync(dir, gone);
+    } catch {
+      return false;
+    }
+    fs.rmSync(gone, { recursive: true, force: true });
+    return true;
+  };
+  const me = `${process.pid}:${crypto.randomUUID()}`;
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  // The lock appears with its owner already in it — a rename of a ready
+  // directory, which fails when one is there — so no session ever sees
+  // a lock without an owner (Codex).
+  const publish = () => {
+    const tmp = fs.mkdtempSync(`${dir}.new-`);
+    fs.writeFileSync(path.join(tmp, "owner"), me, { mode: 0o600 });
+    try {
+      fs.renameSync(tmp, dir);
+      return true;
+    } catch (err) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      if (["EEXIST", "ENOTEMPTY", "EPERM", "EISDIR"].includes(err?.code)) return false;
+      throw err;
+    }
+  };
+  if (!publish()) {
+    let dead = false;
+    /** @type {string | null} */
+    let seenOwner = null;
+    try {
+      const owner = fs.readFileSync(path.join(dir, "owner"), "utf8");
+      seenOwner = owner;
+      const pid = Number(owner.split(":")[0]);
+      let alive = true;
+      try {
+        process.kill(pid, 0);
+      } catch (e) {
+        alive = e?.code === "EPERM";
+      }
+      // A holder whose process lives is never taken over, however long it
+      // has held the lock (a suspended session resumes and commits) (Codex).
+      dead = !alive;
+    } catch {
+      // No owner to read: the lock went away (try again), or it was left by
+      // a build that could leave one ownerless — taken over only once it is
+      // a minute old, and only if it is still ownerless then (Codex).
+      try {
+        if (Date.now() - fs.statSync(dir).mtimeMs <= 60_000) return null;
+      } catch {
+        return null;
+      }
+      dead = true;
+    }
+    if (!dead) return null;
+    // A takeover is itself exclusive: one session at a time, and only of
+    // the very lock it judged dead — another may have taken it over and
+    // made a live one in the meantime (Codex). A guard left by a crash in
+    // these few lines is cleared after 10 s.
+    // The guard has an owner too, published with it, and is reclaimed only
+    // when that owner's process is gone — never by age (Codex).
+    const guard = `${dir}.takeover`;
+    const gtmp = fs.mkdtempSync(`${guard}.new-`);
+    fs.writeFileSync(path.join(gtmp, "owner"), me, { mode: 0o600 });
+    try {
+      fs.renameSync(gtmp, guard);
+    } catch {
+      fs.rmSync(gtmp, { recursive: true, force: true });
+      try {
+        const gowner = fs.readFileSync(path.join(guard, "owner"), "utf8");
+        const gpid = Number(gowner.split(":")[0]);
+        let alive = true;
+        try {
+          process.kill(gpid, 0);
+        } catch (e) {
+          alive = e?.code === "EPERM";
+        }
+        if (!alive) {
+          // Moved aside, then checked: if what was moved is not the dead
+          // guard judged above (a session replaced it meanwhile), it is put
+          // back, never deleted (Codex).
+          const gone = `${guard}.gone-${crypto.randomUUID()}`;
+          fs.renameSync(guard, gone);
+          /** @type {string | null} */
+          let moved = null;
+          try {
+            moved = fs.readFileSync(path.join(gone, "owner"), "utf8");
+          } catch {
+            /* none */
+          }
+          if (moved === gowner) fs.rmSync(gone, { recursive: true, force: true });
+          else {
+            try {
+              fs.renameSync(gone, guard);
+            } catch {
+              fs.rmSync(gone, { recursive: true, force: true });
+            }
+          }
+        }
+      } catch {
+        /* gone, or not ours to judge yet */
+      }
+      return null;
+    }
+    try {
+      /** @type {string | null} */
+      let still = null;
+      try {
+        still = fs.readFileSync(path.join(dir, "owner"), "utf8");
+      } catch {
+        /* no owner, or no lock */
+      }
+      if (still !== seenOwner || (still === null && !fs.existsSync(dir))) return null;
+      if (!drop()) return null;
+      if (!publish()) return null;
+    } catch {
+      return null;
+    } finally {
+      try {
+        if (fs.readFileSync(path.join(guard, "owner"), "utf8") === me) {
+          const gone = `${guard}.gone-${crypto.randomUUID()}`;
+          fs.renameSync(guard, gone);
+          fs.rmSync(gone, { recursive: true, force: true });
+        }
+      } catch {
+        /* gone */
+      }
+    }
   }
-  if (typeof made?.key !== "string" || typeof made?.gatewayUrl !== "string") throw new Error("the platform made no usable key (no gateway on it?) — foldrun code --cloud works without one");
-  const entry = { id: String(made.id ?? ""), key: made.key, gatewayUrl: made.gatewayUrl };
-  saveLocalKey(file, s.keySlot, entry);
+  const beat = setInterval(() => {
+    try {
+      const t = new Date();
+      fs.utimesSync(dir, t, t);
+    } catch {
+      /* gone */
+    }
+  }, 10_000);
+  beat.unref?.();
+  return () => {
+    clearInterval(beat);
+    try {
+      if (fs.readFileSync(path.join(dir, "owner"), "utf8") === me) drop();
+    } catch {
+      /* not ours, or gone */
+    }
+  };
+}
+
+/** Run `fn` holding the lock; the wait stops on Ctrl-C, and nothing is
+ *  minted or revoked once it was pressed (Codex). Null when cancelled. */
+async function withLocalKeyLock(file, cancel, fn) {
+  /** @type {(() => void) | null} */
+  let release = null;
+  for (let i = 0; !(release = tryLocalKeyLock(file)); i++) {
+    if (cancel?.asked) return null;
+    if (i > 600) throw new Error(`another foldrun session is changing this computer's model key — try again; if none is running, remove ${file}.lock`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  try {
+    if (cancel?.asked) return null;
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+/** The key a platform from before plan-first keys makes: $20 in all, from
+ *  bought credits. Kept as asked about, so no swap is offered for it. */
+async function askOlderKind(cancel) {
+  console.log(`  ${c.violet("◆")} ${c.bold("This platform makes only the older kind of key")}`);
+  console.log(`    ${c.grey(`its calls are paid from your bought credits (the plan does not pay them), at most $${LOCAL_OLDER_KEY_CAP_USD} in all`)}`);
+  const yes = ((await cancellablePrompt(`    make that instead? [y/N] `, cancel)) ?? "").trim().toLowerCase();
+  if (cancel?.asked) return false;
+  if (yes !== "y" && yes !== "yes") {
+    console.log(`  ${c.dim("nothing made — foldrun code --cloud works without one")}\n`);
+    return false;
+  }
+  return true;
+}
+
+/** Mint the older kind ($20 in all) and keep it, under the lock. */
+async function mintOlderLocalKey(s, file) {
+  const label = localKeyLabel();
+  const made = await remoteCall(s.url, s.flags, "/api/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", capUsd: LOCAL_OLDER_KEY_CAP_USD, expires: "365d" }) });
+  if (typeof made?.key !== "string" || typeof made?.gatewayUrl !== "string") await refuseUnusable(s.url, s.flags, made);
+  if (made.capUsd !== LOCAL_OLDER_KEY_CAP_USD) {
+    await remoteCall(s.url, s.flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: String(made.id ?? "") }) }).catch(() => {
+      throw new Error(`the key came back without its $${LOCAL_OLDER_KEY_CAP_USD} limit and revoking it failed — remove it yourself: foldrun keys rm ${made.id}`);
+    });
+    throw new Error(`the key came back without its $${LOCAL_OLDER_KEY_CAP_USD} limit — it was revoked, nothing else changed`);
+  }
+  return keepNewKey(s, file, made, { id: String(made.id ?? ""), key: made.key, gatewayUrl: made.gatewayUrl, upgradeAsked: true }, label);
+}
+
+/** Keep a key just made; if it cannot be kept (a full disk), it is revoked —
+ *  a key nobody holds the secret of is never left live (Codex). */
+async function keepNewKey(s, file, made, entry, label) {
+  try {
+    saveLocalKey(file, s.keySlot, entry);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    try {
+      await remoteCall(s.url, s.flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: String(made.id ?? "") }) });
+    } catch {
+      throw new Error(`the key was made but could not be kept here (${why}), and revoking it failed — remove it yourself: foldrun keys rm ${made.id}`);
+    }
+    throw new Error(`the key was made but could not be kept here (${why}) — it was revoked`);
+  }
   console.log(`  ${c.green("✓")} ${c.grey(`made — ${label}`)}\n`);
   return entry;
+}
+
+function localKeyLabel() {
+  return `foldrun code · ${os.hostname().replace(/[^\w.-]+/g, "-")}`.slice(0, 60);
+}
+
+/** A key made but not usable here (no secret, or no gateway URL): revoked
+ *  when it has an id, so a retry does not leave live keys behind (Codex). */
+async function refuseUnusable(url, flags, made) {
+  const id = made?.id ? String(made.id) : "";
+  if (id) {
+    try {
+      await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id }) });
+    } catch {
+      throw new Error(`the platform made a key it gave no usable secret or gateway for, and revoking it failed — remove it yourself: foldrun keys rm ${id}`);
+    }
+  }
+  throw new Error("the platform made no usable key (no gateway on it?) — foldrun code --cloud works without one");
+}
+
+/** A key made as an account key must come back as one, with the wallet
+ *  budget and limits asked for: any other is revoked before it is shown,
+ *  used or kept (Codex). "ok" — it is the one asked for; "revoked" — it was
+ *  not, and is gone. Throws, naming the key, when it could not be revoked. */
+async function checkAccountKey(url, flags, made, want) {
+  const same = (a, b) => (a ?? null) === (b ?? null);
+  if (made?.credential === "account" && made?.walletUsd === want.walletUsd && same(made?.dailyUsd, want.dailyUsd) && same(made?.capUsd, want.capUsd)) return "ok";
+  const id = made?.id ? String(made.id) : "";
+  // The kind is made, at other limits: revoked, and said so — not taken for
+  // a platform from before plan-first keys (Codex).
+  const otherLimits = made?.credential === "account";
+  // No id to revoke: nothing is claimed as cleaned up (Codex).
+  if (!id) throw new Error("this platform made another kind of key (not plan-first, or not at the limits asked) and did not say which — check foldrun keys ls and remove it there");
+  try {
+    await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id }) });
+  } catch {
+    throw new Error(`this platform made another kind of key (not plan-first, or not at the limits asked), and revoking it failed — remove it yourself: foldrun keys rm ${id}`);
+  }
+  if (otherLimits) throw new Error(`the platform made the key at other limits than asked (wallet $${want.walletUsd}, daily ${want.dailyUsd ?? "none"}, total ${want.capUsd ?? "none"}) — it was revoked, nothing else changed`);
+  return "revoked";
+}
+const OTHER_KIND = "this platform does not make plan-first keys at those limits — the key it made instead was revoked, nothing else changed";
+
+/** Mint this computer's account key and keep it. */
+async function makeLocalKey(s, file) {
+  const label = localKeyLabel();
+  let made;
+  try {
+    made = await remoteCall(s.url, s.flags, "/api/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", credential: "account", dailyUsd: LOCAL_KEY_DAILY_USD, walletUsd: LOCAL_KEY_WALLET_USD, expires: "365d" }) });
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 403) throw new Error("only an admin of every project may make a model key — ask one, or use foldrun code --cloud");
+    // A platform from before plan-first keys refuses the kind: the older one
+    // is offered on its own terms, asked separately, never made silently (Codex).
+    if (err instanceof HttpError && err.status === 400 && /credential/.test(String(err.message))) {
+      return OLDER_PLATFORM;
+    }
+    throw err;
+  }
+  if (typeof made?.key !== "string" || typeof made?.gatewayUrl !== "string") await refuseUnusable(s.url, s.flags, made);
+  // Only the key that was agreed to: the plan first and at most the credits promised.
+  if ((await checkAccountKey(s.url, s.flags, made, { walletUsd: LOCAL_KEY_WALLET_USD, dailyUsd: LOCAL_KEY_DAILY_USD, capUsd: null })) === "revoked") {
+    // A platform that ignores the kind is one from before it: the older
+    // key is offered the same way as when it refuses the kind (Codex).
+    return OLDER_PLATFORM;
+  }
+  return keepNewKey(s, file, made, { id: String(made.id ?? ""), key: made.key, gatewayUrl: made.gatewayUrl, kind: "account" }, label);
 }
 
 /**
@@ -13899,7 +14275,24 @@ function engineModelError(/** @type {unknown} */ err, s) {
   }
   if (status === 402) return `the gateway would not pay for this: ${said} — your credits: ${String(s.url).replace(/\/+$/, "")}/dashboard/billing · this key's limit: foldrun keys ls`;
   if (status === 401 && /^(invalid API key|API key revoked|API key expired)/.test(said) && s.keySlot) {
-    saveLocalKey(path.join(credentialsDir(), "code-local-keys.json"), s.keySlot, null);
+    // Forgotten only if the kept key is still the one refused: another
+    // session may have swapped it in the meantime (Codex).
+    // Under the kept keys' lock; when another session holds it, it is
+    // changing the key already, and nothing is forgotten here.
+    const keysFile = path.join(credentialsDir(), "code-local-keys.json");
+    const release = tryLocalKeyLock(keysFile);
+    if (release) {
+      try {
+        if (!s.engineKeyInUse || readLocalKey(keysFile, s.keySlot)?.key === s.engineKeyInUse) saveLocalKey(keysFile, s.keySlot, null);
+      } finally {
+        release();
+      }
+    } else {
+      // Busy (another session, perhaps another account's key): done under
+      // the lock before the next turn reads the key (Codex).
+      s.rejectedKey = s.engineKeyInUse ?? null;
+      s.rejectedKeyPending = true;
+    }
     return `this computer's model key was refused (${said}) — it is forgotten; your next message offers a new one`;
   }
   return `the model endpoint answered ${status}: ${said}`;
@@ -14420,6 +14813,7 @@ async function codeLocalTurn(s, text) {
     if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
     engineKey = await localKeyFor(s, cancel);
     if (!engineKey || cancel.asked) return;
+    s.engineKeyInUse = engineKey.key;
     await foldrunPlanLabel(s);
     typeAhead = startTypeAhead(onInt);
     /** @type {{ kinds: Set<string>, commands: Set<string> }} */

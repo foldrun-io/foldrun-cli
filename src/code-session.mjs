@@ -563,14 +563,19 @@ export function readLocalKey(/** @type {string} */ file, /** @type {string} */ u
   try {
     const all = JSON.parse(fs.readFileSync(file, "utf8"));
     const k = all?.[url];
-    return k && typeof k.key === "string" && typeof k.gatewayUrl === "string" ? { id: String(k.id ?? ""), key: k.key, gatewayUrl: k.gatewayUrl } : null;
+    // `kind`: "account" for a key the plan pays first (FOL-208, CLI 27.3);
+    // a key kept before then has none. `upgradeAsked`: the person was asked
+    // once to swap an older one and said no.
+    return k && typeof k.key === "string" && typeof k.gatewayUrl === "string"
+      ? { id: String(k.id ?? ""), key: k.key, gatewayUrl: k.gatewayUrl, ...(k.kind === "account" ? { kind: "account" } : {}), ...(k.upgradeAsked === true ? { upgradeAsked: true } : {}) }
+      : null;
   } catch {
     return null;
   }
 }
 
 /** Keep (or, with null, forget) this computer's key for a platform; only its owner reads the file. */
-export function saveLocalKey(/** @type {string} */ file, /** @type {string} */ url, /** @type {{ id: string, key: string, gatewayUrl: string } | null} */ entry) {
+export function saveLocalKey(/** @type {string} */ file, /** @type {string} */ url, /** @type {{ id: string, key: string, gatewayUrl: string, kind?: string, upgradeAsked?: boolean } | null} */ entry) {
   let all = {};
   try {
     all = JSON.parse(fs.readFileSync(file, "utf8")) ?? {};

@@ -379,6 +379,8 @@ Signing in
   foldrun keys set <id> --customer required|optional  whether every run (API key) or gateway call (gateway key) with it must name an end customer — create one that requires it with keys create … --require-customer
   foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]  a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — it spends the account's credits on foldrun's models through the gateway, up to its own limits, and opens no /api route; an admin of every project; shown once
   foldrun keys create laptop --gateway --cap 20 --claude-code   the same, and Claude Code is set up on this machine: the URL and key go into its settings, and its status line shows the key's spend
+  foldrun keys create laptop --gateway --account --daily 50 [--wallet 20]   a key the foldrun plan pays for first; bought credits only up to --wallet (0, the default: the plan alone)
+  foldrun keys set <id> --wallet <usd>          an account key's wallet budget: the most bought credits may pay for its calls (0: the plan only)
   foldrun gateway status-line   one line for Claude Code's status line: what the gateway key in ANTHROPIC_AUTH_TOKEN has spent, of its limits (asks the gateway; kept 10 s, --cache <s>)
   foldrun text <file>       a local file as text: uploads it to the platform, which reads it — a PDF or scan (OCR in Persian or English), a Word, sheet or slide file, a recording — and prints the text (--lang fa|en|auto, --ocr auto|always|never, --engine docling, --out <path> or -o <path>, --json, --wait <s>); a long job is polled until it ends
   foldrun talk              speak a prompt: records the microphone until you stop talking, foldrun's own Whisper turns it into text (Persian with the Persian model), prints the words — Claude Code's /talk runs it (--lang auto|fa|en…, --max <s> up to 120, --silence <s>, --file <audio or video> instead of the mic, --mic <name>, --plain, --json; the gateway key from ANTHROPIC_AUTH_TOKEN or --url/--key)
@@ -549,6 +551,7 @@ Options
   --a2a                     keys create: an A2A key for an outside agent — with --to <workspace> and --flows a,b; --max-tasks <n> caps its open tasks (1–100, default 10)
   --gateway                 keys create: a gateway key for Claude Code — with --cap <usd> (in all) and/or --daily <usd> (per UTC day)
   --cap <usd>, --daily <usd>  keys create --gateway: the key's own spending limits, $0.01–$100000
+  --account, --wallet <usd>   keys create --gateway: the plan pays first, bought credits up to --wallet ($0–$100000, default 0)
   --login                   keys create --gateway: on the operator's Claude login instead (the operator's own accounts; not metered, no limits)
   --claude-code             keys create --gateway: also write the gateway URL and the key into Claude Code's settings (~/.claude/settings.json, or $CLAUDE_CONFIG_DIR) — nothing to copy
   --opus, --sonnet, --haiku <model>  keys set <id>: which model that Claude Code tier runs on with a gateway key (e.g. openai/gpt-6; - clears it)

@@ -609,8 +609,19 @@ ticked so Enter keeps it, and the first time in a folder which project:
      folder, with Read, Write, Edit, Glob, Grep and Bash, plus
      [cloud agents](#cloud-agents-from-this-computer). Its model calls are
      paid by your foldrun plan's allowance while it has room, through a key
-     made for this computer after a yes (limit $20, kept only on this
-     computer; `foldrun keys ls` shows what it spent). On a plan the agent
+     made for this computer after a yes, kept only on this computer: the
+     plan first, then at most $20 of bought credits in all and $100 a day
+     on every call (`foldrun keys ls` shows what it spent; `foldrun keys set
+     <id> --wallet <usd>` changes the credits it may use, 0 for the plan
+     alone). A key made before CLI 27.3 ($20 in all) keeps working; the
+     next session asks once whether to swap it for the new kind and, on a
+     yes, revokes the old one — unless you press Ctrl-C while the new one
+     is being made or the revoke fails, when it says which key to remove
+     (`foldrun keys rm <id>`). A platform from before plan-first keys makes
+     only the older kind: when this computer has no key yet, the same
+     session then offers that kind ($20 in all, paid from bought credits,
+     no `--wallet`), asked separately; when it already has one, a swap
+     keeps it and is not offered again. On a plan the agent
      asks for foldrun's tiers (`foldrun/fast`, `foldrun/default`,
      `foldrun/max`, from the agent's `model:`), each the model the platform
      serves at that tier. Bought credits pay for a tier the plan does not

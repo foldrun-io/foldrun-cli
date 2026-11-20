@@ -662,8 +662,12 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
       keysMade++;
       const body = JSON.parse(String(b));
       assert.equal(body.purpose, "gateway");
-      assert.ok(body.capUsd > 0, "a key with a limit");
-      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: body.capUsd };
+      // FOL-208: an account key — the plan first, bought credits only up
+      // to its wallet budget, and a daily limit on every call.
+      assert.equal(body.credential, "account");
+      assert.ok(body.dailyUsd > 0, "a key with a limit");
+      assert.ok(body.walletUsd > 0 && body.walletUsd <= 20, "a wallet budget");
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
     },
     "POST /v1/messages": (b) => {
       asked.push(JSON.parse(String(b)));
@@ -753,7 +757,7 @@ test("--local, cloud_agents: sending the folder is asked (no sends nothing); aft
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
     "GET /api/me": () => ({ account: "acme" }),
-    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: 20 }),
+    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
     [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
     [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID }),
     [`GET ${WS}/runs/${RUN}`]: () => ({
@@ -821,7 +825,7 @@ test("--local, cloud_agents: Ctrl-C while they work stops every run on the platf
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
     "GET /api/me": () => ({ account: "acme" }),
-    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: 20 }),
+    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
     [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
     [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: `run-c-${++n}`, snapshot: ID }),
     [`GET ${WS}/runs/run-c-1`]: () => ({ timedOut: true }),
@@ -895,7 +899,7 @@ test("--local on a foldrun Pro plan with room: no bought credit needed, and the 
     "GET /api/me": () => ({ account: "acme" }),
     // The wallet cannot be read: the plan is asked all the same (Codex review).
     "GET /api/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: true, freeAt: null } }),
-    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, capUsd: 20 }),
+    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
     "POST /v1/messages": (b) => {
       asked.push(JSON.parse(String(b)));
       return sse([{ type: "text", text: "Hello." }]);
@@ -1025,4 +1029,140 @@ test("trimConversation: whole turns from the front, still starting with the pers
   assert.equal((cut[0]!.content[0] as any).text, "two");
   assert.deepEqual(trimConversation(list, 10), [], "one turn too big on its own leaves nothing");
   assert.equal(trimConversation([{ role: "user", content: [{ type: "text", text: "é".repeat(150) }] }, { role: "assistant", content: [{ type: "text", text: "ok" }] }], 200).length, 0, "bytes, not characters");
+});
+
+for (const answer of ["y", "n"]) {
+  test(`--local with a key kept before CLI 27.3: asked once to swap it — ${answer === "y" ? "yes makes an account key and revokes the old one" : "no keeps it and never asks again"}`, { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+    const d = repo();
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+    const s = await serve({
+      [`GET ${WS}`]: () => ({ name: "desk" }),
+      [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+      [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+      "GET /api/me": () => ({ account: "acme" }),
+      "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+      "POST /api/keys": (b: string) => ({ id: "new-1", key: "fr_gw_new", gatewayUrl: s.url, credential: JSON.parse(b).credential, walletUsd: JSON.parse(b).walletUsd, dailyUsd: JSON.parse(b).dailyUsd, capUsd: null }),
+      "DELETE /api/keys": () => ({ ok: true }),
+      "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
+    });
+    const file = path.join(home, "code-local-keys.json");
+    fs.writeFileSync(file, JSON.stringify({ [`${s.url}#acme`]: { id: "old-1", key: "fr_gw_old", gatewayUrl: s.url } }), { mode: 0o600 });
+    // A lock a session that died left behind (its process gone) is taken over.
+    if (answer === "y") {
+      fs.mkdirSync(`${file}.lock`);
+      fs.writeFileSync(path.join(`${file}.lock`, "owner"), "999999:dead");
+    }
+    try {
+      const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+      try {
+        let at = await t.until(/\w ❯ /);
+        t.send("go\r");
+        at = await t.until(/older kind[\s\S]*swap it\? \[y\/N\]/, at);
+        t.send(`${answer}\r`);
+        at = await t.until(/Done\./, at);
+        at = await t.until(/\w ❯ /, at);
+        t.send("/quit\r");
+        await t.done;
+      } finally {
+        t.child.kill();
+      }
+      const kept = JSON.parse(fs.readFileSync(file, "utf8"))[`${s.url}#acme`];
+      const deletes = s.seen.filter((x: any) => x.method === "DELETE" && x.url === "/api/keys");
+      const posts = s.seen.filter((x: any) => x.method === "POST" && x.url === "/api/keys");
+      if (answer === "y") {
+        assert.equal(kept.key, "fr_gw_new");
+        assert.equal(kept.kind, "account");
+        assert.equal(JSON.parse(posts[0].body).credential, "account");
+        assert.deepEqual(JSON.parse(deletes[0].body), { id: "old-1" }, "the old key is revoked");
+        assert.equal(fs.existsSync(`${file}.lock`), false, "the lock is released");
+      } else {
+        assert.equal(kept.key, "fr_gw_old");
+        assert.equal(kept.upgradeAsked, true, "not asked again");
+        assert.equal(posts.length + deletes.length, 0, "nothing made, nothing revoked");
+      }
+    } finally {
+      s.close();
+    }
+  });
+}
+
+test("--local swap on a platform that makes the older kind of key: the new one is revoked at once, the old one kept and used, not asked again", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme" }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /api/keys": () => ({ id: "new-1", key: "fr_gw_new", gatewayUrl: s.url, capUsd: null, dailyUsd: 100 }),
+    "DELETE /api/keys": () => ({ ok: true }),
+  });
+  const file = path.join(home, "code-local-keys.json");
+  fs.writeFileSync(file, JSON.stringify({ [`${s.url}#acme`]: { id: "old-1", key: "fr_gw_old", gatewayUrl: s.url } }), { mode: 0o600 });
+  try {
+    const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("go\r");
+      at = await t.until(/swap it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/does not make plan-first keys yet/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    const deletes = s.seen.filter((x: any) => x.method === "DELETE" && x.url === "/api/keys").map((x: any) => JSON.parse(x.body).id);
+    assert.deepEqual(deletes, ["new-1"], "only the key just made is revoked");
+    const kept = JSON.parse(fs.readFileSync(file, "utf8"))[`${s.url}#acme`];
+    assert.equal(kept.key, "fr_gw_old");
+    assert.equal(kept.upgradeAsked, true, "kept, and the swap is not offered again on this platform");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local on a platform from before plan-first keys: the older kind is offered on its own terms, asked separately, and kept as asked about", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme" }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /api/keys": (b: string) =>
+      JSON.parse(b).credential === "account"
+        ? { __status: 400, body: { error: 'credential must be "login" (the operator\'s Claude login) or left out' } }
+        : { id: "old-kind", key: "fr_gw_older", gatewayUrl: s.url, capUsd: 20, dailyUsd: null },
+    "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
+  });
+  const file = path.join(home, "code-local-keys.json");
+  try {
+    const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("go\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/only the older kind[\s\S]*make that instead\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/Done\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    const posts = s.seen.filter((x: any) => x.method === "POST" && x.url === "/api/keys").map((x: any) => JSON.parse(x.body));
+    assert.equal(posts[0].credential, "account");
+    assert.deepEqual({ capUsd: posts[1].capUsd, credential: posts[1].credential }, { capUsd: 20, credential: undefined });
+    const kept = JSON.parse(fs.readFileSync(file, "utf8"))[`${s.url}#acme`];
+    assert.equal(kept.key, "fr_gw_older");
+    assert.equal(kept.upgradeAsked, true, "no swap offered for it on this platform");
+  } finally {
+    s.close();
+  }
 });
