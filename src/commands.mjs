@@ -4305,7 +4305,7 @@ async function invoke(target, flags, layout) {
     );
   }
   if (!target) throw new Error("which flow? try `foldrun invoke <flow> --to <workspace>`");
-  if (flags.to === true) throw new Error("--to needs a project name: `foldrun invoke <flow> --to <workspace>`");
+  if (flags.to !== undefined && typeof flags.to !== "string") throw new Error("--to needs a project name: `foldrun invoke <flow> --to <workspace>`");
   // invoke starts real work, so a project folder never stands in for --to:
   // a deploy may have gone to another name (`deploy --to main-try`), and
   // guessing could start the flow in the live one (Codex, 20 Nov 2026). The
