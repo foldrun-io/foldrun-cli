@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.2.0] — 2026-11-20
+
+### New in the public API
+
+- `foldrun update`
+
+- feat(cli): keeps itself current — foldrun update, a staged release beside the installed one ([eb77514](https://github.com/foldrun-io/foldrun-cli/commit/eb77514))
+- test(code): answer the local engine's questions a moment after they print ([97a9ede](https://github.com/foldrun-io/foldrun-cli/commit/97a9ede))
+- fix(code): a 402 names the billing page that exists, not a Settings tab ([667752b](https://github.com/foldrun-io/foldrun-cli/commit/667752b))
+
 ## [27.1.0] — 2026-11-19
 
 - feat(code): every session asks where it works; exit or quit leaves, as in Claude Code ([49f83d8](https://github.com/foldrun-io/foldrun-cli/commit/49f83d8))
