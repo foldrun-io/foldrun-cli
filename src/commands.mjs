@@ -5420,13 +5420,6 @@ async function keysCreateGateway(url, label, flags) {
     console.log(`  ${c.dim(`The key's spend under Claude Code's input box: add to ~/.claude/settings.json`)}`);
     console.log(`    "statusLine": { "type": "command", "command": "${STATUS_LINE_COMMAND}" }\n`);
   }
-  // OpenAI's format, on the same key (21 Nov 2026): not for a plan key,
-  // which answers Claude Code alone.
-  if (made.credential !== "login" && made.gatewayUrl) {
-    console.log(`  ${c.dim("Tools that speak OpenAI's format (the OpenAI SDK, Cursor, aider) use the same key:")}`);
-    console.log(`    export OPENAI_BASE_URL=${made.gatewayUrl.replace(/\/+$/, "")}/v1`);
-    console.log(`    export OPENAI_API_KEY=<key>\n`);
-  }
   // A login key is not metered: there is no spend for `keys ls` to show.
   const after = made.credential === "login"
     ? `It opens the gateway only and runs on this account's plan: not billed per call, the plan's usage limits apply. \`foldrun keys revoke ${made.id}\` ends it.`

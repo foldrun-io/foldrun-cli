@@ -187,45 +187,32 @@ Some carry a `code` a program can branch on beside it — `unknown_api_version`,
 
 ## Calling models
 
-The models are called on the gateway, with a **gateway key** (made on Settings → API
-keys as the *Gateway* kind, or `foldrun keys create <label> --gateway`). It opens the
-model routes alone, never `/api`. The gateway's address is shown when the key
-is made (`gatewayUrl` on `GET /api/keys`). One key speaks two formats:
+The models are called on the gateway, in Anthropic's Messages format, with a
+**gateway key** (made on Settings → API keys as the *Gateway* kind, or
+`foldrun keys create <label> --gateway`). It opens the model routes alone,
+never `/api`. The gateway's address is shown when the key is made
+(`gatewayUrl` on `GET /api/keys`).
 
-| Format | Route | Point a client at |
-|---|---|---|
-| Anthropic's Messages | `POST /v1/messages`, `POST /v1/messages/count_tokens` | `ANTHROPIC_BASE_URL=<gateway>`, `ANTHROPIC_AUTH_TOKEN=<key>` |
-| OpenAI's chat completions | `POST /v1/chat/completions` | `OPENAI_BASE_URL=<gateway>/v1`, `OPENAI_API_KEY=<key>` |
+| Route | For |
+|---|---|
+| `POST /v1/messages` | a model call, whole or streamed |
+| `POST /v1/messages/count_tokens` | what a request would count |
+| `GET /v1/models` | the models the key can call |
+| `GET /v1/usage` | the key's spend (`?format=line` for one line) |
 
-Both also answer `GET /v1/models` and `GET /v1/usage` (the key's spend, or
-`?format=line` for one line). The model is named the same way in either
-format — `claude-sonnet-4-5`, or `provider/model` for another provider
-(`openai/gpt-5`, `deepseek/deepseek-v4`; [providers](providers.md)) — and each
-call is checked, held to the key's limits and charged the same way.
+Any Anthropic SDK or client works: `ANTHROPIC_BASE_URL=<gateway>`,
+`ANTHROPIC_AUTH_TOKEN=<key>`. The format is the same whatever runs the call:
+a model of another provider is named `provider/model` (`openai/gpt-5`,
+`deepseek/deepseek-v4`; [providers](providers.md)), and the gateway
+translates the request for it and its reply back, so the caller sees
+Anthropic's shape every time. Each call is checked, held to the key's limits
+and charged the same way.
 
 ```sh
-curl "$GATEWAY/v1/chat/completions" -H "Authorization: Bearer $KEY" \
+curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
-  -d '{"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}]}'
+  -d '{"model": "openai/gpt-5", "max_tokens": 200, "messages": [{"role": "user", "content": "hi"}]}'
 ```
-
-The chat-completions format is served as a Messages call, so what has no
-equal there is refused with a `400` that names the field, rather than ignored:
-`n` above 1, `logprobs`, `audio` and non-text `modalities`, `prediction`,
-`logit_bias`, `response_format` other than `text` (ask for JSON in the
-prompt, or use tools), and a tool's `strict: true`. Fields that only tune a reply (`seed`, the penalties,
-`store`, `metadata`) are let go. Content may be text, images (`https` or
-`data:` URLs) and PDFs as `file_data`. `max_completion_tokens` (or
-`max_tokens`) defaults to 8192; `temperature` above 1 is held to 1. Tool
-calls, `tool_choice`, `parallel_tool_calls`, streaming and
-`stream_options.include_usage` work as OpenAI documents them; a reply's
-thinking is not shown, and a reply cut off on the way ends in an error,
-never a finish. Errors come back in OpenAI's shape
-(`{ "error": { "message", "type", "param", "code" } }`), a `402` with
-`code: "insufficient_quota"`.
-
-A key that runs on a plan (a coding subscription) answers its coding agent
-alone: on chat completions it is refused with a `429`, and nothing is sent.
 
 ## Pagination
 
