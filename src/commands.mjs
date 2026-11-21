@@ -15199,7 +15199,20 @@ async function codeLocalTurn(s, text) {
       // finished, else the message and a note (turns must alternate).
       const whole = [...history, ...turn];
       const done = result?.subtype === "success" && !result?.is_error && validConversation(whole);
-      s.localHistory = trimConversation(done ? whole : [...history, turn[0], { role: "assistant", content: [{ type: "text", text: cancel.asked ? "(stopped by the person before I finished)" : "(this turn did not finish)" }] }]);
+      // A reply that did not finish (cut off at the output limit, a refusal)
+      // keeps its words in the conversation, so "continue" goes on from what
+      // the person just saw (FOL-211, Codex). Text only: a cut-off tool call
+      // is never kept unanswered.
+      // The ending turn's own words, empty included, are both what is printed
+      // and what is kept: an earlier turn's text (a pause, "I'll check") is
+      // not passed off as this one's (Codex, round 2).
+      const failed = !done && !cancel.asked && !!result && result.subtype !== "success";
+      const partial = failed && typeof result.result === "string" ? result.result.trim() : "";
+      if (failed && typeof result.result === "string") reply = partial;
+      const reason = failed && Array.isArray(result.errors) && typeof result.errors[0] === "string" ? result.errors[0] : "";
+      const ending = `(this turn did not finish${reason ? `: ${reason}` : ""})`;
+      const note = cancel.asked ? "(stopped by the person before I finished)" : partial ? `${partial}\n\n${ending}` : ending;
+      s.localHistory = trimConversation(done ? whole : [...history, turn[0], { role: "assistant", content: [{ type: "text", text: note }] }]);
       saveEngineConversation(s, s.localHistory);
     }
   } catch (err) {
@@ -15224,7 +15237,9 @@ async function codeLocalTurn(s, text) {
   }
   const ok = result?.subtype === "success" && !result?.is_error;
   if (!ok && result && !cancel.asked) {
-    const why = plainText(String(result.result ?? (Array.isArray(result.errors) ? result.errors.join("; ") : result.subtype) ?? ""));
+    // Why it did not finish comes first: a reply cut off at the output limit
+    // has its partial text in `result`, which is the reply, not the reason (FOL-211).
+    const why = plainText(String((Array.isArray(result.errors) && result.errors.length ? result.errors.join("; ") : null) ?? result.result ?? result.subtype ?? ""));
     const said = engineModelError(new Error(why), s);
     if (said) console.log(`  ${c.red("✗")} ${c.dim(said)}`);
     else if (why) console.log(`  ${c.red("✗")} ${c.grey(clipLine(why))}`);

@@ -551,7 +551,7 @@ test("local mode helpers: names, tiers, call summaries, inside the folder, the f
 });
 
 /** One scripted model turn as the Messages API streams it. */
-function sse(content: Array<{ type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown }>) {
+function sse(content: Array<{ type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string) {
   const ev = (e: Record<string, unknown>) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
   let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1 } } });
   content.forEach((b, index) => {
@@ -564,7 +564,7 @@ function sse(content: Array<{ type: "text"; text: string } | { type: "tool_use";
     }
     out += ev({ type: "content_block_stop", index });
   });
-  out += ev({ type: "message_delta", delta: { stop_reason: content.some((b) => b.type === "tool_use") ? "tool_use" : "end_turn" }, usage: { output_tokens: 5 } });
+  out += ev({ type: "message_delta", delta: { stop_reason: stop ?? (content.some((b) => b.type === "tool_use") ? "tool_use" : "end_turn") }, usage: { output_tokens: 5 } });
   out += ev({ type: "message_stop" });
   return raw(out, "text/event-stream");
 }
@@ -811,6 +811,57 @@ test("--local, cloud_agents: sending the folder is asked (no sends nothing); aft
     assert.equal(sent.snapshot, ID);
     assert.equal(sent.task, "add b to a.txt\nthen run the tests");
     assert.equal(sent.context, undefined, "its own conversation, not this one");
+  } finally {
+    s.close();
+  }
+});
+
+// The CLI runs the published @foldrun/core: this turns on by itself once
+// the CLI's range reaches the core release that has endOf (FOL-211).
+const coreEndsHonestly = typeof ((await import("@foldrun/core/engine-loop")) as Record<string, unknown>).endOf === "function";
+
+test("--local: a reply cut off at the output limit says so, is shown, and the next turn goes on from its words (FOL-211)", { skip: !hasPty ? "needs python3's pty" : !coreEndsHonestly ? "needs the @foldrun/core release with FOL-211" : false, timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "text", text: "Here is the first half of the pla" }], "max_tokens"),
+    () => sse([{ type: "text", text: "n, and the rest." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme" }),
+    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return turns[asked.length - 1]!();
+    },
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("plan it\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/cut off at the output limit[\s\S]*Here is the first half of the pla[\s\S]*✗ not finished/, at);
+      assert.doesNotMatch(t.out().slice(0, at), /✓ done/, "a cut-off reply is not a finished one");
+      at = await t.until(/\w ❯ /, at);
+      t.send("continue\r");
+      at = await t.until(/and the rest\.[\s\S]*✓ done/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    // The second turn carries what the person saw, and why it stopped.
+    const carried = JSON.stringify(asked[1].messages);
+    assert.match(carried, /Here is the first half of the pla/);
+    assert.match(carried, /this turn did not finish: the reply was cut off at the output limit/);
+    assert.match(carried, /continue/);
   } finally {
     s.close();
   }
