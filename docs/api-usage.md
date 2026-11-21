@@ -185,6 +185,17 @@ Some carry a `code` a program can branch on beside it — `unknown_api_version`,
 | 429 | rate limited — wait `Retry-After` |
 | 5xx | our fault; the detail is in our logs, not the response. Safe to retry with the same Idempotency-Key |
 
+## One address
+
+foldrun answers programs at one address: the platform routes (`/api/…`)
+and the model routes (`/v1/…`) together, for API keys, the CLI and Claude
+Code alike. Settings → API keys → API shows it, and `GET /api/version`
+names it as `urls.api` (with the dashboard's own address as `urls.app`).
+`foldrun login` moves a machine's calls there by itself. Signing in,
+invitations, approvals and the other pages a person opens stay on the
+dashboard's address; the API host answers those routes with a 404 that
+says so.
+
 ## Calling models
 
 The models are called on the gateway, in Anthropic's Messages format, with a

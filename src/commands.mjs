@@ -2180,8 +2180,11 @@ function chosenProfile(flags) {
   } catch {
     return null;
   }
-  if (current && normaliseUrl(current.url) === key) return current;
-  const here = listProfiles().filter((p) => normaliseUrl(p.url) === key);
+  // A profile kept at the API answers for its dashboard's address too
+  // (`app`, 21 Nov 2026): --url https://dev.foldrun.io still finds it.
+  const at = (p) => normaliseUrl(p.url) === key || (typeof p.app === "string" && normaliseUrl(p.app) === key);
+  if (current && at(current)) return current;
+  const here = listProfiles().filter(at);
   if (here.length <= 1) return here[0] ?? null;
   throw new Error(
     `${here.length} accounts are signed in to ${key} (${here.map((p) => p.name).join(", ")}) and none of them is the current one — say which: --profile <name> for this command, or \`foldrun use <name>\``,
@@ -2221,7 +2224,125 @@ function refusedHint(url, flags) {
 
 const remoteUrl = (flags) =>
   (typeof flags.profile === "string" ? chosenProfile(flags)?.url : undefined) ??
+  apiOfAlias(flags.url ?? env("FOLDRUN_URL"), flags) ??
   flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? undefined;
+
+/** A named address that is the acting profile's dashboard (`app`): that
+ *  profile's API, where its calls go (21 Nov 2026). Else undefined — the
+ *  name stands. Never for a key given with --token or FOLDRUN_TOKEN: a key
+ *  from outside goes where it was told, whatever this machine has saved,
+ *  and only the profile whose key is sent decides (Codex review). */
+function apiOfAlias(named, flags) {
+  if (typeof named !== "string" || flags.token || env("FOLDRUN_TOKEN")) return undefined;
+  try {
+    const key = normaliseUrl(named);
+    const p = chosenProfile(flags);
+    return p && typeof p.app === "string" && normaliseUrl(p.app) === key && normaliseUrl(p.url) !== key ? p.url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The dashboard's address for the platform at `url` (21 Nov 2026, one API):
+ * the pages the CLI opens or prints, and the few routes the API host leaves
+ * to the dashboard (`foldrun me`'s name and timezone, `connect`'s start).
+ * A profile that signed in through `foldrun login` keeps both — `url` is the
+ * API, `app` the dashboard, and `app` was checked with its own key then —
+ * so this reads the profile only, never an address a platform names later.
+ * No profile with one: `url` itself, an install with one address for both.
+ */
+function appFor(url, flags) {
+  if (!url) return url;
+  let key;
+  try {
+    key = normaliseUrl(url);
+  } catch {
+    return url;
+  }
+  // The profile this command acts as, when it is the one at `url`: its key
+  // goes with person-only calls, so its own dashboard, never another's.
+  // A key from outside (--token, FOLDRUN_TOKEN) stays on the address it
+  // was given: a saved profile's dashboard was checked with that profile's
+  // key, never with this one (Codex review).
+  if (flags && (flags.token || env("FOLDRUN_TOKEN"))) return key;
+  /** @type {any} */
+  let chosen = null;
+  if (flags) {
+    try {
+      chosen = chosenProfile(flags);
+    } catch {}
+  }
+  if (chosen && normaliseUrl(chosen.url) === key) return typeof chosen.app === "string" ? chosen.app : key;
+  if (flags) return key;
+  // No command flags (a link printed from a session): any profile there.
+  const p = listProfiles().find((x) => typeof x.app === "string" && normaliseUrl(x.url) === key);
+  return p ? p.app : key;
+}
+
+/** GET /api/version's `urls` — { api, app } or null (an older platform, or
+ *  one address for both). Open: asked before a key exists. */
+async function platformUrls(url) {
+  try {
+    // Answered by `url` itself: a redirect is no answer from it, so it can
+    // never vouch for an address it was not asked at (Codex review).
+    const res = await remoteFetch(url, "/api/version", { redirect: "manual" }, { seconds: 15 });
+    if (res.status !== 200) return null;
+    const u = /** @type {any} */ (await res.json().catch(() => null))?.urls;
+    const web = (v) => {
+      if (typeof v !== "string") return null;
+      try {
+        const x = new URL(v);
+        return x.protocol === "https:" || (x.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(x.hostname)) ? normaliseUrl(x.origin) : null;
+      } catch {
+        return null;
+      }
+    };
+    return u && typeof u === "object" ? { api: web(u.api), app: web(u.app) } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a key made by signing in at `url` should be kept (21 Nov 2026): the
+ * platform's API address when it has one and the key answers there as the
+ * same account — else `url` — and its dashboard when that is elsewhere and
+ * also answers the key as the same account. A platform naming an address
+ * the key does not work at changes nothing.
+ */
+async function signedInAddresses(url, token, account) {
+  const urls = await platformUrls(url);
+  const same = async (at) => {
+    try {
+      const res = await remoteFetch(at, "/api/me", { redirect: "manual" }, { token, seconds: 15 });
+      return res.status === 200 && /** @type {any} */ (await res.json().catch(() => null))?.account === account;
+    } catch {
+      return false;
+    }
+  };
+  // Both ways before any key leaves for another address: the other one's own
+  // /api/version (open, no key) must name the same pair. One server's word
+  // alone never sends a key elsewhere (Codex review, 21 Nov 2026).
+  // Either may be null (an install that names only its API): the pair is
+  // compared as named, nulls included.
+  const pair = urls && (urls.api || urls.app) ? `${urls.api} ${urls.app}` : null;
+  const bound = async (other) => {
+    if (!pair || !other || (other !== urls?.api && other !== urls?.app)) return false;
+    const theirs = await platformUrls(other);
+    return !!theirs && `${theirs.api} ${theirs.app}` === pair;
+  };
+  const checked = async (other) => (await bound(other)) && (await same(other));
+  const api = urls?.api && urls.api !== url && (await checked(urls.api)) ? urls.api : url;
+  // The dashboard is the one the platform names, once checked; where the
+  // sign-in started only when it is that one, or when none is named and
+  // the key moved off it (Codex review).
+  const app =
+    urls?.app && urls.app !== api && (urls.app === url || (await checked(urls.app))) ? urls.app
+    : api !== url && !urls?.app ? url
+    : null;
+  return { url: api, app };
+}
 
 const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOKEN / pass --token";
 
@@ -3175,7 +3296,7 @@ async function followRemote(url, flags, ws, runId, seen = new Map(), open = new 
       }
       if (attempt >= 3) {
         throw new Error(
-          `${err.message} three times while ${runId} is still ${run.status} — \`foldrun logs ${runId} --to ${ws} --follow\` picks it up again, or ${url}/dashboard/${ws}/runs/${runId}`,
+          `${err.message} three times while ${runId} is still ${run.status} — \`foldrun logs ${runId} --to ${ws} --follow\` picks it up again, or ${appFor(url)}/dashboard/${ws}/runs/${runId}`,
         );
       }
       console.error(`  ${c.dim(`… ${err.message}; reconnecting (${attempt}/3)`)}`);
@@ -3205,7 +3326,7 @@ async function openCmd(positional, flags) {
   if (!url) throw new Error("open needs a platform — pass --url or set FOLDRUN_URL");
   const ws = flags.to ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
   const page = positional[0] ? `/${positional[0].replace(/^\/+/, "")}` : "";
-  const target = new URL(`/dashboard/${ws}${page}`, url).toString();
+  const target = new URL(`/dashboard/${ws}${page}`, appFor(url, flags)).toString();
   console.log(target);
   if (flags.print === true) return 0;
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
@@ -4409,7 +4530,7 @@ async function invoke(target, flags, layout) {
     return finishLine(run);
   }
   if (!flags.wait) {
-    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)}${body.test ? ` ${c.amber("TEST")}` : ""} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${url}/dashboard/${ws}/runs/${body.runId}`)}\n`);
+    console.log(`\n  ${c.green("✓")} queued ${c.bold(body.runId)}${body.test ? ` ${c.amber("TEST")}` : ""} — ${c.dim(`foldrun logs ${body.runId} --to ${ws} --follow, or ${appFor(url)}/dashboard/${ws}/runs/${body.runId}`)}\n`);
     return 0;
   }
   const run = body.run ?? body;
@@ -4418,7 +4539,7 @@ async function invoke(target, flags, layout) {
   if (!ok && status !== "awaiting-approval" && body.runId && body.status) return reportFailedRun(body, ws);
   if (body.result) console.log(`\n${body.result}\n`);
   const mark = ok ? c.green("✓") : status === "awaiting-approval" ? c.amber("⏸") : c.red("✗");
-  console.log(`  ${mark} ${status}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}${status === "awaiting-approval" ? c.dim(` — ${url}/dashboard/${ws}/runs/${body.runId}`) : ""}\n`);
+  console.log(`  ${mark} ${status}${body.costUsd != null ? ` · $${Number(body.costUsd).toFixed(4)}` : ""}${status === "awaiting-approval" ? c.dim(` — ${appFor(url)}/dashboard/${ws}/runs/${body.runId}`) : ""}\n`);
   return ok ? 0 : status === "awaiting-approval" ? 2 : 1;
 }
 
@@ -4845,8 +4966,10 @@ async function login(flags) {
     // Verify before storing: a wrong key stored is a wrong key on every
     // later command, each failing one step further from the cause.
     const me = await remoteCall(url, { token: flags.token, quiet: true }, "/api/me");
-    const name = saveCredential(url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
-    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
+    const at = await signedInAddresses(url, flags.token, me.account);
+    const name = saveCredential(at.url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
+    console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
+    if (at.app) console.log(`  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}`);
     console.log(`  ${c.dim(`stored as the account "${name}" — \`foldrun accounts\` lists them, \`foldrun use ${name}\` switches`)}\n`);
     return 0;
   }
@@ -4893,8 +5016,12 @@ async function login(flags) {
       // `minted`: this key exists because of this login, so logout may end
       // it. A key stored with --token was made elsewhere and may be in use
       // elsewhere; logout only forgets it.
-      const name = saveCredential(url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true }, { name: typeof flags.profile === "string" ? flags.profile : undefined });
-      console.log(`\n  ${c.green("✓")} signed in to ${c.bold(url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}\n`);
+      // The one API (21 Nov 2026): a platform with an API address of its own
+      // gets this machine's calls there; its dashboard stays for pages.
+      const at = await signedInAddresses(url, poll.token, poll.account);
+      const name = saveCredential(at.url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
+      console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}`);
+      console.log(at.app ? `  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}\n` : "");
       console.log(`  ${c.dim(`Stored as the account "${name}" in ${credentialsShown()}. \`foldrun accounts\` lists every account signed in here; \`foldrun use ${name}\` switches.`)}\n`);
       return 0;
     }
@@ -4947,6 +5074,7 @@ async function whoami(flags) {
   const who = me.actor.kind === "user" ? me.actor.email : `API key ${me.actor.prefix ?? ""}… ${c.dim(`"${me.actor.label ?? ""}"${me.actor.createdBy ? ` by ${me.actor.createdBy}` : ""}`)}`;
   console.log(`\n  ${c.bold(who)}`);
   console.log(`  platform    ${url}`);
+  if (appFor(url, flags) !== normaliseUrl(url)) console.log(`  dashboard   ${appFor(url, flags)}`);
   console.log(`  account     ${me.account}${me.owner ? c.dim(`  (owner ${me.owner})`) : ""}`);
   console.log(`  role        ${me.role}`);
   console.log(`  workspaces  ${me.workspaces === null ? "all" : me.workspaces.join(", ") || "none"}`);
@@ -6540,7 +6668,7 @@ async function signupCmd(positional, flags) {
   const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
   let res;
   try {
-    res = await remoteFetch(url, "/api/signup", {}, { seconds: timeoutSeconds(flags) });
+    res = await remoteFetch(appFor(url), "/api/signup", {}, { seconds: timeoutSeconds(flags) });
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     if (flags.json === true) console.log(JSON.stringify({ url, error }, null, 2));
@@ -14280,7 +14408,7 @@ function engineModelError(/** @type {unknown} */ err, s) {
     s.creditsOk = false;
     s.planReadAt = 0;
   }
-  if (status === 402) return `the gateway would not pay for this: ${said} — your credits: ${String(s.url).replace(/\/+$/, "")}/dashboard/billing · this key's limit: foldrun keys ls`;
+  if (status === 402) return `the gateway would not pay for this: ${said} — your credits: ${String(appFor(s.url)).replace(/\/+$/, "")}/dashboard/billing · this key's limit: foldrun keys ls`;
   if (status === 401 && /^(invalid API key|API key revoked|API key expired)/.test(said) && s.keySlot) {
     // Forgotten only if the kept key is still the one refused: another
     // session may have swapped it in the meantime (Codex).
@@ -14435,7 +14563,7 @@ async function creditsReady(/** @type {any} */ s, /** @type {string | null} */ t
   // is the wallet's, by the wallet's rule below (Codex review, 20 Nov 2026).
   const plan = found && tier && found.covers[tier] ? found : null;
   if (plan?.room) return true;
-  const billing = c.cyan(`${String(s.url).replace(/\/+$/, "")}/dashboard/billing`);
+  const billing = c.cyan(`${String(appFor(s.url)).replace(/\/+$/, "")}/dashboard/billing`);
   // Past the allowance with extra usage off: the agent's tiers are the
   // plan's, and the plan waits for its reset — said now, whatever the wallet
   // holds, not as a refusal after a key is made (Codex review, 20 Nov 2026).
@@ -16847,7 +16975,7 @@ async function onboardingCmd(flags) {
     console.log(JSON.stringify(o, null, 2));
     return 0;
   }
-  const base = String(url).replace(/\/$/, "");
+  const base = String(appFor(url, flags)).replace(/\/$/, "");
   console.log(`\n  ${c.bold("Getting started")}  ${c.dim(`${o.done} of ${o.total}${o.complete ? " — all done" : ""}`)}\n`);
   for (const s of o.steps ?? []) {
     const mark = s.done ? c.green("✓") : s.id === o.next?.id ? c.yellow("→") : c.dim("○");
@@ -18011,7 +18139,8 @@ async function connectFromClient(name, flags) {
       } else if (r.status === "denied" || r.status === "expired") throw new Error(`${r.reason} — run it again`);
     }
   }
-  const started = await remoteCall(url, flags, "/api/oauth/start", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
+  // Not served on the API host: the dashboard's address (appFor).
+  const started = await remoteCall(appFor(url, flags), flags, "/api/oauth/start", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
   const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(started.url);
   // The platform answers a hand-off page: a signed-in person accepts the
   // connection there, then the provider's consent runs in that browser.
@@ -18685,14 +18814,15 @@ async function meCmd(positional, flags) {
   if (sub === "name") {
     if (flags.clear !== true && !rest.length) throw new Error("`foldrun me name <first> [last]`, or `foldrun me name --clear`");
     const body = flags.clear === true ? { firstName: null, lastName: null } : { firstName: rest[0], lastName: rest.slice(1).join(" ") || null };
-    await remoteCall(url, flags, "/api/auth/name", { method: "POST", body: JSON.stringify(body) });
+    // A person's own routes stay on the dashboard's address (appFor).
+    await remoteCall(appFor(url, flags), flags, "/api/auth/name", { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("saved")} ${flags.clear === true ? "no name — you are shown by your address" : `name ${c.bold([body.firstName, body.lastName].filter(Boolean).join(" "))}`}\n`);
     return 0;
   }
   if (sub === "timezone") {
     const zone = rest[0];
     if (!zone) throw new Error("`foldrun me timezone <zone>` (e.g. Australia/Sydney), or `foldrun me timezone auto` for the browser's");
-    const r = await remoteCall(url, flags, "/api/auth/timezone", { method: "POST", body: JSON.stringify({ timezone: zone === "auto" ? null : zone }) });
+    const r = await remoteCall(appFor(url, flags), flags, "/api/auth/timezone", { method: "POST", body: JSON.stringify({ timezone: zone === "auto" ? null : zone }) });
     console.log(`\n  ${c.green("saved")} timezone ${c.bold(r.timezone ?? "automatic (the browser's)")}\n`);
     return 0;
   }

@@ -356,7 +356,7 @@ const HELP = `foldrun — agents are just folders
   foldrun version           this CLI's version, its core's, and the platform's: release, API version, component shas — warns when the platform ships a newer CLI (--json)
 
 Signing in
-  foldrun login             sign this machine in from the browser (--token <key> to skip it)
+  foldrun login             sign this machine in from the browser (--token <key> to skip it); on a platform with its own API address the calls go there, pages stay on the dashboard
   foldrun login <site> --url <address>
                             open a browser, sign in to that site by hand, and store the
                             session: cookies, storage and the browser identity it needs

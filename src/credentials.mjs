@@ -263,20 +263,28 @@ function write(current, profiles) {
  * different account on the same URL is a new one.
  * @param {string} url
  * @param {Record<string, any>} entry
- * @param {{ makeDefault?: boolean, name?: string }} [opts]
+ * @param {{ makeDefault?: boolean, name?: string, alsoAt?: string[] }} [opts]
+ *   alsoAt: the platform's other addresses (where the sign-in started, its
+ *   dashboard) — the same account's profile at one of them is this one.
  */
-export function saveCredential(url, entry, { makeDefault = true, name } = {}) {
+export function saveCredential(url, entry, { makeDefault = true, name, alsoAt } = {}) {
   return locked(() => {
     const key = normaliseUrl(url);
     const { current, profiles } = readCredentials();
-    const existing = name ?? Object.keys(profiles).find((n) => normaliseUrl(profiles[n].url) === key && profiles[n].account === entry.account);
+    // alsoAt: where the sign-in started, when the key is kept at the
+    // platform's API address instead (21 Nov 2026). The same account's
+    // profile there is this one moved, not a second profile beside it.
+    const at = new Set([key, ...(alsoAt ?? []).filter(Boolean).map((u) => normaliseUrl(u))]);
+    // A profile is at its API and at its saved dashboard (`app`) alike.
+    const here = (p) => at.has(normaliseUrl(p.url)) || (typeof p.app === "string" && at.has(normaliseUrl(p.app)));
+    const existing = name ?? Object.keys(profiles).find((n) => here(profiles[n]) && profiles[n].account === entry.account);
     const profileName = existing ?? nameFor(profiles, entry.account, key);
     // The default project (`foldrun workspaces use`) is what is stored NOW for
     // this account on this platform, never what the entry carries: a renewal
     // writes back a profile read before a `use` or `--clear` changed it, and a
     // re-login to the same account keeps it (Codex review, 19 Nov 2026).
     const prev = profiles[profileName];
-    const kept = prev && normaliseUrl(prev.url) === key && prev.account === entry.account && typeof prev.workspace === "string" ? { workspace: prev.workspace } : {};
+    const kept = prev && here(prev) && prev.account === entry.account && typeof prev.workspace === "string" ? { workspace: prev.workspace } : {};
     const { workspace: _carried, ...fields } = entry;
     profiles[profileName] = { ...fields, ...kept, url: key, loggedInAt: new Date().toISOString() };
     write(makeDefault || !current ? profileName : current, profiles);
