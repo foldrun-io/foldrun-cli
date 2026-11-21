@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.5.0] — 2026-11-21
+
+- feat(login): calls go to the platform's API address, pages stay on the dashboard ([351da94](https://github.com/foldrun-io/foldrun-cli/commit/351da94))
+- revert(keys): no OpenAI-format lines after keys create --gateway ([b72662e](https://github.com/foldrun-io/foldrun-cli/commit/b72662e))
+- feat(keys): keys create --gateway prints the OpenAI-format setup too ([19b2804](https://github.com/foldrun-io/foldrun-cli/commit/19b2804))
+
+### docs
+
+- sync api-usage (gateway key's place) ([28a49a0](https://github.com/foldrun-io/foldrun-cli/commit/28a49a0))
+
 ## [27.4.6] — 2026-11-21
 
 ### deps
