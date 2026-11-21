@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.5.1] — 2026-11-21
+
+- fix(code): a turn that did not finish shows why and keeps its own words (FOL-211) ([3743b1f](https://github.com/foldrun-io/foldrun-cli/commit/3743b1f))
+
+### deps
+
+- @foldrun/core ^24.8.0 ([e936970](https://github.com/foldrun-io/foldrun-cli/commit/e936970))
+
 ## [27.5.0] — 2026-11-21
 
 - feat(login): calls go to the platform's API address, pages stay on the dashboard ([351da94](https://github.com/foldrun-io/foldrun-cli/commit/351da94))
