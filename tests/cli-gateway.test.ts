@@ -22,6 +22,8 @@ test("keys create --gateway posts { purpose: gateway, capUsd, dailyUsd } and pri
   assert.doesNotMatch(r.out, /ANTHROPIC_API_KEY/);
   assert.match(r.out, /"statusLine": \{ "type": "command", "command": "foldrun gateway status-line" \}/);
   assert.match(r.out, /opens the gateway only/);
+  assert.match(r.out, /export OPENAI_BASE_URL=https:\/\/gateway\.example\.test\/v1/, "OpenAI's format on the same key");
+  assert.match(r.out, /export OPENAI_API_KEY=<key>/);
 });
 
 test("keys create --gateway refuses, before any request, with no limit, a bad limit, or a role", async () => {
@@ -78,6 +80,7 @@ test("keys create --gateway --login posts credential: login, takes no limit, and
   assert.match(r.out, /pro plan · not billed per call/);
   assert.doesNotMatch(r.out, /shows what it has spent/, "a login key has no spend to show");
   assert.match(r.out, /the plan's usage limits apply/);
+  assert.doesNotMatch(r.out, /OPENAI_BASE_URL/, "a plan key answers Claude Code alone: no OpenAI-format setup");
   assert.equal(withCap.code, 1);
   assert.match(withCap.out, /--login takes no --cap or --daily/);
   assert.match(ls.out, /gateway · Claude Code · pro plan · not billed per call/);
