@@ -187,8 +187,8 @@ Some carry a `code` a program can branch on beside it — `unknown_api_version`,
 
 ## Calling models
 
-The models are called on the gateway, with a **gateway key** (Settings → API
-keys → *Gateway*, or `foldrun keys create <label> --gateway`). It opens the
+The models are called on the gateway, with a **gateway key** (made on Settings → API
+keys as the *Gateway* kind, or `foldrun keys create <label> --gateway`). It opens the
 model routes alone, never `/api`. The gateway's address is shown when the key
 is made (`gatewayUrl` on `GET /api/keys`). One key speaks two formats:
 
