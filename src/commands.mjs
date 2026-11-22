@@ -14221,7 +14221,7 @@ const LOCAL_OLDER_KEY_CAP_USD = 20;
  * The gateway key the foldrun engine's model calls use on this computer:
  * kept in the CLI's own folder (only its owner reads it), made once after
  * a yes. Null when there is none.
- * @returns {Promise<{ id: string, key: string, gatewayUrl: string } | null>}
+ * @returns {Promise<{ id: string, key: string, gatewayUrl: string, kind?: string } | null>}
  */
 async function localKeyFor(s, cancel) {
   const file = path.join(credentialsDir(), "code-local-keys.json");
@@ -15239,7 +15239,7 @@ async function codeLocalTurn(s, text) {
       console.log(`  ${c.red("✗")} ${c.dim(`foldrun keeps its sign-in in ${homeTilde(credentialsDir())}, inside this folder — the agent could read it; work from a folder that does not hold it, or move FOLDRUN_HOME`)}\n`);
       return;
     }
-    /** @type {{ id: string, key: string, gatewayUrl: string } | null} */
+    /** @type {{ id: string, key: string, gatewayUrl: string, kind?: string } | null} */
     let engineKey = null;
     // The agent's model first: a tier word is the plan's to pay for, a
     // model named outright is the wallet's (Codex review, 20 Nov 2026).
