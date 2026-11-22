@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.9.0] — 2026-11-22
+
+- feat(account): account model says when own model keys are off on the platform, and offers no own key ([d039869](https://github.com/foldrun-io/foldrun-cli/commit/d039869))
+
+### docs
+
+- sync — one API, Anthropic's error body from API 2026-11-22 ([e6d7f4d](https://github.com/foldrun-io/foldrun-cli/commit/e6d7f4d))
+
 ## [27.8.0] — 2026-11-22
 
 ### New in the public API
