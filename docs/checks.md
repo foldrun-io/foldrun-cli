@@ -485,6 +485,17 @@ platform (the Checks page, a save, a deploy) when the account runs on
 foldrun's models; `foldrun check` offline does not know the account's
 choice, and an agent or project with its own `provider:` is not checked.
 
+### config/own-model-key
+
+*error, online only.* An agent's or a project's `provider:` block — a model
+endpoint and key of its own — on a platform whose admin turned own model keys
+off (setting `models.byok`, off by default; [providers](providers.md#your-accounts-own-model-key)).
+Every model call there goes through the platform's models, so a deploy, a
+save and the account AGENTS.md editor refuse the file, and a step that still
+names one is refused before it starts. Remove the block: the agent runs on
+the account's choice in Settings → Models. `foldrun check` offline does not
+know the platform's switch and says nothing.
+
 ### config/conflict
 
 *error.* A field written twice: at the top of the frontmatter and inside its

@@ -7980,7 +7980,7 @@ async function accountModelCmd(url, positional, flags) {
       const p = f?.providers?.find((x) => x.name === r.supply);
       const why = f?.refused ?? (p && !p.available ? p.reason : null);
       runs = why
-        ? `${c.red("✗")} foldrun's models — ${c.bold(p?.title ?? r.supply)}, refused: ${why}. Runs are refused until it is resolved, or \`foldrun account model use own\``
+        ? `${c.red("✗")} foldrun's models — ${c.bold(p?.title ?? r.supply)}, refused: ${why}. Runs are refused until it is resolved${r.ownKeys === false ? "" : ", or \`foldrun account model use own\`"}`
         : `${c.green("✓")} foldrun's models — ${c.bold(p?.title ?? r.supply)} ${c.dim("· billed in credits at foldrun's price list")}`;
     } else if (r.runsOn === "account") {
       runs = `${c.green("✓")} your own key — ${c.bold(r.provider ?? "custom")} ${c.dim(`${r.keyHint ?? ""} · ${r.baseUrl ?? ""} · ${r.format ?? ""}`)}`;
@@ -7997,7 +7997,18 @@ async function accountModelCmd(url, positional, flags) {
       const tiers = Object.entries(p?.tiers ?? {});
       if (tiers.length) console.log(`  ${c.dim(`model: ${tiers.map(([t, m]) => `${t} → ${m}`).join(" · ")}`)}`);
       console.log(`  ${c.dim(`spent today ${money(f.spentTodayUsd ?? 0)}${f.dailyCapUsd != null ? ` of a ${money(f.dailyCapUsd)} daily cap (UTC)` : " (no daily cap)"}`)}`);
-      if (r.set) console.log(`  ${c.dim(`your own key ${r.provider ?? "custom"} ${r.keyHint ?? ""} is kept — \`foldrun account model use own\` runs on it again`)}`);
+      if (r.set && r.ownKeys !== false) console.log(`  ${c.dim(`your own key ${r.provider ?? "custom"} ${r.keyHint ?? ""} is kept — \`foldrun account model use own\` runs on it again`)}`);
+    }
+    // Own keys off on this platform (models.byok, a platform admin's
+    // switch): no own key to set or go back to, and no provider: block.
+    if (r.ownKeys === false) {
+      console.log(`  ${c.dim("own model keys are off on this platform: every model call runs on its models (a platform admin can turn them on: setting models.byok)")}`);
+      if (r.set) console.log(`  ${c.dim(`a key stored earlier (${r.provider ?? "custom"} ${r.keyHint ?? ""}) is not used — \`foldrun account model remove\` deletes it`)}`);
+      const hints = [];
+      if (f?.offered) hints.push("use foldrun --provider <p> (which of foldrun's models)", "prices");
+      if (hints.length) console.log(`\n  ${c.dim(hints.join(" · "))}`);
+      console.log("");
+      return;
     }
     const hints = ["foldrun account model set <provider> --key <api key>", "remove"];
     if (f?.offered && r.runsOn !== "foldrun") hints.push("use foldrun --provider <p> (foldrun's models, billed in credits)");

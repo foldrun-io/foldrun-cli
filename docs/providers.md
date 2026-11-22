@@ -2,6 +2,20 @@
 
 ## Your account's own model key
 
+**Off unless a platform admin turns it on** (22 Nov 2026). Bringing your own
+key — this section and every `provider:` block — is one switch for the whole
+platform, the setting `models.byok` (`FOLDRUN_BYOK=1`). On foldrun's hosted
+platform it is off: every model call goes through
+[foldrun's models](#foldruns-models), metered and billed in credits. Where
+it is off, Settings → Models shows no key form, `foldrun account model set`
+and `use own` are refused (`403`), a key stored earlier is never read (remove
+it with `foldrun account model remove`), and a deploy, a save or an account
+AGENTS.md that names a `provider:` is refused with
+[`config/own-model-key`](checks.md#config-own-model-key). A self-hosted
+install with it off runs on the install's own credential
+([self-hosting](self-hosting.md)). What follows is how own keys work where a
+platform admin turned them on.
+
 The simplest way to bring a key: **Settings → Models**, or
 `foldrun account model set <provider> --key <api key>`, or
 `PUT /api/account/model`. Pick a name from the table below (or `custom`

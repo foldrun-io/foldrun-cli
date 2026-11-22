@@ -143,3 +143,21 @@ test("on a Claude Code plan (16 Nov 2026): the account runs on its Claude subscr
   assert.match(r.out, /monthly and weekly limits/);
   assert.doesNotMatch(r.out, /refused|billed in credits/);
 });
+
+test("own keys off on the platform (models.byok): the view says so, offers no own key, and a set is refused by the platform with its reason", async () => {
+  const s = await serve({
+    "GET /api/account/model": () => ({ set: true, provider: "anthropic", keyHint: "…1111", baseUrl: null, format: null, runsOn: "foldrun", platformKeyAllowed: false, source: "foldrun", supply: "anthropic", choiceVersion: 0, ownKeys: false, foldrunModels: { offered: true, refused: null, providers: [{ name: "anthropic", title: "Anthropic", available: true, reason: null, tiers: { default: "claude-sonnet-5-5" } }], prices: [], dailyCapUsd: null, spentTodayUsd: 0 } }),
+    "PUT /api/account/model": () => ({ __status: 403, body: { error: "own model keys are off on this platform: every model call goes through foldrun's models — a platform admin can turn own keys on (setting models.byok)" } }),
+  });
+  try {
+    const view = await at(s.url, "account", "model");
+    assert.match(view.out, /own model keys are off on this platform/);
+    assert.match(view.out, /not used — `foldrun account model remove` deletes it/);
+    assert.doesNotMatch(view.out, /use own|set <provider> --key/);
+    const set = await at(s.url, "account", "model", "set", "anthropic", "--key", "sk-ant-api03-x");
+    assert.notEqual(set.code, 0);
+    assert.match(set.out, /own model keys are off on this platform/);
+  } finally {
+    s.close();
+  }
+});
