@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.7.2] — 2026-11-22
+
+### deps
+
+- @foldrun/core ^24.12.0 ([bebef2b](https://github.com/foldrun-io/foldrun-cli/commit/bebef2b))
+
+### docs
+
+- sync budgets-and-billing from foldrun-docs (warm build disk + billing) ([8f09687](https://github.com/foldrun-io/foldrun-cli/commit/8f09687))
+
 ## [27.7.1] — 2026-11-22
 
 ### deps
