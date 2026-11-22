@@ -12904,6 +12904,12 @@ async function packFolder(dir) {
   const { packSnapshot, SnapshotRefused, SNAPSHOT_LIMITS } = await import("@foldrun/core/snapshot-archive");
   const { uploadSecretFindings } = await import("@foldrun/core/scan");
   const names = [...new Set(git.stdout.toString("utf8").split("\0").filter(Boolean))].sort();
+  // Of those, the ones git does not track yet: sent because .gitignore does
+  // not leave them out — named in the preview (FOL-212).
+  const others = spawnSync("git", ["-C", dir, "ls-files", "-z", "--others", "--exclude-standard"], { encoding: "buffer", maxBuffer: 256 * 1024 * 1024 });
+  // Not answered: the preview could not name them, so nothing goes (Codex).
+  if (others.error || others.status !== 0) throw new Error(`could not list the files git does not track yet in ${dir}, so the folder is not sent (${String(others.stderr ?? others.error?.message ?? "").trim().split("\n")[0]})`);
+  const notTracked = new Set(others.stdout.toString("utf8").split("\0").filter(Boolean));
   const entries = [];
   const left = [];
   let total = 0;
@@ -12959,7 +12965,121 @@ async function packFolder(dir) {
     throw err;
   }
   const summary = `${packed.files} file${packed.files === 1 ? "" : "s"}, ${packed.bytes} bytes (${packed.archive.length} compressed)`;
-  return { packed, left, unscanned, summary };
+  const paths = entries.map((e) => e.path);
+  const untracked = paths.filter((x) => notTracked.has(x));
+  return { packed, left, unscanned, summary, paths, untracked };
+}
+
+/** Throws away what is waiting in the terminal: keys pressed before a
+ *  question must not answer it. */
+async function dropTypedAhead() {
+  const { stdin } = process;
+  if (!stdin.isTTY || typeof stdin.setRawMode !== "function") return;
+  const was = stdin.isRaw;
+  // Another reader (type-ahead) keeps the stream flowing: left as it was.
+  const flowing = stdin.readableFlowing === true;
+  const drop = () => {};
+  stdin.setRawMode(true);
+  stdin.on("data", drop);
+  stdin.resume();
+  await new Promise((r) => setTimeout(r, 30));
+  stdin.off("data", drop);
+  stdin.setRawMode(was);
+  if (!flowing) stdin.pause();
+}
+
+/** A file named the way secrets usually are: named in the preview, even
+ *  though the scan found nothing in it (FOL-212). */
+const SECRET_NAME = /(^|\/)(\.env(\.[^/]*)?|[^/]*\.(pem|key|p12|pfx|jks|keystore|kdbx|ovpn|gpg|asc)|id_(rsa|dsa|ecdsa|ed25519)[^/]*|\.npmrc|\.pypirc|\.netrc|\.git-credentials|[^/]*credentials[^/]*|[^/]*secrets?[^/]*\.(json|ya?ml|toml|txt|ini))$/i;
+
+/**
+ * What a send carries, shown before it goes (FOL-212): where to, how much,
+ * the paths (the new ones when a yes was given before), the files git does
+ * not track yet, the ones named like secrets, the ones not checked for
+ * secrets, and what was left out. Built from the packed archive itself, so
+ * the preview is of the bytes that are sent.
+ * @param {{ packed: any, paths: string[], left: string[], unscanned: string[], untracked: string[] }} p
+ * @param {string} dest
+ * @param {{ paths: Set<string>, unscanned: Set<string>, untracked: Set<string> } | null} agreed what a yes this session covers
+ */
+function uploadPreview(p, dest, agreed) {
+  // A path as it is, with anything a terminal would hide or change written
+  // as an escape: two names never print the same (Codex).
+  // Every control, format, private-use or unassigned code point, line and
+  // paragraph separators, and the joiners and selectors that draw nothing.
+  const shown = (/** @type {string} */ x) => x.replace(/[\p{C}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/gu, (ch) => `\\u{${ch.codePointAt(0)?.toString(16)}}`);
+  const unscanned = new Set(p.unscanned);
+  // New: a path not agreed to, or one the scan could read before and cannot now.
+  const untrackedNow = new Set(p.untracked);
+  // …or one that has left git's index since (Codex).
+  const fresh = agreed ? p.paths.filter((x) => !agreed.paths.has(x) || (unscanned.has(x) && !agreed.unscanned.has(x)) || (untrackedNow.has(x) && !agreed.untracked.has(x))) : p.paths;
+  // Every path is in the list: one by one up to 20, past that by folder
+  // with its count — never "and N more" that a yes would cover unseen (Codex).
+  const listed = (/** @type {string[]} */ list) => {
+    // One per line: a name with a comma in it cannot read as two (Codex).
+    if (list.length <= 20) return list.map((x) => `\n      ${shown(x)}`).join("");
+    /** @type {Map<string, number>} */
+    const by = new Map();
+    for (const x of list) {
+      const top = x.includes("/") ? `${x.slice(0, x.indexOf("/"))}/` : x;
+      by.set(top, (by.get(top) ?? 0) + 1);
+    }
+    return [...by].map(([k, n]) => `\n      ${n === 1 && !k.endsWith("/") ? shown(k) : `${shown(k)} (${n} file${n === 1 ? "" : "s"}; [d] lists them)`}`).join("");
+  };
+  const lines = [];
+  lines.push(`  ${c.cyan("↑")} ${c.bold(`sends a copy of this folder to ${oneLine(dest)}`)}`);
+  lines.push(`    ${c.grey(`${p.packed.files} file${p.packed.files === 1 ? "" : "s"} · ${formatBytes(p.packed.bytes)} (${formatBytes(p.packed.archive.length)} packed) · the files git tracks or would add, as they are on disk now`)}`);
+  lines.push(`    ${c.grey(agreed ? "new since your last yes:" : "files:")} ${c.white(listed(fresh))}`);
+  const untracked = p.untracked.filter((x) => fresh.includes(x));
+  if (untracked.length) lines.push(`    ${c.amber("!")} ${c.grey("not in git yet (sent: .gitignore does not leave them out):")} ${listed(untracked)}`);
+  const named = fresh.filter((x) => SECRET_NAME.test(x) && !unscanned.has(x));
+  if (named.length) lines.push(`    ${c.amber("!")} ${c.grey("named like secrets (the scan found none in them):")} ${listed(named)}`);
+  const binary = fresh.filter((x) => unscanned.has(x));
+  if (binary.length) lines.push(`    ${c.amber("!")} ${c.grey("not checked for secrets (binary):")} ${listed(binary)}`);
+  for (const l of p.left.slice(0, 5)) lines.push(`    ${c.dim(`left out: ${oneLine(l)}`)}`);
+  return { lines, fresh, shown };
+}
+
+/**
+ * Asked before a folder leaves this computer (FOL-212). The yes covers the
+ * paths it showed, for this session: asked again only when the folder holds
+ * a path not yet agreed to. True: send `p.packed` — the bytes the preview
+ * was built from, so a file changed after the question cannot change what
+ * goes. No one to ask (not a terminal), or --yes: the preview is printed
+ * and it goes, as a script that ran `foldrun code` asked for.
+ * @param {any} s
+ * @param {{ packed: any, paths: string[], left: string[], unscanned: string[], untracked: string[] }} p
+ * @param {string} dest
+ * @param {(question: string) => Promise<string | null>} ask
+ * @param {() => boolean} [cancelled] the turn was stopped meanwhile
+ */
+async function agreeToUpload(s, p, dest, ask, cancelled = () => false) {
+  s.uploadAgreed ??= new Map();
+  /** @type {{ paths: Set<string>, unscanned: Set<string>, untracked: Set<string> } | null} */
+  const agreed = s.uploadAgreed.get(s.dir) ?? null;
+  const { lines, fresh, shown } = uploadPreview(p, dest, agreed);
+  if (agreed && !fresh.length) return true;
+  for (const l of lines) console.log(l);
+  // --yes: sent without asking, as it applies without asking. No terminal:
+  // nobody to ask — a script gave this turn with --task; the preview is in
+  // its output and the patch it gets back is still only applied with --yes.
+  // A terminal asks, --task included (Codex).
+  if (s.flags?.yes === true || !process.stdin.isTTY) return true;
+  // Only keys pressed after it asks answer it: a "y" typed earlier is
+  // dropped, not taken as the yes (Codex).
+  await dropTypedAhead();
+  for (;;) {
+    const a = ((await ask(`    ${c.bold("send it?")} ${c.grey("[")}${c.green("y")}${c.grey("]es · [")}${c.red("n")}${c.grey("]o · [d] every path")} `)) ?? "").trim().toLowerCase();
+    // Stopped at the question: no yes is kept (Codex).
+    if (cancelled()) return false;
+    if (a === "d") {
+      for (const x of p.paths) console.log(`      ${c.grey(shown(x))}`);
+      continue;
+    }
+    if (a !== "y" && a !== "yes") return false;
+    s.uploadAgreed.set(s.dir, { paths: new Set([...(agreed?.paths ?? []), ...p.paths]), unscanned: new Set([...(agreed?.unscanned ?? []), ...p.unscanned]), untracked: new Set([...(agreed?.untracked ?? []), ...p.untracked]) });
+    return true;
+  }
 }
 
 /** Send a packed folder to POST …/snapshots; answers the platform's body
@@ -13453,6 +13573,8 @@ async function codeTurn(s, task, include = []) {
       return;
     }
     cancel.asked = true;
+    // A question open now (send it?) closes, as at the apply prompt (Codex).
+    for (const f of [...cancel.onAsk]) f();
     console.log(`\n  ${c.amber("stopping")} …`);
     stop();
   };
@@ -13460,7 +13582,7 @@ async function codeTurn(s, task, include = []) {
   // From the first moment of the turn the keyboard is read here: nothing
   // typed while the folder packs, uploads or runs waits in the terminal for
   // a prompt to read later (Codex).
-  const typeAhead = startTypeAhead(onInt);
+  let typeAhead = startTypeAhead(onInt);
   /** Hands the keyboard back, keys already pressed taken in first. */
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
@@ -13476,11 +13598,26 @@ async function codeTurn(s, task, include = []) {
   /** @type {Map<string, unknown> | null} */
   let open = null;
   try {
-    const { packed, left, unscanned } = await packFolder(dir);
+    const pack = await packFolder(dir);
+    const { packed } = pack;
     if (cancel.asked) return "cancelled";
+    // Asked before anything leaves (FOL-212): what is sent is `packed`, the
+    // bytes the preview showed.
+    const agreed = await agreeToUpload(s, pack, `${ws} on ${url.replace(/^https?:\/\//, "")}`, async (q) => {
+      await keyboardBack();
+      try {
+        return await cancellablePrompt(q, cancel);
+      } finally {
+        if (!cancel.asked) typeAhead = startTypeAhead(onInt);
+      }
+    }, () => cancel.asked);
+    if (cancel.asked) return "cancelled";
+    if (!agreed) {
+      console.log(`  ${c.dim("not sent — nothing left this computer")}\n`);
+      return "cancelled";
+    }
     const snap = await pushPacked(url, flags, ws, packed);
     console.log(`  ${c.cyan("↑")} ${c.grey(`sent the folder · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}${snap.reused && s.turns ? " · unchanged since the last turn" : ""}`)}`);
-    sentNotes(left, unscanned);
     if (cancel.asked) return "cancelled";
     let started;
     try {
@@ -14708,7 +14845,7 @@ export function cloudTasks(/** @type {unknown} */ input) {
  * @param {any} s
  * @param {unknown} input
  * @param {AbortSignal} signal
- * @param {{ pause: () => void, resume: () => void, approveApply: (n: number, lines: string[], patch: string) => Promise<boolean>, changed: (files: string[]) => void }} h
+ * @param {{ pause: () => void, resume: () => void, approveApply: (n: number, lines: string[], patch: string) => Promise<boolean>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
  * @returns {Promise<{ text: string, isError?: boolean }>}
  */
 async function runCloudAgents(s, input, signal, h) {
@@ -14747,11 +14884,17 @@ async function runCloudAgents(s, input, signal, h) {
     void fresh;
     await ensureCodeAgent(url, flags, ws, agent, true);
     if (signal.aborted) return stoppedText([]);
-    const { packed, left, unscanned } = await packFolder(dir);
+    const pack = await packFolder(dir);
+    const { packed } = pack;
+    if (signal.aborted) return stoppedText([]);
+    // Asked before anything leaves (FOL-212), with the bytes that go.
+    if (!(await h.approveUpload(pack, `${ws} on ${url.replace(/^https?:\/\//, "")}`))) {
+      if (signal.aborted) return stoppedText([]);
+      return { text: "The person said no to sending the folder: nothing was sent and nothing was started. Do not try another way to send it; do the work here, or say what you wanted to send and why.", isError: true };
+    }
     if (signal.aborted) return stoppedText([]);
     const snap = await pushPacked(url, flags, ws, packed, signal);
     console.log(`  ${c.cyan("↑")} ${c.grey(`sent the folder to ${plainText(ws)} · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}`)}`);
-    sentNotes(left, unscanned);
     for (let i = 0; i < tasks.length && !signal.aborted; i++) {
       const task = /** @type {string} */ (tasks[i]);
       let started;
@@ -15218,6 +15361,21 @@ async function codeLocalTurn(s, text) {
         },
         changed: (files) => {
           for (const f of files) changed.add(f);
+        },
+        approveUpload: (pack, dest) => {
+          const next = gate.then(() =>
+            agreeToUpload(s, pack, dest, async (q) => {
+              stopTicker();
+              await keyboardBack();
+              try {
+                return await cancellablePrompt(q, cancel);
+              } finally {
+                if (!cancel.asked) typeAhead = startTypeAhead(onInt, onSend);
+              }
+            }, () => cancel.asked),
+          );
+          gate = next.then(() => undefined, () => undefined);
+          return next;
         },
       });
     };

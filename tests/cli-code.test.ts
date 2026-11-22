@@ -447,7 +447,7 @@ test("code: binary files sent without a secret scan are named", async () => {
   const r = await at(s.url, "code", d, "--to", "desk", "--task", "x");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /not checked for secrets \(binary\): logo\.bin/);
+  assert.match(r.out, /not checked for secrets \(binary\):\s+logo\.bin/);
 });
 
 test("code: a call that cannot run adds no agent on its way out, even with --yes (Codex)", async () => {
@@ -672,6 +672,8 @@ test("on a terminal: Ctrl-C at the apply prompt applies nothing and the session 
   t.after(() => { term.child.kill("SIGKILL"); s.close(); });
   await term.until(/\w ❯ /);
   term.type("greet the world\r");
+  await term.until(/send it\? \[y\]es/);
+  term.type("y\r"); // the upload preview (FOL-212)
   await term.until(/apply it to .*\[y\/N\]/);
   term.type("\x03");
   await term.until(/not applied — the patch is at/);
@@ -695,6 +697,8 @@ test("on a terminal: y at the apply prompt applies it, and /quit leaves", LIVE, 
   t.after(() => { term.child.kill("SIGKILL"); s.close(); });
   await term.until(/\w ❯ /);
   term.type("greet the world\r");
+  await term.until(/send it\? \[y\]es/);
+  term.type("y\r"); // the upload preview (FOL-212)
   await term.until(/apply it to .*\[y\/N\]/);
   term.type("y\r");
   await term.until(/✓ applied/);

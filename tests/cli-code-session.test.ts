@@ -98,6 +98,8 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
 
     // Two lines in one write: a paste — one message, one turn.
     t.send("add b\rand keep it short\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
     at = await t.until(/apply it to/, at);
     const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
     assert.equal(posts.length, 1, "one turn for the pasted lines");
@@ -161,6 +163,8 @@ test("a bracketed paste is one message however slowly it arrives; Enter after it
     await new Promise((r) => setTimeout(r, 200));
     assert.equal(s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run")).length, 0, "nothing sent before Enter");
     t.send("\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
     at = await t.until(/apply it to/, at);
     const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
     assert.equal(posts.length, 1);
@@ -367,6 +371,8 @@ test("Ctrl-R: search what was typed before, Ctrl-R again for older, Enter puts i
     await pause();
     assert.equal(s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run")).length, 0, "Enter in the search only puts the match on the line");
     t.send(" now\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
     at = await t.until(/apply it to/, at);
     const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
     assert.equal(posts.length, 1);
@@ -448,6 +454,8 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
   try {
     let at = await t.until(/\w ❯ /);
     t.send("add b\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
     at = await t.until(/the agent is on it/, at);
     await new Promise((r) => setTimeout(r, 300));
     // Mid-turn: a "y" and Enter (which once answered the apply prompt), more
@@ -785,6 +793,8 @@ test("--local, cloud_agents: sending the folder is asked (no sends nothing); aft
       t.send("ok go\r");
       at = await t.until(/1\. add b to a\.txt[\s\S]*then run the tests[\s\S]*allow\?/, at);
       t.send("y\r");
+      at = await t.until(/send it\? \[y\]es/, at);
+      t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
       at = await t.until(/sent the folder to desk[\s\S]*cloud agent 1 · run-sess-1/, at);
       at = await t.until(/✓ cloud agent 1 · completed[\s\S]*cloud agent 1's changes, into this folder:[\s\S]*a\.txt \|\s+1 \+[\s\S]*\[a\]lways for cloud agents' changes this session[\s\S]*\[d\]iff/, at);
       assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n", "nothing applied before the yes");
@@ -894,6 +904,8 @@ test("--local, cloud_agents: Ctrl-C while they work stops every run on the platf
       t.send("y\r");
       at = await t.until(/2 at once[\s\S]*allow\?/, at);
       t.send("y\r");
+      at = await t.until(/send it\? \[y\]es/, at);
+      t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
       at = await t.until(/cloud agent 2 · run-c-2/, at);
       await new Promise((r) => setTimeout(r, 300));
       t.send("\x03");
@@ -1253,4 +1265,43 @@ test("a steered turn that fails keeps what was asked and answered on the way; a 
   const trimmed = trimConversation([u(big), a(big), u("go"), call, answers, a("done")], 1_000_000);
   assert.equal((trimmed[0] as any).content[0].text, "go");
   assert.ok(validConversation(trimmed));
+});
+
+test("the upload preview (FOL-212): no sends zero bytes; it names untracked files and ones named like secrets; a yes covers those paths for the session", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  fs.writeFileSync(path.join(d, "notes.txt"), "not in git yet\n");
+  fs.writeFileSync(path.join(d, ".env.example"), "API_URL=https://example.com\n");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { FOLDRUN_NO_TICKER: "1" });
+  const sent = () => s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/snapshots")).length;
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("add b\r");
+    at = await t.until(/sends a copy of this folder to desk[\s\S]*not in git yet[\s\S]*notes\.txt[\s\S]*named like secrets[\s\S]*\.env\.example[\s\S]*send it\? \[y\]es/, at);
+    t.send("n\r");
+    at = await t.until(/not sent — nothing left this computer/, at);
+    assert.equal(sent(), 0, "no: zero bytes sent");
+    assert.equal(s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run")).length, 0);
+    at = await t.until(/\w ❯ /, at);
+    t.send("add b\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    t.send("y\r");
+    at = await t.until(/apply it to/, at);
+    assert.equal(sent(), 1);
+    t.send("n\r");
+    at = await t.until(/\w ❯ /, at);
+    // The same paths again: the yes covers them, nothing is asked.
+    t.send("again\r");
+    at = await t.until(/apply it to/, at);
+    assert.equal(sent(), 2);
+    assert.doesNotMatch(t.out().slice(t.out().lastIndexOf("again")), /send it\?/);
+    t.send("n\r");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    await s.close();
+  }
 });
