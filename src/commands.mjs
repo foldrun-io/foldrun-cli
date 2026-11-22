@@ -2718,7 +2718,7 @@ async function versionCmd(flags) {
 const RENEW_DAYS = 14;
 const DAY_MS = 86_400_000;
 let renewChecked = false;
-async function renewIfDue(url, flags) {
+async function renewIfDue(flags) {
   if (renewChecked || flags.token || env("FOLDRUN_TOKEN")) return;
   renewChecked = true;
   try {
@@ -2777,7 +2777,7 @@ function credentialsWritable() {
  *  calls that fetch bytes, uploads or streams themselves (FOL-71). Without
  *  it a machine that only ran those would never renew its sign-in. */
 async function renewedToken(url, flags) {
-  await renewIfDue(url, flags);
+  await renewIfDue(flags);
   return tokenFor(url, flags);
 }
 
@@ -6076,7 +6076,7 @@ async function sourceCmd(positional, flags, layout) {
     console.log(`\n  ${c.green("✓")} removed ${a}\n`);
     return 0;
   }
-  if (verb === "share" || verb === "promote") return sourceShare(url, flags, ws, base, a);
+  if (verb === "share" || verb === "promote") return sourceShare(url, flags, ws, a);
   if (verb === "new") {
     // The dashboard's New button for any document (POST …/assets): the
     // platform writes the template — a tool folder, a skill, knowledge,
@@ -6109,7 +6109,7 @@ async function sourceCmd(positional, flags, layout) {
  * --dry-run stops after the list. Done here file by file (4 Nov) it could
  * not delete a skill's SKILL.md alone, nor reach its other files safely.
  */
-async function sourceShare(url, flags, ws, base, spec) {
+async function sourceShare(url, flags, ws, spec) {
   if (!spec) throw new Error("which file? `foldrun source share skills/house-style --to <workspace>` — a skill, tool, script, knowledge or memory file");
   const route = `/api/workspaces/${enc(ws)}/source/share`;
   const ask = (extra) => remoteCall(url, flags, route, { method: "POST", body: JSON.stringify({ path: spec, ...(flags.overwrite === true ? { overwrite: true } : {}), ...extra }) });
@@ -8350,7 +8350,7 @@ async function identityCmd(flags) {
  * combine (they do not all simply override — network_enforce is on if
  * either turns it on, both budgets apply).
  */
-async function jobsCmd(flags, layout) {
+async function jobsCmd(flags) {
   const url = platformFor(flags, "jobs");
   const ws = typeof flags.to === "string" ? flags.to : null;
   const view = await jobsOf(url, flags, ws);
@@ -9037,7 +9037,7 @@ async function mcpCmd(positional, flags) {
     if (Date.now() - renewedAt > 12 * 60 * 60 * 1000) {
       renewedAt = Date.now();
       renewChecked = false;
-      await renewIfDue(url, flags);
+      await renewIfDue(flags);
     }
     return tokenFor(url, flags);
   };
@@ -9297,7 +9297,7 @@ function printIssue(i, full) {
   console.log();
 }
 
-async function approvalsCmd(flags, layout) {
+async function approvalsCmd(flags) {
   const url = platformFor(flags, "approvals");
   const only = typeof flags.to === "string" ? flags.to : null;
   const { approvals = [], questions = [] } = await remoteCall(url, flags, "/api/approvals");
@@ -12453,7 +12453,7 @@ function untilInstant(spec) {
  * asks, and only the runs it printed are touched — a run that starts in
  * between is not swept up by a filter nobody saw it match.
  */
-async function bulkCmd(action, flags, layout) {
+async function bulkCmd(action, flags) {
   const url = platformFor(flags, action);
   const filter = bulkFilter(flags);
   if (action === "rerun") {
@@ -16045,7 +16045,8 @@ export function startupRows(startup) {
 function printObservation(o) {
   console.log(`\n  ${c.bold(o.workspace)}  ${c.dim(`last ${o.sinceDays} days`)}`);
   console.log(`  ${o.runs} runs · ${o.failedRuns ? c.red(`${o.failedRuns} failed`) : "0 failed"} · ${o.steps} steps · $${Number(o.costUsd ?? 0).toFixed(2)}`);
-  const table = (title, head, rows) => {
+  // The first argument names the table for the reader of this code only.
+  const table = (_title, head, rows) => {
     if (!rows.length) return;
     const all = [head, ...rows];
     const w = head.map((_, i) => Math.max(...all.map((r) => String(r[i]).length)));
@@ -16128,7 +16129,7 @@ function printAccountAnalysis(a) {
  * days unasked, as that workspace's Observe page. `--since`/`--days` pick
  * any window.
  */
-async function observeCmd(flags, layout) {
+async function observeCmd(flags) {
   const url = platformFor(flags, "observe");
   const one = typeof flags.to === "string";
   const since = sinceDays(flags.since === undefined && flags.days !== undefined ? { since: flags.days } : flags, one ? 30 : 7);
@@ -17332,7 +17333,7 @@ async function flowSetCmd(positional, flags, layout) {
       if (next !== raw && sameFlow(parseFlow("flow.md", raw), parseFlow("flow.md", next))) next = raw;
       return { next, meta: { i, afterInstruction, label: `step ${i + 1} · ${s.subflow ? `flow:${s.subflow}` : s.agent}` } };
     },
-    bodies: (raw, m) => [
+    bodies: (_raw, m) => [
       ...(instruction !== undefined ? [{ body: { step: m.i, instruction }, after: m.afterInstruction }] : []),
       ...(Object.keys(options).length ? [{ body: { step: m.i, options }, after: null }] : []),
     ],
@@ -17509,7 +17510,7 @@ async function flowMoveStepCmd(positional, flags, layout) {
         meta: { groups: next, label: flags.group !== undefined ? `move ${name} beside group ${target}` : `move ${name} to its own group after ${target}` },
       };
     },
-    bodies: (raw, m) => [{ body: { groups: m.groups }, after: null }],
+    bodies: (_raw, m) => [{ body: { groups: m.groups }, after: null }],
   });
 }
 
@@ -19738,7 +19739,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "proposal":
       return proposalsCmd(positional, flags, layout);
     case "observe":
-      return observeCmd(flags, layout);
+      return observeCmd(flags);
     case "usage":
       if (positional[0] === "compute") return usageComputeCmd(flags);
       if (positional[0] === "meters") return usageMetersCmd(flags);
@@ -19804,7 +19805,7 @@ export async function run(command, positional, flags, workspace, layout) {
       }
       return flags.local === true ? logsCmd(positional, flags, layout) : runsCmd(flags, layout);
     case "approvals":
-      return approvalsCmd(flags, layout);
+      return approvalsCmd(flags);
     case "issues":
       return issuesCmd(positional, flags, layout);
     case "inbox":
@@ -19823,7 +19824,7 @@ export async function run(command, positional, flags, workspace, layout) {
       return positional[1] === "get" ? reportGetCmd(positional[0], positional[2], flags, layout) : reportCmd(positional[0], flags, layout);
     case "stop":
       // No run id and a filter: every run the filter matches (runs/bulk).
-      if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("stop", flags, layout);
+      if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("stop", flags);
       // Several run ids: the dashboard's selection bar (runs/bulk { runIds }).
       if (positional.length > 1) return bulkIdsCmd("stop", positional, flags, layout);
       return stopCmd(positional[0], flags, layout);
@@ -19834,7 +19835,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "sessions":
       return sessionsCmd(positional, flags, layout);
     case "rerun":
-      if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("rerun", flags, layout);
+      if (!positional[0] && hasBulkFilter(flags)) return bulkCmd("rerun", flags);
       if (positional.length > 1) return bulkIdsCmd("rerun", positional, flags, layout);
       return rerunCmd(positional[0], flags, layout);
     case "account":
@@ -19842,7 +19843,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "identity":
       return identityCmd(flags);
     case "jobs":
-      return jobsCmd(flags, layout);
+      return jobsCmd(flags);
     case "schedule":
       if (positional[0] === "tick") return scheduleTickCmd(flags);
       return scheduleCmd(flags);

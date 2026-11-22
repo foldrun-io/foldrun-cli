@@ -124,7 +124,7 @@ test("connect: consent → exchange → refresh recipe stored on the platform, n
 });
 
 test("connect: a provider with no refresh token stores the access token and says when it expires", async () => {
-  const provider = await serve(async (req, res) => {
+  const provider = await serve(async (_req, res) => {
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ access_token: "acc3ss", expires_in: 5184000 }));
   });

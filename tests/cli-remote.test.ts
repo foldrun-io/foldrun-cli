@@ -81,7 +81,7 @@ test("a platform that accepts and never answers is given up on after FOLDRUN_TIM
 });
 
 test("a GET that meets 503 is asked once more after Retry-After, and carries the CLI's User-Agent", async () => {
-  const p = await serve((req, res, n) => {
+  const p = await serve((_req, res, n) => {
     res.setHeader("content-type", "application/json");
     if (n === 1) {
       res.setHeader("retry-after", "0");
@@ -103,7 +103,7 @@ test("a GET that meets 503 is asked once more after Retry-After, and carries the
 });
 
 test("a POST is never retried — a second one could be a second run", async () => {
-  const p = await serve((req, res) => {
+  const p = await serve((_req, res) => {
     res.setHeader("content-type", "application/json");
     res.writeHead(503);
     res.end(JSON.stringify({ error: "deploying" }));
@@ -119,7 +119,7 @@ test("a POST is never retried — a second one could be a second run", async () 
 });
 
 test("a challenge page is reported as what it is: the status, the type and its first line", async () => {
-  const p = await serve((req, res) => {
+  const p = await serve((_req, res) => {
     res.setHeader("content-type", "text/html; charset=UTF-8");
     res.writeHead(403);
     res.end("<!DOCTYPE html>\n<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>");
