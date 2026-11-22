@@ -119,7 +119,7 @@ whatever `FOLDRUN_VERSION` it was started with.
 ## The API version
 
 `api` in `/api/version`, and the `X-Foldrun-Api` header, is a date —
-`2026-10-26` now, after `2026-10-01` — that changes only when a route changes
+`2026-11-22` now, after `2026-10-26` and `2026-10-01` — that changes only when a route changes
 in a way an existing caller would break on ([the list](api-usage#versions)). A new route or a new field in an answer does not move
 it. Breaking changes are announced in the release notes of the version that
 makes them.

@@ -21,9 +21,16 @@ proof instead of a key: a token or signature (`/s/<token>`, `/api/hooks`,
 `/api/cli/login/<id>`, `/api/cli/authorize` GET, `/api/oauth/callback`), `/api/healthz`, `/api/status`, `/api/status/history`, `/api/signup`, `/api/pricing`, `/api/version` and `/api/openapi.json` — and an AI app's OAuth sign-in to `/api/mcp`: `/api/mcp/oauth/register` (open, as the protocol needs) and `/api/mcp/oauth/token` (its code and PKCE verifier, or its refresh token, are the proof).
 
 ```
-Authorization: Bearer <api-key>      # machines. Settings → API keys
+x-api-key: <api-key>                 # machines, as Anthropic's API takes it
+Authorization: Bearer <api-key>      # the same key, the other way
 Cookie: foldrun_session=...          # the dashboard, same-origin
 ```
+
+**One API, one key** (22 Nov 2026). The same key — the one `foldrun login`
+makes, or one from Settings → API keys — calls the platform here and the
+models at `/v1/messages` on the same host (`api.foldrun.io`), sent the same
+way to both, as Anthropic's API does. Two different keys in one request
+(`x-api-key` and a Bearer) are refused, `400`.
 
 It **fails closed**. It used to be the other way round — no key meant "trust
 the `x-foldrun-tenant` header" unless a flag was set — which let anyone who
@@ -33,10 +40,23 @@ flag should refuse, not admit.
 `FOLDRUN_DEV_NO_AUTH=1` opts out for local development only, and only `next dev`
 sets it.
 
-Errors are `{ "error": "..." }` with a real status: `401` unauthenticated,
-`402` out of credit, `404` missing, `409` conflict, `422` a refusal you have to
-read (a deploy with issues, an `Idempotency-Key` reused with a different body),
-`429` rate limited (`Retry-After`, `{ error, retry_after }`).
+Errors are Anthropic's error body, the one `/v1` answers with (API version
+`2026-11-22`):
+
+```json
+{ "type": "error", "error": { "type": "not_found_error", "message": "no run r_123 in desk" } }
+```
+
+`error.type` follows the status as Anthropic's does — `invalid_request_error`
+(400, 409, 422), `authentication_error` (401), `billing_error` (402, out of
+credit), `permission_error` (403), `not_found_error` (404), `request_too_large`
+(413), `rate_limit_error` (429, with `Retry-After` and `error.retry_after`),
+`api_error` (5xx). Anything more a refusal carries — a `code` to branch on
+(`waiting_cap`, `unknown_api_version`), a `runId`, the `issues` a deploy
+found — sits inside `error`. A caller pinned before `2026-11-22` (the CLI
+pins `2026-10-01`), and a browser (the dashboard and the sign-in pages), get
+the older `{ "error": "...", ... }` with the same status and the same fields
+beside it.
 
 **A person's alone.** A key carries a role and a project scope no wider
 than the person who minted it, and opens every route below with that — except
@@ -498,7 +518,7 @@ so a client learns what it is talking to without a second request:
 
 ```
 X-Foldrun-Version: v2026.10.01.3   # the platform's version
-X-Foldrun-Api: 2026-10-26          # the API contract — moves only on a breaking change
+X-Foldrun-Api: 2026-11-22          # the API contract — moves only on a breaking change
 X-Foldrun-Cli: 0.6.0               # the CLI released with this version (absent when unknown)
 ```
 

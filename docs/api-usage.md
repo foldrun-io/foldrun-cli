@@ -50,6 +50,7 @@ The versions so far:
 
 | Version | What changed |
 |---|---|
+| `2026-11-22` | One API, as Anthropic's: every `/api` refusal is Anthropic's error body, `{ "type": "error", "error": { "type", "message" } }`, with a `code` and figures inside `error` — the body `/v1` answers with. The key may be sent as `x-api-key` as well as `Authorization: Bearer` (that part breaks nothing). A caller pinned earlier, and a browser, keep `{ "error": "..." }`. |
 | `2026-10-26` | `GET /api/usage`: `ledger.providerCostUsd` and `ledger.marginUsd` are withdrawn. They were the platform's own accounting of your lines, not part of your account. A caller pinned to `2026-10-01` still gets both keys, as `null`: the values are withheld, not reproduced. |
 | `2026-10-01` | The first dated version. Every CLI released so far sends it. |
 
@@ -163,33 +164,50 @@ call and reuses it on its own retry.
 
 ## Errors
 
-Every error is JSON with one field you can show a person:
+Every error is Anthropic's error body — the same one `/v1/messages` answers
+with — so one client reads both halves of the API (version `2026-11-22`):
+
+```json
+{ "type": "error", "error": { "type": "not_found_error", "message": "flow nightly not found" } }
+```
+
+`error.message` is the sentence to show a person; `error.type` follows the
+status (the table below). Some carry a `code` a program can branch on —
+`unknown_api_version`, `mail_not_configured`, `waiting_cap` — and the
+figures that go with it, inside `error`.
+
+Pinned before `2026-11-22` — and in a browser — an error is the older body,
+the same fields beside one string:
 
 ```json
 { "error": "flow nightly not found" }
 ```
 
-Some carry a `code` a program can branch on beside it — `unknown_api_version`,
-`mail_not_configured`, `waiting_cap` — and the figures that go with it.
+On the API host a few refusals come before the platform reads your
+account — an unknown path, a dashboard-only route, a body over the host's
+limit — and those follow the `Foldrun-Version` header alone: send it to keep
+the older body there too. The model routes (`/v1/…`) answer in Anthropic's
+body whatever version is sent.
 
-| Status | Means |
-|---|---|
-| 400 | the request is malformed, or names an unknown `Foldrun-Version` |
-| 401 | no credential, or a revoked one |
-| 402 | out of credit |
-| 403 | your role or scope does not cover this |
-| 404 | no such thing |
-| 409 | conflict — a run already live (`overlap: skip`), a file changed under `ifMatch`, an idempotent request still in flight, or the account already has its most runs waiting for their turn (`code: "waiting_cap"`, with `limit` and `waiting` — [how many runs may wait](budgets-and-billing#how-many-runs-may-wait); a webhook or inbound email gets this as a `503` with `Retry-After`) |
-| 413 | body over 10 MB |
-| 422 | a refusal to read: a deploy with issues, an Idempotency-Key reused with a different body |
-| 429 | rate limited — wait `Retry-After` |
-| 5xx | our fault; the detail is in our logs, not the response. Safe to retry with the same Idempotency-Key |
+| Status | `error.type` | Means |
+|---|---|---|
+| 400 | `invalid_request_error` | the request is malformed, or names an unknown `Foldrun-Version` |
+| 401 | `authentication_error` | no credential, or a revoked one |
+| 402 | `billing_error` | out of credit |
+| 403 | `permission_error` | your role or scope does not cover this |
+| 404 | `not_found_error` | no such thing |
+| 409 | `invalid_request_error` | conflict — a run already live (`overlap: skip`), a file changed under `ifMatch`, an idempotent request still in flight, or the account already has its most runs waiting for their turn (`code: "waiting_cap"`, with `limit` and `waiting` — [how many runs may wait](budgets-and-billing#how-many-runs-may-wait); a webhook or inbound email gets this as a `503` with `Retry-After`) |
+| 413 | `request_too_large` | body over 10 MB |
+| 422 | `invalid_request_error` | a refusal to read: a deploy with issues, an Idempotency-Key reused with a different body |
+| 429 | `rate_limit_error` | rate limited — wait `Retry-After` |
+| 5xx | `api_error` | our fault; the detail is in our logs, not the response. Safe to retry with the same Idempotency-Key |
 
 ## One address
 
 foldrun answers programs at one address: the platform routes (`/api/…`)
 and the model routes (`/v1/…`) together, for API keys, the CLI and Claude
-Code alike. Settings → API keys → API shows it, and `GET /api/version`
+Code alike — with one key, sent as `x-api-key` or `Authorization: Bearer`
+on either half, and one error body. Settings → API keys → API shows it, and `GET /api/version`
 names it as `urls.api` (with the dashboard's own address as `urls.app`).
 `foldrun login` moves a machine's calls there by itself. Signing in,
 invitations, approvals and the other pages a person opens stay on the
