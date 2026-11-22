@@ -1392,6 +1392,39 @@ test("--local on an older install: a sign-in without model access keeps using th
   }
 });
 
+test("--local: a key kept from a retired models address goes to the one the platform names now", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  // 23 Nov 2026: dev-llm.foldrun.io retired for api.foldrun.dev. A key kept
+  // with the old address must not be sent there.
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: null }, modelsUrl: s.url }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
+  });
+  const file = path.join(home, "code-local-keys.json");
+  fs.writeFileSync(file, JSON.stringify({ [`${s.url}#acme`]: { id: "old-1", key: "fr_gw_cached", gatewayUrl: "http://127.0.0.1:9", kind: "account" } }), { mode: 0o600 });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("go\r");
+      at = await t.until(/Done\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    assert.equal(s.seen.find((x: any) => x.url === "/v1/messages")!.headers.authorization, "Bearer fr_gw_cached", "the kept key, at the platform's models address");
+  } finally {
+    s.close();
+  }
+});
+
 test("--local with a sign-in refused for models: the kept machine keys are left alone and the person is told to sign in again", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

@@ -14268,6 +14268,11 @@ async function localKeyFor(s, cancel) {
     // A sign-in the gateway already refused this session stays off: the
     // kept machine key goes on (a platform half-way through an upgrade).
     s.slotToken = held;
+    // Where this platform answers models NOW (23 Nov 2026: dev-llm retired
+    // for api.foldrun.dev). A key kept on this computer goes there too, not
+    // to the address it was made at — the same /api/me the sign-in's models
+    // URL is read from, over this profile's own address.
+    s.modelsUrl = typeof me.modelsUrl === "string" && me.modelsUrl ? me.modelsUrl.replace(/\/+$/, "") : null;
     s.signInModels = !s.signInRefused && me?.actor?.modelAccess && typeof me.modelsUrl === "string" && me.modelsUrl && held ? { id: String(me.actor.id ?? ""), url: me.modelsUrl.replace(/\/+$/, ""), token: held } : null;
   }
   if (s.signInModels) {
@@ -14285,7 +14290,8 @@ async function localKeyFor(s, cancel) {
     if (!gone) return null;
     s.rejectedKeyPending = false;
   }
-  const have = readLocalKey(file, s.keySlot);
+  const kept = readLocalKey(file, s.keySlot);
+  const have = kept && s.modelsUrl ? { ...kept, gatewayUrl: s.modelsUrl } : kept;
   if (have?.kind === "account" || have?.upgradeAsked) return have;
   if (have) {
     // A key kept before CLI 27.3: $20 in all, its wallet budget not settable.
