@@ -4959,6 +4959,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * nothing pasted into a shell history. `--token` skips the browser and
  * stores a key made in the dashboard — for a machine with no browser.
  */
+/** After a sign-in: whether the same key may call foldrun's models (one
+ *  key) — `foldrun code` then needs no second key. Quiet on any failure. */
+async function sayModelAccess(url, token) {
+  try {
+    const me = await remoteCall(url, { token, quiet: true }, "/api/me");
+    const m = me?.actor?.modelAccess;
+    if (m && me.modelsUrl) console.log(`  ${c.dim(`this sign-in also calls foldrun's models (${modelAccessLine(m)}) — foldrun code uses it as is`)}`);
+  } catch {
+    /* said nothing: the sign-in itself stands */
+  }
+}
+
 async function login(flags) {
   const url = normaliseUrl(flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? DEFAULT_PLATFORM);
 
@@ -4970,6 +4982,7 @@ async function login(flags) {
     const name = saveCredential(at.url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
     console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
     if (at.app) console.log(`  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}`);
+    await sayModelAccess(at.url, flags.token);
     console.log(`  ${c.dim(`stored as the account "${name}" — \`foldrun accounts\` lists them, \`foldrun use ${name}\` switches`)}\n`);
     return 0;
   }
@@ -5021,7 +5034,9 @@ async function login(flags) {
       const at = await signedInAddresses(url, poll.token, poll.account);
       const name = saveCredential(at.url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
       console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}`);
-      console.log(at.app ? `  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}\n` : "");
+      if (at.app) console.log(`  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}`);
+      await sayModelAccess(at.url, poll.token);
+      console.log("");
       console.log(`  ${c.dim(`Stored as the account "${name}" in ${credentialsShown()}. \`foldrun accounts\` lists every account signed in here; \`foldrun use ${name}\` switches.`)}\n`);
       return 0;
     }
@@ -5208,7 +5223,10 @@ async function doctor(flags) {
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
  *   keys create <label> --gateway --account --daily <usd> [--wallet <usd>]  the foldrun plan first, then bought credits up to --wallet (0, the default: the plan only)
- *   keys set <id> --wallet <usd>     an account key's wallet budget
+ *   keys set <id> --wallet <usd>     an account key's wallet budget (or an API key's, with model access)
+ *   keys create <label> --model-access --daily <usd> [--cap <usd>] [--wallet <usd>]  one API key for the platform AND
+ *                                    foldrun's models (CI, `foldrun code` with FOLDRUN_TOKEN): the plan first, then
+ *                                    bought credits up to --wallet (0, the default); admin of every project only
  *   keys create <label> --gateway --login   on the account's plan (where it has one): not billed per call
  *   keys create <label> --gateway --login --plan max   five times a pro key's usage limits (pro is the default)
  *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings (its status line too)
@@ -5241,7 +5259,7 @@ async function keysCmd(positional, flags) {
           ? gatewayLine(k.gateway)
         : k.purpose === "a2a"
           ? `A2A · ${k.a2a?.workspace ?? "?"} · ${(k.a2a?.flows ?? []).join(",")}${k.a2a?.maxTasks ? ` · up to ${k.a2a.maxTasks} open` : ""}`
-          : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no projects" : "all projects"}`;
+          : `${k.role ?? "admin"} · ${k.workspaces ? k.workspaces.join(",") || "no projects" : "all projects"}${k.gateway ? ` · models: ${gatewayLine(k.gateway).replace(/^gateway · Claude Code · /, "")}` : ""}`;
       const expired = !k.revokedAt && k.expiresAt && Date.parse(k.expiresAt) <= Date.now();
       const state = k.revokedAt ? c.red("revoked") : expired ? c.red("expired") : c.green("live");
       // A key `foldrun login` minted lasts 90 days and renews itself while
@@ -5265,7 +5283,9 @@ async function keysCmd(positional, flags) {
     // API and gateway keys (Codex review: never silently dropped).
     if (flags.a2a === true && flags["require-customer"] === true) throw new Error("--require-customer is for API and gateway keys, not --a2a");
     // An account key's flags are a gateway key's: never dropped on another kind (Codex review).
-    if (flags.gateway !== true && (flags.account === true || flags.wallet !== undefined)) throw new Error("--account and --wallet make a gateway key: add --gateway");
+    if (flags["model-access"] === true && (flags.gateway === true || flags.a2a === true)) throw new Error("--model-access goes on an API key — a gateway key's limits are --cap and --daily");
+    if (flags.gateway !== true && flags.account === true) throw new Error("--account makes a gateway key: add --gateway");
+    if (flags.gateway !== true && flags["model-access"] !== true && (flags.wallet !== undefined || flags.daily !== undefined || flags.cap !== undefined)) throw new Error("--wallet, --daily and --cap are model limits: add --model-access (an API key that may also call models) or --gateway");
     if (flags.a2a === true) return keysCreateA2a(url, arg, flags);
     if (flags.gateway === true) return keysCreateGateway(url, arg, flags);
     const body = { label: arg };
@@ -5292,13 +5312,27 @@ async function keysCmd(positional, flags) {
     }
     // --require-customer (FOL-168): every run the key starts must name one.
     if (flags["require-customer"] === true) body.requireCustomer = true;
+    // --model-access (one key, 22 Nov 2026): the same key also calls
+    // foldrun's models, within limits of its own.
+    if (flags["model-access"] === true) {
+      const dailyUsd = usdFlag(flags.daily, "--daily");
+      const capUsd = usdFlag(flags.cap, "--cap");
+      if (dailyUsd === undefined && capUsd === undefined) throw new Error("model access needs a limit of its own: --daily <usd> per UTC day, or --cap <usd> in all (or both)");
+      body.modelAccess = { ...(dailyUsd !== undefined ? { dailyUsd } : {}), ...(capUsd !== undefined ? { capUsd } : {}), walletUsd: flags.wallet === undefined ? 0 : walletFlag(flags.wallet) };
+    }
     const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+    // Asked for model access, told nothing of it: a platform from before
+    // one key made a platform key — revoked, never handed out as more.
+    if (body.modelAccess && !made?.modelAccess) {
+      await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
+      throw new Error(`the platform made ${made.id} without model access — it was revoked; this platform does not give API keys model access yet (\`foldrun keys create <label> --gateway\` makes a model-only key)`);
+    }
     // Asked to scope it, told it is not scoped: never hand that key out.
     if (Array.isArray(body.workspaces) && made.workspaces === null) {
       await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
       throw new Error(`the platform made ${made.id} for every project, not ${body.workspaces.join(",")} — it was revoked; this platform cannot scope a key`);
     }
-    console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
+    console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}${made.modelAccess ? c.dim(`  models: ${modelAccessLine(made.modelAccess)}`) : ""}\n`);
     if (made.key == null) return lostSecret(made.id);
     console.log(`  ${made.key}\n`);
     console.log(`  ${c.dim("Shown once. FOLDRUN_TOKEN=<key> uses it; `foldrun keys revoke " + made.id + "` ends it.")}\n`);
@@ -5455,6 +5489,15 @@ function gatewayLine(g) {
   else if (g?.spentUsd != null) parts.push(`${usd(g.spentUsd)} spent`);
   if (g?.dailyUsd != null) parts.push(`${usd(g.todayUsd)} of ${usd(g.dailyUsd)} today`);
   return parts.join(" · ") + tail;
+}
+
+/** An API key's model access, in a few words: its limits, the plan first. */
+function modelAccessLine(m) {
+  const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+  const parts = [m.walletUsd ? `plan first, then up to ${usd(m.walletUsd)} of credits` : "plan only"];
+  if (m.dailyUsd != null) parts.push(`${usd(m.dailyUsd)} a day`);
+  if (m.capUsd != null) parts.push(`${usd(m.capUsd)} in all`);
+  return parts.join(" · ");
 }
 
 /** An account key's wallet budget from --wallet: 0 (the plan only) to 100000. */
@@ -14184,10 +14227,43 @@ async function localKeyFor(s, cancel) {
   const file = path.join(credentialsDir(), "code-local-keys.json");
   // One key per account on a platform: a second account signed in on the
   // same platform never spends the first one's (Codex).
-  if (!s.keySlot) {
+  // The token this machine would send now. Another terminal may switch
+  // profiles (`foldrun use`) or the CLI may renew its sign-in: what was read
+  // about the sign-in holds only for the exact token it was read with, so a
+  // new token is asked about again — never sent to the last one's models URL
+  // (Codex review). A plain read: no announce, no throw when there is none.
+  let held = null;
+  try {
+    held = tokenFor(s.url, { ...s.flags, quiet: true });
+  } catch {
+    /* none: remoteCall below says so */
+  }
+  if (s.slotToken !== undefined && s.slotToken !== held) {
+    // Another token than the one this slot was read with (renewed, or signed
+    // in again): asked about afresh — its account, its model access — and
+    // what the last one was refused no longer holds.
+    s.signInModels = undefined;
+    s.keySlot = undefined;
+    s.signInRefused = false;
+  }
+  if (!s.keySlot || s.signInModels === undefined) {
     const me = await remoteCall(s.url, s.flags, "/api/me");
     if (typeof me?.account !== "string" || !me.account) throw new Error("could not tell which account this is — foldrun whoami");
     s.keySlot = `${s.url}#${me.account}`;
+    // One key (22 Nov 2026): a sign-in that may call foldrun's models is the
+    // model key too — no second key is asked for or made. Null: the sign-in
+    // opens the platform alone (an older login, a non-admin's, a CI key
+    // without it), and the kept machine key below is used as before.
+    // A sign-in the gateway already refused this session stays off: the
+    // kept machine key goes on (a platform half-way through an upgrade).
+    s.slotToken = held;
+    s.signInModels = !s.signInRefused && me?.actor?.modelAccess && typeof me.modelsUrl === "string" && me.modelsUrl && held ? { id: String(me.actor.id ?? ""), url: me.modelsUrl.replace(/\/+$/, ""), token: held } : null;
+  }
+  if (s.signInModels) {
+    // Read fresh every turn: the CLI renews its own sign-in (FOL-71), and the
+    // key it holds now is the one to send. It never leaves this process: the
+    // agent's commands get localEnv(), which has no FOLDRUN_* in it.
+    return { id: s.signInModels.id, key: s.signInModels.token, gatewayUrl: s.signInModels.url, kind: "sign-in" };
   }
   if (s.rejectedKeyPending) {
     const gone = await withLocalKeyLock(file, cancel, async () => {
@@ -14242,7 +14318,7 @@ async function localKeyFor(s, cancel) {
   const yes = ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
   if (cancel.asked) return null;
   if (yes !== "y" && yes !== "yes") {
-    console.log(`  ${c.dim("nothing made — the agent needs it to work on this computer; foldrun code --cloud works without one")}\n`);
+    console.log(`  ${c.dim("nothing made — the agent needs it to work on this computer; foldrun code --cloud works without one, and `foldrun login` (an admin, with model access ticked) makes your sign-in the model key too")}\n`);
     return null;
   }
   // Another session may have made one while this one asked.
@@ -14567,6 +14643,16 @@ function engineModelError(/** @type {unknown} */ err, s) {
     s.planReadAt = 0;
   }
   if (status === 402) return `the gateway would not pay for this: ${said} — your credits: ${String(appFor(s.url)).replace(/\/+$/, "")}/dashboard/billing · this key's limit: foldrun keys ls`;
+  if (s.engineKeyKind === "sign-in" && (status === 401 || status === 403)) {
+    // The sign-in itself: nothing kept here is dropped. Asked again next
+    // turn — its model access may have been taken away, or the key renewed.
+    s.signInModels = undefined;
+    if (status === 401) return `your sign-in was refused for model calls (${said}) — foldrun login signs this machine in again`;
+    // Refused for models though the platform said it may: for the rest of
+    // this session the machine key path is used instead (Codex review).
+    s.signInRefused = true;
+    return `your sign-in cannot call models here (${said}) — the next message uses a key for this computer instead`;
+  }
   if (status === 401 && /^(invalid API key|API key revoked|API key expired)/.test(said) && s.keySlot) {
     // Forgotten only if the kept key is still the one refused: another
     // session may have swapped it in the meantime (Codex).
@@ -15173,6 +15259,7 @@ async function codeLocalTurn(s, text) {
     engineKey = await localKeyFor(s, cancel);
     if (!engineKey || cancel.asked) return;
     s.engineKeyInUse = engineKey.key;
+    s.engineKeyKind = engineKey.kind;
     await foldrunPlanLabel(s);
     typeAhead = startTypeAhead(onInt, onSend);
     /** @type {{ kinds: Set<string>, commands: Set<string> }} */
@@ -15557,6 +15644,16 @@ async function codeLocalTurn(s, text) {
 }
 
 async function codeCmd(positional, flags, layout) {
+  // One session, one sign-in: a session reads its token on every call, so
+  // without a pin `foldrun use` in another terminal would carry this one's
+  // later calls — platform reads and model calls alike — to another account,
+  // even another installation's token to this one's platform (Codex review,
+  // 22 Nov 2026). The profile it started on is the one it keeps; its own
+  // renewals (FOL-71) stay in that profile, so they still apply.
+  if (flags.token === undefined && !env("FOLDRUN_TOKEN") && typeof flags.profile !== "string") {
+    const start = chosenProfile(flags);
+    if (start?.name) flags = { ...flags, profile: start.name };
+  }
   const dir = path.resolve(positional[0] ?? ".");
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
     // `foldrun code to my-project` (19 Nov 2026, a tester): the dashes left off.

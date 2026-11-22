@@ -225,6 +225,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun keys delete <id>` | delete a key (`DELETE /api/keys/<id>`): a live one is revoked in the same moment, so anything using it stops; a revoked or expired one just leaves `keys ls` and Settings. The audit log keeps the record (`apikey.deleted`). Asks first; `--yes` on a pipe. An admin's |
 | `foldrun keys rotate <id>` | a new key with the old one's label, role, projects and deploy scope, printed once; the old key is revoked at once (asks first; `--yes` on a pipe), or keeps working for `--grace 1h` / `24h` while you swap the new one in. A key already rotated is refused (409) and the command names the key that replaced it — rotate that one, also if its secret was lost; `keys ls` shows `rotated → <id>`. The owner is emailed a week before any key expires |
 | `foldrun keys set <id> --customer required\|optional` | whether every run the key starts must name an end customer ([end customers](runs#end-customers)); make one that requires it from the start with `foldrun keys create <label> --require-customer`. `PATCH /api/keys/<id>` |
+| `foldrun keys create <label> --model-access --daily <usd>` | one API key for the platform and foldrun's models: its role and projects as any API key (`--role`, `--to`), and it also calls `/v1/messages` (and runs `foldrun code --local` as `FOLDRUN_TOKEN`) within limits of its own — `--daily <usd>` a UTC day and/or `--cap <usd>` in all, the plan first, then bought credits up to `--wallet <usd>` (default 0: the plan alone). An admin of every project, on the hosted platform; a platform that makes the key without model access has it revoked at once. `keys ls` shows it as `… · models: …`; `keys set <id> --wallet <usd>` changes its budget; rotation keeps its limits and what it has spent. `POST /api/keys { modelAccess: { dailyUsd, capUsd, walletUsd } }` |
 | `foldrun keys create <label> --a2a --to <ws> --flows a,b` | a key for an outside agent ([A2A](a2a.md)): it opens `/a2a/<account>/<ws>/…` — the agent card and JSON-RPC endpoint of those flows, each published with `a2a:` (a flow not published when the key is minted is refused: publish first) — and no `/api` route. `--max-tasks <n>` caps the tasks it may have open at once (1–100, default 10); `--expires` as for any key. Printed once; `keys ls` shows it as `A2A · <ws> · <flows>`. `POST /api/keys { purpose: "a2a", workspace, flows, maxTasks }`, an admin's |
 | `foldrun a2a ls --to <ws>` | what a project serves over A2A (`GET /api/workspaces/<ws>/a2a`): every flow that says `a2a:`, published or not, with its public/private card and its card and endpoint URLs; the project's A2A keys (an admin's view; `null` otherwise); and the newest tasks — state, flow, run, and `A2A · <key label>`; then, under **Secret and code**, every agent that holds a secret and can run code, accepted or not, with the `--accept-risk` line that accepts it. `--json` prints the answer as it came |
 | `foldrun a2a publish <flow>` | sets `a2a: { publish: true }` in the flow, keeping the rest of its block: `--name`, `--description`, `--example "…"` (repeatable — the card's examples), `--public-card` (the card is readable without a key; calling never is) or `--private-card`. Checked with core's `a2a:` rules before anything is written; shows the diff, `--dry-run` writes nothing. Without `--to` it edits this folder (`deploy` ships it); `--to <workspace>` sends the flow page's `PATCH …/flows/<flow> { a2a, expect }` — an admin's, the platform refuses an editor — and prints the card URL. A caller also needs an A2A key that names the flow |
@@ -608,7 +609,17 @@ ticked so Enter keeps it, and the first time in a folder which project:
    - **On this computer**: foldrun's own agent works directly in your
      folder, with Read, Write, Edit, Glob, Grep and Bash, plus
      [cloud agents](#cloud-agents-from-this-computer). Its model calls are
-     paid by your foldrun plan's allowance while it has room, through a key
+     paid by your foldrun plan's allowance while it has room. **One key:**
+     when your sign-in has model access — ticked on the approval page of
+     `foldrun login` (an admin of every project; the page shows the limits:
+     the plan first, then at most $20 of bought credits, $100 a day), or a
+     key made with `foldrun keys create <label> --model-access` and given as
+     `FOLDRUN_TOKEN` — the agent's model calls use that same key at the
+     platform's API address, and nothing else is asked or made. The key
+     stays inside the CLI: the agent's commands never see it, and it is never
+     sent to the model. A session keeps the account it started on, even if
+     `foldrun use` picks another in a second terminal. Without model access (an older sign-in, or a member
+     who is not an admin of every project), they go through a key
      made for this computer after a yes, kept only on this computer: the
      plan first, then at most $20 of bought credits in all and $100 a day
      on every call (`foldrun keys ls` shows what it spent; `foldrun keys set

@@ -437,3 +437,45 @@ test("keys create --gateway --account: the right kind at other limits is revoked
   assert.match(r.out, /other limits than asked/);
   assert.doesNotMatch(r.out, /fr_gw_y/);
 });
+
+// One key (22 Nov 2026): an API key that may also call foldrun's models.
+test("keys create --model-access posts modelAccess on an API key, prints its limits, and revokes a key a platform made without it", async () => {
+  const s = await serve({
+    "POST /api/keys": () => ({ ok: true, key: "fr_api_onekey", id: "a1", prefix: "fr_api_onek", role: "editor", workspaces: null, expiresAt: null, modelAccess: { capUsd: null, dailyUsd: 50, walletUsd: 5 }, gatewayUrl: "https://api.example.test" }),
+  });
+  const r = await at(s.url, "keys", "create", "ci", "--model-access", "--daily", "50", "--wallet", "5");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(s.seen[0].body), { label: "ci", expires: "90d", modelAccess: { dailyUsd: 50, walletUsd: 5 } });
+  assert.match(r.out, /models: plan first, then up to \$5\.00 of credits · \$50\.00 a day/);
+  assert.equal(r.out.split("fr_api_onekey").length - 1, 1, "the key is printed once");
+
+  const old = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_plain", id: "a2", prefix: "fr_api_plai", role: "editor", workspaces: null }), "DELETE /api/keys": () => ({ ok: true }) });
+  const refused = await at(old.url, "keys", "create", "ci", "--model-access", "--daily", "5");
+  old.close();
+  assert.equal(refused.code, 1, refused.out);
+  assert.match(refused.out, /without model access — it was revoked/);
+  assert.doesNotMatch(refused.out, /fr_api_plain/, "the key it made instead is never shown");
+  assert.deepEqual(JSON.parse(old.seen[1].body), { id: "a2" });
+
+  const z = await serve({ "POST /api/keys": () => ({ ok: true }) });
+  const none = await at(z.url, "keys", "create", "x", "--model-access");
+  const stray = await at(z.url, "keys", "create", "x", "--daily", "5");
+  const mixed = await at(z.url, "keys", "create", "x", "--model-access", "--gateway", "--daily", "5");
+  z.close();
+  for (const x of [none, stray, mixed]) assert.equal(x.code, 1, x.out);
+  assert.match(none.out, /needs a limit of its own/);
+  assert.match(stray.out, /add --model-access/);
+  assert.match(mixed.out, /goes on an API key/);
+  assert.equal(z.seen.length, 0, "refused before any request");
+});
+
+test("keys ls shows an API key's model access beside its role", async () => {
+  const s = await serve({
+    "GET /api/keys": () => ({ keys: [{ id: "a1", prefix: "fr_api_onek", label: "ci", role: "editor", workspaces: null, createdAt: "2026-11-22T00:00:00Z", revokedAt: null, gateway: { capUsd: null, dailyUsd: 50, credential: "account", walletUsd: 5, spentUsd: 1, todayUsd: 1, walletSpentUsd: 0 } }] }),
+  });
+  const r = await at(s.url, "keys", "ls");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /editor · all projects · models: plan first · credits \$0\.00 of \$5\.00 · \$1\.00 spent · \$1\.00 of \$50\.00 today/);
+});

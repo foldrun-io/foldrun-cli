@@ -1305,3 +1305,234 @@ test("the upload preview (FOL-212): no sends zero bytes; it names untracked file
     await s.close();
   }
 });
+
+// ------------------------------------------------ one key (22 Nov 2026)
+
+test("--local with a sign-in that has model access: a fresh machine gets a reply with no second key — nothing asked, nothing minted, the sign-in sent to the models URL and never seen by a command", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "t1", name: "Bash", input: { command: "echo t=${FOLDRUN_TOKEN:-none} a=${ANTHROPIC_AUTH_TOKEN:-none} > env.txt" } }]),
+    () => sse([{ type: "text", text: "Hello there." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", origin: "cli-login", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 20 } }, modelsUrl: s.url }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /api/keys": () => {
+      throw new Error("no key may be minted");
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return turns[asked.length - 1]!();
+    },
+  });
+  try {
+    // A CI-style key in the environment: it, too, is the model key, and the
+    // agent's commands never see it.
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url], home, { FOLDRUN_TOKEN: "fr_api_signed" });
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("hi\r");
+      at = await t.until(/\$ echo t=[\s\S]*allow\?/, at);
+      assert.doesNotMatch(t.out(), /make it\? \[y\/N\]|swap it\?/, "no second key is offered");
+      t.send("y\r");
+      at = await t.until(/Hello there\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    assert.equal(s.seen.filter((x: any) => x.url === "/api/keys").length, 0, "zero key-mint requests");
+    const models = s.seen.filter((x: any) => x.url === "/v1/messages");
+    assert.equal(models.length, 2);
+    for (const m of models) assert.equal(m.headers.authorization, "Bearer fr_api_signed", "the sign-in itself");
+    assert.equal(fs.readFileSync(path.join(d, "env.txt"), "utf8").trim(), "t=none a=none", "no command sees the reusable key");
+    assert.equal(fs.existsSync(path.join(home, "code-local-keys.json")), false, "nothing kept beside it");
+    assert.doesNotMatch(JSON.stringify(asked), /fr_api_signed/, "never in the model's context");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local on an older install: a sign-in without model access keeps using the machine key it cached, asks nothing, mints nothing", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: null }, modelsUrl: s.url }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
+  });
+  const file = path.join(home, "code-local-keys.json");
+  fs.writeFileSync(file, JSON.stringify({ [`${s.url}#acme`]: { id: "old-1", key: "fr_gw_cached", gatewayUrl: s.url, kind: "account" } }), { mode: 0o600 });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("go\r");
+      at = await t.until(/Done\./, at);
+      assert.doesNotMatch(t.out(), /make it\?|swap it\?/);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    assert.equal(s.seen.filter((x: any) => x.url === "/api/keys").length, 0);
+    assert.equal(s.seen.find((x: any) => x.url === "/v1/messages")!.headers.authorization, "Bearer fr_gw_cached");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local with a sign-in refused for models: the kept machine keys are left alone and the person is told to sign in again", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": () => ({ __status: 401, body: { type: "error", error: { type: "authentication_error", message: "API key revoked" } } }),
+  });
+  const file = path.join(home, "code-local-keys.json");
+  const other = { [`https://elsewhere.test#acme`]: { id: "x", key: "fr_gw_other", gatewayUrl: "https://elsewhere.test", kind: "account" } };
+  fs.writeFileSync(file, JSON.stringify(other), { mode: 0o600 });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("go\r");
+      at = await t.until(/your sign-in was refused for model calls[\s\S]*foldrun login/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), other, "untouched");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local, sign-in: another terminal switches the token between turns — the new one is asked about again, never sent to the models URL the old one was given (Codex review)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
+  });
+  const creds = (token: string) => fs.writeFileSync(path.join(home, "credentials.json"), JSON.stringify({ current: "acme", profiles: { acme: { url: s.url, token, account: "acme" } } }), { mode: 0o600 });
+  creds("fr_api_first");
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("one\r");
+      at = await t.until(/Done\./, at);
+      at = await t.until(/\w ❯ /, at);
+      creds("fr_api_second");
+      t.send("two\r");
+      at = await t.until(/Done\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    const models = s.seen.filter((x: any) => x.url === "/v1/messages").map((x: any) => x.headers.authorization);
+    assert.deepEqual(models, ["Bearer fr_api_first", "Bearer fr_api_second"]);
+    const me = s.seen.filter((x: any) => x.url === "/api/me").map((x: any) => x.headers.authorization);
+    assert.ok(me.includes("Bearer fr_api_second"), "the new token was asked about before it was sent");
+    const askedAt = s.seen.findIndex((x: any) => x.url === "/api/me" && x.headers.authorization === "Bearer fr_api_second");
+    const sentAt = s.seen.findIndex((x: any) => x.url === "/v1/messages" && x.headers.authorization === "Bearer fr_api_second");
+    assert.ok(askedAt >= 0 && askedAt < sentAt, "asked about before it was sent");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local, sign-in refused with 403 by the gateway: the next message goes on the machine key this computer kept (a platform half-way through an upgrade)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": () => (s.seen.filter((x: any) => x.url === "/v1/messages").length === 1 ? { __status: 403, body: { type: "error", error: { type: "permission_error", message: "this is not a gateway key" } } } : sse([{ type: "text", text: "Done." }])),
+  });
+  fs.writeFileSync(path.join(home, "code-local-keys.json"), JSON.stringify({ [`${s.url}#acme`]: { id: "old-1", key: "fr_gw_cached", gatewayUrl: s.url, kind: "account" } }), { mode: 0o600 });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "fr_api_k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("one\r");
+      at = await t.until(/your sign-in cannot call models here[\s\S]*a key for this computer instead/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("two\r");
+      at = await t.until(/Done\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    const models = s.seen.filter((x: any) => x.url === "/v1/messages").map((x: any) => x.headers.authorization);
+    assert.deepEqual(models, ["Bearer fr_api_k", "Bearer fr_gw_cached"]);
+    assert.equal(s.seen.filter((x: any) => x.url === "/api/keys").length, 0);
+  } finally {
+    s.close();
+  }
+});
+
+test("--local: `foldrun use` in another terminal mid-session does not move this session — it keeps the profile it started on (Codex review)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
+  });
+  const creds = (current: string) =>
+    fs.writeFileSync(path.join(home, "credentials.json"), JSON.stringify({ current, profiles: { acme: { url: s.url, token: "fr_api_acme", account: "acme" }, other: { url: "https://other.test", token: "fr_api_other", account: "other" } } }), { mode: 0o600 });
+  creds("acme");
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk"], home, { FOLDRUN_URL: "" });
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("one\r");
+      at = await t.until(/Done\./, at);
+      at = await t.until(/\w ❯ /, at);
+      creds("other");
+      t.send("two\r");
+      at = await t.until(/Done\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    const tokens = new Set(s.seen.map((x: any) => x.headers.authorization));
+    assert.deepEqual([...tokens], ["Bearer fr_api_acme"], "every call, both turns, as the profile it started on");
+  } finally {
+    s.close();
+  }
+});
