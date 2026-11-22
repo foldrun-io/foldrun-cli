@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave } from "./code-session.mjs";
+import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave } from "./code-session.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -14918,6 +14918,9 @@ async function codeLocalTurn(s, text) {
     set.delete(grant);
     return true;
   };
+  /** The conversation as the engine compacted it part-way, if it did (FOL-213). */
+  /** @type {any[] | null} */
+  let compacted = null;
   try {
     await keyboardBack();
     // The CLI's own keys must not be in reach of what the agent reads
@@ -15168,9 +15171,22 @@ async function codeLocalTurn(s, text) {
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
       if (m.type === "system" && m.subtype === "init" && m.model) s.model = String(m.model);
+      if (m.type === "system" && m.subtype === "compact_boundary" && Array.isArray(m.conversation)) {
+        // The older part was summarised so the conversation fits the
+        // model's window: it goes on from here, and so does what is kept.
+        compacted = m.conversation;
+        turn.length = 0;
+        stopTicker();
+        console.log(`  ${c.dim("⋯ the conversation was getting long: its older part was summarised")}`);
+        stopTicker = startTicker(started);
+      }
       if (m.type === "assistant" && !m.parent_tool_use_id) {
         const content = Array.isArray(m.message?.content) ? m.message.content : [];
-        turn.push({ role: "assistant", content });
+        // A paused turn's continuation is the same turn (the engine joins
+        // them too): the conversation kept still alternates.
+        const last = turn[turn.length - 1];
+        if (last?.role === "assistant") last.content = [...last.content, ...content];
+        else turn.push({ role: "assistant", content });
         const words = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
         const calls = content.filter((b) => b.type === "tool_use");
         if (calls.length) {
@@ -15197,7 +15213,7 @@ async function codeLocalTurn(s, text) {
     {
       // The conversation goes on from here: the whole turn when it
       // finished, else the message and a note (turns must alternate).
-      const whole = [...history, ...turn];
+      const whole = [...(compacted ?? history), ...turn];
       const done = result?.subtype === "success" && !result?.is_error && validConversation(whole);
       // A reply that did not finish (cut off at the output limit, a refusal)
       // keeps its words in the conversation, so "continue" goes on from what
@@ -15212,12 +15228,17 @@ async function codeLocalTurn(s, text) {
       const reason = failed && Array.isArray(result.errors) && typeof result.errors[0] === "string" ? result.errors[0] : "";
       const ending = `(this turn did not finish${reason ? `: ${reason}` : ""})`;
       const note = cancel.asked ? "(stopped by the person before I finished)" : partial ? `${partial}\n\n${ending}` : ending;
-      s.localHistory = trimConversation(done ? whole : [...history, turn[0], { role: "assistant", content: [{ type: "text", text: note }] }]);
+      s.localHistory = trimConversation(nextConversation({ history, turn, compacted, done, note }));
       saveEngineConversation(s, s.localHistory);
     }
   } catch (err) {
     stopTicker();
-    if (s.localHistory) {
+    if (compacted) {
+      // Compacted before it failed: the summary was paid for and is kept;
+      // the compacted conversation ends on a user turn, the note answers it.
+      s.localHistory = trimConversation([...compacted, { role: "assistant", content: [{ type: "text", text: "(this turn did not finish)" }] }]);
+      saveEngineConversation(s, s.localHistory);
+    } else if (s.localHistory) {
       s.localHistory = trimConversation([...s.localHistory, { role: "user", content: [{ type: "text", text }] }, { role: "assistant", content: [{ type: "text", text: "(this turn did not finish)" }] }]);
       saveEngineConversation(s, s.localHistory);
     }

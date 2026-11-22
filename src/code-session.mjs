@@ -623,6 +623,27 @@ export function validConversation(list) {
  * too big on its own leaves nothing.
  * @param {Array<{ role: string, content: Array<Record<string, unknown>> }>} list
  */
+/**
+ * The conversation a local turn leaves (`foldrun code --local`). Finished:
+ * what came before and the whole turn. Not finished: what came before, the
+ * person's message and a note of how it ended (turns must alternate; a
+ * cut-off tool call is never kept unanswered). When the engine compacted
+ * the conversation part-way (a `compact_boundary` message, FOL-213), what
+ * came before is the compacted conversation — the summary and the newest
+ * part, the person's message already in it — and the turn is what followed.
+ * @param {{ history: any[], turn: any[], compacted: any[] | null, done: boolean, note: string }} p
+ */
+export function nextConversation({ history, turn, compacted, done, note }) {
+  const before = compacted ?? history;
+  const whole = [...before, ...turn];
+  if (done && validConversation(whole)) return whole;
+  const ending = { role: "assistant", content: [{ type: "text", text: note }] };
+  // The compacted conversation ends on a user message (the person's, or the
+  // answers to the last calls): the note answers it.
+  if (compacted) return [...compacted, ending];
+  return [...history, turn[0], ending];
+}
+
 export function trimConversation(list, maxBytes = 1_500_000) {
   const size = (/** @type {unknown} */ x) => Buffer.byteLength(JSON.stringify(x));
   if (size(list) <= maxBytes) return list;

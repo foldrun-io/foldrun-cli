@@ -1217,3 +1217,21 @@ test("--local on a platform from before plan-first keys: the older kind is offer
     s.close();
   }
 });
+
+test("nextConversation: a compacted turn goes on from the compacted conversation (FOL-213)", async () => {
+  const { nextConversation, validConversation } = await import("../src/code-session.mjs");
+  const u = (t: string) => ({ role: "user", content: [{ type: "text", text: t }] });
+  const a = (t: string) => ({ role: "assistant", content: [{ type: "text", text: t }] });
+  const history = [u("one"), a("1"), u("two"), a("2")];
+  // Not compacted: as before.
+  assert.deepEqual(nextConversation({ history, turn: [u("three"), a("3")], compacted: null, done: true, note: "" }), [...history, u("three"), a("3")]);
+  assert.deepEqual(nextConversation({ history, turn: [u("three"), a("half")], compacted: null, done: false, note: "(cut)" }), [...history, u("three"), a("(cut)")]);
+  // Compacted part-way: the summary and the newest part, then what followed.
+  const compacted = [{ role: "user", content: [{ type: "text", text: "summary" }, { type: "text", text: "three" }] }];
+  const done = nextConversation({ history, turn: [a("3")], compacted, done: true, note: "" });
+  assert.deepEqual(done, [...compacted, a("3")]);
+  assert.equal(validConversation(done), true);
+  const cut = nextConversation({ history, turn: [a("half")], compacted, done: false, note: "(cut)" });
+  assert.deepEqual(cut, [...compacted, a("(cut)")]);
+  assert.equal(validConversation(cut), true);
+});

@@ -640,7 +640,14 @@ ticked so Enter keeps it, and the first time in a folder which project:
      control characters is refused. The commands it runs never see the
      model key. The folder's `CLAUDE.md` is read as notes. Its conversation
      is kept on this computer, so `--continue` goes on with it, and Ctrl-C
-     stops a turn. The line after each turn names your foldrun plan.
+     stops a turn. The line after each turn names your foldrun plan. When
+     the conversation nears the model's context window, its older part is
+     summarised so the session goes on: the newest part stays word for
+     word, and the summary keeps the goal, what is done and what is next,
+     and the files read and changed. The session says so in one line, and
+     the summary is a model call like any other. If the model says the
+     conversation is too long before that, it is summarised then and the
+     turn is asked again, once.
    - **In the cloud**: the agent works on a copy of the folder in a
      sandbox on the platform, on your foldrun credits, and you apply the
      patch it hands back. See [Coding in a sandbox](#coding-in-a-sandbox).
