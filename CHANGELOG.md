@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.7.1] — 2026-11-22
+
+### deps
+
+- @foldrun/core ^24.11.0 ([0a8c319](https://github.com/foldrun-io/foldrun-cli/commit/0a8c319))
+
 ## [27.7.0] — 2026-11-22
 
 - feat(code): the folder is shown, and asked about, before it goes to the cloud (FOL-212) ([56f7745](https://github.com/foldrun-io/foldrun-cli/commit/56f7745))
