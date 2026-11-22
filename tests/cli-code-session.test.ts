@@ -1235,3 +1235,22 @@ test("nextConversation: a compacted turn goes on from the compacted conversation
   assert.deepEqual(cut, [...compacted, a("(cut)")]);
   assert.equal(validConversation(cut), true);
 });
+
+test("a steered turn that fails keeps what was asked and answered on the way; a trim never starts at a tool result (FOL-213, Codex)", async () => {
+  const { nextConversation, validConversation, trimConversation } = await import("../src/code-session.mjs");
+  const u = (t: string) => ({ role: "user", content: [{ type: "text", text: t }] });
+  const a = (t: string) => ({ role: "assistant", content: [{ type: "text", text: t }] });
+  const history = [u("before"), a("ok")];
+  const turn = [u("go"), a("first answer"), u("use metric"), a("second, cut")];
+  const kept = nextConversation({ history, turn, compacted: null, done: false, note: "(this turn did not finish)" });
+  assert.deepEqual(kept.map((m: any) => m.content[0].text), ["before", "ok", "go", "first answer", "use metric", "(this turn did not finish)"]);
+  assert.ok(validConversation(kept));
+  // A message sent mid-turn rides with the answers to calls: not a place to cut.
+  const call = { role: "assistant", content: [{ type: "tool_use", id: "r", name: "Read", input: {} }] };
+  const answers = { role: "user", content: [{ type: "tool_result", tool_use_id: "r", content: "x" }, { type: "text", text: "use metric" }] };
+  assert.equal(validConversation([answers, a("done")]), false, "a tool result with no call before it");
+  const big = "y".repeat(800_000);
+  const trimmed = trimConversation([u(big), a(big), u("go"), call, answers, a("done")], 1_000_000);
+  assert.equal((trimmed[0] as any).content[0].text, "go");
+  assert.ok(validConversation(trimmed));
+});

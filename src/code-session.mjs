@@ -41,9 +41,11 @@ export const CODE_TIPS = [
   "typing while a turn runs keeps it for your next message (never sent mid-turn)",
 ];
 
-export function helpText() {
+/** @param {{ steers?: boolean }} [o] steers: Enter sends into a running turn (foldrun's own loop, FOL-213). */
+export function helpText({ steers = false } = {}) {
   const w = Math.max(...CODE_COMMANDS.map(([c]) => c.length));
-  return [...CODE_COMMANDS.map(([c, d]) => `${c.padEnd(w)}  ${d}`), "", ...CODE_TIPS].join("\n");
+  const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now" : t)) : CODE_TIPS;
+  return [...CODE_COMMANDS.map(([c, d]) => `${c.padEnd(w)}  ${d}`), "", ...tips].join("\n");
 }
 
 // ------------------------------------------------------------- history
@@ -608,6 +610,8 @@ export function validConversation(list) {
       const answered = new Set((next?.content ?? []).filter((b) => b.type === "tool_result").map((b) => b.tool_use_id));
       if (!calls.every((id) => answered.has(id))) return false;
     }
+    // The first turn answers no call: a tool result there has lost its call.
+    if (m.role === "user" && i === 0 && m.content.some((b) => b.type === "tool_result")) return false;
     if (m.role === "user" && i > 0) {
       const asked = new Set(list[i - 1].content.filter((b) => b.type === "tool_use").map((b) => b.id));
       if (!m.content.filter((b) => b.type === "tool_result").every((b) => asked.has(b.tool_use_id))) return false;
@@ -638,8 +642,15 @@ export function nextConversation({ history, turn, compacted, done, note }) {
   const whole = [...before, ...turn];
   if (done && validConversation(whole)) return whole;
   const ending = { role: "assistant", content: [{ type: "text", text: note }] };
-  // The compacted conversation ends on a user message (the person's, or the
-  // answers to the last calls): the note answers it.
+  // As much of the turn as stands, to its last user message (the person's,
+  // one they sent mid-turn, or the answers to calls), and the note answering
+  // it: what was asked and answered on the way is kept (Codex).
+  for (let k = turn.length; k >= 0; k--) {
+    const kept = [...before, ...turn.slice(0, k)];
+    if (kept.at(-1)?.role !== "user") continue;
+    const list = [...kept, ending];
+    if (validConversation(list)) return list;
+  }
   if (compacted) return [...compacted, ending];
   return [...history, turn[0], ending];
 }
@@ -647,7 +658,9 @@ export function nextConversation({ history, turn, compacted, done, note }) {
 export function trimConversation(list, maxBytes = 1_500_000) {
   const size = (/** @type {unknown} */ x) => Buffer.byteLength(JSON.stringify(x));
   if (size(list) <= maxBytes) return list;
-  const starts = list.map((m, i) => (m.role === "user" && m.content.some((b) => b.type === "text") ? i : -1)).filter((i) => i > 0);
+  // A turn the person began: their words, and no answers to the model's
+  // calls (a message sent mid-turn rides with those, and cannot start one).
+  const starts = list.map((m, i) => (m.role === "user" && m.content.some((b) => b.type === "text") && !m.content.some((b) => b.type === "tool_result") ? i : -1)).filter((i) => i > 0);
   for (const at of starts) {
     const rest = list.slice(at);
     if (size(rest) <= maxBytes) return rest;

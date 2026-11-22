@@ -13659,16 +13659,19 @@ const TYPE_AHEAD_MAX = 4000;
 /**
  * While a turn runs in an interactive session: the keyboard read here, in
  * raw mode — Ctrl-C goes to the turn's own handler, printable keys and
- * Backspace build the next message, everything else (Enter included) is
- * not acted on. Nothing is sent mid-turn. stop() hands the terminal back
- * and returns what was typed.
+ * Backspace build the next message. Enter sends it into the running turn
+ * when the turn takes messages (onSend, foldrun's own loop: FOL-213);
+ * otherwise nothing is sent mid-turn and Enter is a space. stop() hands
+ * the terminal back and returns what was typed and not sent.
  * @param {() => void} onInt
+ * @param {(text: string) => void} [onSend]
  */
-function startTypeAhead(onInt) {
+function startTypeAhead(onInt, onSend) {
   if (!codeInteractive || !process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") return { text: () => "", stop: async () => "" };
   const decoder = new StringDecoder("utf8");
   let text = "";
   let carry = "";
+  let pasting = false;
   const onData = (/** @type {Buffer} */ d) => {
     // Escape sequences (arrows, paste marks) are dropped whole — one cut at
     // the end of a read waits for its rest (Codex); a line break becomes a
@@ -13677,15 +13680,32 @@ function startTypeAhead(onInt) {
     const cut = /\x1b(?:\[[0-?]*[ -/]*|O)?$/.exec(raw);
     carry = cut ? cut[0] : "";
     if (cut) raw = raw.slice(0, cut.index);
-    const keys = raw.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b/g, "");
-    for (const k of keys) {
+    // A paste is one message: its line breaks are spaces, never a send.
+    // Enter sends only as a key pressed on its own — a read that is that
+    // key and nothing else, outside the terminal's paste marks (Codex).
+    const alone = !pasting && /^(\r\n?|\n)$/.test(raw);
+    /** @type {Array<{ k: string, pasted: boolean }>} */
+    const keys = [];
+    for (const part of raw.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b)/)) {
+      if (part === "\x1b[200~") pasting = true;
+      else if (part === "\x1b[201~") pasting = false;
+      else if (!part.startsWith("\x1b")) for (const k of part) keys.push({ k, pasted: pasting });
+    }
+    for (const { k } of keys) {
       if (k === "\x03") onInt();
       else if (k === "\x7f" || k === "\b") text = [...text].slice(0, -1).join("");
-      else if (k === "\r" || k === "\n") text = text && !text.endsWith(" ") ? `${text} ` : text;
+      else if ((k === "\r" || k === "\n") && onSend && alone && text.trim()) {
+        const t = text.trim();
+        text = "";
+        onSend(t);
+      } else if (k === "\r" || k === "\n") text = text && !text.endsWith(" ") ? `${text} ` : text;
       else if (!/[\x00-\x1f\x7f-\x9f]/.test(k) && text.length < TYPE_AHEAD_MAX) text += k;
     }
   };
   process.stdin.setRawMode(true);
+  // Paste marks on, so a paste is told from typing (the prompt turns them
+  // off when it hands the terminal back).
+  if (onSend) writeControl("\x1b[?2004h");
   process.stdin.on("data", onData);
   process.stdin.resume();
   let stopped = false;
@@ -13699,6 +13719,7 @@ function startTypeAhead(onInt) {
       await new Promise((r) => setImmediate(r));
       await new Promise((r) => setTimeout(r, 15));
       process.stdin.off("data", onData);
+      if (onSend) writeControl("\x1b[?2004l");
       process.stdin.setRawMode(false);
       process.stdin.pause();
       const t = text.trim();
@@ -14872,6 +14893,8 @@ async function codeLocalTurn(s, text) {
   const onInt = () => {
     if (cancel.asked) {
       stopTicker();
+      // The terminal as it was: paste marks off (type-ahead turned them on).
+      writeControl("\x1b[?2004l");
       console.log(`\n  ${c.dim("stopped")}`);
       process.exit(130);
     }
@@ -14882,10 +14905,37 @@ async function codeLocalTurn(s, text) {
     abort.abort();
   };
   process.on("SIGINT", onInt);
-  let typeAhead = startTypeAhead(onInt);
+  /** What the person typed during this turn, in order: sent into it with
+   *  Enter (and not yet taken by the engine), or set aside when a question
+   *  took the keyboard. What is left starts the next message (FOL-213). */
+  /** @type {Array<{ t: string, sent: boolean, n: number }>} */
+  const pending = [];
+  /** Each entry's place in the order typed, so one given back goes back there. */
+  let typedSeq = 0;
+  /** The engine takes what was sent, in order; what was set aside stays. */
+  const takeSent = () => {
+    const taken = pending.filter((e) => e.sent);
+    for (let i = pending.length - 1; i >= 0; i--) if (pending[i].sent) pending.splice(i, 1);
+    if (taken.length) lastSteer = taken;
+    return taken.map((e) => e.t);
+  };
+  /** The last messages the engine took, until the model answers them. */
+  /** @type {Array<{ t: string, sent: boolean, n: number }> | null} */
+  let lastSteer = null;
+  // Enter sends only to an engine that takes messages mid-turn: an older
+  // @foldrun/core would leave them queued while saying they were sent (Codex).
+  const steers = /** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.steer === true;
+  const onSendNow = (/** @type {string} */ t) => {
+    pending.push({ t, sent: true, n: typedSeq++ });
+    // The ticker clears its own line before anything is printed, so it is
+    // left as it is: restarting it here could start a second (Codex).
+    console.log(`  ${c.violet("↳")} ${c.grey(clipLine(t))} ${c.dim("· the agent reads it after what it is doing now")}`);
+  };
+  const onSend = steers ? onSendNow : undefined;
+  let typeAhead = startTypeAhead(onInt, onSend);
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
-    if (t) s.typeAhead = s.typeAhead ? `${s.typeAhead} ${t}` : t;
+    if (t) pending.push({ t, sent: false, n: typedSeq++ });
   };
   const changed = new Set();
   /** @type {any} */
@@ -14921,6 +14971,34 @@ async function codeLocalTurn(s, text) {
   /** The conversation as the engine compacted it part-way, if it did (FOL-213). */
   /** @type {any[] | null} */
   let compacted = null;
+  /** The conversation before this turn, and the turn so far: what a turn
+   *  that throws keeps (Codex). */
+  /** @type {any[] | null} */
+  let historyAtStart = null;
+  /** @type {any[]} */
+  let turnSoFar = [];
+  /** Where in the turn a message sent into it became its own user turn,
+   *  until the model answers it; -1 when none waits. */
+  let unansweredAt = -1;
+  /** A message sent into the turn that the model never answered (the turn
+   *  stopped or failed first) goes back to the next prompt, not into the
+   *  conversation as asked (Codex). True when one went back. */
+  const giveBackUnanswered = () => {
+    if (unansweredAt < 0 || unansweredAt >= turnSoFar.length || !lastSteer) return false;
+    const m = turnSoFar[unansweredAt];
+    const words = new Set(lastSteer.map((e) => e.t.slice(0, 20_000)));
+    if (m.content.some((/** @type {any} */ b) => b.type === "tool_result")) {
+      // It rode with the answers to calls: those stay, its words come out.
+      m.content = m.content.filter((/** @type {any} */ b) => !(b.type === "text" && words.has(b.text)));
+      turnSoFar.splice(unansweredAt + 1);
+    } else turnSoFar.splice(unansweredAt);
+    // Back where it was typed among what is waiting (Codex).
+    pending.push(...lastSteer.map((e) => ({ ...e, sent: false })));
+    pending.sort((a, b) => a.n - b.n);
+    unansweredAt = -1;
+    lastSteer = null;
+    return true;
+  };
   try {
     await keyboardBack();
     // The CLI's own keys must not be in reach of what the agent reads
@@ -14953,7 +15031,7 @@ async function codeLocalTurn(s, text) {
     if (!engineKey || cancel.asked) return;
     s.engineKeyInUse = engineKey.key;
     await foldrunPlanLabel(s);
-    typeAhead = startTypeAhead(onInt);
+    typeAhead = startTypeAhead(onInt, onSend);
     /** @type {{ kinds: Set<string>, commands: Set<string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
@@ -15039,9 +15117,11 @@ async function codeLocalTurn(s, text) {
           return { behavior: /** @type {const} */ ("deny"), message: "the request was withdrawn" };
         }
         let answer = "";
+        let words = "";
         try {
           for (;;) {
-            answer = ((await cancellablePrompt(ask, cancel)) ?? "").trim().toLowerCase();
+            words = ((await cancellablePrompt(ask, cancel)) ?? "").trim();
+            answer = words.toLowerCase();
             // d: the whole patch, as git will apply it, then the question again.
             if (!(isApply && (answer === "d" || answer === "diff") && !cancel.asked && !signal?.aborted)) break;
             console.log(`\n${colorPatch(plainText(String(input.patch ?? "")), c).split("\n").map((l) => `    ${l}`).join("\n")}\n`);
@@ -15059,10 +15139,12 @@ async function codeLocalTurn(s, text) {
           if (FILE_CHANGES.has(name) && file !== undefined) changed.add(localCallSummary("Write", { file_path: file }, s.dir));
           return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
         }
+        // More than a no: what they wrote is what the model hears (Codex).
+        if (!/^(n|no|)$/.test(answer)) return { behavior: /** @type {const} */ ("deny"), message: `The person said no to this, and said: ${JSON.stringify(words.slice(0, 2_000))}. Do what they said; do not try the same thing another way.` };
         return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
       } finally {
         if (!cancel.asked) {
-          typeAhead = startTypeAhead(onInt);
+          typeAhead = startTypeAhead(onInt, onSend);
           stopTicker = startTicker(started);
         }
       }
@@ -15142,6 +15224,8 @@ async function codeLocalTurn(s, text) {
     const history = (s.localHistory ??= readEngineConversation(s));
     /** @type {Array<{ role: string, content: Array<Record<string, unknown>> }>} */
     const turn = [{ role: "user", content: [{ type: "text", text }] }];
+    historyAtStart = history;
+    turnSoFar = turn;
     /** @type {Record<string, string | undefined>} */
     const own = localEnv();
     for (const k of Object.keys(own)) if (/^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)) delete own[k];
@@ -15167,6 +15251,8 @@ async function codeLocalTurn(s, text) {
             history,
             canUseTool,
             abortController: abort,
+            // Messages sent with Enter while it works (FOL-213).
+            steer: takeSent,
           },
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
@@ -15176,11 +15262,18 @@ async function codeLocalTurn(s, text) {
         // model's window: it goes on from here, and so does what is kept.
         compacted = m.conversation;
         turn.length = 0;
+        // A message sent in is now part of the summarised conversation: it
+        // stays there, and is not also put back on the next prompt (Codex).
+        unansweredAt = -1;
+        lastSteer = null;
         stopTicker();
         console.log(`  ${c.dim("⋯ the conversation was getting long: its older part was summarised")}`);
         stopTicker = startTicker(started);
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) {
+        // The model is answering: what was sent into the turn reached it.
+        unansweredAt = -1;
+        lastSteer = null;
         const content = Array.isArray(m.message?.content) ? m.message.content : [];
         // A paused turn's continuation is the same turn (the engine joins
         // them too): the conversation kept still alternates.
@@ -15203,6 +15296,17 @@ async function codeLocalTurn(s, text) {
       if (m.type === "user" && !m.parent_tool_use_id) {
         const content = Array.isArray(m.message?.content) ? m.message.content : [];
         turn.push({ role: "user", content });
+        // Carrying what was sent into the turn — on its own, or after the
+        // answers to calls: unanswered until the model's next message.
+        if (lastSteer && content.some((/** @type {any} */ b) => b.type === "text" && lastSteer?.some((e) => e.t.slice(0, 20_000) === b.text))) unansweredAt = turn.length - 1;
+        // The model finished an answer and goes on with a message the person
+        // sent meanwhile: that answer is shown now, not overwritten (Codex).
+        if (reply && !content.some((/** @type {any} */ b) => b.type === "tool_result")) {
+          stopTicker();
+          console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}\n`);
+          reply = "";
+          stopTicker = startTicker(started);
+        }
         for (const b of /** @type {any[]} */ (content)) {
           const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");
           if (b.type === "tool_result" && b.is_error && !/person said no|person stopped|user doesn't want/i.test(said)) console.log(`    ${c.red("✗")} ${c.grey(clipLine(plainText(said)))}`);
@@ -15213,8 +15317,11 @@ async function codeLocalTurn(s, text) {
     {
       // The conversation goes on from here: the whole turn when it
       // finished, else the message and a note (turns must alternate).
+      // A message sent in that the model never answered: back to the next
+      // prompt, and the turn up to it is whole as it stands.
+      const gaveBack = giveBackUnanswered();
       const whole = [...(compacted ?? history), ...turn];
-      const done = result?.subtype === "success" && !result?.is_error && validConversation(whole);
+      const done = (gaveBack || (result?.subtype === "success" && !result?.is_error)) && validConversation(whole);
       // A reply that did not finish (cut off at the output limit, a refusal)
       // keeps its words in the conversation, so "continue" goes on from what
       // the person just saw (FOL-211, Codex). Text only: a cut-off tool call
@@ -15233,7 +15340,15 @@ async function codeLocalTurn(s, text) {
     }
   } catch (err) {
     stopTicker();
-    if (compacted) {
+    // An unanswered follow-up goes back to the prompt; what came before it
+    // was a whole exchange, and is kept whole (Codex).
+    const gaveBack = giveBackUnanswered();
+    if (historyAtStart && turnSoFar.length) {
+      // What was asked and answered on the way is kept: a message sent into
+      // the turn and its answer included (Codex).
+      s.localHistory = trimConversation(nextConversation({ history: historyAtStart, turn: turnSoFar, compacted, done: gaveBack, note: "(this turn did not finish)" }));
+      saveEngineConversation(s, s.localHistory);
+    } else if (compacted) {
       // Compacted before it failed: the summary was paid for and is kept;
       // the compacted conversation ends on a user turn, the note answers it.
       s.localHistory = trimConversation([...compacted, { role: "assistant", content: [{ type: "text", text: "(this turn did not finish)" }] }]);
@@ -15253,7 +15368,12 @@ async function codeLocalTurn(s, text) {
     if (cloudBusy.size) abort.abort();
     if (cloudBusy.size) await Promise.race([Promise.all([...cloudBusy].map((p) => p.catch(() => null))), new Promise((r) => setTimeout(r, timeoutSeconds(s.flags) * 1000))]);
     stopTicker();
-    await keyboardBack();
+    // The keyboard first (an Enter in its last moments still queues), then
+    // what was sent and not taken (the turn ended first, or failed): not
+    // lost — it starts the next message, before what was typed after it.
+    const typed = await typeAhead.stop();
+    if (pending.some((e) => e.sent)) console.log(`  ${c.dim("the agent did not get to your message: it is on the next line, to send")}`);
+    s.typeAhead = [s.typeAhead, ...pending.splice(0).map((e) => e.t), typed].filter(Boolean).join(" ");
     process.off("SIGINT", onInt);
   }
   const ok = result?.subtype === "success" && !result?.is_error;
@@ -15415,7 +15535,9 @@ async function codeCmd(positional, flags, layout) {
       continue;
     }
     if (line === "/help" || line === "/?") {
-      console.log(`${helpText().split("\n").map((l) => `  ${c.dim(l)}`).join("\n")}\n`);
+      // Enter-to-send is told only where it works: on this computer, with an engine that takes it.
+      const steers = s.mode === "local" && /** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.steer === true;
+      console.log(`${helpText({ steers }).split("\n").map((l) => `  ${c.dim(l)}`).join("\n")}\n`);
       continue;
     }
     if (line === "/diff") {
