@@ -12,6 +12,17 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.7.0] — 2026-11-22
+
+- feat(code): the folder is shown, and asked about, before it goes to the cloud (FOL-212) ([56f7745](https://github.com/foldrun-io/foldrun-cli/commit/56f7745))
+- feat(code): Enter sends a message into a running local turn (FOL-213) ([536d762](https://github.com/foldrun-io/foldrun-cli/commit/536d762))
+
+### deps
+
+- @foldrun/core ^24.10.0 ([b63fca4](https://github.com/foldrun-io/foldrun-cli/commit/b63fca4))
+- @foldrun/core ^24.9.1 ([0b105ae](https://github.com/foldrun-io/foldrun-cli/commit/0b105ae))
+- @foldrun/core ^24.9.0 ([2f3e04b](https://github.com/foldrun-io/foldrun-cli/commit/2f3e04b))
+
 ## [27.6.0] — 2026-11-22
 
 - chore(lint): drop unused parameters ([9257cbc](https://github.com/foldrun-io/foldrun-cli/commit/9257cbc))
