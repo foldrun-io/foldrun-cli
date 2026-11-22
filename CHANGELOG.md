@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.6.0] — 2026-11-22
+
+- chore(lint): drop unused parameters ([9257cbc](https://github.com/foldrun-io/foldrun-cli/commit/9257cbc))
+- feat(code): --local keeps the compacted conversation (FOL-213) ([15b30a5](https://github.com/foldrun-io/foldrun-cli/commit/15b30a5))
+
+### deps
+
+- @foldrun/core ^24.8.1 ([8894d64](https://github.com/foldrun-io/foldrun-cli/commit/8894d64))
+
 ## [27.5.1] — 2026-11-21
 
 - fix(code): a turn that did not finish shows why and keeps its own words (FOL-211) ([3743b1f](https://github.com/foldrun-io/foldrun-cli/commit/3743b1f))
