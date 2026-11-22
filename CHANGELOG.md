@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.8.0] — 2026-11-22
+
+### New in the public API
+
+- `foldrun keys create ci`
+- the `--model-access` flag
+
+- fix(code): the sign-in key's kind is in its JSDoc type — the dev pipeline's CLI typecheck refused d75bea7 ([253b94d](https://github.com/foldrun-io/foldrun-cli/commit/253b94d))
+- feat(code): one key — the sign-in is the model key when it has model access ([d75bea7](https://github.com/foldrun-io/foldrun-cli/commit/d75bea7))
+
 ## [27.7.2] — 2026-11-22
 
 ### deps
