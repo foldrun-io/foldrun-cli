@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.10.1] — 2026-11-23
+
+- fix(cli): keep the run stream's literal URL for the coverage scan ([81d48c6](https://github.com/foldrun-io/foldrun-cli/commit/81d48c6))
+
 ## [27.10.0] — 2026-11-23
 
 - feat(cli): call the platform under /v1 where the API address serves it ([f62ab02](https://github.com/foldrun-io/foldrun-cli/commit/f62ab02))
