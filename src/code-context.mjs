@@ -408,3 +408,142 @@ export function slashMatches(line, all) {
 
 /** Whether a line holds a control character a terminal would act on. */
 export const hasControl = (/** @type {string} */ t) => CONTROL.test(t);
+
+// ------------------------------------------------- commands that only look
+// Asked for every `git status` a session is slow to use (owner, 24 Nov
+// 2026). A short fixed list runs without a question — and only in a shape
+// this file can read completely: one command, plain words, nothing the
+// shell expands, every option one this file names, no path that leaves the
+// folder however the file system reads it. Anything else is asked.
+// Codex, 24 Nov 2026: git takes shortened option names (so refusing a list
+// of bad ones is not enough), runs programs its config names (filters,
+// signature checks, submodules), and `ls` follows a link out of the folder.
+
+/** The options each git lookup may carry, exactly as written. */
+const GIT_OPTIONS = {
+  status: new Set(["-s", "--short", "-b", "--branch", "-sb", "--porcelain", "-uall", "-uno", "--untracked-files=all", "--untracked-files=no", "--untracked-files=normal"]),
+  diff: new Set(["--stat", "--shortstat", "--name-only", "--name-status", "--cached", "--staged", "-w"]),
+  log: new Set(["--oneline", "--stat", "--shortstat", "-p", "--patch", "--name-only", "--name-status", "--graph", "--all", "--decorate", "--no-merges", "-n"]),
+  show: new Set(["--stat", "--name-only", "--name-status", "--oneline", "-s"]),
+  "ls-files": new Set(["-c", "--cached", "-m", "--modified", "-o", "--others", "-d", "--deleted", "--exclude-standard"]),
+  "rev-parse": new Set(["--show-toplevel", "--abbrev-ref", "--short", "--is-inside-work-tree", "--show-prefix"]),
+  branch: new Set(["--show-current", "-a", "-v", "-vv", "--list", "-r"]),
+};
+/** A revision, a range or a path: starts with a letter, digit, "_" or "."; never with "-". */
+const GIT_WORD = /^[A-Za-z0-9_.][A-Za-z0-9_.@^~/-]*$/;
+/**
+ * The names a repository's own config may hold for git to stay a program
+ * that only looks: none of these names a program a lookup runs. One more
+ * name (a filter, an include, a signature program…) and the command is asked.
+ */
+const GIT_CONFIG_PLAIN = /^(core\.(hookspath|fsmonitor|repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|quotepath|untrackedcache)|remote\.[^.]+\.(url|fetch|pushurl|push|tagopt)|branch\..+\.(remote|merge|rebase|pushremote|description)|user\.(name|email)|credential\.(helper|usehttppath)|foldrun\.[a-z]+|pull\.(rebase|ff)|push\.(default|autosetupremote)|init\.defaultbranch|gc\.auto|merge\.ff|rebase\.autostash)$/i;
+
+/** A word that names nothing outside the folder: not absolute, no home, no ".." part. */
+function staysInside(/** @type {string} */ word) {
+  if (word.startsWith("/") || word.startsWith("~")) return false;
+  return !word.split(/[/:=]/).some((part) => part === ".." || part.startsWith("~"));
+}
+
+/** Whether the path is inside the folder as the file system reads it (links followed). */
+function reallyInside(/** @type {string} */ dir, /** @type {string} */ word) {
+  try {
+    const top = fs.realpathSync(path.resolve(dir));
+    const real = fs.realpathSync(path.resolve(top, word));
+    const rel = path.relative(top, real);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  } catch {
+    return false;
+  }
+}
+
+/** The lookups that compare the working files, which is where git runs a clean filter. */
+const GIT_READS_WORK = new Set(["status", "diff", "ls-files"]);
+
+/**
+ * Whether git, run in this folder, shows only this folder and runs nothing
+ * but itself for the lookup. Checked now, at every question (an edit to
+ * .git/config since is seen):
+ * - the folder is the repository's own top — in one package of a larger
+ *   repository `git show` would hand over its neighbours' changes unasked;
+ * - the config that is not the person's own (the repository's, a
+ *   worktree's, the environment's, a scope git cannot name) holds only
+ *   plain names;
+ * - where any filter program is configured, in any file — Git LFS in the
+ *   person's own config is the usual one, and a repository picks it with
+ *   .gitattributes — the lookups that read the working files are asked.
+ */
+function gitOnlyItself(/** @type {string} */ dir, /** @type {string} */ sub) {
+  const git = (/** @type {string[]} */ args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", maxBuffer: 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+  const top = git(["rev-parse", "--show-toplevel"]);
+  if (top.status !== 0 || top.error) return false;
+  try {
+    if (fs.realpathSync(String(top.stdout).trim()) !== fs.realpathSync(path.resolve(dir))) return false;
+  } catch {
+    return false;
+  }
+  const r = git(["config", "--list", "--show-scope", "--name-only"]);
+  if (r.status !== 0 || r.error) return false;
+  for (const row of String(r.stdout).split("\n")) {
+    if (!row) continue;
+    const [scope, name] = row.split("\t");
+    if (typeof name !== "string") return false;
+    if (GIT_READS_WORK.has(sub) && /^filter\..+\.(clean|smudge|process)$/i.test(name)) return false;
+    // Hooks and the monitor may be named: the command turns both off.
+    if (scope === "system" || scope === "global") continue;
+    if (!GIT_CONFIG_PLAIN.test(name)) return false;
+  }
+  return true;
+}
+
+/**
+ * The command as it is run when it only looks, or null when it must be
+ * asked. What comes back is run in the session's folder whatever directory
+ * the agent's shell is in, and git is held to itself: no hooks, no monitor
+ * program, no outside diff or text converter, no signature program, no
+ * work inside submodules.
+ * @returns {string | null}
+ */
+export function readOnlyCommand(/** @type {unknown} */ command, /** @type {string} */ dir) {
+  if (typeof command !== "string" || command.length > 400) return null;
+  const line = command.trim();
+  // Plain words only: no quote, pipe, redirect, variable, glob, backslash, newline.
+  if (!/^[A-Za-z0-9 _.@^~/:=,+-]+$/.test(line)) return null;
+  const [program, ...args] = line.split(/ +/);
+  if (!args.every(staysInside)) return null;
+  /** @type {string | null} */
+  let run = null;
+  if (program === "pwd" && !args.length) run = "pwd";
+  else if (program === "date" && (!args.length || (args.length === 1 && args[0] === "-u"))) run = line;
+  else if (program === "ls") {
+    // No -R and no -L: what a listing reaches must be checkable here.
+    if (!args.every((a) => (a.startsWith("-") ? /^-[alhtrS1AFd]+$/.test(a) : reallyInside(dir, a)))) return null;
+    run = line;
+  } else if (program === "git" && args.length && Object.hasOwn(GIT_OPTIONS, /** @type {string} */ (args[0]))) {
+    const sub = /** @type {keyof typeof GIT_OPTIONS} */ (args[0]);
+    const rest = args.slice(1);
+    const known = GIT_OPTIONS[sub];
+    for (const a of rest) {
+      if (a === "--" && sub !== "branch") continue;
+      if (a.startsWith("-")) {
+        if (known.has(a)) continue;
+        // -3, -20: how many commits; -U5: lines of context.
+        if (sub === "log" && /^-\d{1,4}$/.test(a)) continue;
+        if (sub === "diff" && /^-U\d{1,3}$/.test(a)) continue;
+        return null;
+      }
+      if (sub === "branch") return null;
+      // rev:path for show; otherwise a revision, a range or a path.
+      const parts = sub === "show" ? a.split(":") : [a];
+      if (parts.length > 2 || !parts.every((x) => GIT_WORD.test(x))) return null;
+    }
+    if (!gitOnlyItself(dir, sub)) return null;
+    const quiet = sub === "diff" || sub === "log" || sub === "show" ? " --no-ext-diff --no-textconv" : "";
+    const flat = sub === "status" || sub === "diff" ? " --ignore-submodules=all" : "";
+    run = `git --no-pager --no-optional-locks -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false ${sub}${quiet}${flat}${rest.length ? ` ${rest.join(" ")}` : ""}`;
+  }
+  if (run === null) return null;
+  return `(cd '${String(dir).replace(/'/g, `'\\''`)}' && ${run})`;
+}
+
+/** The list as a person reads it, for /permissions and /help. */
+export const READ_ONLY_SAID = "pwd, date, ls, and git status, diff, log, show, ls-files, rev-parse, branch";

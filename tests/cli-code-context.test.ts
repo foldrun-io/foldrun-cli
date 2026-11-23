@@ -12,8 +12,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { serve, raw } from "./fake-platform.ts";
 import {
-  folderInstructions, folderSkills, folderCommands, frontmatterLines, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, readBody,
-} from "../src/code-context.mjs";
+  folderInstructions, folderSkills, folderCommands, frontmatterLines, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, readBody, readOnlyCommand } from "../src/code-context.mjs";
 import { CODE_COMMANDS, helpText, codeCompleter, friendlyTool, localCallSummary, localPrompt } from "../src/code-session.mjs";
 import { foldrunDocsCall, sessionMessageOf, goalVerdict, usageBlock } from "../src/commands.mjs";
 
@@ -202,7 +201,7 @@ test("suggestions: what starts with the typed part first, then what holds it; no
   assert.deepEqual(slashMatches("hello", all), []);
   assert.deepEqual(slashMatches("/zzz", all), []);
   const names = CODE_COMMANDS.map(([n]) => String(n).split(" ")[0]);
-  for (const n of ["/usage", "/context", "/compact", "/plan", "/goal", "/init", "/review", "/cost", "/local", "/cloud", "/skills", "/memory", "/permissions", "/copy", "/export", "/clear", "/sessions"]) assert.ok(names.includes(n), n);
+  for (const n of ["/resume", "/doctor", "/usage", "/context", "/compact", "/plan", "/goal", "/init", "/review", "/cost", "/local", "/cloud", "/skills", "/memory", "/permissions", "/copy", "/export", "/clear", "/sessions"]) assert.ok(names.includes(n), n);
   assert.equal(new Set(names).size, names.length, "no command listed twice");
   const help = helpText({ extra: [{ name: "/fix-tests", hint: "[which]", desc: "Run the tests" }] });
   assert.match(help, /this folder's own:\n\/fix-tests \[which\]\s+Run the tests/);
@@ -407,6 +406,60 @@ test("on a terminal: /cloud and /local move one session; the other side is told 
   assert.equal(fs.statSync(path.join(home, "code-sessions.json")).mode & 0o077, 0, "private to the person");
 });
 
+test("commands that only look run without a question — in the folder, git held to itself; anything the shell could turn into more is asked", () => {
+  const d = fs.realpathSync(repo({ "src/a.ts": "a\n", "it's.txt": "x\n" }));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-out-"));
+  fs.symlinkSync(outside, path.join(d, "link"));
+  const at = `(cd '${d}' && `;
+  const git = "git --no-pager --no-optional-locks -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false ";
+  assert.equal(readOnlyCommand("pwd", d), `${at}pwd)`);
+  assert.equal(readOnlyCommand("  date -u ", d), `${at}date -u)`);
+  assert.equal(readOnlyCommand("ls -la src", d), `${at}ls -la src)`);
+  assert.equal(readOnlyCommand("git status --short", d), `${at}${git}status --ignore-submodules=all --short)`);
+  assert.equal(readOnlyCommand("git diff HEAD~2..HEAD -- src/a.ts", d), `${at}${git}diff --no-ext-diff --no-textconv --ignore-submodules=all HEAD~2..HEAD -- src/a.ts)`);
+  assert.equal(readOnlyCommand("git log -p -3", d), `${at}${git}log --no-ext-diff --no-textconv -p -3)`);
+  assert.equal(readOnlyCommand("git show HEAD:src/a.ts", d), `${at}${git}show --no-ext-diff --no-textconv HEAD:src/a.ts)`);
+  assert.equal(readOnlyCommand("git branch --show-current", d), `${at}${git}branch --show-current)`);
+  // A folder whose path has a quote in it is still one word to the shell.
+  assert.equal(readOnlyCommand("pwd", "/work/it's here"), "(cd '/work/it'\\''s here' && pwd)");
+  for (const asked of [
+    "git status; rm -rf x", "git status && curl x", "git log | sh", "ls > out", "ls $(whoami)", "ls `id`", "ls *", "ls 'a b'", "ls a\\b", "git status\nrm x",
+    "ls /etc", "ls ~", "ls ../other", "ls src/../../x", "ls link", "ls link/", "ls -R", "ls -L src", "ls nothing-here",
+    "git show HEAD:../../secret", "git diff --no-index a b", "git diff --output=x", "git log --output=x", "git log --outp=x", "git log --ext-diff", "git log --format=x",
+    "git -c core.pager=sh status", "git -C /tmp status", "git show --textconv", "git branch new-branch", "git branch -D main", "git push", "git commit -m x", "git checkout .",
+    "git status --anything", "git diff -O x", "git log -S x", "git rev-parse --git-dir",
+    "date -s 2020", "cat .env", "rm x", "npm test", "FOO=1 ls", "", "x".repeat(401),
+  ]) assert.equal(readOnlyCommand(asked, d), null, asked);
+  assert.equal(readOnlyCommand(undefined, d), null);
+  // A repository whose own config names a program for git to run: every git lookup is asked.
+  const run = (...a: string[]) => assert.equal(spawnSync("git", ["-C", d, ...a]).status, 0);
+  run("config", "filter.x.clean", "sh -c 'touch owned'");
+  assert.equal(readOnlyCommand("git status", d), null, "a filter in the repository's config");
+  run("config", "--unset", "filter.x.clean");
+  assert.notEqual(readOnlyCommand("git status", d), null);
+  run("config", "include.path", "../evil");
+  assert.equal(readOnlyCommand("git log -1", d), null, "an include in the repository's config");
+  // A filter program configured anywhere (Git LFS in the person's own config): what reads the working files is asked, history is not.
+  run("config", "--unset", "include.path");
+  const lfs = { ...process.env };
+  process.env.GIT_CONFIG_COUNT = "1";
+  process.env.GIT_CONFIG_KEY_0 = "user.name";
+  process.env.GIT_CONFIG_VALUE_0 = "x";
+  assert.notEqual(readOnlyCommand("git status", d), null, "a plain name from the environment");
+  process.env.GIT_CONFIG_KEY_0 = "filter.lfs.clean";
+  assert.equal(readOnlyCommand("git status", d), null);
+  assert.equal(readOnlyCommand("git diff", d), null);
+  assert.equal(readOnlyCommand("git log -1", d), null, "the environment's config is not the person's own file");
+  process.env = lfs;
+  // One package of a larger repository: git would show its neighbours.
+  fs.mkdirSync(path.join(d, "pkg"));
+  assert.equal(readOnlyCommand("git log -1", path.join(d, "pkg")), null);
+  assert.equal(readOnlyCommand("ls", path.join(d, "pkg")), `(cd '${path.join(d, "pkg")}' && ls)`);
+  // Not a repository: git is asked, the rest is not.
+  assert.equal(readOnlyCommand("git status", outside), null);
+  assert.equal(readOnlyCommand("ls", outside), `(cd '${outside}' && ls)`);
+});
+
 test("a goal: the reply's last line says whether it is met; anything else hands back to the person", () => {
   assert.equal(goalVerdict("Fixed it.\n\nGOAL MET"), "met");
   assert.equal(goalVerdict("Fixed it.\n**GOAL MET.**"), "met");
@@ -462,7 +515,8 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
     at = await t.until(/read 48k tokens \(24k cached\) in 2 model calls/, at);
     at = await t.until(/goal not met yet — going on \(2 of 8\)/, at);
     at = await t.until(/goal not met yet — going on \(3 of 8\)/, at);
-    at = await t.until(/the agent says the goal is met: the tests pass/, at);
+    at = await t.until(/having it checked once more before that is accepted/, at);
+    at = await t.until(/goal met, and checked a second time: the tests pass/, at);
     at = await t.until(/desk ❯ /, at);
     await t.type("/goal\r");
     at = await t.until(/no goal set/, at);
@@ -480,17 +534,60 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
     at = await t.until(/conversation\s+not opened yet/, at);
     await t.type("/compact\r");
     at = await t.until(/nothing to shorten yet/, at);
-    await t.type("/goal ship it\r");
-    at = await t.until(/goal set/, at);
+    await t.type("/permissions\r");
+    at = await t.until(/commands that only look: pwd, date, ls, and git status/, at);
+    await t.type("/permissions strict\r");
+    at = await t.until(/the commands that only look are asked too/, at);
+    await t.type("/doctor\r");
+    at = await t.until(/✓ git\s/, at);
+    at = await t.until(/✓ folder\s[^\n]*a git repository/, at);
+    at = await t.until(/✓ project\s+desk with the agent coder/, at);
+    at = await t.until(/desk ❯ /, at);
+    await t.type("/resume\r");
+    at = await t.until(/no earlier conversation of this folder is kept/, at);
+    await t.type("/clear\r");
+    at = await t.until(/a fresh conversation[^\n]*\/resume goes back to one/, at);
+    await t.type("/resume\r");
+    at = await t.until(/ 1  \/goal the tests pass/, at);
+    await t.type("/resume 1\r");
+    at = await t.until(/back in: \/goal the tests pass/, at);
+    await t.type("/status\r");
+    at = await t.until(/session\s+code-me/, at);
+    // Back where that conversation was worked on, whatever side the session had moved to.
+    at = await t.until(/works\s+in the cloud/, at);
+    await t.type("/clear\r");
+    at = await t.until(/a fresh conversation/, at);
     await t.type("/quit\r");
     await t.done;
   } finally {
     t.child.kill();
     s.close();
   }
-  assert.equal(tasks.length, 3, "three turns: the first, and two the session sent by itself");
+  assert.equal(tasks.length, 4, "four turns: the first, two the session sent by itself, and the check");
   for (const task of tasks) assert.match(task, /The person set a goal for this session: the tests pass/);
   assert.match(tasks[1]!, /Go on toward the goal\./);
+  assert.match(tasks[3]!, /check it once more from the start/);
+  // /clear kept the conversation it left; --continue has it for /resume.
+  const kept = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"))[d];
+  assert.equal(kept.past.length, 1);
+  assert.equal(kept.past[0].context, "code-me");
+  assert.equal(kept.past[0].said, "/goal the tests pass", "its first message, kept with it");
+  // A plain start (no --continue) keeps the list.
+  const s3 = await platform();
+  const all = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"));
+  all[d].url = s3.url;
+  fs.writeFileSync(path.join(home, "code-sessions.json"), JSON.stringify(all), { mode: 0o600 });
+  const again = onTerminal(["code", d, "--cloud", "--to", "desk", "--url", s3.url, "--token", "k"], home, { TERM: "dumb" });
+  try {
+    const at3 = await again.until(/desk ❯ /);
+    await again.type("/resume\r");
+    await again.until(/ 1  \/goal the tests pass/, at3);
+    await again.type("/quit\r");
+    await again.done;
+  } finally {
+    again.child.kill();
+    s3.close();
+  }
 });
 
 test("a session message is sent exactly as it was shown: an id, plain text, 4,000 characters at most — a hidden character or a long id is refused, never cleaned for the screen only", () => {

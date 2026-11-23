@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
-import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl } from "./code-context.mjs";
+import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID } from "./code-context.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -14064,13 +14064,16 @@ async function codeTurn(s, task, include = []) {
  * private file, beside the conversation id.
  */
 function sessionCarry(/** @type {any} */ s) {
-  if ((!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size && typeof s.goal !== "string") return {};
+  if ((!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size && typeof s.goal !== "string" && !(Array.isArray(s.past) && s.past.length) && typeof s.label !== "string") return {};
   const owner = typeof s.owner === "string" ? { owner: s.owner } : {};
   const KEEP = 8;
   const cut = Math.max(0, s.transcript.length - KEEP);
   const clip = (/** @type {string} */ x) => (x.length > 2_000 ? `${x.slice(0, 2_000)} […]` : x);
   return {
     ...owner,
+    ...(Array.isArray(s.past) && s.past.length ? { past: s.past.slice(0, PAST_KEPT) } : {}),
+    ...(typeof s.label === "string" && s.label ? { label: s.label } : {}),
+    ...(s.lastWhere === "local" || s.lastWhere === "cloud" ? { lastWhere: s.lastWhere } : {}),
     ...(typeof s.goal === "string" ? { goal: s.goal } : {}),
     ...(s.cloudBriefed === s.context ? { briefed: true } : {}),
     transcript: s.transcript.slice(cut).map((/** @type {any} */ e) => ({ where: e.where, you: clip(e.you), agent: clip(e.agent), ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}) })),
@@ -14132,6 +14135,49 @@ export function usageBlock(/** @type {any} */ u) {
   return `${lines.join("\n")}\n`;
 }
 
+/** What the agent is told about commands that run without a question. */
+const LOOKS_NOTE = `Commands that only look run at once, without the person being asked: ${READ_ONLY_SAID}. Only as one plain command per call — no ";", "&&", pipe, redirect, quote or variable, and paths inside this folder. To look around, send these one at a time (several calls in one reply is fine) rather than chained: a chained command is asked like any other.`;
+
+/** Earlier conversations of a folder that /resume can go back to. */
+const PAST_KEPT = 10;
+
+/**
+ * /doctor: what a session needs, each checked now and said plainly. Nothing
+ * is changed; a check that could not be made says so rather than passing.
+ */
+async function doctorBlock(/** @type {any} */ s, /** @type {string} */ url, /** @type {any} */ flags) {
+  const ok = (/** @type {string} */ k, /** @type {string} */ v) => `  ${c.green("✓")} ${c.dim(k.padEnd(14))}${v}`;
+  const bad = (/** @type {string} */ k, /** @type {string} */ v) => `  ${c.red("✗")} ${c.dim(k.padEnd(14))}${v}`;
+  const unknown = (/** @type {string} */ k, /** @type {string} */ v) => `  ${c.amber("?")} ${c.dim(k.padEnd(14))}${v}`;
+  const lines = [];
+  const major = Number(process.versions.node.split(".")[0]);
+  // package.json: engines.node >=22.
+  lines.push((major >= 22 ? ok : bad)("node", `${process.versions.node}${major >= 22 ? "" : " — foldrun needs Node 22 or newer"}`));
+  lines.push(ok("foldrun", `${CLI_VERSION}`));
+  const git = spawnSync("git", ["--version"], { encoding: "utf8" });
+  lines.push(git.status === 0 ? ok("git", String(git.stdout).trim().replace(/^git version /, "")) : bad("git", "not found — patches from the cloud, /diff and /undo need it"));
+  const top = spawnSync("git", ["-C", s.dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  lines.push(top.status === 0 ? ok("folder", `${homeTilde(s.dir)} — a git repository`) : bad("folder", `${homeTilde(s.dir)} is not a git repository — git init, so changes can be seen and taken back`));
+  const own = folderInstructions(s.dir);
+  lines.push(own.files.length ? ok("instructions", own.files.map((f) => plainText(f.path)).join(", ")) : unknown("instructions", "no AGENTS.md or CLAUDE.md here — /init writes one"));
+  try {
+    const v = await remoteCall(url, flags, "/v1/version");
+    lines.push(ok("platform", `${plainText(url)} · ${plainText(String(v?.version ?? "version not told"))}`));
+  } catch (err) {
+    lines.push(bad("platform", `${plainText(url)} — ${plainText(explain(err))}`));
+  }
+  try {
+    await remoteCall(url, flags, `/v1/workspaces/${enc(s.ws)}`);
+    const agents = (await remoteCall(url, flags, `/v1/workspaces/${enc(s.ws)}/agents`))?.agents;
+    const there = Array.isArray(agents) && agents.some((/** @type {any} */ a) => a?.name === s.agent);
+    lines.push(there ? ok("project", `${plainText(s.ws)} with the agent ${plainText(s.agent)} — your sign-in reaches it`) : bad("project", `${plainText(s.ws)} has no agent ${plainText(s.agent)} — /cloud turns need it`));
+  } catch (err) {
+    lines.push(bad("project", `${plainText(s.ws)} — ${plainText(explain(err))}`));
+  }
+  lines.push(s.turns ? ok("models", `the last turn ran${s.model ? ` on ${shortModel(plainText(s.model))}` : ""}`) : unknown("models", "not tried in this conversation yet — the first message does"));
+  return `${lines.join("\n")}\n`;
+}
+
 /** A goal is one line. */
 const GOAL_CHARS = 500;
 /** Turns in a row the session sends by itself toward a goal. */
@@ -14142,6 +14188,9 @@ function goalNote(/** @type {unknown} */ goal) {
   if (typeof goal !== "string" || !goal) return "";
   return `[The person set a goal for this session: ${goal}\nWork toward it. Call it met only when you have checked it — by reading the result or running what proves it — not because the work looks done. End your reply with one last line, exactly "GOAL MET" or "GOAL NOT MET: <what is left>".]`;
 }
+
+/** The turn sent when the agent first says the goal is met. */
+const GOAL_CHECK_PROMPT = "Before the goal is accepted, check it once more from the start, as if you had not said it is met: read the result or run what proves it now, and look for what you may have missed. Then end with exactly \"GOAL MET\" or \"GOAL NOT MET: <what is left>\".";
 
 /** What a reply's last line says about the goal. */
 export function goalVerdict(/** @type {string} */ reply) {
@@ -15954,6 +16003,13 @@ async function codeLocalTurn(s, text) {
       const file = input.file_path ?? input.notebook_path ?? input.path;
       const inside = file !== undefined && bothInside(s.dir, file);
       const command = name === "Bash" ? String(input.command ?? "") : null;
+      // A command that only looks (pwd, ls, git status…) runs without a
+      // question, in the shape readOnlyCommand hands back: in this folder,
+      // git held to itself. /permissions strict asks for these too.
+      if (command !== null && s.strict !== true && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout")) {
+        const looks = readOnlyCommand(command, s.dir);
+        if (looks) return { behavior: /** @type {const} */ ("allow"), updatedInput: { ...input, command: looks } };
+      }
       // Sending the folder to cloud agents, and putting one's patch into
       // the folder (cloud_apply, which is a change inside it).
       const cloud = isCloudAgents(name);
@@ -16182,7 +16238,7 @@ async function codeLocalTurn(s, text) {
             shellEnv: own,
             userAgent: USER_AGENT,
             model: localModelOf(model),
-            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" })), folderInstructions(s.dir).text, skillsNote(folderSkills(s.dir, { relativeTo: s.dir }))].filter(Boolean).join("\n\n"),
+            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" })), folderInstructions(s.dir).text, skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE].filter(Boolean).join("\n\n"),
             tools: ENGINE_TOOLS_LOCAL,
             extraTools: [
               { name: CLOUD_AGENTS_TOOL, description: CLOUD_AGENTS_DESCRIPTION, input_schema: CLOUD_AGENTS_SCHEMA, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => cloudCall(input, ctx.signal) },
@@ -16469,6 +16525,22 @@ async function codeCmd(positional, flags, layout) {
   const carried = resumed && resumed.owner === owner ? resumed : null;
   if (carried && Array.isArray(carried.shown)) s.shownMessages = new Set(carried.shown.filter((/** @type {unknown} */ x) => typeof x === "string"));
   if (carried && typeof carried.goal === "string" && carried.goal.trim() && !hasControl(carried.goal) && !/[\n\r\t]/.test(carried.goal)) s.goal = carried.goal.slice(0, GOAL_CHARS);
+  {
+    // Whatever this start does, the folder's earlier conversations stay
+    // listed: a plain start files the last one with them (Codex). Same
+    // sign-in, platform, project and agent only.
+    const was = readSessions(sessionsFile)[path.resolve(dir)];
+    const mine = was && typeof was === "object" && was.owner === owner && (was.url === undefined || was.url === url) && was.ws === ws && (was.agent === undefined || was.agent === agent) ? was : null;
+    const entry = (/** @type {any} */ e) => (e && typeof e.context === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(e.context) && typeof e.said === "string" && e.said && !hasControl(e.said) && typeof e.at === "string" ? { context: e.context, said: e.said.slice(0, 80), at: e.at.slice(0, 30), mode: e.mode === "local" ? "local" : "cloud", ...(e.briefed === true ? { briefed: true } : {}) } : null);
+    if (mine) {
+      const last = mine.context !== s.context ? entry({ context: mine.context, said: typeof mine.label === "string" && mine.label ? mine.label : Array.isArray(mine.transcript) && typeof mine.transcript[0]?.you === "string" ? plainText(mine.transcript[0].you).replace(/\s+/g, " ").trim().slice(0, 80) : undefined, at: mine.at, mode: mine.lastWhere ?? mine.mode, briefed: mine.briefed }) : null;
+      s.past = [last, ...(Array.isArray(mine.past) ? mine.past.map(entry) : [])].filter((e) => e && e.context !== s.context).slice(0, PAST_KEPT);
+      if (mine.context === s.context && typeof mine.label === "string" && mine.label && !hasControl(mine.label)) {
+        s.label = mine.label.slice(0, 80);
+        if (mine.lastWhere === "local" || mine.lastWhere === "cloud") s.lastWhere = mine.lastWhere;
+      }
+    }
+  }
   if (carried && Array.isArray(carried.transcript)) {
     s.transcript = carried.transcript.filter((/** @type {any} */ e) => e && (e.where === "local" || e.where === "cloud") && typeof e.you === "string" && typeof e.agent === "string").map((/** @type {any} */ e) => ({ where: e.where, you: e.you, agent: e.agent, ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}) }));
     const n = s.transcript.length;
@@ -16583,6 +16655,9 @@ async function codeCmd(positional, flags, layout) {
         const steered = Array.isArray(s.turnSteer) && s.turnSteer.length ? `\n(sent while the agent worked: ${s.turnSteer.join(" · ")})` : "";
         s.transcript.push({ where, you: `${typed}${steered}`, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(where === "cloud" ? { applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) } : {}) });
         s.here[where]++;
+        // Where this conversation was last worked on: /resume goes back there.
+        s.lastWhere = where;
+        s.label ??= plainText(typed).replace(/\s+/g, " ").trim().slice(0, 80) || "(a message)";
         if (s.turnReply) s.lastReply = s.turnReply;
         s.told[where] = s.transcript.length;
       }
@@ -16599,7 +16674,17 @@ async function codeCmd(positional, flags, layout) {
     readOwn();
     prompt.slash = suggestions();
   };
+  /** The conversation as /resume lists it, or null when nothing was said in it. */
+  const asPast = () => (typeof s.label === "string" && s.label ? { context: String(s.context), said: s.label, at: new Date().toISOString(), mode: s.lastWhere === "local" || s.lastWhere === "cloud" ? s.lastWhere : s.mode, ...(s.cloudBriefed === s.context ? { briefed: true } : {}) } : null);
+  /** The current conversation goes first; `without` (the one being gone back to) is taken out before the list is cut. */
+  const keepPast = (/** @type {string} */ without = "") => {
+    const now = asPast();
+    s.past = [...(now ? [now] : []), ...(Array.isArray(s.past) ? s.past : []).filter((/** @type {any} */ e) => e.context !== s.context && e.context !== without)].slice(0, PAST_KEPT);
+  };
   const fresh = () => {
+    keepPast();
+    delete s.label;
+    delete s.lastWhere;
     s.context = newContext();
     delete s.localAllow;
     delete s.localHistory;
@@ -16623,24 +16708,37 @@ async function codeCmd(positional, flags, layout) {
    */
   const towardGoal = async (/** @type {string} */ said, /** @type {string} */ typed = said) => {
     await runTurn(s.mode, said, typed);
-    for (let round = 1; typeof s.goal === "string"; round++) {
+    // Turns the session sends by itself, the check included: never more than
+    // the number it told the person. Whether a "met" was checked is known
+    // only inside this call — a check that was stopped or failed leaves
+    // nothing behind that a later "met" could pass on (Codex).
+    let sent = 0;
+    let checking = false;
+    while (typeof s.goal === "string") {
       if (s.turnOk !== true) return;
       const verdict = goalVerdict(typeof s.turnReply === "string" ? s.turnReply : "");
-      if (verdict === "met") {
-        console.log(`  ${c.green("✓")} ${c.dim(`the agent says the goal is met: ${plainText(s.goal)} — check it yourself; the goal is dropped`)}\n`);
+      if (verdict === "met" && checking) {
+        console.log(`  ${c.green("✓")} ${c.dim(`goal met, and checked a second time: ${plainText(s.goal)} — the agent judged its own work, so look at the result; the goal is dropped`)}\n`);
         delete s.goal;
         // Seen on dev: with the goal gone the agent kept ending replies "GOAL MET".
         s.notes.push("[The session's goal is met and no longer set: do not end replies with a GOAL line any more.]");
         remember();
         return;
       }
-      if (verdict !== "not-met") return;
-      if (round >= GOAL_ROUNDS) {
-        say(`${GOAL_ROUNDS} turns in a row toward the goal and not there yet — say "go on" to continue, or /goal clear`);
+      if (verdict !== "met" && verdict !== "not-met") return;
+      if (sent >= GOAL_ROUNDS - 1) {
+        say(verdict === "met" ? `the agent says the goal is met; that was not checked a second time (${GOAL_ROUNDS} turns in a row is the limit) — look at it, then /goal clear` : `${GOAL_ROUNDS} turns in a row toward the goal and not there yet — say "go on" to continue, or /goal clear`);
         return;
       }
-      console.log(`  ${c.dim(`↻ goal not met yet — going on (${round + 1} of ${GOAL_ROUNDS}) · Ctrl-C stops`)}`);
-      await runTurn(s.mode, "Go on toward the goal.", "(went on toward the goal)");
+      sent++;
+      checking = verdict === "met";
+      if (checking) {
+        console.log(`  ${c.dim("↻ the agent says the goal is met — having it checked once more before that is accepted · Ctrl-C stops")}`);
+        await runTurn(s.mode, GOAL_CHECK_PROMPT, "(checked the goal once more)");
+      } else {
+        console.log(`  ${c.dim(`↻ goal not met yet — going on (${sent + 1} of ${GOAL_ROUNDS}) · Ctrl-C stops`)}`);
+        await runTurn(s.mode, "Go on toward the goal.", "(went on toward the goal)");
+      }
     }
   };
   for (;;) {
@@ -16848,7 +16946,46 @@ async function codeCmd(positional, flags, layout) {
     }
     if (name === "/new" || name === "/clear") {
       fresh();
-      say("a fresh conversation — the agent no longer reads the earlier turns");
+      say(`a fresh conversation — the agent no longer reads the earlier turns${s.past?.length ? " (/resume goes back to one)" : ""}`);
+      continue;
+    }
+    if (name === "/resume") {
+      const past = Array.isArray(s.past) ? s.past : [];
+      if (!past.length) {
+        say("no earlier conversation of this folder is kept — /clear starts a new one and keeps the one you leave");
+        continue;
+      }
+      const n = Number(rest);
+      if (!rest || !Number.isInteger(n) || n < 1 || n > past.length) {
+        past.forEach((/** @type {any} */ e, /** @type {number} */ i) => console.log(`  ${c.cyan(String(i + 1).padStart(2))}  ${c.white(plainText(e.said))} ${c.dim(`· ${String(e.at).slice(0, 16).replace("T", " ")} · ${e.mode === "local" ? "on this computer" : "in the cloud"}`)}`));
+        say("/resume <number> goes back to one — this conversation is kept in its place");
+        continue;
+      }
+      const to = past[n - 1];
+      keepPast(to.context);
+      s.context = to.context;
+      s.label = to.said;
+      // Where it was worked on: its conversation is kept on that side.
+      s.mode = to.mode === "local" ? "local" : "cloud";
+      s.lastWhere = s.mode;
+      // What was allowed with "always" was allowed in the conversation being left (Codex).
+      delete s.localAllow;
+      if (s.mode === "local") s.engine = "foldrun";
+      delete s.localHistory;
+      delete s.lastReply;
+      delete s.cloudBriefed;
+      if (to.briefed === true) s.cloudBriefed = s.context;
+      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "lastRun"]) delete s[k];
+      s.notes = [];
+      s.transcript = [];
+      s.told = { local: 0, cloud: 0 };
+      s.here = { local: 0, cloud: 0 };
+      remember();
+      console.log(`  ${c.green("✓")} ${c.dim(`back in: ${plainText(to.said)} — the agent ${s.mode === "local" ? "on this computer" : "in the cloud"} reads that conversation again from your next message; what the other side did in it is not retold`)}\n`);
+      continue;
+    }
+    if (name === "/doctor") {
+      console.log(await doctorBlock(s, url, flags));
       continue;
     }
     if (name === "/local" || name === "/cloud") {
@@ -16897,11 +17034,17 @@ async function codeCmd(positional, flags, layout) {
         say("forgotten — every change, command and send is asked again");
         continue;
       }
+      if (rest === "strict" || rest === "relaxed") {
+        s.strict = rest === "strict";
+        say(s.strict ? `the commands that only look are asked too${s.localAllow?.commands?.size || s.localAllow?.kinds?.size ? " — what you allowed with \"always\" stays allowed (/permissions reset asks again)" : ""}` : `commands that only look run without a question: ${READ_ONLY_SAID}`);
+        continue;
+      }
+      if (s.strict !== true) console.log(`  ${c.green("✓")} ${c.white(`commands that only look: ${READ_ONLY_SAID}`)} ${c.dim("— plain forms, inside this folder; /permissions strict asks for these too")}`);
       const rows = [];
       for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "sending this folder to cloud agents" : k === "cloud-changes" ? "putting a cloud agent's changes into this folder" : String(k));
       for (const cmd of s.localAllow?.commands ?? []) rows.push(`the command  ${clipLine(plainText(String(cmd)))}`);
       if (s.uploadAgreed?.get(dir)) rows.push("sending this folder's files to the cloud (the ones you were shown)");
-      if (!rows.length) say("nothing allowed ahead — the agent asks before every change and command (a = always, at a question)");
+      if (!rows.length) say(`nothing ${s.strict !== true ? "else " : ""}allowed ahead — the agent asks before every change and every ${s.strict !== true ? "other " : ""}command (a = always, at a question)`);
       else {
         console.log(rows.map((r) => `  ${c.green("✓")} ${c.white(r)}`).join("\n"));
         say("for this session only — /permissions reset asks again");
