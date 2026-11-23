@@ -249,8 +249,9 @@ cancel it first (`foldrun billing plan cancel`), and it runs to its end.
 
 Changing or buying the subscription is the account **owner's**
 (`billing:manage`). A key, the one `foldrun login` makes included, is at
-most an admin, so from the CLI the owner reads it (`foldrun billing
-plans`) and the CLI points to Billing → Plans for the change.
+most an admin, so a leaked key can never spend the account's money: from
+the CLI the owner reads it (`foldrun billing plans`), and a change opens
+Billing → Plans, where the signed-in owner makes it.
 
 ## Plans and credits
 

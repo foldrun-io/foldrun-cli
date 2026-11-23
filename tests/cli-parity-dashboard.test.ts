@@ -508,7 +508,7 @@ test("billing plans / plan / cancel / resume / pay-as-you-go / top-up / card —
   assert.match(typo.out, /"of" is not on or off/);
   assert.match(top.out, /https:\/\/checkout\.stripe\.com\/c\/1/);
   assert.equal(card.code, 1);
-  assert.match(card.out, /needs billing:manage/);
+  assert.match(card.out, /is the account owner's, signed in to the dashboard — a key cannot change billing\. Open http.*\/dashboard\/billing\/plans/);
   assert.deepEqual(writes(s).map((w) => [w.method, w.url, w.body]), [
     ["POST", "/v1/billing/coding-plan", { plan: "max", maxUsd: 100, period: "2026-12-20T00:00:00Z" }],
     ["DELETE", "/v1/billing/coding-plan", null],

@@ -18762,8 +18762,14 @@ async function billingPlansCmd(verb, arg, flags) {
       return await fn();
     } catch (err) {
       // billing:manage is the owner's, and a key is at most admin (an
-      // owner's `foldrun login` key too): the page is where the owner does it.
-      if (err instanceof HttpError && err.status === 403) throw new Error(`${what} needs billing:manage — the account owner's, in the browser: ${String(appFor(url)).replace(/\/+$/, "")}/dashboard/billing/plans — ${err.message}`);
+      // owner's `foldrun login` key too) — least privilege: a key that leaks
+      // cannot spend the account's money (owner, 23 Nov 2026: best practice).
+      // The page is where the owner does it, signed in: opened in a terminal.
+      if (err instanceof HttpError && err.status === 403) {
+        const page = `${String(appFor(url)).replace(/\/+$/, "")}/dashboard/billing/plans`;
+        const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(page).catch(() => false);
+        throw new Error(`${what} is the account owner's, signed in to the dashboard — a key cannot change billing. ${opened ? "Opened" : "Open"} ${page}`);
+      }
       if (err instanceof HttpError && err.status === 501) throw new Error(`${what}: ${err.message}`);
       throw err;
     }
