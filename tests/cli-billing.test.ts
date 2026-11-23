@@ -92,3 +92,34 @@ test("every billing verb on a platform without billing says so, not a bare 404",
   assert.match(plain.out, /has no billing/);
   assert.match(statement.out, /has no billing/);
 });
+
+test("billing names the subscription the account works under (23 Nov 2026): the plan and its use, a legacy plan as honoured, or none", async () => {
+  const sub = (body: object) => ({ prices: { pro: 20, max: 100 }, available: { pro: true, max: true }, balanceUsd: 10, ...body });
+  const pro = await serve({
+    "/v1/billing": () => ({ enabled: true, balanceUsd: 10, entries: [] }),
+    "/v1/billing/coding-plan": () => sub({ plan: { plan: "pro", status: "active", renew: true, periodEnd: "2026-12-20T00:00:00Z" }, allowance: { windows: [{ name: "month", usedPct: 12 }, { name: "week", usedPct: 40 }] }, extraUsage: { on: true }, entitlement: { kind: "active", source: "subscription", plan: "pro" } }),
+  });
+  const a = await at(pro.url, "billing");
+  pro.close();
+  assert.match(a.out, /foldrun Pro\s+renews 2026-12-20 · used month 12% · week 40% · pay as you go on/);
+  const legacy = await serve({
+    "/v1/billing": () => ({ enabled: true, balanceUsd: 10, entries: [] }),
+    "/v1/billing/coding-plan": () => sub({ plan: null, allowance: null, extraUsage: null, entitlement: { kind: "active", source: "legacy", plan: "scale", paidThrough: "2026-12-01T00:00:00Z" } }),
+  });
+  const b = await at(legacy.url, "billing");
+  legacy.close();
+  assert.match(b.out, /scale platform plan — honoured to 2026-12-01, no longer sold/);
+  const none = await serve({
+    "/v1/billing": () => ({ enabled: true, balanceUsd: 50, entries: [] }),
+    "/v1/billing/coding-plan": () => sub({ plan: null, allowance: null, extraUsage: null, entitlement: { kind: "none" } }),
+  });
+  const n = await at(none.url, "billing");
+  none.close();
+  assert.match(n.out, /no active subscription — new work is refused until one starts: foldrun billing plan pro/);
+  // A platform that sells none: nothing about a subscription.
+  const off = await serve({ "/v1/billing": () => ({ enabled: true, balanceUsd: 1, entries: [] }) });
+  const o = await at(off.url, "billing");
+  off.close();
+  assert.equal(o.code, 0, o.out);
+  assert.doesNotMatch(o.out, /subscription|foldrun Pro/);
+});

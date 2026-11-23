@@ -1030,7 +1030,34 @@ test("--local on a foldrun Pro plan past its allowance, extra usage off: the lim
     try {
       let at = await t.until(/\w ❯ /);
       t.send("hi\r");
-      at = await t.until(/used your foldrun Pro plan's allowance — it resets [^;]+; turn on extra usage \(Billing\) to carry on from bought credits: \S+\/dashboard\/billing\r?\n/, at);
+      at = await t.until(/used your foldrun Pro allowance — it resets [^;]+; top up and turn on pay as you go to carry on from your balance: foldrun billing pay-as-you-go on \(or \S+\/dashboard\/billing\)\r?\n/, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/v1\/keys|\/v1\/messages/, "no key made, no model asked");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local with no foldrun subscription (23 Nov 2026): said before the turn, whatever the wallet holds — no key made, no model asked", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 0, boughtUsd: 50 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/billing/coding-plan": () => ({ plan: null, allowance: null, entitlement: { kind: "none" }, extraUsage: null }),
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("hi\r");
+      at = await t.until(/no active foldrun subscription — start one with foldrun billing plan pro \(or Billing → Plans\), then try again\r?\n/, at);
       at = await t.until(/\w ❯ /, at);
       t.send("/quit\r");
       await t.done;

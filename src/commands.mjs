@@ -8136,6 +8136,22 @@ async function billingCmd(flags) {
   const entries = body.entries ?? [];
 
   console.log(`\n  ${balance > 0 ? c.green("✓") : c.red("✗")} balance ${c.bold(`$${balance.toFixed(2)}`)}  ${c.dim(body.enabled ? "billing on" : "billing off — nothing is charged on this install")}`);
+  // The subscription the account works under (23 Nov 2026), where the
+  // platform sells one; a platform without it says nothing here.
+  if (body.enabled) {
+    /** @type {any} */
+    const sub = await remoteCall(url, flags, "/v1/billing/coding-plan").catch(() => null);
+    const p = sub?.plan && sub.plan.status === "active" ? sub.plan : null;
+    const e = sub?.entitlement;
+    if (p) {
+      const used = (sub.allowance?.windows ?? []).filter((/** @type {any} */ w) => w.usedPct != null).map((/** @type {any} */ w) => `${w.name} ${w.usedPct}%`).join(" · ");
+      console.log(`  ${c.green("●")} foldrun ${p.plan === "max" ? "Max" : "Pro"}  ${c.dim(`${p.renew ? "renews" : "ends"} ${String(p.periodEnd).slice(0, 10)}${used ? ` · used ${used}` : ""} · pay as you go ${sub.extraUsage?.on ? "on" : "off"}`)}`);
+    } else if (e?.kind === "active" && e.source === "legacy") {
+      console.log(`  ${c.dim("●")} ${e.plan} platform plan ${c.dim(`— honoured to ${String(e.paidThrough ?? "").slice(0, 10) || "its paid-through date"}, no longer sold`)}`);
+    } else if (e?.kind === "none") {
+      console.log(`  ${c.amber("!")} no active subscription ${c.dim("— new work is refused until one starts: foldrun billing plan pro")}`);
+    }
+  }
   // What the account should be told — an empty wallet, an overdraft, a
   // waiver — as the platform words it: it knows the gate, the overdraft and
   // the waivers; the numbers here do not say enough to guess.
@@ -14777,16 +14793,23 @@ async function codingPlanOf(/** @type {any} */ s, fresh = false) {
     // Not offered here (no billing, no database): no plan, said once.
     if (err instanceof HttpError && (err.status === 404 || err.status === 501)) {
       s.planReadAt = Date.now();
+      s.entitlement = null;
       if (s.onPlan) s.planLabel = null;
       s.codingPlan = null;
       s.onPlan = false;
       return null;
     }
     // Asked fresh and not answered: undefined — not known, which is not
-    // "no plan" (null) (Codex review).
+    // "no plan" (null) (Codex review). Nor is the entitlement known any
+    // more: a "none" read before is not held against a turn now — the
+    // gateway decides (Codex, 23 Nov 2026: a plan bought meanwhile).
+    s.entitlement = null;
     return fresh ? undefined : s.codingPlan ?? null;
   }
   s.planReadAt = Date.now();
+  // The one decision every door asks (23 Nov 2026): none means new work is
+  // refused 402 subscription_required, whatever the wallet holds.
+  s.entitlement = got?.entitlement && typeof got.entitlement === "object" ? got.entitlement : null;
   const plan = got?.plan && typeof got.plan === "object" ? got.plan : null;
   const room = got?.allowance && typeof got.allowance === "object" ? got.allowance : null;
   if (!plan || !room) {
@@ -14825,6 +14848,14 @@ async function creditsReady(/** @type {any} */ s, /** @type {string | null} */ t
   // one platform plan for AI and compute): with room, no bought credit is
   // needed. Asked first, and whether or not the wallet can be read.
   const found = await codingPlanOf(s);
+  // No subscription at all (23 Nov 2026): every model call is refused with
+  // subscription_required, so it is said before the turn, not after it.
+  // Only on the platform's explicit word ("none"); a legacy plan, an exempt
+  // account or an unanswered read goes on as before.
+  if (found === null && s.entitlement?.kind === "none") {
+    console.log(`  ${c.red("✗")} ${c.white("this account has no active foldrun subscription — start one with")} ${c.cyan("foldrun billing plan pro")} ${c.white("(or Billing → Plans), then try again")}\n`);
+    return false;
+  }
   // A model named outright: whether the plan pays for it is the gateway's
   // to say (by its provider), so with room left the call goes to it.
   if (found?.room && !tier) return true;
@@ -14844,12 +14875,16 @@ async function creditsReady(/** @type {any} */ s, /** @type {string | null} */ t
     // Not answered now: nothing to refuse on — the gateway decides. No plan
     // any more: the wallet's rule below.
     if (now === undefined) return true;
+    if (now === null && s.entitlement?.kind === "none") {
+      console.log(`  ${c.red("✗")} ${c.white("this account has no active foldrun subscription — start one with")} ${c.cyan("foldrun billing plan pro")} ${c.white("(or Billing → Plans), then try again")}\n`);
+      return false;
+    }
     if (now === null) return walletReady(s, tier, billing);
     const still = tier && now.covers[tier] ? now : null;
     if (still?.room) return true;
     if (still && !still.extraUsage) {
       const at = still.freeAt ? ` — it resets ${new Date(still.freeAt).toLocaleString()}` : "";
-      console.log(`  ${c.red("✗")} ${c.white(`you've used your foldrun ${still.name} plan's allowance${at}; turn on extra usage (Billing) to carry on from bought credits:`)} ${billing}\n`);
+      console.log(`  ${c.red("✗")} ${c.white(`you've used your foldrun ${still.name} allowance${at}; top up and turn on pay as you go to carry on from your balance:`)} ${c.cyan("foldrun billing pay-as-you-go on")} ${c.dim(`(or ${billing})`)}\n`);
       return false;
     }
   }
@@ -15511,6 +15546,7 @@ async function codeLocalTurn(s, text) {
             // runs get the person's own environment without it.
             env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
             shellEnv: own,
+            userAgent: USER_AGENT,
             model: localModelOf(model),
             systemPrompt: [localPrompt(s.dir), folderClaudeMd(s.dir)].filter(Boolean).join("\n\n"),
             tools: ENGINE_TOOLS_LOCAL,
@@ -18714,18 +18750,20 @@ async function secretOfKind(kind, flags) {
 }
 
 /**
- * `foldrun billing plans | plan <id>|cancel|resume | top-up <usd> | card` —
+ * `foldrun billing plans | plan pro|max|cancel|resume | pay-as-you-go on|off [--limit <usd>|--no-limit] | top-up <usd> | card` —
  * the Plans and Payment pages. Anything that takes a card answers with
  * Stripe's own page to open; nothing here touches card data.
  */
-async function billingPlansCmd(verb, sub, flags) {
+async function billingPlansCmd(verb, arg, flags) {
   const url = platformFor(flags, `billing ${verb}`);
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const billingOnly = async (fn, what) => {
     try {
       return await fn();
     } catch (err) {
-      if (err instanceof HttpError && err.status === 403) throw new Error(`${what} needs billing:manage — the owner's — ${err.message}`);
+      // billing:manage is the owner's, and a key is at most admin (an
+      // owner's `foldrun login` key too): the page is where the owner does it.
+      if (err instanceof HttpError && err.status === 403) throw new Error(`${what} needs billing:manage — the account owner's, in the browser: ${String(appFor(url)).replace(/\/+$/, "")}/dashboard/billing/plans — ${err.message}`);
       if (err instanceof HttpError && err.status === 501) throw new Error(`${what}: ${err.message}`);
       throw err;
     }
@@ -18735,42 +18773,171 @@ async function billingPlansCmd(verb, sub, flags) {
     console.log(`\n  ${opened ? `Opened Stripe's page for ${what}.` : `Open Stripe's page for ${what}:`}\n\n    ${link}\n\n  ${c.dim("the link lasts minutes; the balance moves when Stripe confirms the payment, not before")}\n`);
     return 0;
   };
+  // The foldrun subscription (owner, 23 Nov 2026): Pro or Max, one for
+  // every hosted account, paid from the wallet — the Billing page's card.
+  // A platform plan bought before (Starter / Pro / Scale at Stripe) is
+  // honoured to its paid-through date and no longer sold.
+  const name = (/** @type {unknown} */ x) => (x === "max" ? "Max" : "Pro");
+  const readSub = () =>
+    remoteCall(url, flags, "/v1/billing/coding-plan").catch((err) => {
+      if (err instanceof HttpError && (err.status === 404 || err.status === 501)) return null;
+      throw err;
+    });
+  // A platform older than 23 Nov 2026 ignores resume, period and a limit:
+  // a write it would read differently is not sent to it (Codex, 23 Nov:
+  // "on --limit 30" turned on with no limit). Asked before the write.
+  const current = (/** @type {any} */ sub) => {
+    if (!sub || !("entitlement" in sub) || !("extraUsage" in sub)) throw new Error("this platform is older than this CLI and would not read this change the same way — use the Billing page, or update the platform");
+  };
   if (verb === "plans") {
-    const p = await remoteCall(url, flags, "/v1/billing/plans");
-    const cur = p.current;
-    console.log(`\n  ${c.bold("plans")}  ${c.dim(`one credit is ${usd(p.creditUsd)}${cur?.plan ? ` · on ${cur.plan} (${cur.status})` : " · Free: 300 credits a month, bought credits on top"}`)}`);
-    for (const x of p.plans ?? []) {
-      const mark = cur?.plan === x.id ? c.green("●") : c.dim("○");
-      console.log(`  ${mark} ${c.bold(pad(x.id, 8))} ${pad(`$${x.monthlyUsd}/mo`, 9)} ${pad(`${Number(x.credits).toLocaleString()} credits`, 16)} ${pad(`${x.storageGb ?? "?"} GB`, 8)} ${pad(`${x.vcpu ?? "?"} vCPU · ${x.memGiB ?? "?"} GiB`, 16)} ${pad(x.workspaces == null ? "any projects" : `${x.workspaces} workspaces`, 15)} ${c.dim(x.pitch ?? "")}`);
+    const sub = await readSub();
+    if (!sub) throw new Error("this platform sells no subscription (no billing here) — `foldrun billing` shows what it charges");
+    const mine = sub.plan && sub.plan.status === "active" ? sub.plan : null;
+    console.log(`\n  ${c.bold("foldrun subscription")}  ${c.dim(`one for model calls, foldrun code and the cloud's compute · paid from your balance (${usd(sub.balanceUsd)})`)}`);
+    for (const id of ["pro", "max"]) {
+      const price = sub.prices?.[id];
+      const mark = mine?.plan === id ? c.green("●") : c.dim("○");
+      const note = price == null ? c.dim("not for sale here") : c.dim(id === "max" ? "five times Pro's allowance" : "the allowance for one person");
+      console.log(`  ${mark} ${c.bold(pad(name(id), 6))} ${pad(price == null ? "—" : `$${Number(price).toFixed(0)}/30 days`, 15)} ${note}`);
     }
-    if (cur?.plan) console.log(`\n  ${c.dim(`this cycle: ${cur.cycleRemainingCredits ?? "?"} of ${cur.cycleCredits ?? "?"} credits left${cur.resetsAt ? `, resets ${String(cur.resetsAt).slice(0, 10)}` : ""}`)}`);
-    console.log(`  ${c.dim(`balance ${usd(p.balanceUsd)}${p.cards ? "" : " · card payments are not configured on this install"}`)}`);
-    console.log(`\n  ${c.dim("foldrun billing plan <id> · plan cancel · plan resume · top-up <usd> · card")}\n`);
+    if (mine) {
+      const next = mine.nextPlan && mine.nextPlan !== mine.plan ? `, then ${name(mine.nextPlan)}` : "";
+      console.log(`\n  ${mine.renew ? `renews ${String(mine.periodEnd).slice(0, 10)}${next}` : c.amber(`ends ${String(mine.periodEnd).slice(0, 10)} — \`foldrun billing plan resume\` keeps it`)}`);
+      for (const w of sub.allowance?.windows ?? []) {
+        console.log(`  ${pad(w.name === "month" ? "this month" : "this week", 14)} ${w.usedPct == null ? c.dim("counted, no limit") : `${w.usedPct}% used`} ${c.dim(`· resets ${String(w.resetsAt).slice(0, 16).replace("T", " ")} UTC`)}`);
+      }
+      const x = sub.extraUsage;
+      const sums = x && typeof x.spentUsd === "number" ? ` ${c.dim(`· ${usd(x.spentUsd)} spent, ${usd(x.heldUsd ?? 0)} held`)}` : "";
+      const limit = x?.capUsd != null ? ` · up to ${usd(x.capUsd)} a period` : " · no limit beyond the balance";
+      console.log(`  ${pad("pay as you go", 14)} ${x?.on ? `on${limit}${sums}` : c.dim(`off — past the allowance new work waits for the reset${x?.capUsd != null ? ` (limit ${usd(x.capUsd)} kept)` : ""}`)}`);
+    } else if (sub.entitlement?.kind === "active" && sub.entitlement.source === "legacy") {
+      console.log(`\n  ${c.dim(`on the ${sub.entitlement.plan} platform plan, honoured to ${String(sub.entitlement.paidThrough ?? "").slice(0, 10) || "its paid-through date"}; it is no longer sold`)}`);
+    } else if (sub.entitlement?.kind === "exempt") {
+      console.log(`\n  ${c.dim("this account is not charged (the platform's own, or set by the operator)")}`);
+    } else if (sub.entitlement?.kind !== "none") {
+      console.log(`\n  ${c.amber("the subscription could not be read just now")} ${c.dim("— try again in a moment")}`);
+    } else {
+      console.log(`\n  ${c.amber("no active subscription")} ${c.dim("— new work needs one")}`);
+    }
+    console.log(`\n  ${c.dim("foldrun billing plan pro|max · plan cancel · plan resume · pay-as-you-go on|off [--limit <usd>] · top-up <usd>")}\n`);
     return 0;
   }
   if (verb === "plan") {
-    if (!sub) throw new Error("`foldrun billing plan <starter|pro|scale>`, `plan cancel` or `plan resume` — `billing plans` lists them");
-    if (sub === "cancel") {
-      if (!(await confirmed(flags, "billing plan cancel", "Cancel the plan at the end of this cycle? [y/N] "))) {
+    if (!arg) throw new Error("`foldrun billing plan pro|max`, `plan cancel` or `plan resume` — `billing plans` shows them");
+    const sub = await readSub();
+    if (!sub) throw new Error("this platform sells no subscription (no billing here)");
+    const mine = sub.plan && sub.plan.status === "active" ? sub.plan : null;
+    if (arg === "cancel") {
+      if (!mine) {
+        // A platform plan bought at Stripe before 23 Nov 2026: still
+        // cancelled where it was bought.
+        if (sub.entitlement?.kind === "active" && sub.entitlement.source === "legacy") {
+          if (!(await confirmed(flags, "billing plan cancel", `Cancel the ${sub.entitlement.plan} platform plan at the end of this cycle? [y/N] `))) {
+            console.log(`\n  ${c.dim("nothing changed")}\n`);
+            return 0;
+          }
+          const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/subscribe", { method: "DELETE" }), "cancelling the plan");
+          console.log(`\n  ${c.green("✓")} the platform plan stops ${r.endsAt ? `on ${String(r.endsAt).slice(0, 10)}` : "at the end of this cycle"}\n`);
+          return 0;
+        }
+        throw new Error("this account has no subscription to cancel");
+      }
+      if (!(await confirmed(flags, "billing plan cancel", `Stop renewing ${name(mine.plan)}? It runs to ${String(mine.periodEnd).slice(0, 10)}. [y/N] `))) {
         console.log(`\n  ${c.dim("nothing changed")}\n`);
         return 0;
       }
-      const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/subscribe", { method: "DELETE" }), "cancelling the plan");
-      console.log(`\n  ${c.green("✓")} the plan stops ${r.endsAt ? `on ${String(r.endsAt).slice(0, 10)}` : "at the end of this cycle"} ${c.dim("— `foldrun billing plan resume` undoes it until then")}\n`);
+      const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/coding-plan", { method: "DELETE" }), "cancelling the subscription");
+      console.log(`\n  ${c.green("✓")} it stops on ${String(r.plan?.periodEnd ?? mine.periodEnd).slice(0, 10)} ${c.dim("— `foldrun billing plan resume` undoes it until then")}\n`);
       return 0;
     }
-    const body = sub === "resume" ? { resume: true } : { plan: sub };
-    if (sub !== "resume" && !(await confirmed(flags, "billing plan", `Move the account to the ${sub} plan? A change on a live plan is prorated at Stripe now. [y/N] `))) {
+    const want = arg === "resume" ? mine?.plan : arg;
+    if (arg === "resume" && !want) throw new Error("this account has no subscription to resume — `foldrun billing plan pro` starts one");
+    if (want !== "pro" && want !== "max") {
+      throw new Error(`"${arg}" is not sold any more — foldrun is one subscription since 23 Nov 2026: \`foldrun billing plan pro\` or \`plan max\``);
+    }
+    const price = sub.prices?.[want];
+    if (price == null) throw new Error(`${name(want)} is not for sale here right now`);
+    current(sub);
+    // The same plan again also takes a change down off: said in the question.
+    const keepsDown = mine?.plan === want && mine.nextPlan && mine.nextPlan !== want ? `, and drop the move to ${name(mine.nextPlan)} at the renewal` : "";
+    const ask = arg === "resume" ? `Keep ${name(want)} renewing${keepsDown}? [y/N] `
+      : mine?.plan === want ? `Already on ${name(want)} — keep it renewing${keepsDown}? [y/N] `
+      : mine && want === "pro" ? `Move down to Pro at the renewal (${String(mine.periodEnd).slice(0, 10)})? [y/N] `
+      : mine ? `Move up to Max now? The difference for the rest of the period is taken from your balance (${usd(sub.balanceUsd)}). [y/N] `
+      : `Start ${name(want)} for ${usd(price)} from your balance (${usd(sub.balanceUsd)}), renewed every 30 days? [y/N] `;
+    if (!(await confirmed(flags, "billing plan", ask))) {
       console.log(`\n  ${c.dim("nothing changed")}\n`);
       return 0;
     }
-    const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/subscribe", { method: "POST", body: JSON.stringify(body) }), "choosing a plan");
-    if (r.url) return follow(r.url, `the ${sub} plan`);
-    console.log(`\n  ${c.green("✓")} ${r.resumed ? `${r.plan} resumed — it renews as before` : r.unchanged ? `already on ${sub}` : `moving to ${r.plan}; the invoice Stripe raises grants the new credits`}\n`);
+    /** @type {any} */
+    let r;
+    try {
+      // resume: only the live plan renews again — if its period ended while
+      // the question was open, nothing is bought (409).
+      // Bound to the period shown (period): one that ended meanwhile is
+      // refused, never bought again at full price. The same plan is a
+      // resume: never a purchase.
+      // And to the price confirmed (maxUsd): a price raised meanwhile is
+      // refused, never charged.
+      const same = arg === "resume" || mine?.plan === want;
+      const body = { plan: want, ...(same ? { resume: true } : { maxUsd: Number(price) }), ...(mine ? { period: mine.periodEnd } : {}) };
+      r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/coding-plan", { method: "POST", body: JSON.stringify(body) }), "choosing a plan");
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 402 && /costs more than this purchase may charge/.test(err.message)) throw new Error("the price changed since it was shown — nothing was charged; `foldrun billing plans` shows it now");
+      if (err instanceof HttpError && err.status === 402) throw new Error(`${err.message} — \`foldrun billing top-up <usd>\` adds credit`);
+      if (err instanceof HttpError && err.status === 409 && /still renews at Stripe/.test(err.message)) throw new Error(`${err.message.replace("foldrun billing plan cancel", "`foldrun billing plan cancel`")}`);
+      throw err;
+    }
+    const p = r.plan ?? {};
+    console.log(`\n  ${c.green("✓")} ${p.nextPlan && p.nextPlan !== p.plan ? `${name(p.plan)} until ${String(p.periodEnd).slice(0, 10)}, then ${name(p.nextPlan)}` : `on ${name(p.plan)}${r.chargedUsd ? ` — ${usd(r.chargedUsd)} from your balance` : ""}; renews ${String(p.periodEnd).slice(0, 10)}`}\n`);
+    return 0;
+  }
+  if (verb === "pay-as-you-go") {
+    const usage = "`foldrun billing pay-as-you-go on|off` — past the allowance, carry on from your balance; `--limit <usd>` caps a period, `--no-limit` drops the cap";
+    // Nothing guessed where money is concerned (Codex, 23 Nov 2026): a word
+    // that is not on/off, a bare --limit, or both limit flags is refused
+    // before anything is sent.
+    if (arg !== undefined && arg !== "on" && arg !== "off") throw new Error(`"${arg}" is not on or off — ${usage}`);
+    if (flags.limit !== undefined && flags["no-limit"] !== undefined) throw new Error("--limit and --no-limit together — give one");
+    if (flags["no-limit"] !== undefined && flags["no-limit"] !== true) throw new Error("--no-limit takes no value");
+    if (arg === undefined && flags.limit === undefined && flags["no-limit"] === undefined) throw new Error(usage);
+    /** @type {Record<string, unknown>} */
+    const body = {};
+    if (arg === "on" || arg === "off") body.extraUsage = arg === "on";
+    if (flags["no-limit"] === true) body.extraUsageCapUsd = null;
+    else if (flags.limit !== undefined) {
+      const n = typeof flags.limit === "string" && /^\d+(\.\d{1,2})?$/.test(flags.limit) ? Number(flags.limit) : NaN;
+      if (!(n >= 0.01 && n <= 100_000)) throw new Error("--limit is dollars a period, from 0.01 to 100000 (`--no-limit` for none)");
+      body.extraUsageCapUsd = n;
+    }
+    current(await readSub());
+    // Turning it on, or lifting or setting its limit, lets the balance be
+    // spent: asked first (`--yes`). Only turning it off, alone, is not asked.
+    if (!(arg === "off" && body.extraUsageCapUsd === undefined)) {
+      const what = body.extraUsage === true
+        ? `Turn on pay as you go${body.extraUsageCapUsd === null ? " with no limit beyond your balance" : typeof body.extraUsageCapUsd === "number" ? `, up to ${usd(body.extraUsageCapUsd)} a period` : ""}? Past the allowance, work is paid from your balance at the listed price. [y/N] `
+        : body.extraUsageCapUsd === null ? `${body.extraUsage === false ? "Turn pay as you go off and remove its limit? Turned on later, it" : "Remove the pay-as-you-go limit? If it is on, it"} may then spend up to your whole balance. [y/N] `
+        : `${body.extraUsage === false ? "Turn pay as you go off and set" : "Set"} its limit to ${usd(Number(body.extraUsageCapUsd))} a period? [y/N] `;
+      if (!(await confirmed(flags, "billing pay-as-you-go", what))) {
+        console.log(`\n  ${c.dim("nothing changed")}\n`);
+        return 0;
+      }
+    }
+    /** @type {any} */
+    let r;
+    try {
+      r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/coding-plan", { method: "PATCH", body: JSON.stringify(body) }), "pay as you go");
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 409) throw new Error("pay as you go needs a subscription — `foldrun billing plan pro` starts one");
+      if (err instanceof HttpError && (err.status === 404 || err.status === 501)) throw new Error("this platform sells no subscription (no billing here)");
+      throw err;
+    }
+    const x = r.extraUsage ?? { on: r.plan?.extraUsage, capUsd: r.plan?.extraUsageCapUsd };
+    console.log(`\n  ${c.green("✓")} pay as you go ${x.on ? `on${x.capUsd != null ? `, up to ${usd(x.capUsd)} a period` : ", no limit beyond the balance"} ${c.dim("— past the allowance, work carries on from your balance at the listed price")}` : `off${x.capUsd != null ? ` (its limit, ${usd(x.capUsd)} a period, kept)` : ""} ${c.dim("— past the allowance, new work waits for the reset")}`}\n`);
     return 0;
   }
   if (verb === "top-up") {
-    const amount = Number(sub);
+    const amount = Number(arg);
     if (!(amount > 0)) throw new Error("`foldrun billing top-up <usd>` — how much to add, e.g. 50");
     const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/checkout", { method: "POST", body: JSON.stringify({ usd: amount }) }), "a top-up");
     return follow(r.url, `a ${usd(amount)} top-up`);
@@ -20258,7 +20425,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "billing":
       return noBillingSaid(flags, () => {
         if (positional[0] === "invoices") return billingInvoicesCmd(flags);
-        if (["plans", "plan", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
+        if (["plans", "plan", "pay-as-you-go", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
         return positional.length ? billingVerbCmd(positional, flags) : billingCmd(flags);
       });
     case "library":

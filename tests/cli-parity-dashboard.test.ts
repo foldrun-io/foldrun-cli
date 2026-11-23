@@ -444,42 +444,118 @@ test("secrets set --kind: Basic from a username and password, and a service acco
   ]);
 });
 
-test("billing plans / plan / cancel / resume / top-up / card", async () => {
+test("billing plans / plan / cancel / resume / pay-as-you-go / top-up / card — the foldrun subscription (23 Nov 2026)", async () => {
+  let plan: any = { plan: "pro", nextPlan: null, status: "active", periodStart: "2026-11-20T00:00:00Z", periodEnd: "2026-12-20T00:00:00Z", priceUsd: 20, renew: true, extraUsage: false, extraUsageCapUsd: null };
+  const offer = () => ({
+    prices: { pro: 20, max: 100 }, available: { pro: true, max: true }, plan, balanceUsd: 42,
+    allowance: { windows: [{ name: "month", usedPct: 12, resetsAt: "2026-12-20T00:00:00Z" }, { name: "week", usedPct: 40, resetsAt: "2026-11-27T00:00:00Z" }], extraUsage: plan.extraUsage, room: true, freeAt: null },
+    entitlement: { kind: "active", plan: plan.plan, source: "subscription", paidThrough: plan.periodEnd, renews: plan.renew },
+    extraUsage: { on: plan.extraUsage, capUsd: plan.extraUsageCapUsd, spentUsd: 1.5, heldUsd: 0.25, periodStart: plan.periodStart, periodEnd: plan.periodEnd },
+  });
   const s = await serve({
-    "/v1/billing/plans": () => ({
-      creditUsd: 0.01, trialCredits: 500, cards: true, balanceUsd: 12.5,
-      plans: [{ id: "starter", monthlyUsd: 29, credits: 2900, concurrency: 1, workspaces: 3, pitch: "One desk." }, { id: "creator", monthlyUsd: 79, credits: 8800, concurrency: 2, workspaces: 10, pitch: "A few." }],
-      current: { plan: "starter", status: "active", cycleCredits: 2900, cycleRemainingCredits: 1000, resetsAt: "2026-10-20T00:00:00Z" },
-    }),
-    "POST /v1/billing/subscribe": (b) => (JSON.parse(b).resume ? { ok: true, resumed: true, plan: "starter" } : { ok: true, changed: true, plan: JSON.parse(b).plan }),
-    "DELETE /v1/billing/subscribe": () => ({ ok: true, endsAt: "2026-10-20T00:00:00Z" }),
+    "GET /v1/billing/coding-plan": offer,
+    "POST /v1/billing/coding-plan": (b) => {
+      const want = JSON.parse(b).plan;
+      plan = want === plan.plan ? { ...plan, renew: true } : { ...plan, plan: want };
+      return { plan, chargedUsd: want === "max" ? 53.33 : 0 };
+    },
+    "DELETE /v1/billing/coding-plan": () => ((plan = { ...plan, renew: false }), { plan }),
+    "PATCH /v1/billing/coding-plan": (b) => {
+      const j = JSON.parse(b);
+      plan = { ...plan, ...(j.extraUsage !== undefined ? { extraUsage: j.extraUsage } : {}), ...(j.extraUsageCapUsd !== undefined ? { extraUsageCapUsd: j.extraUsageCapUsd } : {}) };
+      return { plan, allowance: offer().allowance, extraUsage: offer().extraUsage };
+    },
     "POST /v1/billing/checkout": () => ({ ok: true, url: "https://checkout.stripe.com/c/1" }),
     "POST /v1/billing/card": () => failing(403, { error: "forbidden: billing:manage" }),
   });
   const plans = await at(s.url, "billing", "plans");
-  const pipe = await at(s.url, "billing", "plan", "creator");
-  const plan = await at(s.url, "billing", "plan", "creator", "--yes");
+  const pipe = await at(s.url, "billing", "plan", "max");
+  const up = await at(s.url, "billing", "plan", "max", "--yes");
+  const old = await at(s.url, "billing", "plan", "starter", "--yes");
   const cancel = await at(s.url, "billing", "plan", "cancel", "--yes");
-  const resume = await at(s.url, "billing", "plan", "resume");
+  const resume = await at(s.url, "billing", "plan", "resume", "--yes");
+  const asked = await at(s.url, "billing", "pay-as-you-go", "on");
+  const on = await at(s.url, "billing", "pay-as-you-go", "on", "--limit", "30", "--yes");
+  const nolimit = await at(s.url, "billing", "pay-as-you-go", "--no-limit", "--yes");
+  const off = await at(s.url, "billing", "pay-as-you-go", "off");
+  const bad = await at(s.url, "billing", "pay-as-you-go");
+  // Nothing guessed where money is concerned: each refused before a write.
+  const both = await at(s.url, "billing", "pay-as-you-go", "on", "--limit", "30", "--no-limit", "--yes");
+  const bare = await at(s.url, "billing", "pay-as-you-go", "on", "--limit", "--yes");
+  const typo = await at(s.url, "billing", "pay-as-you-go", "of", "--no-limit", "--yes");
+  const cents = await at(s.url, "billing", "pay-as-you-go", "--limit", "1e3", "--yes");
   const top = await at(s.url, "billing", "top-up", "50");
   const card = await at(s.url, "billing", "card");
   s.close();
-  assert.match(plans.out, /● starter\s+\$29\/mo\s+2,900 credits[\s\S]*○ creator/);
-  assert.match(plans.out, /1000 of 2900 credits left, resets 2026-10-20/);
-  assert.equal(pipe.code, 1);
-  for (const r of [plan, cancel, resume, top]) assert.equal(r.code, 0, r.out);
-  assert.match(plan.out, /moving to creator/);
-  assert.match(cancel.out, /stops on 2026-10-20/);
+  assert.equal(plans.code, 0, plans.out);
+  assert.match(plans.out, /● Pro\s+\$20\/30 days[\s\S]*○ Max\s+\$100\/30 days/);
+  assert.match(plans.out, /renews 2026-12-20/);
+  assert.match(plans.out, /this month\s+12% used[\s\S]*this week\s+40% used/);
+  assert.match(plans.out, /pay as you go\s+off/);
+  assert.equal(pipe.code, 1, "no terminal and no --yes: nothing bought");
+  for (const r of [up, cancel, resume, on, nolimit, off, top]) assert.equal(r.code, 0, r.out);
+  assert.match(up.out, /on Max — \$53\.33 from your balance/);
+  assert.equal(old.code, 1);
+  assert.match(old.out, /not sold any more[\s\S]*foldrun billing plan pro/);
+  assert.match(cancel.out, /stops on 2026-12-20/);
+  assert.match(on.out, /pay as you go on, up to \$30\.00 a period/);
+  assert.match(nolimit.out, /no limit beyond the balance/);
+  assert.match(off.out, /pay as you go off/);
+  assert.equal(bad.code, 1);
+  assert.equal(asked.code, 1, "turning it on asks first; no terminal and no --yes: nothing changed");
+  for (const r of [both, bare, typo, cents]) assert.equal(r.code, 1, r.out);
+  assert.match(both.out, /--limit and --no-limit together/);
+  assert.match(typo.out, /"of" is not on or off/);
   assert.match(top.out, /https:\/\/checkout\.stripe\.com\/c\/1/);
   assert.equal(card.code, 1);
   assert.match(card.out, /needs billing:manage/);
   assert.deepEqual(writes(s).map((w) => [w.method, w.url, w.body]), [
-    ["POST", "/v1/billing/subscribe", { plan: "creator" }],
-    ["DELETE", "/v1/billing/subscribe", null],
-    ["POST", "/v1/billing/subscribe", { resume: true }],
+    ["POST", "/v1/billing/coding-plan", { plan: "max", maxUsd: 100, period: "2026-12-20T00:00:00Z" }],
+    ["DELETE", "/v1/billing/coding-plan", null],
+    ["POST", "/v1/billing/coding-plan", { plan: "max", resume: true, period: "2026-12-20T00:00:00Z" }],
+    ["PATCH", "/v1/billing/coding-plan", { extraUsage: true, extraUsageCapUsd: 30 }],
+    ["PATCH", "/v1/billing/coding-plan", { extraUsageCapUsd: null }],
+    ["PATCH", "/v1/billing/coding-plan", { extraUsage: false }],
     ["POST", "/v1/billing/checkout", { usd: 50 }],
     ["POST", "/v1/billing/card", {}],
   ]);
+});
+
+test("billing plan on a legacy platform plan: shown as honoured, cancelled where it was bought; pay as you go needs a subscription", async () => {
+  const s = await serve({
+    "GET /v1/billing/coding-plan": () => ({ prices: { pro: 20, max: 100 }, available: { pro: true, max: true }, plan: null, balanceUsd: 5, allowance: null, entitlement: { kind: "active", plan: "scale", source: "legacy", paidThrough: "2026-12-01T00:00:00Z", renews: true }, extraUsage: null }),
+    "DELETE /v1/billing/subscribe": () => ({ ok: true, endsAt: "2026-12-01T00:00:00Z" }),
+    "PATCH /v1/billing/coding-plan": () => failing(409, { error: "this account has no plan" }),
+    "POST /v1/billing/coding-plan": () => failing(409, { error: "the scale platform plan still renews at Stripe — cancel it first (Billing → Plans, or foldrun billing plan cancel); it runs to 2026-12-01, then choose Pro or Max", legacy: true }),
+  });
+  const plans = await at(s.url, "billing", "plans");
+  const cancel = await at(s.url, "billing", "plan", "cancel", "--yes");
+  const payg = await at(s.url, "billing", "pay-as-you-go", "on", "--yes");
+  // Still renewing at Stripe: a subscription is not started beside it.
+  const beside = await at(s.url, "billing", "plan", "pro", "--yes");
+  s.close();
+  assert.equal(beside.code, 1);
+  assert.match(beside.out, /the scale platform plan still renews at Stripe — cancel it first .*`foldrun billing plan cancel`/);
+  assert.match(plans.out, /on the scale platform plan, honoured to 2026-12-01; it is no longer sold/);
+  assert.equal(cancel.code, 0, cancel.out);
+  assert.match(cancel.out, /the platform plan stops on 2026-12-01/);
+  assert.equal(payg.code, 1);
+  assert.match(payg.out, /pay as you go needs a subscription — `foldrun billing plan pro` starts one/);
+  assert.deepEqual(writes(s).map((w) => [w.method, w.url, w.body]), [["DELETE", "/v1/billing/subscribe", null], ["PATCH", "/v1/billing/coding-plan", { extraUsage: true }], ["POST", "/v1/billing/coding-plan", { plan: "pro", maxUsd: 20 }]]);
+});
+
+test("billing against a platform older than 23 Nov 2026: a limit, a resume or a change it would read differently is not sent", async () => {
+  const s = await serve({
+    "GET /v1/billing/coding-plan": () => ({ prices: { pro: 20, max: 100 }, available: { pro: true, max: true }, balanceUsd: 5, allowance: null, plan: { plan: "pro", status: "active", periodEnd: "2026-12-20T00:00:00Z", renew: false } }),
+  });
+  const payg = await at(s.url, "billing", "pay-as-you-go", "on", "--limit", "30", "--yes");
+  const resume = await at(s.url, "billing", "plan", "resume", "--yes");
+  s.close();
+  for (const r of [payg, resume]) {
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /older than this CLI/);
+  }
+  assert.deepEqual(writes(s), []);
 });
 
 test("api version shows the pin and limits; pin and unpin PATCH /v1/account/api", async () => {

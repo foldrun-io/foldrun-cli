@@ -209,6 +209,49 @@ The operator watches it on the metrics scrape:
 `foldrun_queue_account_oldest_pending_seconds`, each for the five busiest
 accounts by rank (`rank="1"` … `"5"`) and never by name.
 
+## The foldrun subscription
+
+Since 23 November 2026 foldrun is sold as **one subscription**: **Pro**
+($20 for thirty days) or **Max** ($100, five times Pro's allowance). It pays
+for model calls on foldrun's models wherever they come from — `foldrun code`
+on your computer or in the cloud, agents and flows, and direct calls to the
+API with a foldrun key — inside its **allowance**. Without one, new work is
+refused with `402 subscription_required`; your balance, billing and history
+stay as they are.
+
+- **Bought from your balance.** Top up (Balance → Add credit, or
+  `foldrun billing top-up <usd>`), then choose Pro or Max under Billing →
+  Plans or with `foldrun billing plan pro`. It renews from the balance every
+  thirty days. Moving up to Max is charged now for the rest of the period;
+  moving down to Pro happens at the renewal. `foldrun billing plan cancel`
+  stops it renewing; it runs to the end of the period.
+- **The allowance** is measured in a month (the subscription's own thirty
+  days) and a week. Billing → Plans and `foldrun billing plans` show how much
+  of each is used, as a percentage, and when it resets (a window the
+  platform sets no limit on is counted and shown without one).
+- **Past the allowance**, new work waits for the reset — unless you turn on
+  **pay as you go** (Billing → Plans, or `foldrun billing pay-as-you-go
+  on`): the work carries on from your balance at the listed price. A limit
+  on what it may spend in a period is set with `foldrun billing
+  pay-as-you-go --limit 30` (`--no-limit` removes it). A new subscription
+  starts with it off and no limit.
+- **Fable models** are not part of Pro's allowance; on Max at most half of
+  each window's allowance may go on them. Past that, a Fable call is paid
+  from the balance with pay as you go on, and refused with it off.
+- **Cloud compute and network** of an account's runs are covered while the
+  allowance has room, and weighed on it; past it, they are paid from the
+  balance like the rest.
+
+A platform plan bought before 23 November 2026 (Starter, Pro or Scale,
+below) keeps working until its paid-through date and is no longer sold.
+While it still renews at Stripe, Pro or Max cannot be started beside it:
+cancel it first (`foldrun billing plan cancel`), and it runs to its end.
+
+Changing or buying the subscription is the account **owner's**
+(`billing:manage`). A key, the one `foldrun login` makes included, is at
+most an admin, so from the CLI the owner reads it (`foldrun billing
+plans`) and the CLI points to Billing → Plans for the change.
+
 ## Plans and credits
 
 Usage is sold in **credits: one credit is one cent** of what a step consumes
@@ -218,6 +261,8 @@ the money is shown and bought. Credits bought on top — on any plan, or on
 none — are **1¢ each**; the falling figure below is what a plan's bundle
 works out to, and it is the reason to pick a bigger plan rather than buy
 more credits.
+
+*The platform plans — no longer sold since 23 November 2026; a paid one is honoured to its paid-through date:*
 
 | plan | a month | credits a month | storage included | compute at once | one step, at most | projects | queue lane |
 |---|---|---|---|---|---|---|---|
