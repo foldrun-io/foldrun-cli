@@ -1,5 +1,5 @@
 // The one API (21 Nov 2026): a platform with an API address of its own
-// (GET /api/version `urls: { api, app }`) gets this machine's calls there
+// (GET /v1/version `urls: { api, app }`) gets this machine's calls there
 // after `foldrun login`; its dashboard is kept for the pages the CLI opens
 // and the person's own routes the API host leaves to it.
 //
@@ -14,8 +14,8 @@ import { serve, cli, failing, raw, type Fake } from "./fake-platform.ts";
 
 const me = { account: "acme", role: "admin", workspaces: null, actor: { kind: "key", id: "k1", prefix: "mda_x", label: "cli", origin: "cli-login" } };
 const loginRoutes = (token = "mda_oneapi") => ({
-  "POST /api/cli/login": () => ({ id: "p1", code: "ABCD-EFGH", verifyUrl: "http://x.test/cli/authorize", interval: 1, expiresAt: new Date(Date.now() + 60_000).toISOString() }),
-  "/api/cli/login/p1": () => ({ status: "approved", token, email: "a@acme.test", account: "acme", role: "admin" }),
+  "POST /v1/cli/login": () => ({ id: "p1", code: "ABCD-EFGH", verifyUrl: "http://x.test/cli/authorize", interval: 1, expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+  "/v1/cli/login/p1": () => ({ status: "approved", token, email: "a@acme.test", account: "acme", role: "admin" }),
 });
 
 /** A dashboard and an API, two addresses of one platform. */
@@ -23,8 +23,8 @@ async function pair(opts: { apiMe?: () => unknown; appMe?: () => unknown; apiVer
   let api: Fake;
   let app: Fake;
   const urls = () => ({ version: "v1", api: "2026-10-26", urls: { api: api.url, app: app.url } });
-  app = await serve({ ...loginRoutes(), "/api/version": urls, "/api/me": opts.appMe ?? (() => me), "POST /api/auth/name": () => ({ ok: true }) });
-  api = await serve({ ...loginRoutes(), "/api/version": opts.apiVersion ?? urls, "/api/me": opts.apiMe ?? (() => me), "/api/workspaces": () => ({ workspaces: [] }) });
+  app = await serve({ ...loginRoutes(), "/v1/version": urls, "/v1/me": opts.appMe ?? (() => me), "POST /v1/auth/name": () => ({ ok: true }) });
+  api = await serve({ ...loginRoutes(), "/v1/version": opts.apiVersion ?? urls, "/v1/me": opts.apiMe ?? (() => me), "/v1/workspaces": () => ({ workspaces: [] }) });
   return { api, app, close: () => (api.close(), app.close()) };
 }
 
@@ -47,13 +47,13 @@ test("signed in at the dashboard: calls move to the API, pages and a person's ow
     const before = p.api.seen.length;
     const who = await cli(["whoami"], { env });
     assert.equal(who.code, 0, who.out);
-    assert.ok(p.api.seen.slice(before).some((s) => s.url === "/api/me"), "whoami asks the API");
+    assert.ok(p.api.seen.slice(before).some((s) => s.url === "/v1/me"), "whoami asks the API");
     assert.match(who.out, /dashboard\s+http:\/\/127\.0\.0\.1/);
 
     const name = await cli(["me", "name", "Ana"], { env });
     assert.equal(name.code, 0, name.out);
-    assert.ok(p.app.seen.some((s) => s.method === "POST" && s.url === "/api/auth/name"), "a person's name is the dashboard's route");
-    assert.ok(!p.api.seen.some((s) => s.url === "/api/auth/name"), "never sent to the API host, which refuses it");
+    assert.ok(p.app.seen.some((s) => s.method === "POST" && s.url === "/v1/auth/name"), "a person's name is the dashboard's route");
+    assert.ok(!p.api.seen.some((s) => s.url === "/v1/auth/name"), "never sent to the API host, which refuses it");
 
     const open = await cli(["open", "runs", "--print", "--to", "blog-desk"], { env });
     assert.equal(open.out.trim().split("\n").at(-1), `${p.app.url}/dashboard/blog-desk/runs`);
@@ -61,11 +61,11 @@ test("signed in at the dashboard: calls move to the API, pages and a person's ow
     const seen = p.api.seen.length;
     const byDashboard = await cli(["whoami", "--url", p.app.url], { env });
     assert.equal(byDashboard.code, 0, `--url <dashboard> still finds the profile kept at the API: ${byDashboard.out}`);
-    assert.ok(p.api.seen.slice(seen).some((s) => s.url === "/api/me"), "and its calls go to the API, not the dashboard named");
+    assert.ok(p.api.seen.slice(seen).some((s) => s.url === "/v1/me"), "and its calls go to the API, not the dashboard named");
     const viaEnv = p.api.seen.length;
     const envWho = await cli(["whoami"], { env: { ...env, FOLDRUN_URL: p.app.url } });
     assert.equal(envWho.code, 0, envWho.out);
-    assert.ok(p.api.seen.slice(viaEnv).some((s) => s.url === "/api/me"), "FOLDRUN_URL=<dashboard> too");
+    assert.ok(p.api.seen.slice(viaEnv).some((s) => s.url === "/v1/me"), "FOLDRUN_URL=<dashboard> too");
   } finally {
     p.close();
     fs.rmSync(h, { recursive: true, force: true });
@@ -164,7 +164,7 @@ test("signed in at the API itself: the dashboard it names is kept once the key a
 
 test("a platform with one address (no urls, or an older one): nothing moves", async () => {
   const h = home();
-  const s = await serve({ ...loginRoutes(), "/api/me": () => me });
+  const s = await serve({ ...loginRoutes(), "/v1/me": () => me });
   try {
     const login = await cli(["login", "--url", s.url, "--no-browser"], { env: { FOLDRUN_HOME: h } });
     assert.equal(login.code, 0, login.out);
@@ -200,10 +200,10 @@ test("a redirect is no answer: an address that only redirects never vouches for 
   let api: Fake;
   const app = await serve({
     ...loginRoutes(),
-    "/api/version": () => ({ version: "v1", api: "2026-10-26", urls: { api: api.url, app: app.url } }),
-    "/api/me": () => me,
+    "/v1/version": () => ({ version: "v1", api: "2026-10-26", urls: { api: api.url, app: app.url } }),
+    "/v1/me": () => me,
   });
-  api = await serve({ "/api/version": () => raw("", "text/plain", { location: `${app.url}/api/version` }, 302), "/api/me": () => me });
+  api = await serve({ "/v1/version": () => raw("", "text/plain", { location: `${app.url}/v1/version` }, 302), "/v1/me": () => me });
   try {
     const login = await cli(["login", "--url", app.url, "--no-browser"], { env: { FOLDRUN_HOME: h } });
     assert.equal(login.code, 0, login.out);
@@ -219,7 +219,7 @@ test("a redirect is no answer: an address that only redirects never vouches for 
 
 test("a sign-in that cannot reach the API this time keeps the moved profile, not a second one", async () => {
   const h = home();
-  const s = await serve({ ...loginRoutes(), "/api/me": () => me });
+  const s = await serve({ ...loginRoutes(), "/v1/me": () => me });
   try {
     fs.writeFileSync(
       path.join(h, "credentials.json"),
@@ -246,7 +246,7 @@ test("a key given with --token keeps a person's own routes on the address given,
     assert.equal((await cli(["login", "--url", p.app.url, "--no-browser"], { env })).code, 0);
     await cli(["me", "name", "Bo", "--url", p.api.url, "--token", "mda_given"], { env });
     assert.ok(!p.app.seen.some((s) => s.headers.authorization === "Bearer mda_given"), "the given key never went to the saved dashboard");
-    assert.ok(p.api.seen.some((s) => s.url === "/api/auth/name" && s.headers.authorization === "Bearer mda_given"), "it went where it was told");
+    assert.ok(p.api.seen.some((s) => s.url === "/v1/auth/name" && s.headers.authorization === "Bearer mda_given"), "it went where it was told");
   } finally {
     p.close();
     fs.rmSync(h, { recursive: true, force: true });
@@ -257,8 +257,8 @@ test("an install that names only its API: the login moves there and the dashboar
   const h = home();
   let api: Fake;
   const only = () => ({ version: "v1", api: "2026-10-26", urls: { api: api.url, app: null } });
-  const app = await serve({ ...loginRoutes(), "/api/version": only, "/api/me": () => me });
-  api = await serve({ "/api/version": only, "/api/me": () => me });
+  const app = await serve({ ...loginRoutes(), "/v1/version": only, "/v1/me": () => me });
+  api = await serve({ "/v1/version": only, "/v1/me": () => me });
   try {
     const login = await cli(["login", "--url", app.url, "--no-browser"], { env: { FOLDRUN_HOME: h } });
     assert.equal(login.code, 0, login.out);

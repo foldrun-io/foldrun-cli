@@ -12,8 +12,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { serve, at, failing } from "./fake-platform.ts";
 
-const FLOW = "/api/workspaces/blog-desk/flows/daily/run";
-const AGENT = "/api/workspaces/blog-desk/agents/writer/run";
+const FLOW = "/v1/workspaces/blog-desk/flows/daily/run";
+const AGENT = "/v1/workspaces/blog-desk/agents/writer/run";
 const REASON = "no model key: this account runs on its own API key, and none is set — add one in Settings → Models";
 const failed = { ok: false, runId: "run-f1", status: "failed", result: null, failure: { agent: "writer", reason: REASON }, costUsd: 0, steps: [{ agent: "writer", status: "failed", skipReason: null }] };
 
@@ -50,7 +50,7 @@ test("invoke --wait: a completed run is still ✓ and exit 0", async () => {
 test("agent run --wait: a 200 failed run is reported from the record, exit 1", async () => {
   const s = await serve({
     [`POST ${AGENT}`]: () => failed,
-    "/api/workspaces/blog-desk/runs/run-f1": () => ({
+    "/v1/workspaces/blog-desk/runs/run-f1": () => ({
       id: "run-f1",
       flow: "adhoc:writer",
       status: "failed",

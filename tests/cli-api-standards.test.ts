@@ -26,7 +26,7 @@ const limited = () => raw(JSON.stringify({ error: "rate limit: this API key may 
 
 test("the API version this CLI was built for goes out on every call", async () => {
   assert.match(API_VERSION, /^\d{4}-\d{2}-\d{2}$/);
-  const s = await serve({ "/api/workspaces": () => WORKSPACES, "/api/workspaces/blog-desk/runs/run-live": () => running, "POST /api/workspaces/blog-desk/runs/run-live/stop": () => ({ ok: true, runId: "run-live", status: "failed" }) });
+  const s = await serve({ "/v1/workspaces": () => WORKSPACES, "/v1/workspaces/blog-desk/runs/run-live": () => running, "POST /v1/workspaces/blog-desk/runs/run-live/stop": () => ({ ok: true, runId: "run-live", status: "failed" }) });
   const r = await at(s.url, "stop", "run-live", "--to", "blog-desk", "--yes");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -40,9 +40,9 @@ test("the API version this CLI was built for goes out on every call", async () =
 test("a 429 is waited out once, and the retry reuses the same Idempotency-Key", async () => {
   let n = 0;
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-live": () => running,
-    "POST /api/workspaces/blog-desk/runs/run-live/stop": () => (++n === 1 ? limited() : { ok: true, runId: "run-live", status: "failed" }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-live": () => running,
+    "POST /v1/workspaces/blog-desk/runs/run-live/stop": () => (++n === 1 ? limited() : { ok: true, runId: "run-live", status: "failed" }),
   });
   const r = await at(s.url, "stop", "run-live", "--to", "blog-desk", "--yes");
   s.close();
@@ -54,9 +54,9 @@ test("a 429 is waited out once, and the retry reuses the same Idempotency-Key", 
 
 test("a second 429 is a clear message, not a loop", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-live": () => running,
-    "POST /api/workspaces/blog-desk/runs/run-live/stop": limited,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-live": () => running,
+    "POST /v1/workspaces/blog-desk/runs/run-live/stop": limited,
   });
   const r = await at(s.url, "stop", "run-live", "--to", "blog-desk", "--yes");
   s.close();
@@ -67,8 +67,8 @@ test("a second 429 is a clear message, not a loop", async () => {
 });
 
 test("api spec: stdout, or --out <file>", async () => {
-  const doc = { openapi: "3.1.0", info: { title: "foldrun API", version: "2026-10-01" }, paths: { "/api/healthz": { get: {} }, "/api/keys": { get: {}, post: {} } } };
-  const s = await serve({ "/api/openapi.json": () => doc });
+  const doc = { openapi: "3.1.0", info: { title: "foldrun API", version: "2026-10-01" }, paths: { "/v1/healthz": { get: {} }, "/v1/keys": { get: {}, post: {} } } };
+  const s = await serve({ "/v1/openapi.json": () => doc });
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-spec-")), "openapi.json");
   const r = await at(s.url, "api", "spec", "--out", out);
   assert.equal(r.code, 0, r.out);

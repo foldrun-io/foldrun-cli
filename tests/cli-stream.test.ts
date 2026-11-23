@@ -63,12 +63,12 @@ function fakePlatform(streams: ("stall" | "finish" | "tools" | "pretty")[], { li
         res.end(JSON.stringify({ error: "forbidden" }));
         return;
       }
-      if (req.method === "POST" && url.startsWith("/api/workspaces/ws/flows/daily/run")) {
+      if (req.method === "POST" && url.startsWith("/v1/workspaces/ws/flows/daily/run")) {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ runId: "r1" }));
         return;
       }
-      if (url === "/api/workspaces/ws/runs/r1/stream") {
+      if (url === "/v1/workspaces/ws/runs/r1/stream") {
         const mode = streams[connections++] ?? "stall";
         res.writeHead(200, { "content-type": "text/event-stream" });
         const record = mode === "tools" || mode === "pretty" ? toolRecord() : runRecord(mode === "finish" ? "completed" : "running", connections);
@@ -80,7 +80,7 @@ function fakePlatform(streams: ("stall" | "finish" | "tools" | "pretty")[], { li
         if (mode === "finish" || mode === "tools" || mode === "pretty") res.end("event: done\ndata: {}\n\n");
         return;
       }
-      if (url === "/api/workspaces/ws/runs/r1") {
+      if (url === "/v1/workspaces/ws/runs/r1") {
         polls++;
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify(runRecord(polls > liveFor ? "completed" : "running", connections)));

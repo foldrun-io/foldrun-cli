@@ -40,7 +40,7 @@ const gallery = {
 };
 
 test("gallery lists what ships, and says which copies are the account's own", async () => {
-  const s = await serve({ "/api/library/gallery": () => gallery });
+  const s = await serve({ "/v1/library/gallery": () => gallery });
   const r = await at(s.url, "gallery");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -53,7 +53,7 @@ test("gallery lists what ships, and says which copies are the account's own", as
 
 test("gallery pull lays the shelf down per platform, as <kind>/<file>", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
-  const s = await serve({ "/api/library/gallery": () => gallery });
+  const s = await serve({ "/v1/library/gallery": () => gallery });
   const r = await cli(["gallery", "pull", "--url", s.url, "--token", "k"], { env: { FOLDRUN_HOME: home } });
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -68,7 +68,7 @@ test("gallery pull lays the shelf down per platform, as <kind>/<file>", async ()
 
 test("a pull is a mirror: a tool the platform stopped shipping goes", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
-  const s = await serve({ "/api/library/gallery": () => gallery });
+  const s = await serve({ "/v1/library/gallery": () => gallery });
   const dir = path.join(home, "gallery", new URL(s.url).host);
   fs.mkdirSync(path.join(dir, "tools/old"), { recursive: true });
   fs.writeFileSync(path.join(dir, "tools/old/tool.md"), "---\nname: old\n---\n");
@@ -82,7 +82,7 @@ test("a pull is a mirror: a tool the platform stopped shipping goes", async () =
 test("a file the platform names outside the shelf is refused", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const bad = { tools: [{ ...gallery.tools[0], files: [{ kind: "tools", file: "../../escape.md", content: "x" }] }] };
-  const s = await serve({ "/api/library/gallery": () => bad });
+  const s = await serve({ "/v1/library/gallery": () => bad });
   const r = await cli(["gallery", "pull", "--url", s.url, "--token", "k"], { env: { FOLDRUN_HOME: home } });
   s.close();
   assert.notEqual(r.code, 0);
@@ -92,7 +92,7 @@ test("a file the platform names outside the shelf is refused", async () => {
 });
 
 test("gallery upgrade asks the platform to replace the account's copy", async () => {
-  const s = await serve({ "POST /api/library/gallery": () => ({ ok: true, path: "sql/tool.md" }) });
+  const s = await serve({ "POST /v1/library/gallery": () => ({ ok: true, path: "sql/tool.md" }) });
   const r = await at(s.url, "gallery", "upgrade", "sql");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -101,7 +101,7 @@ test("gallery upgrade asks the platform to replace the account's copy", async ()
 });
 
 test("an unknown verb is named, not treated as a list", async () => {
-  const s = await serve({ "/api/library/gallery": () => gallery });
+  const s = await serve({ "/v1/library/gallery": () => gallery });
   const r = await at(s.url, "gallery", "install", "sql");
   s.close();
   assert.notEqual(r.code, 0);
@@ -109,7 +109,7 @@ test("an unknown verb is named, not treated as a list", async () => {
 });
 
 test("gallery --json lists every entry with its kind, without the files", async () => {
-  const s = await serve({ "/api/library/gallery": () => gallery });
+  const s = await serve({ "/v1/library/gallery": () => gallery });
   const r = await at(s.url, "gallery", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);

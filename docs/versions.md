@@ -94,9 +94,9 @@ ALTER TABLE "api_keys" DROP COLUMN "label";
 | The sidebar's foot | `foldrun v2026.10.01.3`, linking to What's new |
 | **What's new** (`/dashboard/whats-new`) | every recent release, newest first, with what changed in each — grouped Features, Fixes, Docs and Other |
 | **Settings → About** | the version, when it was released, the API version, and each component's commit |
-| `GET /api/version` | the same as JSON; without a key it names only the version and the API date, the rest needs a key or a session — see the [API reference](api#versions) |
-| `GET /api/changelog` | the release notes as JSON, with a key |
-| Any `/api` response | the `X-Foldrun-Version`, `X-Foldrun-Api` and `X-Foldrun-Cli` headers |
+| `GET /v1/version` | the same as JSON; without a key it names only the version and the API date, the rest needs a key or a session — see the [API reference](api#versions) |
+| `GET /v1/changelog` | the release notes as JSON, with a key |
+| Any `/v1` response | the `X-Foldrun-Version`, `X-Foldrun-Api` and `X-Foldrun-Cli` headers |
 | `foldrun version` | this CLI, its core, and the platform it talks to |
 
 An open dashboard tab checks every few minutes, and when you come back to it,
@@ -118,7 +118,7 @@ whatever `FOLDRUN_VERSION` it was started with.
 
 ## The API version
 
-`api` in `/api/version`, and the `X-Foldrun-Api` header, is a date —
+`api` in `/v1/version`, and the `X-Foldrun-Api` header, is a date —
 `2026-11-22` now, after `2026-10-26` and `2026-10-01` — that changes only when a route changes
 in a way an existing caller would break on ([the list](api-usage#versions)). A new route or a new field in an answer does not move
 it. Breaking changes are announced in the release notes of the version that
@@ -129,7 +129,7 @@ makes them.
 The CLI talks to the platform over the same HTTP API as everything else, so
 an older CLI keeps working against a newer platform; what it lacks are the
 newest commands. Each platform version records the CLI released with it
-(`packages.cli` in `/api/version`, and `X-Foldrun-Cli` on every response):
+(`packages.cli` in `/v1/version`, and `X-Foldrun-Cli` on every response):
 
 - `foldrun version` compares that with its own version and warns when the
   platform's is newer.

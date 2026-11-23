@@ -167,7 +167,7 @@ declared the same way.
 | `foldrun preferences` | your theme on the platform — `set theme system\|light\|dark` |
 | `foldrun api version` | the API version pin and rate limits — `pin <date>`, `unpin` |
 | `foldrun changelog` | the platform's release notes |
-| `foldrun doctor` | check the path to the platform: node, CLI, account, DNS, a timed `/api/healthz` — exit 1 if any line fails |
+| `foldrun doctor` | check the path to the platform: node, CLI, account, DNS, a timed `/v1/healthz` — exit 1 if any line fails |
 | `foldrun keys ls` | the account's API keys — also `create <label>`, `revoke <id>` |
 
 `foldrun --help` lists every flag.

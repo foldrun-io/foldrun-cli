@@ -28,7 +28,7 @@ const plan = (over: Record<string, unknown> = {}) => ({
 
 test("export a flow: asks the platform for that flow and writes the zip under the served name", async () => {
   const s = await serve({
-    "GET /api/workspaces/blog/export": () => raw(ZIP, "application/zip", { "content-disposition": 'attachment; filename="blog-flow-publish.zip"' }),
+    "GET /v1/workspaces/blog/export": () => raw(ZIP, "application/zip", { "content-disposition": 'attachment; filename="blog-flow-publish.zip"' }),
   });
   const out = path.join(tmp, "out.zip");
   const r = await at(s.url, "export", "blog", "--flow", "publish", "--file", out);
@@ -52,7 +52,7 @@ test("export refuses --flow and --agent together, before asking", async () => {
 test("import --dry-run previews and writes nothing", async () => {
   const file = path.join(tmp, "p.zip");
   fs.writeFileSync(file, ZIP);
-  const s = await serve({ "POST /api/workspaces/fresh/import": () => plan({ skipped: ["memory/x.md", ".gitignore"] }) });
+  const s = await serve({ "POST /v1/workspaces/fresh/import": () => plan({ skipped: ["memory/x.md", ".gitignore"] }) });
   const r = await at(s.url, "import", file, "--to", "fresh", "--dry-run");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -70,7 +70,7 @@ test("import --yes previews then applies", async () => {
   const file = path.join(tmp, "p.zip");
   fs.writeFileSync(file, ZIP);
   const s = await serve({
-    "POST /api/workspaces/fresh/import": (_b, q) => (q.get("dryRun") ? plan() : { ...plan(), ok: true, written: ["agents/writer/agent.md", "flows/publish.md"], revision: "r-1" }),
+    "POST /v1/workspaces/fresh/import": (_b, q) => (q.get("dryRun") ? plan() : { ...plan(), ok: true, written: ["agents/writer/agent.md", "flows/publish.md"], revision: "r-1" }),
   });
   const r = await at(s.url, "import", file, "--to", "fresh", "--yes");
   s.close();
@@ -85,7 +85,7 @@ test("import stops before replacing files unless --overwrite", async () => {
   const file = path.join(tmp, "p.zip");
   fs.writeFileSync(file, ZIP);
   const clash = plan({ overwritten: ["agents/writer/agent.md"], added: ["flows/publish.md"] });
-  const s = await serve({ "POST /api/workspaces/fresh/import": (_b, q) => (q.get("dryRun") ? clash : { ...clash, ok: true, written: ["agents/writer/agent.md", "flows/publish.md"] }) });
+  const s = await serve({ "POST /v1/workspaces/fresh/import": (_b, q) => (q.get("dryRun") ? clash : { ...clash, ok: true, written: ["agents/writer/agent.md", "flows/publish.md"] }) });
   const refused = await at(s.url, "import", file, "--to", "fresh", "--yes");
   assert.equal(refused.code, 1, refused.out);
   assert.match(refused.out, /--overwrite/);
@@ -99,7 +99,7 @@ test("import stops before replacing files unless --overwrite", async () => {
 test("import with no terminal and no --yes is refused after the preview", async () => {
   const file = path.join(tmp, "p.zip");
   fs.writeFileSync(file, ZIP);
-  const s = await serve({ "POST /api/workspaces/fresh/import": () => plan() });
+  const s = await serve({ "POST /v1/workspaces/fresh/import": () => plan() });
   const r = await at(s.url, "import", file, "--to", "fresh");
   s.close();
   assert.notEqual(r.code, 0);
@@ -109,7 +109,7 @@ test("import with no terminal and no --yes is refused after the preview", async 
 
 test("workspaces --json is JSON on stdout, nothing else — what a loop over workspaces reads", async () => {
   const { WORKSPACES } = await import("./fake-platform.ts");
-  const s = await serve({ "GET /api/workspaces": () => WORKSPACES });
+  const s = await serve({ "GET /v1/workspaces": () => WORKSPACES });
   const r = await at(s.url, "workspaces", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);

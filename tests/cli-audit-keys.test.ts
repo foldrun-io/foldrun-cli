@@ -17,7 +17,7 @@ const ENTRIES = [
 ];
 
 test("audit: one page of the log, with the filters as query parameters", async () => {
-  const s = await serve({ "/api/audit": () => ({ entries: ENTRIES, next: null, retention: "kept for the life of the account" }) });
+  const s = await serve({ "/v1/audit": () => ({ entries: ENTRIES, next: null, retention: "kept for the life of the account" }) });
   const r = await at(s.url, "audit", "--since", "30d", "--action", "apikey", "--actor", "owner@acme.test", "--to", "leads");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -35,7 +35,7 @@ test("audit: one page of the log, with the filters as query parameters", async (
 test("audit: 7 days unless said; --all follows the cursor", async () => {
   let n = 0;
   const s = await serve({
-    "/api/audit": (_b, q) => (n++ === 0 ? { entries: ENTRIES.slice(0, 2), next: "8" } : (assert.equal(q.get("cursor"), "8"), { entries: ENTRIES.slice(2), next: null })),
+    "/v1/audit": (_b, q) => (n++ === 0 ? { entries: ENTRIES.slice(0, 2), next: "8" } : (assert.equal(q.get("cursor"), "8"), { entries: ENTRIES.slice(2), next: null })),
   });
   const r = await at(s.url, "audit", "--all");
   s.close();
@@ -47,7 +47,7 @@ test("audit: 7 days unless said; --all follows the cursor", async () => {
 
 test("audit --csv writes the file the platform sends", async () => {
   const csv = "id,at,actor,action,subject,workspace,detail\n8,2026-10-01T01:00:00.000Z,owner@acme.test,apikey.created,k1,,{}\n";
-  const s = await serve({ "/api/audit": () => raw(csv, "text/csv", { "content-disposition": 'attachment; filename="audit-acme-2026-10-01.csv"' }) });
+  const s = await serve({ "/v1/audit": () => raw(csv, "text/csv", { "content-disposition": 'attachment; filename="audit-acme-2026-10-01.csv"' }) });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-audit-")), "audit.csv");
   const r = await at(s.url, "audit", "--csv", "--file", file);
   s.close();
@@ -57,7 +57,7 @@ test("audit --csv writes the file the platform sends", async () => {
 });
 
 test("audit: a refusal is the platform's words", async () => {
-  const s = await serve({ "/api/audit": () => ({ __status: 403, body: { error: "your role (editor) cannot do this — it needs admin or above" } }) });
+  const s = await serve({ "/v1/audit": () => ({ __status: 403, body: { error: "your role (editor) cannot do this — it needs admin or above" } }) });
   const r = await at(s.url, "audit");
   s.close();
   assert.notEqual(r.code, 0);
@@ -66,7 +66,7 @@ test("audit: a refusal is the platform's words", async () => {
 
 test("keys ls shows created, last used, expires and scope", async () => {
   const s = await serve({
-    "/api/keys": () => ({
+    "/v1/keys": () => ({
       keys: [
         { id: "k1", prefix: "fr_api_abcdef12", label: "ci", role: "editor", workspaces: ["leads"], createdAt: "2026-09-01T00:00:00Z", createdBy: "owner@acme.test", revokedAt: null, expiresAt: "2026-12-01T00:00:00Z", lastUsedAt: "2026-09-30T10:00:00Z", lastIp: "203.0.113.0/24" },
         { id: "k2", prefix: "fr_api_00000000", label: "old", role: "admin", workspaces: null, createdAt: "2026-01-01T00:00:00Z", revokedAt: null, expiresAt: "2026-02-01T00:00:00Z", lastUsedAt: null },
@@ -82,7 +82,7 @@ test("keys ls shows created, last used, expires and scope", async () => {
 });
 
 test("keys create --expires sends it and prints when it ends", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: null, expiresAt: "2026-12-30T00:00:00.000Z" }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: null, expiresAt: "2026-12-30T00:00:00.000Z" }) });
   const r = await at(s.url, "keys", "create", "ci", "--expires", "90d");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -92,7 +92,7 @@ test("keys create --expires sends it and prints when it ends", async () => {
 });
 
 test("keys create with no --expires asks for 90 days, as the dashboard does; --forever asks for never", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: null, expiresAt: null }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: null, expiresAt: null }) });
   assert.equal((await at(s.url, "keys", "create", "ci")).code, 0);
   assert.equal(JSON.parse(s.seen[0].body).expires, "90d");
   assert.equal((await at(s.url, "keys", "create", "ci", "--forever")).code, 0);
@@ -104,7 +104,7 @@ test("keys create with no --expires asks for 90 days, as the dashboard does; --f
 });
 
 test("keys create --to <ws> sends the scope, as --workspaces does (never an all-workspaces key)", async () => {
-  const s = await serve({ "POST /api/keys": (b) => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: JSON.parse(b).workspaces, expiresAt: null }) });
+  const s = await serve({ "POST /v1/keys": (b) => ({ ok: true, key: "fr_api_new", id: "k9", prefix: "fr_api_new", role: "editor", workspaces: JSON.parse(b).workspaces, expiresAt: null }) });
   const one = await at(s.url, "keys", "create", "ci", "--to", "leads");
   assert.equal(one.code, 0, one.out);
   assert.deepEqual(JSON.parse(s.seen[0].body).workspaces, ["leads"]);
@@ -116,7 +116,7 @@ test("keys create --to <ws> sends the scope, as --workspaces does (never an all-
 });
 
 test("keys create --to refuses, before any request, when the scope is empty, bare or doubled", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", workspaces: null }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true, key: "fr_api_new", id: "k9", workspaces: null }) });
   for (const args of [["--to"], ["--to", ","], ["--to", "a", "--workspaces", "b"]]) {
     const r = await at(s.url, "keys", "create", "ci", ...args);
     assert.notEqual(r.code, 0, args.join(" "));
@@ -127,8 +127,8 @@ test("keys create --to refuses, before any request, when the scope is empty, bar
 
 test("keys create --to: a platform that answers with an all-workspaces key has it revoked, and no key is printed", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "fr_api_secret_all", id: "k9", prefix: "fr_api_secr", role: "editor", workspaces: null, expiresAt: null }),
-    "DELETE /api/keys": () => ({ ok: true }),
+    "POST /v1/keys": () => ({ ok: true, key: "fr_api_secret_all", id: "k9", prefix: "fr_api_secr", role: "editor", workspaces: null, expiresAt: null }),
+    "DELETE /v1/keys": () => ({ ok: true }),
   });
   const r = await at(s.url, "keys", "create", "ci", "--to", "leads");
   s.close();
@@ -140,7 +140,7 @@ test("keys create --to: a platform that answers with an all-workspaces key has i
 
 test("keys rotate --grace 1h posts to the rotate route and prints the new key once", async () => {
   const s = await serve({
-    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "fr_api_fresh", id: "k2", prefix: "fr_api_fresh", expiresAt: null, replaced: { id: "k1", endsAt: "2026-10-01T03:00:00.000Z" } }),
+    "POST /v1/keys/k1/rotate": () => ({ ok: true, key: "fr_api_fresh", id: "k2", prefix: "fr_api_fresh", expiresAt: null, replaced: { id: "k1", endsAt: "2026-10-01T03:00:00.000Z" } }),
   });
   const r = await at(s.url, "keys", "rotate", "k1", "--grace", "1h");
   s.close();
@@ -152,7 +152,7 @@ test("keys rotate --grace 1h posts to the rotate route and prints the new key on
 });
 
 test("keys rotate with no grace revokes now, so it asks — and on a pipe without --yes sends nothing", async () => {
-  const s = await serve({ "POST /api/keys/k1/rotate": () => ({ ok: true, key: "x", id: "k2", replaced: { id: "k1", endsAt: "" } }) });
+  const s = await serve({ "POST /v1/keys/k1/rotate": () => ({ ok: true, key: "x", id: "k2", replaced: { id: "k1", endsAt: "" } }) });
   const refused = await at(s.url, "keys", "rotate", "k1");
   assert.notEqual(refused.code, 0);
   assert.equal(s.seen.length, 0, "nothing sent");
@@ -165,8 +165,8 @@ test("keys rotate with no grace revokes now, so it asks — and on a pipe withou
 
 test("keys rotate on a key already rotated: the refusal, and the command for the key that replaced it", async () => {
   const s = await serve({
-    "POST /api/keys/k1/rotate": () => failing(409, { error: 'this key was already rotated to fr_api_fresh… ("ci"); rotate that one — if you lost its secret, rotating fr_api_fresh… mints another and ends it' }),
-    "/api/keys": () => ({ keys: [
+    "POST /v1/keys/k1/rotate": () => failing(409, { error: 'this key was already rotated to fr_api_fresh… ("ci"); rotate that one — if you lost its secret, rotating fr_api_fresh… mints another and ends it' }),
+    "/v1/keys": () => ({ keys: [
       { id: "k1", prefix: "fr_api_old", label: "ci", createdAt: "2026-09-01T00:00:00.000Z", revokedAt: null, replacedBy: "k2", expiresAt: "2026-10-02T00:00:00.000Z" },
       { id: "k2", prefix: "fr_api_fresh", label: "ci", createdAt: "2026-10-01T00:00:00.000Z", revokedAt: null },
     ] }),
@@ -181,7 +181,7 @@ test("keys rotate on a key already rotated: the refusal, and the command for the
 
 test("keys ls shows a rotated key as rotated, and to which", async () => {
   const s = await serve({
-    "/api/keys": () => ({ keys: [
+    "/v1/keys": () => ({ keys: [
       { id: "k1", prefix: "fr_api_old", label: "ci", createdAt: "2026-09-01T00:00:00.000Z", revokedAt: null, replacedBy: "k2", expiresAt: "2099-10-02T00:00:00.000Z" },
       { id: "k2", prefix: "fr_api_fresh", label: "ci", createdAt: "2026-10-01T00:00:00.000Z", revokedAt: null },
     ] }),
@@ -204,8 +204,8 @@ test("help: audit and the key verbs are documented, and --help runs nothing", as
   assert.match(k.out, /--expires <span>/);
 });
 
-test("keys delete asks first, then sends DELETE /api/keys/<id> and says whether it ended a live key", async () => {
-  const s = await serve({ "DELETE /api/keys/k1": () => ({ ok: true, id: "k1", revoked: true }) });
+test("keys delete asks first, then sends DELETE /v1/keys/<id> and says whether it ended a live key", async () => {
+  const s = await serve({ "DELETE /v1/keys/k1": () => ({ ok: true, id: "k1", revoked: true }) });
   const refused = await at(s.url, "keys", "delete", "k1");
   assert.notEqual(refused.code, 0);
   assert.equal(s.seen.length, 0, "nothing sent without --yes on a pipe");

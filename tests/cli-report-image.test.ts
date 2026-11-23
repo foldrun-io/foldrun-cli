@@ -37,8 +37,8 @@ const run = {
 
 test("report shows the image and the pod's story per step", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-pod": () => run,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-pod": () => run,
   });
   const r = await at(s.url, "report", "run-pod", "--to", "blog-desk");
   s.close();

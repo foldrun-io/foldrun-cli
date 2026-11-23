@@ -155,7 +155,7 @@ foldrun onboarding                       # the same steps, in the terminal
 foldrun onboarding --to main             # and that project's checklist
 ```
 
-The API is `GET /api/me/onboarding` (`?workspace=` for the checklist);
+The API is `GET /v1/me/onboarding` (`?workspace=` for the checklist);
 hiding is a person's own setting, so it is done from the dashboard, not with
 a key.
 

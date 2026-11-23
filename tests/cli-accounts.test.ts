@@ -19,7 +19,7 @@ import { spawn } from "node:child_process";
 const ROOT = path.join(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "bin/foldrun.mjs");
 
-/** A platform that answers /api/me as whichever account the key names. */
+/** A platform that answers /v1/me as whichever account the key names. */
 function fakePlatform(keys: Record<string, { account: string; email: string; role: string }>) {
   return new Promise<{ url: string; close: () => void }>((resolve) => {
     const server = http.createServer((req, res) => {
@@ -31,7 +31,7 @@ function fakePlatform(keys: Record<string, { account: string; email: string; rol
         res.end(JSON.stringify({ error: "no" }));
         return;
       }
-      if (req.url?.startsWith("/api/me")) {
+      if (req.url?.startsWith("/v1/me")) {
         res.end(JSON.stringify({ account: who.account, role: who.role, workspaces: null, actor: { kind: "user", id: "u", name: who.email, email: who.email } }));
         return;
       }

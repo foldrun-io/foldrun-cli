@@ -1,7 +1,7 @@
 // FOL-71: a `foldrun login` key lives 90 days and this CLI renews it itself.
 //
 // With under 14 days left, the next command rotates the key from itself
-// (POST /api/keys/<own id>/rotate) and stores the new one. A key the person
+// (POST /v1/keys/<own id>/rotate) and stores the new one. A key the person
 // handed in (--token, FOLDRUN_TOKEN, `login --token`) is never touched, a
 // key that does not renew is asked about at most daily, and a renewal that
 // fails leaves the old key and the command alone.
@@ -32,9 +32,9 @@ const calls = (s: { seen: { method: string; url: string; headers: Record<string,
 
 test("under 14 days left: the next command rotates the key from itself and stores the new one", async () => {
   const s = await serve({
-    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
-    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
+    "POST /v1/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
+    "/v1/workspaces": () => WORKSPACES,
   });
   const dir = home(s.url);
   const first = await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } });
@@ -42,60 +42,60 @@ test("under 14 days left: the next command rotates the key from itself and store
   s.close();
   assert.equal(first.code, 0, first.out);
   assert.match(first.out, /renewed this machine's sign-in as "acme" — it now lasts until \d{4}-\d{2}-\d{2}/);
-  const rotate = calls(s, "/api/keys/k1/rotate");
+  const rotate = calls(s, "/v1/keys/k1/rotate");
   assert.equal(rotate.length, 1, "rotated once");
   assert.equal(rotate[0].headers.authorization, "Bearer mda_old", "with the key being renewed");
   const after = stored(dir);
   assert.equal(after.token, "mda_new");
   assert.equal(after.renews, true);
   assert.equal(after.minted, true, "still a login key, so logout still revokes it");
-  const listed = s.seen.filter((x) => x.url.startsWith("/api/workspaces"));
+  const listed = s.seen.filter((x) => x.url.startsWith("/v1/workspaces"));
   assert.equal(listed.at(-1)!.headers.authorization, "Bearer mda_new", "the command itself already uses the new key");
-  assert.equal(calls(s, "/api/me").length, 1, "the second command knows the end and asks nothing");
+  assert.equal(calls(s, "/v1/me").length, 1, "the second command knows the end and asks nothing");
   assert.doesNotMatch(second.out, /renewed/);
 });
 
 test("plenty of time left: nothing is rotated, and the end is remembered", async () => {
-  const s = await serve({ "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(80) }), "/api/workspaces": () => WORKSPACES });
+  const s = await serve({ "/v1/me": () => me({ origin: "cli-login", expiresAt: inDays(80) }), "/v1/workspaces": () => WORKSPACES });
   const dir = home(s.url);
   assert.equal((await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } })).code, 0);
   assert.equal((await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } })).code, 0);
   s.close();
-  assert.equal(calls(s, "/api/keys").length, 0);
-  assert.equal(calls(s, "/api/me").length, 1);
+  assert.equal(calls(s, "/v1/keys").length, 0);
+  assert.equal(calls(s, "/v1/me").length, 1);
   assert.equal(stored(dir).token, "mda_old");
   assert.equal(stored(dir).renews, true);
 });
 
 test("a key that does not renew (an older platform, a person's key) is never rotated, and asked about at most daily", async () => {
-  const s = await serve({ "/api/me": () => me({ expiresAt: inDays(3) }), "/api/workspaces": () => WORKSPACES });
+  const s = await serve({ "/v1/me": () => me({ expiresAt: inDays(3) }), "/v1/workspaces": () => WORKSPACES });
   const dir = home(s.url);
   assert.equal((await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } })).code, 0);
   assert.equal((await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } })).code, 0);
   s.close();
-  assert.equal(calls(s, "/api/keys").length, 0);
-  assert.equal(calls(s, "/api/me").length, 1);
+  assert.equal(calls(s, "/v1/keys").length, 0);
+  assert.equal(calls(s, "/v1/me").length, 1);
   assert.equal(stored(dir).renews, false);
 });
 
 test("--token, FOLDRUN_TOKEN and a key stored with `login --token` are never renewed", async () => {
-  const s = await serve({ "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(1) }), "/api/workspaces": () => WORKSPACES });
+  const s = await serve({ "/v1/me": () => me({ origin: "cli-login", expiresAt: inDays(1) }), "/v1/workspaces": () => WORKSPACES });
   const dir = home(s.url);
   const handed = home(s.url, { minted: false });
   assert.equal((await cli(["workspaces", "--token", "mda_ci"], { env: { FOLDRUN_HOME: dir } })).code, 0);
   assert.equal((await cli(["workspaces"], { env: { FOLDRUN_HOME: dir, FOLDRUN_TOKEN: "mda_ci", FOLDRUN_URL: s.url } })).code, 0);
   assert.equal((await cli(["workspaces"], { env: { FOLDRUN_HOME: handed } })).code, 0);
   s.close();
-  assert.equal(calls(s, "/api/me").length, 0);
-  assert.equal(calls(s, "/api/keys").length, 0);
+  assert.equal(calls(s, "/v1/me").length, 0);
+  assert.equal(calls(s, "/v1/keys").length, 0);
   assert.equal(stored(dir).token, "mda_old");
 });
 
 test("a rotation the platform refuses leaves the old key and the command alone", async () => {
   const s = await serve({
-    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(2) }),
-    "POST /api/keys/k1/rotate": () => failing(403, { error: "this key may not do that" }),
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/me": () => me({ origin: "cli-login", expiresAt: inDays(2) }),
+    "POST /v1/keys/k1/rotate": () => failing(403, { error: "this key may not do that" }),
+    "/v1/workspaces": () => WORKSPACES,
   });
   const dir = home(s.url);
   const r = await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } });
@@ -107,24 +107,24 @@ test("a rotation the platform refuses leaves the old key and the command alone",
 
 test("a credentials file this CLI cannot write: nothing is rotated, so the new key is never lost", { skip: process.getuid?.() === 0 ? "root writes a read-only file anyway" : false }, async () => {
   const s = await serve({
-    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
-    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
+    "POST /v1/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
+    "/v1/workspaces": () => WORKSPACES,
   });
   const dir = home(s.url);
   fs.chmodSync(path.join(dir, "credentials.json"), 0o444);
   const r = await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } });
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.equal(calls(s, "/api/keys/k1/rotate").length, 0, "rotating would end the stored key minutes later");
+  assert.equal(calls(s, "/v1/keys/k1/rotate").length, 0, "rotating would end the stored key minutes later");
   assert.equal(stored(dir).token, "mda_old");
 });
 
 test("a writable credentials file in a folder this CLI cannot write: nothing is rotated (the file is replaced by a rename)", { skip: process.getuid?.() === 0 ? "root writes a read-only folder anyway" : false }, async (t) => {
   const s = await serve({
-    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
-    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
+    "POST /v1/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
+    "/v1/workspaces": () => WORKSPACES,
   });
   const dir = home(s.url);
   fs.chmodSync(dir, 0o555);
@@ -132,22 +132,22 @@ test("a writable credentials file in a folder this CLI cannot write: nothing is 
   const r = await cli(["workspaces"], { env: { FOLDRUN_HOME: dir } });
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.equal(calls(s, "/api/keys/k1/rotate").length, 0, "the new key could not be saved");
+  assert.equal(calls(s, "/v1/keys/k1/rotate").length, 0, "the new key could not be saved");
   assert.equal(stored(dir).token, "mda_old");
 });
 
 test("a command that fetches bytes itself (storage cat) renews too", async () => {
   const s = await serve({
-    "/api/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
-    "POST /api/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
-    "/api/workspaces/blog-desk/storage/download": () => ({ __raw: "# notes\n", type: "text/markdown" }),
+    "/v1/me": () => me({ origin: "cli-login", expiresAt: inDays(5) }),
+    "POST /v1/keys/k1/rotate": () => ({ ok: true, key: "mda_new", id: "k2", prefix: "mda_new", expiresAt: inDays(90), replaced: { id: "k1", endsAt: inDays(0) } }),
+    "/v1/workspaces/blog-desk/storage/download": () => ({ __raw: "# notes\n", type: "text/markdown" }),
   });
   const dir = home(s.url);
   const r = await cli(["storage", "cat", "notes.md", "--to", "blog-desk"], { env: { FOLDRUN_HOME: dir } });
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /# notes/);
-  assert.equal(calls(s, "/api/keys/k1/rotate").length, 1);
+  assert.equal(calls(s, "/v1/keys/k1/rotate").length, 1);
   assert.equal(stored(dir).token, "mda_new");
-  assert.equal(calls(s, "/api/workspaces/blog-desk/storage/download").at(-1)!.headers.authorization, "Bearer mda_new");
+  assert.equal(calls(s, "/v1/workspaces/blog-desk/storage/download").at(-1)!.headers.authorization, "Bearer mda_new");
 });

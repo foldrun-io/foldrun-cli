@@ -24,7 +24,7 @@ const run = {
 };
 
 test("report: revision and queue time; one model-call line; --calls lists each call and the recorded tool calls", async () => {
-  const s = await serve({ "/api/workspaces/blog-desk/runs/run-cap": () => run });
+  const s = await serve({ "/v1/workspaces/blog-desk/runs/run-cap": () => run });
   const plain = await at(s.url, "report", "run-cap", "--to", "blog-desk");
   const full = await at(s.url, "report", "run-cap", "--to", "blog-desk", "--calls");
   s.close();
@@ -38,7 +38,7 @@ test("report: revision and queue time; one model-call line; --calls lists each c
 
 test("report <run> call <id> prints its input and output, saying when it was cut", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/runs/run-cap/calls/toolu_1": () => ({ call: { id: "toolu_1", tool: "Read", input: '{"file_path":"a.txt"}', inputChars: 21, output: "hello", outputChars: 90000, truncated: true, outputCut: true } }),
+    "/v1/workspaces/blog-desk/runs/run-cap/calls/toolu_1": () => ({ call: { id: "toolu_1", tool: "Read", input: '{"file_path":"a.txt"}', inputChars: 21, output: "hello", outputChars: 90000, truncated: true, outputCut: true } }),
   });
   const r = await at(s.url, "report", "run-cap", "call", "toolu_1", "--to", "blog-desk");
   const json = await at(s.url, "report", "run-cap", "call", "toolu_1", "--to", "blog-desk", "--json");
@@ -60,7 +60,7 @@ test("report --tree prints the run as one tree and marks what went wrong (FOL-72
       ] },
     ],
   };
-  const s = await serve({ "/api/workspaces/blog-desk/runs/run-cap/trace": () => ({ tree, failure: ["run", "s0", "s0/m1", "s0/t:toolu_1"] }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/runs/run-cap/trace": () => ({ tree, failure: ["run", "s0", "s0/m1", "s0/t:toolu_1"] }) });
   const r = await at(s.url, "report", "run-cap", "--to", "blog-desk", "--tree");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -83,8 +83,8 @@ test("report --compare shows what differs from the last good run; rerun --instru
     ],
   };
   const s = await serve({
-    "/api/workspaces/blog-desk/runs/run-cap/compare": (_b, q) => ({ comparison, chosen: q.get("with") ? "named" : "last good" }),
-    "POST /api/workspaces/blog-desk/runs/run-cap/rerun": () => ({ ok: true, runId: "run-new", from: "run-cap", steps: 2 }),
+    "/v1/workspaces/blog-desk/runs/run-cap/compare": (_b, q) => ({ comparison, chosen: q.get("with") ? "named" : "last good" }),
+    "POST /v1/workspaces/blog-desk/runs/run-cap/rerun": () => ({ ok: true, runId: "run-new", from: "run-cap", steps: 2 }),
   });
   const r = await at(s.url, "report", "run-cap", "--to", "blog-desk", "--compare");
   const named = await at(s.url, "report", "run-cap", "--compare", "run-good", "--to", "blog-desk");

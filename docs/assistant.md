@@ -168,6 +168,6 @@ saves on yes. With no message, in a terminal, it is a conversation.
 `foldrun assistant history` lists your kept conversations and
 `--conversation <id>` carries one on. See [CLI](cli).
 
-The route is `POST /api/workspaces/<ws>/assistant`. It writes nothing and
+The route is `POST /v1/workspaces/<ws>/assistant`. It writes nothing and
 returns the proposals for you to save with the source PUT. See
 [API](api#assistant).

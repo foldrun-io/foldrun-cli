@@ -30,8 +30,8 @@ run.steps[0].promptLayers = [{ name: "persona", chars: 10, hash: "aaaaaaaaaaaa" 
 
 test("report prints the cache share per step and for the run", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-cache": () => run,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-cache": () => run,
   });
   const r = await at(s.url, "report", "run-cache", "--to", "blog-desk");
   s.close();

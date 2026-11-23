@@ -40,10 +40,10 @@ function run(h: string, args: string[], env: Record<string, string> = {}): Promi
 
 const platform = () =>
   serve({
-    "/api/workspaces/desk": () => ({ name: "desk" }),
-    "/api/workspaces/other": () => ({ name: "other" }),
-    "/api/workspaces/desk/source": () => ({ files: ["AGENTS.md"] }),
-    "/api/workspaces/other/source": () => ({ files: ["OTHER.md"] }),
+    "/v1/workspaces/desk": () => ({ name: "desk" }),
+    "/v1/workspaces/other": () => ({ name: "other" }),
+    "/v1/workspaces/desk/source": () => ({ files: ["AGENTS.md"] }),
+    "/v1/workspaces/other/source": () => ({ files: ["OTHER.md"] }),
   });
 
 test("use checks the project, keeps it on the profile, and a command without --to then uses it — and says so", async (t) => {
@@ -54,13 +54,13 @@ test("use checks the project, keeps it on the profile, and a command without --t
   assert.equal(set.code, 0, set.out + set.err);
   assert.match(set.out, /desk.*is the project for acme/);
   assert.equal(saved(h), "desk");
-  assert.ok(s.seen.some((r) => r.method === "GET" && r.url === "/api/workspaces/desk"), "checked on the platform first");
+  assert.ok(s.seen.some((r) => r.method === "GET" && r.url === "/v1/workspaces/desk"), "checked on the platform first");
 
   const ls = await run(h, ["source", "ls"]);
   assert.equal(ls.code, 0, ls.out + ls.err);
   assert.match(ls.out, /AGENTS\.md/);
   assert.match(ls.err, /project desk \(foldrun workspaces use\)/);
-  assert.ok(s.seen.some((r) => r.url === "/api/workspaces/desk/source"));
+  assert.ok(s.seen.some((r) => r.url === "/v1/workspaces/desk/source"));
 
   const shown = await run(h, ["workspaces", "use", "--json"]);
   assert.deepEqual(JSON.parse(shown.out), { profile: "acme", url: s.url, workspace: "desk" });
@@ -74,7 +74,7 @@ test("--to still wins over the default", async (t) => {
   assert.equal(ls.code, 0, ls.out + ls.err);
   assert.match(ls.out, /OTHER\.md/);
   assert.doesNotMatch(ls.err, /foldrun workspaces use/);
-  assert.ok(!s.seen.some((r) => r.url === "/api/workspaces/desk/source"));
+  assert.ok(!s.seen.some((r) => r.url === "/v1/workspaces/desk/source"));
 });
 
 test("a project the platform does not have is refused and nothing is kept", async (t) => {
@@ -126,9 +126,9 @@ test("commands that guess from the folder take the default from a folder that is
     assert.match(r.err, /project desk \(foldrun workspaces use\)/, args.join(" "));
   }
   const urls = s.seen.map((r) => `${r.method} ${r.url}`);
-  assert.ok(urls.includes("GET /api/workspaces/desk/storage"), urls.join(" | "));
-  assert.ok(urls.includes("GET /api/workspaces/desk/history"), urls.join(" | "));
-  assert.ok(urls.includes("POST /api/workspaces/desk/agents/a/run"), urls.join(" | "));
+  assert.ok(urls.includes("GET /v1/workspaces/desk/storage"), urls.join(" | "));
+  assert.ok(urls.includes("GET /v1/workspaces/desk/history"), urls.join(" | "));
+  assert.ok(urls.includes("POST /v1/workspaces/desk/agents/a/run"), urls.join(" | "));
 });
 
 /** The CLI from a given folder. */
@@ -157,7 +157,7 @@ test("inside a project folder, source and invoke still need --to: the saved proj
   const inv = await runIn(proj, h, ["invoke", "daily"]);
   assert.notEqual(inv.code, 0);
   assert.match(inv.out + inv.err, /which project is it in\?/);
-  assert.equal(s.seen.filter((r) => r.url.startsWith("/api/workspaces/desk")).length, 0);
+  assert.equal(s.seen.filter((r) => r.url.startsWith("/v1/workspaces/desk")).length, 0);
 });
 
 test("a delete never takes the default: source rm and storage rm name their project (Codex)", async (t) => {
@@ -177,7 +177,7 @@ test("the notice is said even with --json (on stderr; stdout stays JSON), and --
   const s = await platform();
   t.after(() => s.close());
   const h = home(s.url, { workspace: "desk" });
-  const s2 = await serve({ "/api/workspaces/desk/vocabulary": () => ({ terms: [] }) });
+  const s2 = await serve({ "/v1/workspaces/desk/vocabulary": () => ({ terms: [] }) });
   t.after(() => s2.close());
   const h2 = home(s2.url, { workspace: "desk" });
   const ls = await run(h2, ["workspace", "vocabulary", "--json"]);

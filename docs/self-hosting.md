@@ -80,7 +80,7 @@ tunnel the installer prints (`ssh -o ExitOnForwardFailure=yes -L …`), never
 over plain http. After the owner, the install takes new accounts only on an
 invite (Settings → Team) unless you open sign-up to strangers with
 `FOLDRUN_OPEN_SIGNUP=1`; with it off, `/signup` says registration is closed
-and `GET /api/signup` answers `{ "free": false, "paid": false, "plans": [] }`.
+and `GET /v1/signup` answers `{ "free": false, "paid": false, "plans": [] }`.
 Then sign the CLI in and deploy:
 
 ```sh

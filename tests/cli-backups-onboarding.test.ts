@@ -14,7 +14,7 @@ const posts = (s: { seen: { method: string; url: string; body: string }[] }) =>
 
 test("onboarding lists every step, marks the next, and links it", async () => {
   const s = await serve({
-    "/api/me/onboarding": () => ({
+    "/v1/me/onboarding": () => ({
       done: 1,
       total: 3,
       complete: false,
@@ -37,7 +37,7 @@ test("onboarding lists every step, marks the next, and links it", async () => {
 
 test("onboarding --to <workspace> asks for that workspace's checklist and prints it", async () => {
   const s = await serve({
-    "/api/me/onboarding": () => ({
+    "/v1/me/onboarding": () => ({
       done: 1,
       total: 1,
       complete: true,
@@ -60,7 +60,7 @@ test("onboarding --to <workspace> asks for that workspace's checklist and prints
   const r = await at(s.url, "onboarding", "--to", "desk");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.ok(s.seen.some((x) => x.method === "GET" && x.url === "/api/me/onboarding" && x.query.get("workspace") === "desk"), JSON.stringify(s.seen));
+  assert.ok(s.seen.some((x) => x.method === "GET" && x.url === "/v1/me/onboarding" && x.query.get("workspace") === "desk"), JSON.stringify(s.seen));
   assert.match(r.out, /desk checklist\s+1 of 2/);
   assert.match(r.out, /✓ Run a flow to the end/);
   assert.match(r.out, /○ Add an eval/);
@@ -80,7 +80,7 @@ const backups = {
 };
 
 test("backups prints the policy, the last snapshot and the list", async () => {
-  const s = await serve({ "/api/account/backups": () => backups });
+  const s = await serve({ "/v1/account/backups": () => backups });
   const r = await at(s.url, "backups");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -96,7 +96,7 @@ test("backups prints the policy, the last snapshot and the list", async () => {
 
 test("backups request sends what, when and where; refuses without --what or --at", async () => {
   const s = await serve({
-    "POST /api/account/backups/requests": () => ({ ok: true, request: { id: "rr_1", workspace: "desk", target: "2026-09-28 14:00", notified: true } }),
+    "POST /v1/account/backups/requests": () => ({ ok: true, request: { id: "rr_1", workspace: "desk", target: "2026-09-28 14:00", notified: true } }),
   });
   const bad = await at(s.url, "backups", "request", "--at", "yesterday");
   assert.notEqual(bad.code, 0);
@@ -105,7 +105,7 @@ test("backups request sends what, when and where; refuses without --what or --at
   const r = await at(s.url, "backups", "request", "--what", "runs", "--at", "2026-09-28 14:00", "--to", "desk", "--note", "lost a run");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(posts(s), [{ url: "/api/account/backups/requests", body: { what: "runs", target: "2026-09-28 14:00", workspace: "desk", backupId: null, note: "lost a run" } }]);
+  assert.deepEqual(posts(s), [{ url: "/v1/account/backups/requests", body: { what: "runs", target: "2026-09-28 14:00", workspace: "desk", backupId: null, note: "lost a run" } }]);
   assert.match(r.out, /asked/);
   assert.match(r.out, /emailed/);
 });
@@ -127,7 +127,7 @@ const plan = {
 };
 
 test("restore --dry-run shows the diff and sends only the dry run", async () => {
-  const s = await serve({ "POST /api/workspaces/desk/restore": () => plan });
+  const s = await serve({ "POST /v1/workspaces/desk/restore": () => plan });
   const r = await at(s.url, "restore", "desk", "--to", "3d", "--dry-run");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -138,7 +138,7 @@ test("restore --dry-run shows the diff and sends only the dry run", async () => 
 });
 
 test("restore without a terminal or --yes sends nothing but the dry run", async () => {
-  const s = await serve({ "POST /api/workspaces/desk/restore": () => plan });
+  const s = await serve({ "POST /v1/workspaces/desk/restore": () => plan });
   const r = await at(s.url, "restore", "desk", "--to", "3d");
   s.close();
   assert.notEqual(r.code, 0);
@@ -148,7 +148,7 @@ test("restore without a terminal or --yes sends nothing but the dry run", async 
 
 test("restore --yes restores the exact commit the dry run showed, with its removals", async () => {
   const s = await serve({
-    "POST /api/workspaces/desk/restore": (body) =>
+    "POST /v1/workspaces/desk/restore": (body) =>
       JSON.parse(body).dryRun ? plan : { ok: true, applied: true, to: plan.to, from: plan.from, main: "3333333ccccccc" },
   });
   const r = await at(s.url, "restore", "desk", "--to", "2026-09-28", "--yes");

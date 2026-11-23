@@ -1144,7 +1144,7 @@ for arm64. The build writes down what it got, in
 `/opt/browser/engines.json`; the tool reads it, so an engine the image lacks
 is refused with `this runner image was built without …` and the engines it
 has (`chrome` instead falls back to Chromium and says so). The deploy reads
-the same file, and `GET /api/version` reports it as `browsers`, with the
+the same file, and `GET /v1/version` reports it as `browsers`, with the
 versions it knows as `browser_versions` — `foldrun version` prints them, and
 so does Settings. On x86_64 every engine ships, so a build that is missing
 one **fails** rather than shipping without it, and its first error line
@@ -1249,7 +1249,7 @@ weeks. The day they part, a site sees `Chrome/153` in the User-Agent header
 beside `"Google Chrome";v="154"` in the client hints Chrome still sends, and
 a JavaScript engine that is 154's: exactly the mismatch bot checks look
 for. So `foldrun check` (when signed in, from the platform's
-`/api/version`) and the deploy warn when a pinned `user_agent:` — the
+`/v1/version`) and the deploy warn when a pinned `user_agent:` — the
 block's or an identity's — claims another Chrome major than the browser
 that sends it: on `engine: chrome` the image's Google Chrome, on
 `chromium` (the default) the image's Playwright Chromium, which is often a
@@ -1959,7 +1959,7 @@ the team is covered:
 | | redirect URL to register |
 |---|---|
 | `foldrun connect` from a terminal | `http://localhost:8642/callback` — the same on every machine |
-| Connect from the dashboard | `<dashboard URL>/api/oauth/callback` — the form shows the exact value |
+| Connect from the dashboard | `<dashboard URL>/v1/oauth/callback` — the form shows the exact value |
 
 ```sh
 foldrun connect LINKEDIN_OAUTH --to linkedin-desk \
@@ -1988,7 +1988,7 @@ tool is broken" and "the agent used it wrong", and it costs no model call.
 
 ## The Test button
 
-Every tool has a Test button, and `POST /api/workspaces/<ws>/tools/<tool>/test`
+Every tool has a Test button, and `POST /v1/workspaces/<ws>/tools/<tool>/test`
 behind it: it calls the tool with typed arguments from where a run would call
 it, shows the raw result, and costs no model call. On an install that
 isolates runs (the hosted platform, a Docker or Kubernetes self-host) a

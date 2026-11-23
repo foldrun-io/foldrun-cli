@@ -56,7 +56,7 @@ and still works everywhere; `foldrun init --flat` makes one.
 
 ## A new project starts blank
 
-**Create project** on the dashboard, `POST /api/workspaces` with
+**Create project** on the dashboard, `POST /v1/workspaces` with
 `template: true`, and `foldrun new <name>` all make a project with nothing in
 it to delete: an `AGENTS.md` (plus, on a laptop, the `.gitignore` that keeps
 its secret key out of git and a `CLAUDE.md` for your coding tool). No example
@@ -75,7 +75,7 @@ project) lists every agent in the account's other projects you can read,
 and copies the one you pick. From a terminal, `foldrun agent import
 <workspace>/<agent>` does it between projects of an account folder, or on the
 platform with `--to <workspace>`; the route is `POST
-/api/workspaces/<ws>/agents/import` with `{ from, agent, as? }`.
+/v1/workspaces/<ws>/agents/import` with `{ from, agent, as? }`.
 
 What is copied is what the agent **is**: `agent.md` and its own `skills/`,
 `scripts/` and `knowledge/`. What it **accumulated** stays where it was learned:
@@ -130,8 +130,8 @@ Compress included) imports the same way.
 
 From a terminal: `foldrun export [workspace] [--flow <name> | --agent <name>]`
 and `foldrun import <file.zip> --to <workspace> [--dry-run] [--overwrite]`.
-The routes are `GET /api/workspaces/<ws>/export` and
-`POST /api/workspaces/<ws>/import` (`?dryRun=1`, `?overwrite=1`).
+The routes are `GET /v1/workspaces/<ws>/export` and
+`POST /v1/workspaces/<ws>/import` (`?dryRun=1`, `?overwrite=1`).
 
 ## `AGENTS.md` — context and defaults
 
@@ -216,7 +216,7 @@ to the next level with one line in the trace rather than failing the step.
 When something is going wrong — an agent posting what it should not, a
 loop spending money — pause the project, or the whole account, from its
 Settings → Policies → Pause runs, `foldrun workspace pause` / `foldrun account pause`, or
-the API (`POST /api/workspaces/<ws>/pause`, `POST /api/account/pause`).
+the API (`POST /v1/workspaces/<ws>/pause`, `POST /v1/account/pause`).
 
 While paused, nothing new starts: a schedule's fire, a webhook delivery, a
 chained flow, a person's Run and a rerun are all refused, and the

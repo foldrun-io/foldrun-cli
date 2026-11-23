@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { serve, at, cli } from "./fake-platform.ts";
 
-const route = "POST /api/workspaces/rank-desk/tools/serp_check/test";
+const route = "POST /v1/workspaces/rank-desk/tools/serp_check/test";
 
 test("a tool that works prints its transport, its time and what it printed", async () => {
   const s = await serve({
@@ -110,7 +110,7 @@ test("a tool with no name says what to type", async () => {
 
 test("standing in a workspace folder is enough; standing nowhere asks", async () => {
   const s = await serve({
-    "POST /api/workspaces/rank-desk/tools/serp_check/test": () => ({
+    "POST /v1/workspaces/rank-desk/tools/serp_check/test": () => ({
       ok: true, transport: "script", summary: "exited 0", detail: "", ms: 12, missingSecrets: [],
     }),
   });

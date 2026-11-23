@@ -108,17 +108,17 @@ the model is sent what was said and what was shown on screen
 
 ```sh
 # a file sent whole
-curl -sS -X POST "$FOLDRUN_URL/api/extract?name=letter.jpg&lang=fa" \
+curl -sS -X POST "$FOLDRUN_URL/v1/extract?name=letter.jpg&lang=fa" \
   -H "authorization: Bearer $FOLDRUN_TOKEN" \
   --data-binary @letter.jpg
 
 # a stored file, its text written to inbox/letter.pdf.txt
-curl -sS -X POST "$FOLDRUN_URL/api/workspaces/sales/storage/extract" \
+curl -sS -X POST "$FOLDRUN_URL/v1/workspaces/sales/storage/extract" \
   -H "authorization: Bearer $FOLDRUN_TOKEN" -H "content-type: application/json" \
   -d '{"path": "inbox/letter.pdf", "lang": "fa"}'
 
 # a 202's job, polled
-curl -sS "$FOLDRUN_URL/api/extract/xj-…" -H "authorization: Bearer $FOLDRUN_TOKEN"
+curl -sS "$FOLDRUN_URL/v1/extract/xj-…" -H "authorization: Bearer $FOLDRUN_TOKEN"
 ```
 
 The answer:

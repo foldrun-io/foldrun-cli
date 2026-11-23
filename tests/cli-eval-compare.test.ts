@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { serve, at, cli, WORKSPACES } from "./fake-platform.ts";
 
 process.env.FOLDRUN_EVAL_POLL_MS = "10";
-const base = "/api/workspaces/blog-desk/evals/writer-quality/compare";
+const base = "/v1/workspaces/blog-desk/evals/writer-quality/compare";
 
 const result = {
   eval: "writer-quality",
@@ -33,7 +33,7 @@ const result = {
 test("eval compare sends the settings, waits, and prints the table and where they differ", async () => {
   let polls = 0;
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [`POST ${base}`]: () => ({ started: true, eval: "writer-quality", runId: "a".repeat(24), startedAt: "x", trials: 4, maxUsd: 2 }),
     [`GET ${base}`]: () => (++polls < 2 ? { runId: "a".repeat(24), state: "running", progress: { done: 2, total: 4 }, running: true } : { runId: "a".repeat(24), state: "done", result, running: false }),
   });
@@ -55,7 +55,7 @@ test("eval compare sends the settings, waits, and prints the table and where the
 
 test("--effort and --agent apply to every setting that names none; --models is required", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [`POST ${base}`]: () => ({ started: true, runId: "b".repeat(24), trials: 2, maxUsd: 5 }),
     [`GET ${base}`]: () => ({ state: "done", result }),
   });
@@ -73,7 +73,7 @@ test("--effort and --agent apply to every setting that names none; --models is r
 
 test("--list shows the kept comparisons; --run reads one", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [`GET ${base}`]: (_b, q) =>
       q.get("run")
         ? { runId: q.get("run"), state: "done", result }
@@ -93,7 +93,7 @@ test("--list shows the kept comparisons; --run reads one", async () => {
 });
 
 test("a bare --run is refused, never read as starting a comparison", async () => {
-  const fake = await serve({ "/api/workspaces": () => WORKSPACES, [`POST ${base}`]: () => ({ started: true, runId: "x", trials: 2, maxUsd: 5 }) });
+  const fake = await serve({ "/v1/workspaces": () => WORKSPACES, [`POST ${base}`]: () => ({ started: true, runId: "x", trials: 2, maxUsd: 5 }) });
   try {
     const r = await at(fake.url, "eval", "compare", "writer-quality", "--models", "fast,max", "--to", "blog-desk", "--run");
     assert.notEqual(r.code, 0);
@@ -105,7 +105,7 @@ test("a bare --run is refused, never read as starting a comparison", async () =>
 });
 
 test("--run --json on a comparison still running prints its view as JSON", async () => {
-  const fake = await serve({ "/api/workspaces": () => WORKSPACES, [`GET ${base}`]: () => ({ runId: "r", state: "running", running: true, progress: { done: 1, total: 4 } }) });
+  const fake = await serve({ "/v1/workspaces": () => WORKSPACES, [`GET ${base}`]: () => ({ runId: "r", state: "running", running: true, progress: { done: 1, total: 4 } }) });
   try {
     const r = await at(fake.url, "eval", "compare", "writer-quality", "--to", "blog-desk", "--run", "r", "--json");
     assert.equal(r.code, 1);

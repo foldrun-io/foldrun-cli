@@ -15,9 +15,9 @@ const failed = { id: "run-old", flow: "publish", status: "failed", startedAt: "2
 
 test("rerun posts the step or the agent, names the new run, and refuses without either", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/rank-desk/runs/run-old": () => failed,
-    "POST /api/workspaces/rank-desk/runs/run-old/rerun": () => ({ ok: true, runId: "run-new", from: "run-old", steps: 2 }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/rank-desk/runs/run-old": () => failed,
+    "POST /v1/workspaces/rank-desk/runs/run-old/rerun": () => ({ ok: true, runId: "run-new", from: "run-old", steps: 2 }),
   });
   const byStep = await at(s.url, "rerun", "run-old", "--from", "2", "--to", "rank-desk");
   assert.equal(byStep.code, 0, byStep.out);
@@ -39,9 +39,9 @@ test("storage put uploads the bytes under the file's name or --as, and rm remove
   fs.writeFileSync(local, "# brief\n");
   // No bucket: upload-url answers url null and the platform takes the bytes.
   const s = await serve({
-    "POST /api/workspaces/rank-desk/storage/upload-url": () => ({ url: null }),
-    "PUT /api/workspaces/rank-desk/storage": (body) => ({ file: { path: "brief.md", size: body.length } }),
-    "DELETE /api/workspaces/rank-desk/storage": () => ({ ok: true }),
+    "POST /v1/workspaces/rank-desk/storage/upload-url": () => ({ url: null }),
+    "PUT /v1/workspaces/rank-desk/storage": (body) => ({ file: { path: "brief.md", size: body.length } }),
+    "DELETE /v1/workspaces/rank-desk/storage": () => ({ ok: true }),
   });
   const put = await at(s.url, "storage", "put", local, "--to", "rank-desk");
   assert.equal(put.code, 0, put.out);
@@ -73,7 +73,7 @@ test("storage put walks folders under --into, skips .git and empty files, and re
   fs.writeFileSync(path.join(dir, "site", ".git", "HEAD"), "ref");
   fs.writeFileSync(path.join(dir, "site", "empty.txt"), "");
   // An older platform with no upload-url route: 404, then the plain PUT.
-  const s = await serve({ "PUT /api/workspaces/rank-desk/storage": () => ({ ok: true }) });
+  const s = await serve({ "PUT /v1/workspaces/rank-desk/storage": () => ({ ok: true }) });
   const r = await at(s.url, "storage", "put", path.join(dir, "site"), "--into", "drop/", "--to", "rank-desk");
   assert.equal(r.code, 0, r.out);
   const paths = s.seen.filter((x) => x.method === "PUT").map((x) => x.query.get("path"));
@@ -92,8 +92,8 @@ test("storage put sends the bytes to a presigned URL, then records the file", as
   fs.writeFileSync(local, "jpegbytes");
   const bucket = await serve({ "PUT /bucket/obj": () => ({}) });
   const s = await serve({
-    "POST /api/workspaces/rank-desk/storage/upload-url": () => ({ url: `${bucket.url}/bucket/obj` }),
-    "POST /api/workspaces/rank-desk/storage": () => ({ ok: true }),
+    "POST /v1/workspaces/rank-desk/storage/upload-url": () => ({ url: `${bucket.url}/bucket/obj` }),
+    "POST /v1/workspaces/rank-desk/storage": () => ({ ok: true }),
   });
   const r = await at(s.url, "storage", "put", local, "--to", "rank-desk");
   s.close();
@@ -112,7 +112,7 @@ test("storage put sends the bytes to a presigned URL, then records the file", as
 });
 
 test("keys create --workspaces narrows the key, and 'all' asks for every workspace", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "mda_x", id: "k1", prefix: "mda_x", role: "editor", workspaces: ["rank-desk"] }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true, key: "mda_x", id: "k1", prefix: "mda_x", role: "editor", workspaces: ["rank-desk"] }) });
   const narrow = await at(s.url, "keys", "create", "ci", "--workspaces", "rank-desk,blog-desk");
   assert.equal(narrow.code, 0, narrow.out);
   assert.deepEqual(JSON.parse(s.seen[0].body).workspaces, ["rank-desk", "blog-desk"]);
@@ -123,7 +123,7 @@ test("keys create --workspaces narrows the key, and 'all' asks for every workspa
 });
 
 test("invoke --once sends the idempotency key", async () => {
-  const s = await serve({ "POST /api/workspaces/rank-desk/flows/publish/run": () => ({ ok: true, runId: "run-1", steps: 3, test: false }) });
+  const s = await serve({ "POST /v1/workspaces/rank-desk/flows/publish/run": () => ({ ok: true, runId: "run-1", steps: 3, test: false }) });
   const r = await at(s.url, "invoke", "publish", "--to", "rank-desk", "--once", "ci-1234");
   s.close();
   assert.equal(r.code, 0, r.out);

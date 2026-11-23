@@ -20,7 +20,7 @@ const refusal = (known: string[], withCode = true) =>
   });
 
 test("a platform older than the CLI: says so, names the CLI released with it, exit 1", async () => {
-  const s = await serve({ "/api/workspaces": () => refusal([OLDER]) }, { headers: { "x-foldrun-cli": "1.9.0" } });
+  const s = await serve({ "/v1/workspaces": () => refusal([OLDER]) }, { headers: { "x-foldrun-cli": "1.9.0" } });
   const r = await at(s.url, "workspaces");
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -29,7 +29,7 @@ test("a platform older than the CLI: says so, names the CLI released with it, ex
 });
 
 test("a platform that retired the CLI's version: update the CLI, exit 1", async () => {
-  const s = await serve({ "/api/schedule": () => refusal([NEWER]) });
+  const s = await serve({ "/v1/schedule": () => refusal([NEWER]) });
   const r = await at(s.url, "schedule");
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -37,7 +37,7 @@ test("a platform that retired the CLI's version: update the CLI, exit 1", async 
 });
 
 test("a platform from before the refusal had a code: its sentence is read instead", async () => {
-  const s = await serve({ "/api/schedule": () => refusal([OLDER], false) });
+  const s = await serve({ "/v1/schedule": () => refusal([OLDER], false) });
   const r = await at(s.url, "schedule");
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -45,7 +45,7 @@ test("a platform from before the refusal had a code: its sentence is read instea
 });
 
 test("any other 400 is left to the command", async () => {
-  const s = await serve({ "/api/schedule": () => failing(400, { error: "something else entirely" }) });
+  const s = await serve({ "/v1/schedule": () => failing(400, { error: "something else entirely" }) });
   const r = await at(s.url, "schedule");
   s.close();
   assert.match(r.out, /something else entirely/);
@@ -54,7 +54,7 @@ test("any other 400 is left to the command", async () => {
 
 test("version: still shows the platform it would refuse, and warns that commands will be refused", async () => {
   const s = await serve({
-    "/api/version": () => ({ version: "v2026.01.15.1", api: OLDER, packages: { cli: "1.9.0" }, components: {} }),
+    "/v1/version": () => ({ version: "v2026.01.15.1", api: OLDER, packages: { cli: "1.9.0" }, components: {} }),
   });
   const r = await cli(["version", "--url", s.url]);
   s.close();

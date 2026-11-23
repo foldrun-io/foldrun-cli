@@ -14,7 +14,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { serve, at, raw, failing } from "./fake-platform.ts";
 
 const ID = "b".repeat(64);
-const WS = "/api/workspaces/desk";
+const WS = "/v1/workspaces/desk";
 const RUN_ID = "run-code-1";
 
 const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { encoding: "utf8" });
@@ -63,7 +63,7 @@ function platform(opts: { agents?: string[]; status?: string; meta?: unknown; pa
   let agents = opts.agents ?? ["coder"];
   return serve({
     [`GET ${WS}`]: () => (exists ? { name: "desk" } : failing(404, { error: "workspace not found" })),
-    ["POST /api/workspaces"]: () => {
+    ["POST /v1/workspaces"]: () => {
       if (exists) return failing(409, { error: "a workspace called desk exists — nothing was changed" });
       exists = true;
       agents = [];
@@ -185,7 +185,7 @@ test("code --to a project that is not there: asked, refused with no terminal; wi
 
   const yes = await at(s.url, "code", d, "--to", "desk", "--task", "greet", "--yes");
   assert.equal(yes.code, 0, yes.out);
-  const made = JSON.parse(s.seen.find((x) => x.method === "POST" && x.url === "/api/workspaces")!.body);
+  const made = JSON.parse(s.seen.find((x) => x.method === "POST" && x.url === "/v1/workspaces")!.body);
   assert.deepEqual(made, { name: "desk", template: true, ifAbsent: true }, "created only if absent: never over one made meanwhile");
   assert.match(yes.out, /✓ created desk/);
   assert.doesNotMatch(yes.out, /has no coder agent yet/, "one question, not two");
@@ -977,5 +977,5 @@ test("droppedConnection: socket failures yes; an abort, an HTTP answer or anythi
   assert.ok(!droppedConnection(Object.assign(new Error("aborted"), { name: "AbortError" })));
   assert.ok(!droppedConnection(Object.assign(new Error("could not reach x"), { status: 500 })));
   assert.ok(!droppedConnection(new Error("workspace not found")));
-  assert.ok(droppedConnection(new Error("dev.foldrun.io did not answer GET /api/workspaces/x/runs/y within 30s — FOLDRUN_TIMEOUT=<seconds> allows longer")), "the CLI's own timeout (Codex)");
+  assert.ok(droppedConnection(new Error("dev.foldrun.io did not answer GET /v1/workspaces/x/runs/y within 30s — FOLDRUN_TIMEOUT=<seconds> allows longer")), "the CLI's own timeout (Codex)");
 });

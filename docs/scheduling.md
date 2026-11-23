@@ -77,7 +77,7 @@ fresh measurement.
 ## Webhooks and inboxes
 
 A `webhook` flow has a hook URL —
-`/api/hooks/<account>/<workspace>/<flow>?token=…` — and an `email` flow an
+`/v1/hooks/<account>/<workspace>/<flow>?token=…` — and an `email` flow an
 inbox URL of the same shape. The token is derived, not stored; rotating it
 (`POST …/hooks/<flow>/rotate`) stops every old URL at once. A flow with
 `signature: github | stripe | slack | hmac` and a `signing_secret:` also has

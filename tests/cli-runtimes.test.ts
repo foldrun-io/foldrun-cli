@@ -36,7 +36,7 @@ const failed = {
 };
 
 test("runtimes lists each environment, who needs it and whether it is built", async () => {
-  const s = await serve({ "/api/workspaces/customer-desk/runtimes": () => ({ workspace: "customer-desk", runtimes: [ready, failed] }) });
+  const s = await serve({ "/v1/workspaces/customer-desk/runtimes": () => ({ workspace: "customer-desk", runtimes: [ready, failed] }) });
   const r = await at(s.url, "runtimes", "--to", "customer-desk");
   s.close();
   assert.equal(r.code, 1, "a failed environment is a failing exit");
@@ -47,7 +47,7 @@ test("runtimes lists each environment, who needs it and whether it is built", as
 });
 
 test("a workspace whose agents declare nothing says so, and exits clean", async () => {
-  const s = await serve({ "/api/workspaces/quiet/runtimes": () => ({ workspace: "quiet", runtimes: [] }) });
+  const s = await serve({ "/v1/workspaces/quiet/runtimes": () => ({ workspace: "quiet", runtimes: [] }) });
   const r = await at(s.url, "runtimes", "--to", "quiet");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -57,8 +57,8 @@ test("a workspace whose agents declare nothing says so, and exits clean", async 
 test("deploy waits for the environments it just caused to be built, and reports them", async () => {
   let asked = 0;
   const s = await serve({
-    "POST /api/workspaces/desk/deploy": () => ({ ok: true, applied: true, added: ["agents/a/agent.md"], updated: [], removed: [], preserved: 0, commit: null }),
-    "/api/workspaces/desk/runtimes": () => {
+    "POST /v1/workspaces/desk/deploy": () => ({ ok: true, applied: true, added: ["agents/a/agent.md"], updated: [], removed: [], preserved: 0, commit: null }),
+    "/v1/workspaces/desk/runtimes": () => {
       asked++;
       return { workspace: "desk", runtimes: [asked < 2 ? { ...ready, state: "building" } : ready] };
     },
@@ -80,7 +80,7 @@ test("deploy waits for the environments it just caused to be built, and reports 
 
 test("a platform without the endpoint deploys exactly as before", async () => {
   const s = await serve({
-    "POST /api/workspaces/desk/deploy": () => ({ ok: true, applied: true, added: [], updated: [], removed: [], preserved: 0, commit: null }),
+    "POST /v1/workspaces/desk/deploy": () => ({ ok: true, applied: true, added: [], updated: [], removed: [], preserved: 0, commit: null }),
   });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-deploy-rt-"));
   try {

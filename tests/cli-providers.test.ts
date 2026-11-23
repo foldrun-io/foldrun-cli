@@ -17,7 +17,7 @@ const checked = { checkedAt: "2026-09-24T01:00:00.000Z", results: [
 ] };
 
 test("lists what would be checked, marks the last check's verdicts, and a dead key is a non-zero exit", async () => {
-  const s = await serve({ "/api/account/providers": () => ({ configured, lastCheck: checked }) });
+  const s = await serve({ "/v1/account/providers": () => ({ configured, lastCheck: checked }) });
   const r = await at(s.url, "account", "providers");
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -28,8 +28,8 @@ test("lists what would be checked, marks the last check's verdicts, and a dead k
 
 test("never checked is said plainly, and --check asks the platform now", async () => {
   const s = await serve({
-    "GET /api/account/providers": () => ({ configured, lastCheck: null }),
-    "POST /api/account/providers": () => ({ ok: true, lastCheck: { ...checked, results: checked.results.map((x) => ({ ...x, ok: true, verdict: "ok" })) } }),
+    "GET /v1/account/providers": () => ({ configured, lastCheck: null }),
+    "POST /v1/account/providers": () => ({ ok: true, lastCheck: { ...checked, results: checked.results.map((x) => ({ ...x, ok: true, verdict: "ok" })) } }),
   });
   const quiet = await at(s.url, "account", "providers");
   assert.equal(quiet.code, 0, quiet.out);
@@ -42,7 +42,7 @@ test("never checked is said plainly, and --check asks the platform now", async (
 });
 
 test("an account on the platform's own credential has nothing to check", async () => {
-  const s = await serve({ "/api/account/providers": () => ({ configured: [], lastCheck: null }) });
+  const s = await serve({ "/v1/account/providers": () => ({ configured: [], lastCheck: null }) });
   const r = await at(s.url, "account", "providers");
   s.close();
   assert.equal(r.code, 0, r.out);

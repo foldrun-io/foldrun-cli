@@ -80,7 +80,7 @@ turn, and its trail says which level holds it — `room: waiting to start —
 3 of this run's 4 vCPU is held by its running steps…`. A step that **alone**
 is bigger than a level's whole cap fails at once, naming it. A project's
 figure above the account's grants nothing: the account's still applies.
-`foldrun usage compute` and `GET /api/usage/compute` show every level — the
+`foldrun usage compute` and `GET /v1/account/usage/compute` show every level — the
 account, each project and each live run — with what it holds. Before
 27 Oct 2026 a project's `compute:` was read nowhere; it now caps that
 project.
@@ -108,7 +108,7 @@ fails, at once, because nothing finishing would make room.
   step's `retry:`, and a stop ends it like any other.
 - **Seen.** The run page says *Waiting for room to start*, why, and since
   when; Settings → Policies → Governance and `foldrun usage compute` list every
-  waiting step, oldest first (`waiting` in `GET /api/usage/compute`).
+  waiting step, oldest first (`waiting` in `GET /v1/account/usage/compute`).
 - **Told.** After an hour (`FOLDRUN_ROOM_ALERT_MIN`) the project's
   `notify:` hears of it once, as event `room`, with what to change: ask for
   less (`size:`, `resources:`) or allow the account more compute.
@@ -165,7 +165,7 @@ that is running.
   may both take the last place.
 - **Seen.** Settings → Policies → Governance and `foldrun usage compute`
   show *N of M runs waiting for their turn* (`runsWaiting` in
-  `GET /api/usage/compute`).
+  `GET /v1/account/usage/compute`).
 
 ### Fair share across accounts
 
@@ -258,7 +258,7 @@ figures); a paid plan runs the default size.
 Compute, storage and network draw on plan credits first, then bought
 credits. Tokens on foldrun's models draw on bought credits only, so an
 account that wants them buys credits. The Usage page and
-`GET /api/usage` show the two pots separately.
+`GET /v1/account/usage` show the two pots separately.
 
 **Free: 300 credits every month.** Free credits are plan credits, so they
 never pay for tokens on foldrun's models. They **do not roll over**: a month after
@@ -345,8 +345,8 @@ provider's own invoice.
 | **warm builds** | when you deploy, your project's environments (the packages an agent declares) are built ahead of its first step, in a short pod. **You pay for it**, because it is the work the first step would otherwise have done in its own sandbox: a small sandbox's vCPU and RAM, with the disk of the largest agent that uses the environment (a `size: heavy` agent's build gets a heavy sandbox's disk, so it fits), for the seconds it ran from when it was placed on a machine, and the GB it downloaded. Waiting for room is not charged. It is bounded (one build at a time, ten minutes at most) and shown as its own line, so it is never hidden in another |
 
 The rates are on the Usage page's **Rates** tab, in `foldrun usage rates`,
-in `GET /api/usage/rates` and, for anyone, in the public
-`GET /api/pricing`. They are the rates charging uses, read when you look.
+in `GET /v1/account/usage/rates` and, for anyone, in the public
+`GET /v1/pricing`. They are the rates charging uses, read when you look.
 A default step (2 vCPU, 2 GiB) costs about 16 credits an hour. The Usage
 page's **Compute** tab shows each meter with its quantity, rate and credits,
 the plan fee as its own line, and what each step size costs per hour;
@@ -477,7 +477,7 @@ The Usage page shows both, by week, with the change between the last two
 **complete** periods so a partial week never reads as a collapse. Charges
 written before attribution existed appear as a remainder rather than being
 quietly dropped: a breakdown that does not add up is worse than one that
-admits what it cannot place. `GET /api/usage/history?days=` is the same
+admits what it cannot place. `GET /v1/account/usage/history?days=` is the same
 thing as JSON.
 
 ## The Billing section
@@ -543,7 +543,7 @@ operator sees where it stands on the customer's overview.
 
 **Your data, and leaving.** Settings → Your data gives the owner one JSON
 file with the account's projects, members, an index of every run and the
-whole ledger (`GET /api/account/export`). The same place holds **Close
+whole ledger (`GET /v1/account/export`). The same place holds **Close
 account**: type the account's name and it is suspended at once — no new
 runs, schedules stop firing — while the platform team settles the last
 invoice and any refund. Nothing is deleted by the request itself; people can
@@ -670,7 +670,7 @@ refuses.
 version — and charges in `FOLDRUN_CURRENCY` (default `usd`), which is also
 the unit of every balance. Set the currency before any money is on the
 books; Stripe will not mix currencies on one customer. The webhook endpoint
-is `<public url>/api/billing/stripe`, sending exactly:
+is `<public url>/v1/billing/stripe`, sending exactly:
 
 | event | what it does |
 |---|---|

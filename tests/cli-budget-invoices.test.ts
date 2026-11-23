@@ -1,8 +1,8 @@
 // Two dashboard pages the CLI could not reach (5 Nov 2026): Spend limits —
 // `foldrun usage budget`, each cap and what is spent in its window, from
-// GET /api/usage/budget — and the Invoices tab — `foldrun billing invoices`,
+// GET /v1/account/usage/budget — and the Invoices tab — `foldrun billing invoices`,
 // the plan's tax invoices and every credit purchase with its receipt, from
-// GET /api/billing/invoices.
+// GET /v1/billing/invoices.
 //
 //   node --test tests/cli-budget-invoices.test.ts
 
@@ -22,7 +22,7 @@ const BUDGET = {
 };
 
 test("usage budget: the account's cap and each workspace's, spent in its window, how close, and the one at its cap", async () => {
-  const s = await serve({ "/api/usage/budget": () => BUDGET });
+  const s = await serve({ "/v1/account/usage/budget": () => BUDGET });
   const r = await at(s.url, "usage", "budget");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -34,7 +34,7 @@ test("usage budget: the account's cap and each workspace's, spent in its window,
 });
 
 test("usage budget --to <ws>: that workspace alone; one the key cannot open is said so", async () => {
-  const s = await serve({ "/api/usage/budget": () => BUDGET });
+  const s = await serve({ "/v1/account/usage/budget": () => BUDGET });
   const one = await at(s.url, "usage", "budget", "--to", "blog");
   const asJson = await at(s.url, "usage", "budget", "--to", "blog", "--json");
   const none = await at(s.url, "usage", "budget", "--to", "nope");
@@ -48,7 +48,7 @@ test("usage budget --to <ws>: that workspace alone; one the key cannot open is s
 });
 
 test("usage budget for a scoped key: the account's figure is hidden, and why", async () => {
-  const s = await serve({ "/api/usage/budget": () => ({ account: null, accountHidden: true, workspaces: [BUDGET.workspaces[1]] }) });
+  const s = await serve({ "/v1/account/usage/budget": () => ({ account: null, accountHidden: true, workspaces: [BUDGET.workspaces[1]] }) });
   const r = await at(s.url, "usage", "budget");
   const j = await at(s.url, "usage", "budget", "--json");
   s.close();
@@ -70,7 +70,7 @@ const INVOICES = {
 };
 
 test("billing invoices: number, date, amount, status and link for each invoice; each purchase with its receipt", async () => {
-  const s = await serve({ "/api/billing/invoices": () => INVOICES });
+  const s = await serve({ "/v1/billing/invoices": () => INVOICES });
   const r = await at(s.url, "billing", "invoices");
   const j = await at(s.url, "billing", "invoices", "--json");
   s.close();
@@ -86,7 +86,7 @@ test("billing invoices: number, date, amount, status and link for each invoice; 
 });
 
 test("billing invoices without Stripe: says so rather than an empty table", async () => {
-  const s = await serve({ "/api/billing/invoices": () => ({ stripe: false, invoices: [], receipts: [] }) });
+  const s = await serve({ "/v1/billing/invoices": () => ({ stripe: false, invoices: [], receipts: [] }) });
   const r = await at(s.url, "billing", "invoices");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -103,7 +103,7 @@ test("billing invoices on an install with no billing (404): says so", async () =
 });
 
 test("billing invoices with a scoped key (403): needs every workspace", async () => {
-  const s = await serve({ "/api/billing/invoices": () => failing(403, { error: "invoices and receipts are the whole account's — a member or key scoped to some workspaces cannot read them" }) });
+  const s = await serve({ "/v1/billing/invoices": () => failing(403, { error: "invoices and receipts are the whole account's — a member or key scoped to some workspaces cannot read them" }) });
   const r = await at(s.url, "billing", "invoices");
   s.close();
   assert.notEqual(r.code, 0);
@@ -111,7 +111,7 @@ test("billing invoices with a scoped key (403): needs every workspace", async ()
 });
 
 test("usage budget: $995 of $1,000 shows 100% but is not at the cap", async () => {
-  const s = await serve({ "/api/usage/budget": () => ({ account: { budget: { usd: 1000, period: "month" }, label: "$1000/month", window: "this month", spentUsd: 995 }, workspaces: [] }) });
+  const s = await serve({ "/v1/account/usage/budget": () => ({ account: { budget: { usd: 1000, period: "month" }, label: "$1000/month", window: "this month", spentUsd: 995 }, workspaces: [] }) });
   const r = await at(s.url, "usage", "budget");
   s.close();
   assert.equal(r.code, 0, r.out);

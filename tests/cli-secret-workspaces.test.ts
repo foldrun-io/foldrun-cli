@@ -1,5 +1,5 @@
 // `foldrun secrets workspaces NAME [workspace…] [--all]`: limit an account
-// secret to selected workspaces on the platform (PATCH /api/secrets
+// secret to selected workspaces on the platform (PATCH /v1/secrets
 // { name, workspaces }), open it to all again, or show the limit — against a
 // fake platform, through the real binary (30 Oct 2026).
 
@@ -33,16 +33,16 @@ function fakePlatform() {
       req.on("end", () => {
         res.setHeader("content-type", "application/json");
         const json = body.length ? JSON.parse(Buffer.concat(body).toString()) : {};
-        if (req.url?.startsWith("/api/secrets") && req.method === "PUT") {
+        if (req.url?.startsWith("/v1/secrets") && req.method === "PUT") {
           patches.push({ put: json });
           return res.end(JSON.stringify({ ok: true, name: json.name, scope: json.workspace ? "workspace" : "account", ...(json.workspaces !== undefined ? { workspaces: json.workspaces } : {}) }));
         }
-        if (req.url?.startsWith("/api/secrets") && req.method === "PATCH") {
+        if (req.url?.startsWith("/v1/secrets") && req.method === "PATCH") {
           patches.push(json);
           limit = json.workspaces === null ? null : [...json.workspaces].sort();
           return res.end(JSON.stringify({ ok: true, name: json.name, scope: "account", workspaces: limit }));
         }
-        if (req.url?.startsWith("/api/secrets")) {
+        if (req.url?.startsWith("/v1/secrets")) {
           return res.end(JSON.stringify({ secrets: [{ name: "STRIPE_KEY", scope: "account", updatedAt: "2026-10-30", ...(limit ? { workspaces: limit } : {}) }] }));
         }
         res.statusCode = 404;

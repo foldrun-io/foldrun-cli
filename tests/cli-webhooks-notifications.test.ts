@@ -22,7 +22,7 @@ const delivery = (over: Record<string, unknown>) => ({
 
 test("deliveries lists each one with its status and attempts; --failed narrows it", async () => {
   const s = await serve({
-    "/api/workspaces/desk/notify/deliveries": (_b, q) => ({
+    "/v1/workspaces/desk/notify/deliveries": (_b, q) => ({
       deliveries: q.get("status") === "failed"
         ? [delivery({ id: "dlv_2", status: "failed", attempts: 6, lastStatusCode: 503 })]
         : [delivery({}), delivery({ id: "dlv_3", status: "pending", attempts: 2, lastStatusCode: null, lastError: "timed out", nextAttemptAt: "2026-10-01T01:06:00.000Z" })],
@@ -46,7 +46,7 @@ test("deliveries lists each one with its status and attempts; --failed narrows i
 
 test("a switched-off endpoint is said first, with the way back", async () => {
   const s = await serve({
-    "/api/workspaces/desk/notify/deliveries": () => ({
+    "/v1/workspaces/desk/notify/deliveries": () => ({
       deliveries: [delivery({ status: "skipped", attempts: 0, lastStatusCode: null, lastError: "not attempted: the endpoint is switched off" })],
       total: 1, limit: 30, offset: 0,
       endpoint: { disabledAt: "2026-09-30T00:00:00.000Z", disabledReason: "every delivery failed for 3 days running", failingSince: "2026-09-27T00:00:00.000Z" },
@@ -60,7 +60,7 @@ test("a switched-off endpoint is said first, with the way back", async () => {
 
 test("redeliver posts to the delivery and exits on whether it landed", async () => {
   const s = await serve({
-    "POST /api/workspaces/desk/notify/deliveries/dlv_9/redeliver": () => ({
+    "POST /v1/workspaces/desk/notify/deliveries/dlv_9/redeliver": () => ({
       ok: false,
       attempt: { n: 7, statusCode: 500, durationMs: 41, response: "boom", error: "HTTP 500", manual: true },
       delivery: delivery({ id: "dlv_9" }),
@@ -81,7 +81,7 @@ const categories = [
 ];
 
 test("notifications lists every category: always, on, off, and the workspaces that differ", async () => {
-  const s = await serve({ "/api/me/notifications": () => ({ email: "me@example.test", categories }) });
+  const s = await serve({ "/v1/me/notifications": () => ({ email: "me@example.test", categories }) });
   const r = await at(s.url, "notifications");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -92,7 +92,7 @@ test("notifications lists every category: always, on, off, and the workspaces th
 });
 
 test("notifications set sends the change — with --to as the workspace", async () => {
-  const s = await serve({ "PATCH /api/me/notifications": () => ({ email: "me@example.test", categories }) });
+  const s = await serve({ "PATCH /v1/me/notifications": () => ({ email: "me@example.test", categories }) });
   const r = await at(s.url, "notifications", "set", "run-alerts", "off", "--to", "seo-desk");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -101,7 +101,7 @@ test("notifications set sends the change — with --to as the workspace", async 
 });
 
 test("a required category's refusal is the platform's words", async () => {
-  const s = await serve({ "PATCH /api/me/notifications": () => failing(409, { error: "Security mail cannot be turned off: how you get back in" }) });
+  const s = await serve({ "PATCH /v1/me/notifications": () => failing(409, { error: "Security mail cannot be turned off: how you get back in" }) });
   const r = await at(s.url, "notifications", "set", "security", "off");
   s.close();
   assert.notEqual(r.code, 0);

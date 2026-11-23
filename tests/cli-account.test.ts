@@ -177,7 +177,7 @@ interface Fake {
   library: Map<string, Map<string, string>>;
   deploys: string[];
   deleted: string[];
-  /** The account's AGENTS.md (/api/account/agents-md) — served only when `route` is on, as a platform of 11 Nov 2026 does. */
+  /** The account's AGENTS.md (/v1/account/agents-md) — served only when `route` is on, as a platform of 11 Nov 2026 does. */
   accountMd: { route: boolean; content: string | null; puts: { content: string; ifMatch: unknown }[] };
 }
 
@@ -198,7 +198,7 @@ function fakePlatform(): Promise<Fake> {
         res.setHeader("content-type", "application/json");
         const send = (o: unknown) => res.end(JSON.stringify(o));
 
-        if (url.pathname === "/api/account/agents-md" && accountMd.route) {
+        if (url.pathname === "/v1/account/agents-md" && accountMd.route) {
           if (req.method === "PUT") {
             accountMd.puts.push({ content: json.content, ifMatch: json.ifMatch });
             const now = accountMd.content === null ? null : shaOf(accountMd.content);
@@ -211,13 +211,13 @@ function fakePlatform(): Promise<Fake> {
           }
           return send({ content: accountMd.content ?? "", sha256: accountMd.content === null ? null : shaOf(accountMd.content), exists: accountMd.content !== null });
         }
-        let m = /^\/api\/workspaces\/([^/]+)\/source$/.exec(url.pathname);
+        let m = /^\/v1\/workspaces\/([^/]+)\/source$/.exec(url.pathname);
         if (m) {
           const files = workspaces.get(m[1]) ?? new Map();
           const rel = url.searchParams.get("path");
           return send(rel ? { path: rel, content: files.get(rel) ?? "" } : { files: [...files.keys()] });
         }
-        m = /^\/api\/workspaces\/([^/]+)\/deploy$/.exec(url.pathname);
+        m = /^\/v1\/workspaces\/([^/]+)\/deploy$/.exec(url.pathname);
         if (m) {
           const files = new Map<string, string>(json.files.map((f: { path: string; content: string }) => [f.path, f.content]));
           // A dry run plans and changes nothing, as the platform's does —
@@ -228,16 +228,16 @@ function fakePlatform(): Promise<Fake> {
           }
           return send({ added: [...files.keys()], updated: [], removed: [], issues: [], blockedBy: [], preserved: 0, commit: null });
         }
-        m = /^\/api\/workspaces\/([^/]+)$/.exec(url.pathname);
+        m = /^\/v1\/workspaces\/([^/]+)$/.exec(url.pathname);
         if (m && req.method === "DELETE") {
           deleted.push(m[1]);
           workspaces.delete(m[1]);
           return send({ ok: true });
         }
-        if (url.pathname === "/api/workspaces") {
+        if (url.pathname === "/v1/workspaces") {
           return send({ workspaces: [...workspaces.keys()].map((name) => ({ name })) });
         }
-        m = /^\/api\/library\/([^/]+)$/.exec(url.pathname);
+        m = /^\/v1\/library\/([^/]+)$/.exec(url.pathname);
         if (m) {
           const kind = library.get(m[1]) ?? new Map<string, string>();
           if (req.method === "PUT") {

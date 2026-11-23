@@ -1,4 +1,4 @@
-// `foldrun account model` — the account's own model key (/api/account/model).
+// `foldrun account model` — the account's own model key (/v1/account/model).
 //
 //   node --test tests/cli-account-model.test.ts
 
@@ -10,7 +10,7 @@ const none = { set: false, provider: null, baseUrl: null, format: null, keyHint:
 const mine = { set: true, provider: "openrouter", baseUrl: "https://openrouter.ai/api", format: "anthropic", keyHint: "…9876", runsOn: "account", platformKeyAllowed: false };
 
 test("with no key, it says runs are refused and exits non-zero", async () => {
-  const s = await serve({ "GET /api/account/model": () => none });
+  const s = await serve({ "GET /v1/account/model": () => none });
   const r = await at(s.url, "account", "model");
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -18,12 +18,12 @@ test("with no key, it says runs are refused and exits non-zero", async () => {
 });
 
 test("set sends the provider and key once, with an idempotency key, and shows only the last four", async () => {
-  const s = await serve({ "PUT /api/account/model": () => mine });
+  const s = await serve({ "PUT /v1/account/model": () => mine });
   const r = await at(s.url, "account", "model", "set", "openrouter", "--key", "fake-9876");
   s.close();
   assert.equal(r.code, 0, r.out);
   const put = s.seen.find((x) => x.method === "PUT")!;
-  assert.equal(put.url.split("?")[0], "/api/account/model");
+  assert.equal(put.url.split("?")[0], "/v1/account/model");
   assert.deepEqual(JSON.parse(put.body), { provider: "openrouter", apiKey: "fake-9876" });
   assert.ok(put.headers["idempotency-key"], "an Idempotency-Key on the write");
   assert.match(r.out, /your own key — openrouter/);
@@ -31,14 +31,14 @@ test("set sends the provider and key once, with an idempotency key, and shows on
 });
 
 test("a custom endpoint carries its base URL and format; remove DELETEs", async () => {
-  const s = await serve({ "PUT /api/account/model": () => ({ ...mine, provider: "custom" }), "DELETE /api/account/model": () => none });
+  const s = await serve({ "PUT /v1/account/model": () => ({ ...mine, provider: "custom" }), "DELETE /v1/account/model": () => none });
   await at(s.url, "account", "model", "set", "custom", "--key", "k-1", "--base-url", "https://llm.example.com/v1", "--format", "openai");
   const put = s.seen.find((x) => x.method === "PUT")!;
   assert.deepEqual(JSON.parse(put.body), { provider: "custom", apiKey: "k-1", baseUrl: "https://llm.example.com/v1", format: "openai" });
   const rm = await at(s.url, "account", "model", "remove");
   s.close();
   assert.equal(rm.code, 0, rm.out);
-  assert.ok(s.seen.some((x) => x.method === "DELETE" && x.url.split("?")[0] === "/api/account/model"));
+  assert.ok(s.seen.some((x) => x.method === "DELETE" && x.url.split("?")[0] === "/v1/account/model"));
 });
 
 test("set without a key is refused before anything is sent", async () => {
@@ -51,7 +51,7 @@ test("set without a key is refused before anything is sent", async () => {
 });
 
 test("--key - reads a piped key (no prompt, no echo); a terminal is asked for it hidden instead of EAGAIN", async () => {
-  const s = await serve({ "PUT /api/account/model": () => mine });
+  const s = await serve({ "PUT /v1/account/model": () => mine });
   const r = await cli(["account", "model", "set", "openrouter", "--key", "-", "--url", s.url, "--token", "k"], { input: "piped-9876\n" });
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -79,7 +79,7 @@ const offered = {
 const onFoldrun = { ...mine, runsOn: "foldrun", source: "foldrun", supply: "openai", choiceVersion: 1, foldrunModels: offered };
 
 test("use foldrun --provider sends the choice once and says what it costs today", async () => {
-  const s = await serve({ "PUT /api/account/model": () => onFoldrun });
+  const s = await serve({ "PUT /v1/account/model": () => onFoldrun });
   const r = await at(s.url, "account", "model", "use", "foldrun", "--provider", "openai");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -93,7 +93,7 @@ test("use foldrun --provider sends the choice once and says what it costs today"
 });
 
 test("use foldrun without a provider is refused before anything is sent; use own goes back", async () => {
-  const s = await serve({ "PUT /api/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 2, foldrunModels: offered }) });
+  const s = await serve({ "PUT /v1/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 2, foldrunModels: offered }) });
   const bad = await at(s.url, "account", "model", "use", "foldrun");
   assert.notEqual(bad.code, 0);
   assert.match(bad.out, /which provider/);
@@ -106,7 +106,7 @@ test("use foldrun without a provider is refused before anything is sent; use own
 });
 
 test("refused for the account: shown with why, and a non-zero exit", async () => {
-  const s = await serve({ "GET /api/account/model": () => ({ ...onFoldrun, foldrunModels: { ...offered, refused: "foldrun's models are not available to this account — contact support" } }) });
+  const s = await serve({ "GET /v1/account/model": () => ({ ...onFoldrun, foldrunModels: { ...offered, refused: "foldrun's models are not available to this account — contact support" } }) });
   const r = await at(s.url, "account", "model");
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -115,7 +115,7 @@ test("refused for the account: shown with why, and a non-zero exit", async () =>
 });
 
 test("prices lists each provider's models as the account pays; --provider narrows", async () => {
-  const s = await serve({ "GET /api/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 0, foldrunModels: offered }) });
+  const s = await serve({ "GET /v1/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 0, foldrunModels: offered }) });
   const all = await at(s.url, "account", "model", "prices");
   assert.equal(all.code, 0, all.out);
   assert.match(all.out, /gpt-5 +\$1\.50 +\$12\.00 +\$0\.15 +—/);
@@ -127,7 +127,7 @@ test("prices lists each provider's models as the account pays; --provider narrow
 });
 
 test("on your own key where foldrun's models are offered, the hint says how to choose them", async () => {
-  const s = await serve({ "GET /api/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 0, foldrunModels: offered }) });
+  const s = await serve({ "GET /v1/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 0, foldrunModels: offered }) });
   const r = await at(s.url, "account", "model");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -135,7 +135,7 @@ test("on your own key where foldrun's models are offered, the hint says how to c
 });
 
 test("on a Claude Code plan (16 Nov 2026): the account runs on its Claude subscription, said so, exit 0", async () => {
-  const s = await serve({ "GET /api/account/model": () => ({ ...none, runsOn: "subscription" }) });
+  const s = await serve({ "GET /v1/account/model": () => ({ ...none, runsOn: "subscription" }) });
   const r = await at(s.url, "account", "model");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -146,8 +146,8 @@ test("on a Claude Code plan (16 Nov 2026): the account runs on its Claude subscr
 
 test("own keys off on the platform (models.byok): the view says so, offers no own key, and a set is refused by the platform with its reason", async () => {
   const s = await serve({
-    "GET /api/account/model": () => ({ set: true, provider: "anthropic", keyHint: "…1111", baseUrl: null, format: null, runsOn: "foldrun", platformKeyAllowed: false, source: "foldrun", supply: "anthropic", choiceVersion: 0, ownKeys: false, foldrunModels: { offered: true, refused: null, providers: [{ name: "anthropic", title: "Anthropic", available: true, reason: null, tiers: { default: "claude-sonnet-5-5" } }], prices: [], dailyCapUsd: null, spentTodayUsd: 0 } }),
-    "PUT /api/account/model": () => ({ __status: 403, body: { error: "own model keys are off on this platform: every model call goes through foldrun's models — a platform admin can turn own keys on (setting models.byok)" } }),
+    "GET /v1/account/model": () => ({ set: true, provider: "anthropic", keyHint: "…1111", baseUrl: null, format: null, runsOn: "foldrun", platformKeyAllowed: false, source: "foldrun", supply: "anthropic", choiceVersion: 0, ownKeys: false, foldrunModels: { offered: true, refused: null, providers: [{ name: "anthropic", title: "Anthropic", available: true, reason: null, tiers: { default: "claude-sonnet-5-5" } }], prices: [], dailyCapUsd: null, spentTodayUsd: 0 } }),
+    "PUT /v1/account/model": () => ({ __status: 403, body: { error: "own model keys are off on this platform: every model call goes through foldrun's models — a platform admin can turn own keys on (setting models.byok)" } }),
   });
   try {
     const view = await at(s.url, "account", "model");

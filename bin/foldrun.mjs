@@ -255,7 +255,7 @@ const HELP = `foldrun — agents are just folders
   foldrun mcp                           this account as MCP tools for an AI app, over stdio, with this machine's sign-in: \`claude mcp add foldrun -- foldrun mcp\` (--read-only: only the tools that read)
   foldrun mcp connections               the AI apps connected over OAuth (claude.ai and the like): which app, whose, what access, last used — everyone's for an admin, else yours (--all adds the disconnected, --json)
   foldrun mcp disconnect <id>           end one: every token it holds stops working (asks; --yes)
-  foldrun mcp clients add <name>        a machine client for /api/mcp, signing in with client credentials (no person approves its tokens): --role viewer|editor|admin, --workspaces a,b, --write (else read only), --token-auth basic|post|jwt (jwt with --jwks-file <path>); prints the client id and secret, the secret once
+  foldrun mcp clients add <name>        a machine client for /v1/mcp, signing in with client credentials (no person approves its tokens): --role viewer|editor|admin, --workspaces a,b, --write (else read only), --token-auth basic|post|jwt (jwt with --jwks-file <path>); prints the client id and secret, the secret once
   foldrun issues            what went wrong, grouped, open until resolved (--to <workspace>, --all, --status, --json)
   foldrun issues show|ack|snooze|resolve|reopen <id>  one issue — snooze --for 1d, --until <ISO time> or --times 5, --note "…"
   foldrun issues doctor <id>  the run doctor on the issue's newest run, in its project: why, and the fix as diffs, saved on yes (--yes, --dry-run, --json)
@@ -350,7 +350,7 @@ const HELP = `foldrun — agents are just folders
   foldrun source put <path> --check  the editor's checked save: refused with the issues (exit 1, nothing saved) when the file would not check out; --empty writes an empty file
   foldrun source share <path>  the dashboard's Move to shared: a skill, tool, script, knowledge or memory file (a skill or folder tool whole) into the account library, then out of the project — asks (--yes), --dry-run, --overwrite (--to)
   foldrun open [page]       the dashboard for this project, in the browser
-  foldrun api spec          the platform's OpenAPI 3.1 document (GET /api/openapi.json) — stdout, or --out <file>
+  foldrun api spec          the platform's OpenAPI 3.1 document (GET /v1/openapi.json) — stdout, or --out <file>
   foldrun api version       the API version this account's requests get, the versions served, the rate limits, your last 30 days by version and any deprecated route you still call — also pin <YYYY-MM-DD>, unpin (admin; --json)
   foldrun changelog         the platform's release notes, newest first: features, fixes, docs — and the API's versions, breaking changes and deprecations (--limit <n>, --json)
   foldrun version           this CLI's version, its core's, and the platform's: release, API version, component shas — warns when the platform ships a newer CLI (--json)
@@ -362,7 +362,7 @@ Signing in
                             session: cookies, storage and the browser identity it needs
   foldrun logout            forget this machine's key, and revoke it where allowed
   foldrun whoami            who you are on the platform: account, role, projects
-  foldrun signup status     can a stranger sign up on the platform: free sign-up, paid sign-up, and the plans sold while paid is in effect — the open /api/signup, no key sent (--url, --json; exits 1 when it does not answer)
+  foldrun signup status     can a stranger sign up on the platform: free sign-up, paid sign-up, and the plans sold while paid is in effect — the open /v1/signup, no key sent (--url, --json; exits 1 when it does not answer)
   foldrun me                the person this machine is signed in as: name, address, timezone (--json)
   foldrun me name <first> [last]   set your name (--clear for none) · foldrun me timezone <zone|auto>   the zone you read times in
   foldrun team              who is in the account: role, the projects each may open, when they joined (--json)
@@ -374,15 +374,15 @@ Signing in
   foldrun team invites revoke <id>   take an invite back: its link stops working at once (an admin's; a key may)
   foldrun onboarding        the account's getting-started steps, done or not, the next one first; --to <workspace> adds that project's checklist (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
-  foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /api/healthz
+  foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /v1/healthz
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun accounts prune    forget the saved sign-ins that no longer work (--unreachable: also those whose platform did not answer)
   foldrun use <name>        act as one of them from here on
   foldrun keys ls           the account's API keys: created, last used, expires, scope, and which are a machine's CLI sign-in (they renew themselves) — also create <label> [--expires 90d], rotate <id> [--grace 1h], revoke <id>
-  foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no /api route (--max-tasks N open at once, default 10; --expires); shown once
+  foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no platform route (--max-tasks N open at once, default 10; --expires); shown once
   foldrun keys set <id> --sonnet openai/gpt-6   which model a gateway key runs each Claude Code tier on (--opus, --haiku; - clears one, --clear all)
   foldrun keys set <id> --customer required|optional  whether every run (API key) or gateway call (gateway key) with it must name an end customer — create one that requires it with keys create … --require-customer
-  foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]  a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — it spends the account's credits on foldrun's models through the gateway, up to its own limits, and opens no /api route; an admin of every project; shown once
+  foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]  a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — it spends the account's credits on foldrun's models through the gateway, up to its own limits, and opens no platform route; an admin of every project; shown once
   foldrun keys create laptop --gateway --cap 20 --claude-code   the same, and Claude Code is set up on this machine: the URL and key go into its settings, and its status line shows the key's spend
   foldrun keys create laptop --gateway --account --daily 50 [--wallet 20]   a key the foldrun plan pays for first; bought credits only up to --wallet (0, the default: the plan alone)
   foldrun keys set <id> --wallet <usd>          an account key's wallet budget: the most bought credits may pay for its calls (0: the plan only)

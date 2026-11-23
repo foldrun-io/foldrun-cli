@@ -43,18 +43,18 @@ authorization server (Keycloak) and against recorded provider answers.
 | Mutual-TLS client auth and bound tokens | RFC 8705 | Supported | `token_auth: tls_client_auth` with the certificate and key; presented to the token URL and, through the egress proxy, on the calls the token is bound to. |
 | Client-initiated backchannel authentication | OpenID CIBA | Not needed | No provider an agent needs uses it. |
 
-## When an AI app signs in to foldrun (`/api/mcp`)
+## When an AI app signs in to foldrun (`/v1/mcp`)
 
 | What | Spec | Status | How, or why not |
 |---|---|---|---|
-| Authorization code with PKCE (S256) | OAuth 2.1, MCP authorization | Supported | How claude.ai and other AI apps sign in to /api/mcp. |
+| Authorization code with PKCE (S256) | OAuth 2.1, MCP authorization | Supported | How claude.ai and other AI apps sign in to /v1/mcp. |
 | Refresh rotation, reuse revokes | OAuth 2.1 §4.3.1 | Supported | A refresh token used twice ends the connection. |
 | Client secret (Basic or body), or a public app | RFC 6749 §2.3.1 | Supported | Registered apps choose `none`, `client_secret_post` or `client_secret_basic`. |
 | Authorization server and resource metadata | RFC 8414, RFC 9728 | Supported | `/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource`. |
 | Dynamic registration and client metadata documents | RFC 7591, CIMD | Supported | An app registers itself, or names itself by an https URL. |
-| Resource indicators | RFC 8707 | Supported | Tokens are bound to /api/mcp. |
+| Resource indicators | RFC 8707 | Supported | Tokens are bound to /v1/mcp. |
 | Issuer in the authorization response | RFC 9207 | Supported | Every answer carries `iss`. |
-| Revocation endpoint | RFC 7009 | Supported | `POST /api/mcp/oauth/revoke`: an app ends its own connection. |
+| Revocation endpoint | RFC 7009 | Supported | `POST /v1/mcp/oauth/revoke`: an app ends its own connection. |
 | Client credentials for machine clients | RFC 6749 §4.4 | Supported | An admin registers a machine client (Settings, or `foldrun mcp clients add`) with a role, projects and access; no refresh token; disconnecting it makes it `invalid_client`. |
 | Signed client assertion (private_key_jwt) | RFC 7523 §2.2 | Supported | Apps that register `jwks` or `jwks_uri` sign in with assertions; each `jti` is used once. |
 

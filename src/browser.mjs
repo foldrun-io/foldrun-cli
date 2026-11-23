@@ -495,7 +495,7 @@ export async function browserCmd(positional, flags, deps) {
     let note = null;
     if (refresh) {
       try {
-        const body = await deps.remoteCall(url, { ...flags, quiet: true }, "/api/library/gallery", {}, { seconds: 20 });
+        const body = await deps.remoteCall(url, { ...flags, quiet: true }, "/v1/library/gallery", {}, { seconds: 20 });
         if (Array.isArray(body.tools) && body.tools.length) deps.writeGalleryCache(deps.galleryCacheDir(url), body.tools);
       } catch (err) {
         note = `could not refresh the browser program from ${new URL(url).host} (${deps.explain(err).split("\n")[0]})`;

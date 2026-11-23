@@ -12,7 +12,7 @@ const QUESTIONS = {
 };
 
 test("approvals lists a question an agent is asking, with its choices", async () => {
-  const s = await serve({ "/api/approvals": () => QUESTIONS });
+  const s = await serve({ "/v1/approvals": () => QUESTIONS });
   const r = await at(s.url, "approvals");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -24,8 +24,8 @@ test("approvals lists a question an agent is asking, with its choices", async ()
 
 test("answer --option sends the chosen option to that run's question", async () => {
   const s = await serve({
-    "/api/approvals": () => QUESTIONS,
-    "POST /api/workspaces/blog-desk/runs/run-9/answer": (b) => ({ ok: true, question: "q_1", answer: JSON.parse(b).answer }),
+    "/v1/approvals": () => QUESTIONS,
+    "POST /v1/workspaces/blog-desk/runs/run-9/answer": (b) => ({ ok: true, question: "q_1", answer: JSON.parse(b).answer }),
   });
   const r = await at(s.url, "answer", "run-9", "--option", "2");
   s.close();
@@ -37,8 +37,8 @@ test("answer --option sends the chosen option to that run's question", async () 
 
 test("answer --option with no number is a usage error, not option 1", async () => {
   const s = await serve({
-    "/api/approvals": () => QUESTIONS,
-    "POST /api/workspaces/blog-desk/runs/run-9/answer": (b) => ({ ok: true, question: "q_1", answer: JSON.parse(b).answer }),
+    "/v1/approvals": () => QUESTIONS,
+    "POST /v1/workspaces/blog-desk/runs/run-9/answer": (b) => ({ ok: true, question: "q_1", answer: JSON.parse(b).answer }),
   });
   const r = await at(s.url, "answer", "run-9", "--option");
   s.close();
@@ -49,8 +49,8 @@ test("answer --option with no number is a usage error, not option 1", async () =
 
 test("answer in words; a run that is not asking says so", async () => {
   const s = await serve({
-    "/api/approvals": () => QUESTIONS,
-    "POST /api/workspaces/blog-desk/runs/run-9/answer": (b) => ({ ok: true, question: "q_1", answer: JSON.parse(b).answer }),
+    "/v1/approvals": () => QUESTIONS,
+    "POST /v1/workspaces/blog-desk/runs/run-9/answer": (b) => ({ ok: true, question: "q_1", answer: JSON.parse(b).answer }),
   });
   const words = await at(s.url, "answer", "run-9", "ten,", "after", "the", "report");
   const none = await at(s.url, "answer", "run-1", "yes");
@@ -63,7 +63,7 @@ test("answer in words; a run that is not asking says so", async () => {
 
 test("message posts to the running run in the workspace it lives in", async () => {
   const s = await serve({
-    "POST /api/workspaces/blog-desk/runs/run-9/message": (b) => ({ ok: true, message: { text: JSON.parse(b).text } }),
+    "POST /v1/workspaces/blog-desk/runs/run-9/message": (b) => ({ ok: true, message: { text: JSON.parse(b).text } }),
   });
   const r = await at(s.url, "message", "run-9", "use", "the", "2025", "figures", "--to", "blog-desk");
   s.close();

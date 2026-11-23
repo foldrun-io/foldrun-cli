@@ -11,7 +11,7 @@ const ago = (mins: number) => new Date(Date.now() - mins * 60_000).toISOString()
 
 test("usage compute lists the steps waiting for room, with how long and why", async () => {
   const s = await serve({
-    "/api/usage/compute": () => ({
+    "/v1/account/usage/compute": () => ({
       compute: { vcpu: 8, memGiB: 16, stepVcpu: 4, stepMemGiB: 8, source: "plan" },
       inUse: { vcpu: 8, memGiB: 12, steps: 3 },
       waiting: [
@@ -31,7 +31,7 @@ test("usage compute lists the steps waiting for room, with how long and why", as
 });
 
 test("with nothing waiting, no waiting section", async () => {
-  const s = await serve({ "/api/usage/compute": () => ({ compute: { vcpu: null, memGiB: null, stepVcpu: null, stepMemGiB: null, source: null }, inUse: { vcpu: 0, memGiB: 0, steps: 0 }, waiting: [] }) });
+  const s = await serve({ "/v1/account/usage/compute": () => ({ compute: { vcpu: null, memGiB: null, stepVcpu: null, stepMemGiB: null, source: null }, inUse: { vcpu: 0, memGiB: 0, steps: 0 }, waiting: [] }) });
   const r = await at(s.url, "usage", "compute");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -42,7 +42,7 @@ test("with nothing waiting, no waiting section", async () => {
 
 test("usage compute shows the account, each workspace and each live run, with disk", async () => {
   const s = await serve({
-    "/api/usage/compute": () => ({
+    "/v1/account/usage/compute": () => ({
       compute: { vcpu: 8, memGiB: 16, diskGiB: 80, stepVcpu: 4, stepMemGiB: 8, stepDiskGiB: 20, source: "plan" },
       inUse: { vcpu: 3, memGiB: 6, diskGiB: 28, steps: 2 },
       workspaces: [
@@ -66,10 +66,10 @@ test("usage compute shows the account, each workspace and each live run, with di
 
 test("account and workspace set compute send only the figures named, disk included", async () => {
   const s = await serve({
-    "PATCH /api/account": () => ({ ok: true, defaults: {} }),
-    "PATCH /api/workspaces/desk": () => ({ ok: true }),
-    "/api/workspaces/desk/source": () => ({ content: "---\nname: desk\n---\n" }),
-    "/api/workspaces/desk": () => ({ name: "desk" }),
+    "PATCH /v1/account": () => ({ ok: true, defaults: {} }),
+    "PATCH /v1/workspaces/desk": () => ({ ok: true }),
+    "/v1/workspaces/desk/source": () => ({ content: "---\nname: desk\n---\n" }),
+    "/v1/workspaces/desk": () => ({ name: "desk" }),
     "/api/jobs": () => ({ jobs: [] }),
   });
   const a = await at(s.url, "account", "set", "compute", "disk", "40");
@@ -87,7 +87,7 @@ test("account and workspace set compute send only the figures named, disk includ
 
 test("flow compute sets one run's pool through the flows route, and --clear drops it", async () => {
   const s = await serve({
-    "PATCH /api/workspaces/desk/flows/daily": (body: string) => {
+    "PATCH /v1/workspaces/desk/flows/daily": (body: string) => {
       const c = JSON.parse(body).compute;
       return { ok: true, flow: { name: "daily", compute: c ? { vcpu: c.vcpu, memGiB: c.memGiB, diskGiB: c.diskGiB } : null } };
     },
@@ -150,7 +150,7 @@ test("compute figures below core's bounds are refused before anything is sent or
 
 // Codex review: --dry-run is a rehearsal — nothing sent, nothing written.
 test("flow compute --dry-run sends nothing to the platform and writes nothing here", async () => {
-  const s = await serve({ "PATCH /api/workspaces/desk/flows/daily": () => ({ ok: true }) });
+  const s = await serve({ "PATCH /v1/workspaces/desk/flows/daily": () => ({ ok: true }) });
   const r = await at(s.url, "flow", "compute", "daily", "vcpu", "2", "--dry-run", "--to", "desk");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -184,7 +184,7 @@ test("flow compute --dry-run sends nothing to the platform and writes nothing he
 
 test("usage compute prints the runs waiting against the limit, and where a step maximum is the no-plan default", async () => {
   const s = await serve({
-    "/api/usage/compute": () => ({
+    "/v1/account/usage/compute": () => ({
       compute: { vcpu: null, memGiB: null, stepVcpu: 4, stepMemGiB: 8, stepDiskGiB: 20, source: null, stepDefault: ["stepVcpu", "stepMemGiB", "stepDiskGiB"] },
       inUse: { vcpu: 0, memGiB: 0, steps: 0 },
       waiting: [],
@@ -200,7 +200,7 @@ test("usage compute prints the runs waiting against the limit, and where a step 
 
 test("a start refused at the waiting limit prints the platform's sentence and where to see the figures", async () => {
   const s = await serve({
-    "POST /api/workspaces/rank-desk/flows/publish/run": () =>
+    "POST /v1/workspaces/rank-desk/flows/publish/run": () =>
       failing(409, { error: "this account already has 50 runs waiting for their turn, its limit (50: …) — nothing was started", code: "waiting_cap", limit: 50, waiting: 50 }),
   });
   const r = await at(s.url, "invoke", "publish", "--to", "rank-desk");

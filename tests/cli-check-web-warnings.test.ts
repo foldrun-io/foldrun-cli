@@ -1,7 +1,7 @@
 // `foldrun check` warnings about a web: block that works but should change:
 // the old `web.browse.session:` key (now vendor_session:), and a pinned
 // user_agent whose Chrome major is not the runner image's — the image's
-// Chrome from the platform's /api/version (browser_versions.chrome), or
+// Chrome from the platform's /v1/version (browser_versions.chrome), or
 // FOLDRUN_RUNNER_ENGINES where check runs beside a platform.
 //
 //   node --test tests/cli-check-web-warnings.test.ts
@@ -31,13 +31,13 @@ function deployed(agent: string, chrome: string | null, chromium: string | null 
     "flows/daily.md": "---\ntrigger: manual\n---\n\n1. [[reader]] — Read it.\n",
   };
   return {
-    "/api/workspaces/desk/source": (_b: string, q: URLSearchParams) => {
+    "/v1/workspaces/desk/source": (_b: string, q: URLSearchParams) => {
       const p = q.get("path");
       return p ? { path: p, content: files[p] ?? "" } : { files: Object.keys(files) };
     },
-    "/api/library/tools": () => ({ entries: [] }),
-    "/api/library/skills": () => ({ entries: [] }),
-    "/api/version": () => ({ version: "v2026.10.01.9", browsers: ["chromium", "chrome"], browser_versions: chrome || chromium ? { ...(chrome ? { chrome } : {}), ...(chromium ? { chromium } : {}) } : null }),
+    "/v1/library/tools": () => ({ entries: [] }),
+    "/v1/library/skills": () => ({ entries: [] }),
+    "/v1/version": () => ({ version: "v2026.10.01.9", browsers: ["chromium", "chrome"], browser_versions: chrome || chromium ? { ...(chrome ? { chrome } : {}), ...(chromium ? { chromium } : {}) } : null }),
   };
 }
 

@@ -196,7 +196,7 @@ wrong — a failed tool call before the step's error line, before the failed
 step — and highlights it; **expand all** shows every call.
 
 `foldrun report <run-id> --tree` prints the same tree in the terminal, with
-`← what went wrong` on that line, and `GET /api/workspaces/<ws>/runs/<id>/trace`
+`← what went wrong` on that line, and `GET /v1/workspaces/<ws>/runs/<id>/trace`
 answers it as JSON. Runs from before 19 Oct 2026 have no model calls on
 record; their tool calls sit under the step.
 
@@ -301,7 +301,7 @@ credits it cost, and links the runs it was seen in:
   agent keeps trying;
 - **near its timeout** — steps that use 80% or more of their `timeout:`.
 
-`foldrun insights` prints them; `GET /api/insights` answers them.
+`foldrun insights` prints them; `GET /v1/insights` answers them.
 
 Below them the page compares the window — 24 hours, 7 days (unasked) or 30
 days — with the one of the same length before it: the completion rate and
@@ -310,7 +310,7 @@ platform's causes first (no desk edit fixes those), then the desks' by how
 often; every desk, worst first; and the **agents** and **tools to watch**.
 `foldrun observe` prints the same analysis under its one-row-per-workspace
 table, over the same 7 days unless `--since` says otherwise; `GET
-/api/observe` answers it.
+/v1/observe` answers it.
 
 ## Compare with the last good run
 
@@ -371,7 +371,7 @@ missed schedules never close on their own.
 
 The **Issues** page lists them (Open, Snoozed, Resolved, All; a project's
 own from its home), Home lists the open ones under Needs attention, and
-`foldrun issues` and `GET /api/issues` are the same list. A platform issue
+`foldrun issues` and `GET /v1/issues` are the same list. A platform issue
 belongs to the account: closing it needs access to every project.
 
 Each agent also has an **Activity** page: every step it has ever run, across
@@ -404,7 +404,7 @@ on the top bar is what is unread in For me and Started by me.
 
 `foldrun inbox` prints the same (`--team`, `--all`, `--kind approval`); a key
 reads the inbox of the person who minted it, within the key's own projects.
-The API is `GET /api/me/inbox`.
+The API is `GET /v1/me/inbox`.
 
 ## Gates
 
@@ -490,7 +490,7 @@ not changed — so you can try a fix on the real input before writing it in.
 The new run says where it came from (`rerunOf`). From the terminal:
 `foldrun rerun <run-id> --from <n> --instruction "…"`.
 
-**Stop and re-run in bulk.** `POST /api/workspaces/<ws>/runs/bulk` applies
+**Stop and re-run in bulk.** `POST /v1/workspaces/<ws>/runs/bulk` applies
 one of those two actions to every run a small filter names — statuses, a
 flow, a time window, or an explicit list of ids. It is the tool for the
 morning when one broken thing failed seventy runs. A call naming no filter is
@@ -524,7 +524,7 @@ last section is the delivery log, which answers the separate and earlier
 question of whether a request arrived at all and was authentic — a bad token
 never reaches a flow rule, so it appears there and nowhere else.
 
-`GET /api/workspaces/<ws>/triggers` is the same thing as JSON.
+`GET /v1/workspaces/<ws>/triggers` is the same thing as JSON.
 
 ## Handoffs
 
@@ -702,11 +702,11 @@ What follows from it:
   calls on foldrun's models may be charged at most that much in a UTC day,
   held with the account's daily limit — each call at the most it could cost —
   so calls at once cannot pass it together. A run past it is refused at its
-  next model call. None is set by default. `GET /api/customers/usage?days=7`
+  next model call. None is set by default. `GET /v1/customers/usage?days=7`
   and `foldrun customers usage` show what each customer was charged.
 - **Blocked.** An admin with every project can block a customer
   (Settings → API keys → Customers, `foldrun customers block <id>`, or
-  `PUT /api/customers/<id>/block`). Its runs are refused at start (`403`,
+  `PUT /v1/customers/<id>/block`). Its runs are refused at start (`403`,
   code `customer_blocked`), and a run of it already going stops at its next
   model call. Unblocking lets it through again.
 - **Kept inside foldrun.** The customer id is not sent to the model provider,
@@ -718,7 +718,7 @@ What follows from it:
   them.
 
 The limits are the account's to change, in Settings → API keys → Customers,
-with `PATCH /api/customers`, or `foldrun customers limits --max-open-runs 20
+with `PATCH /v1/customers`, or `foldrun customers limits --max-open-runs 20
 --daily-model-usd 5` (`default`, or `none` for the spend, puts one back).
 A customer is a grouping and a limit, not an access boundary: anyone who may
 start runs in the account may name any customer. To make sure nothing slips

@@ -36,9 +36,9 @@ async function platform(plan: Plan) {
     return { ok: true, ...plan, issues: [], warnings: [], blockedBy: [], preserved: 0, commit: "c0ffee" };
   };
   const fake = await serve({
-    "/api/workspaces/blog-desk/deploy": answer,
-    "/api/me": () => ({ actor: { kind: "user", email: "dev@example.com" }, account: "matt", role: "owner", workspaces: null }),
-    "/api/workspaces/blog-desk/runtimes": () => ({ runtimes: [] }),
+    "/v1/workspaces/blog-desk/deploy": answer,
+    "/v1/me": () => ({ actor: { kind: "user", email: "dev@example.com" }, account: "matt", role: "owner", workspaces: null }),
+    "/v1/workspaces/blog-desk/runtimes": () => ({ runtimes: [] }),
   });
   return { fake, deploys };
 }
@@ -118,13 +118,13 @@ test("--dry-run asks for the plan once and deletes nothing", async () => {
 test("the real deploy carries the confirmed removals as expectRemoved", async () => {
   const bodies: any[] = [];
   const fake = await serve({
-    "/api/workspaces/blog-desk/deploy": (body: string) => {
+    "/v1/workspaces/blog-desk/deploy": (body: string) => {
       const b = JSON.parse(body || "{}");
       bodies.push(b);
       return { ok: true, added: [], updated: [], removed: ["storage/report.md"], issues: [], warnings: [], blockedBy: [], preserved: 0, commit: null };
     },
-    "/api/me": () => ({ actor: { kind: "user", email: "dev@example.com" }, account: "matt" }),
-    "/api/workspaces/blog-desk/runtimes": () => ({ runtimes: [] }),
+    "/v1/me": () => ({ actor: { kind: "user", email: "dev@example.com" }, account: "matt" }),
+    "/v1/workspaces/blog-desk/runtimes": () => ({ runtimes: [] }),
   });
   try {
     const r = await run(flatWorkspace(), fake.url, "--yes");
@@ -140,7 +140,7 @@ test("the real deploy carries the confirmed removals as expectRemoved", async ()
 test("a 409 (removals changed since the yes) is shown and refused without a terminal, even with --yes", async () => {
   const bodies: any[] = [];
   const fake = await serve({
-    "/api/workspaces/blog-desk/deploy": (body: string) => {
+    "/v1/workspaces/blog-desk/deploy": (body: string) => {
       const b = JSON.parse(body || "{}");
       bodies.push(b);
       if (b.dryRun) return { ok: true, added: [], updated: [], removed: ["storage/report.md"], issues: [], warnings: [], blockedBy: [], preserved: 0 };
@@ -152,8 +152,8 @@ test("a 409 (removals changed since the yes) is shown and refused without a term
         unexpectedRemovals: ["storage/new-output.md"],
       });
     },
-    "/api/me": () => ({ actor: { kind: "user", email: "dev@example.com" }, account: "matt" }),
-    "/api/workspaces/blog-desk/runtimes": () => ({ runtimes: [] }),
+    "/v1/me": () => ({ actor: { kind: "user", email: "dev@example.com" }, account: "matt" }),
+    "/v1/workspaces/blog-desk/runtimes": () => ({ runtimes: [] }),
   });
   try {
     const r = await run(flatWorkspace(), fake.url, "--yes");

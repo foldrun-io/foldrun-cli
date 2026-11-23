@@ -127,7 +127,7 @@ foldrun check
 ```
 
 `foldrun hook test` runs the hook on your machine exactly as a step runs it.
-`POST /api/workspaces/<ws>/hooks/<name>/test` does the same on the platform
+`POST /v1/workspaces/<ws>/hooks/<name>/test` does the same on the platform
 (see [API](api)).
 
 ## Two in the library to copy

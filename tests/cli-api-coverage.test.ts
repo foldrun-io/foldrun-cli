@@ -29,16 +29,16 @@ const FLOWS = [
 
 // ------------------------------------------------------------ reading a workspace
 
-test("workspaces show <name> reads GET /api/workspaces/<name>: agents, flows, files by folder", async () => {
+test("workspaces show <name> reads GET /v1/workspaces/<name>: agents, flows, files by folder", async () => {
   const doc = { name: "blog desk", agents: AGENTS, flows: FLOWS, files: ["AGENTS.md", "agents/researcher/agent.md", "agents/writer/agent.md", "flows/publish.md", "flows/nightly.md"] };
-  const s = await serve({ "/api/workspaces/blog%20desk": () => doc });
+  const s = await serve({ "/v1/workspaces/blog%20desk": () => doc });
   const r = await at(s.url, "workspaces", "show", "blog desk");
   const j = await at(s.url, "workspaces", "show", "blog desk", "--json");
   const none = await at(s.url, "workspaces", "show");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(s.seen[0].method, "GET");
-  assert.equal(s.seen[0].url, "/api/workspaces/blog%20desk", "the name is encoded");
+  assert.equal(s.seen[0].url, "/v1/workspaces/blog%20desk", "the name is encoded");
   assert.match(r.out, /2 agents, 2 flows, 5 files/);
   assert.match(r.out, /researcher\s+fast\s+Finds sources\./);
   assert.match(r.out, /nightly\s+schedule 0 3 \* \* \* Australia\/Sydney/);
@@ -50,8 +50,8 @@ test("workspaces show <name> reads GET /api/workspaces/<name>: agents, flows, fi
 
 test("agent ls / flow ls read GET …/agents and …/flows of the workspace --to names", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/agents": () => ({ agents: AGENTS }),
-    "/api/workspaces/blog-desk/flows": () => ({ flows: FLOWS }),
+    "/v1/workspaces/blog-desk/agents": () => ({ agents: AGENTS }),
+    "/v1/workspaces/blog-desk/flows": () => ({ flows: FLOWS }),
   });
   const a = await at(s.url, "agent", "ls", "--to", "blog-desk");
   const f = await at(s.url, "flow", "ls", "--to", "blog-desk");
@@ -64,7 +64,7 @@ test("agent ls / flow ls read GET …/agents and …/flows of the workspace --to
   assert.match(f.out, /publish\s+manual/);
   assert.match(f.out, /nightly\s+schedule 0 3 \* \* \*/);
   assert.deepEqual(json(aj.out), AGENTS);
-  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["GET /api/workspaces/blog-desk/agents", "GET /api/workspaces/blog-desk/flows", "GET /api/workspaces/blog-desk/agents"]);
+  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["GET /v1/workspaces/blog-desk/agents", "GET /v1/workspaces/blog-desk/flows", "GET /v1/workspaces/blog-desk/agents"]);
 });
 
 test("agent ls shows when each agent last ran; --stale <days> keeps the idle and never-run ones", async () => {
@@ -74,7 +74,7 @@ test("agent ls shows when each agent last ran; --stale <days> keeps the idle and
     { name: "idle", model: "fast", description: "Forgotten.", lastRunAt: new Date(Date.now() - 45 * day).toISOString(), stale: true },
     { name: "unborn", model: "fast", description: "Never ran.", lastRunAt: null, stale: false },
   ];
-  const s = await serve({ "/api/workspaces/blog-desk/agents": () => ({ agents }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/agents": () => ({ agents }) });
   const all = await at(s.url, "agent", "ls", "--to", "blog-desk");
   const idle = await at(s.url, "agent", "ls", "--to", "blog-desk", "--stale", "30");
   const flagged = await at(s.url, "agent", "ls", "--to", "blog-desk", "--stale");
@@ -94,7 +94,7 @@ test("agent ls shows when each agent last ran; --stale <days> keeps the idle and
 
 test("agent import --list reads GET …/agents/import and imports nothing", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/agents/import": () => ({ workspaces: [{ name: "rank-desk", agents: [{ name: "auditor", description: "Audits pages." }] }] }),
+    "/v1/workspaces/blog-desk/agents/import": () => ({ workspaces: [{ name: "rank-desk", agents: [{ name: "auditor", description: "Audits pages." }] }] }),
   });
   const r = await at(s.url, "agent", "import", "--list", "--to", "blog-desk");
   s.close();
@@ -108,7 +108,7 @@ test("agent import --list reads GET …/agents/import and imports nothing", asyn
 
 test("agent new --platform posts { name, description, model } to …/agents; nothing written here", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cov-"));
-  const s = await serve({ "POST /api/workspaces/blog-desk/agents": () => ({ ok: true, path: "agents/checker/agent.md" }) });
+  const s = await serve({ "POST /v1/workspaces/blog-desk/agents": () => ({ ok: true, path: "agents/checker/agent.md" }) });
   const r = await cli(["agent", "new", "checker", "--platform", "--to", "blog-desk", "--description", "Checks facts.", "--model", "max", "--url", s.url, "--token", "k"], { cwd });
   const bare = await cli(["agent", "new", "editor", "--platform", "--to", "blog-desk", "--url", s.url, "--token", "k"], { cwd });
   s.close();
@@ -116,15 +116,15 @@ test("agent new --platform posts { name, description, model } to …/agents; not
   assert.match(r.out, /created agent checker in blog-desk/);
   assert.match(r.out, /agents\/checker\/agent\.md/);
   assert.deepEqual(writes(s), [
-    { method: "POST", url: "/api/workspaces/blog-desk/agents", body: { name: "checker", description: "Checks facts.", model: "max" } },
-    { method: "POST", url: "/api/workspaces/blog-desk/agents", body: { name: "editor" } },
+    { method: "POST", url: "/v1/workspaces/blog-desk/agents", body: { name: "checker", description: "Checks facts.", model: "max" } },
+    { method: "POST", url: "/v1/workspaces/blog-desk/agents", body: { name: "editor" } },
   ]);
   assert.equal(bare.code, 0, bare.out);
   assert.deepEqual(fs.readdirSync(cwd), [], "the folder is untouched");
 });
 
 test("flow new --platform posts { name, pattern } to …/flows, and refuses a shape the platform lacks", async () => {
-  const s = await serve({ "POST /api/workspaces/blog-desk/flows": (b) => ({ ok: true, path: `flows/${JSON.parse(b).name}.md`, pattern: JSON.parse(b).pattern ?? "pipeline" }) });
+  const s = await serve({ "POST /v1/workspaces/blog-desk/flows": (b) => ({ ok: true, path: `flows/${JSON.parse(b).name}.md`, pattern: JSON.parse(b).pattern ?? "pipeline" }) });
   const r = await at(s.url, "flow", "new", "review", "--platform", "--to", "blog-desk", "--pattern", "review-loop");
   const bad = await at(s.url, "flow", "new", "x", "--platform", "--to", "blog-desk", "--pattern", "spiral");
   s.close();
@@ -132,20 +132,20 @@ test("flow new --platform posts { name, pattern } to …/flows, and refuses a sh
   assert.match(r.out, /flows\/review\.md · review-loop/);
   assert.equal(bad.code, 1);
   assert.match(bad.out, /--pattern takes pipeline, review-loop, fan-out, debate, router/);
-  assert.deepEqual(writes(s), [{ method: "POST", url: "/api/workspaces/blog-desk/flows", body: { name: "review", pattern: "review-loop" } }]);
+  assert.deepEqual(writes(s), [{ method: "POST", url: "/v1/workspaces/blog-desk/flows", body: { name: "review", pattern: "review-loop" } }]);
 });
 
 test("tool new --platform posts kind tools to …/assets — a script tool by default, as here", async () => {
-  const s = await serve({ "POST /api/workspaces/blog-desk/assets": () => ({ ok: true, path: "tools/uuid/tool.md", type: null }) });
+  const s = await serve({ "POST /v1/workspaces/blog-desk/assets": () => ({ ok: true, path: "tools/uuid/tool.md", type: null }) });
   const r = await at(s.url, "tool", "new", "uuid", "--platform", "--to", "blog-desk", "--language", "python");
   const http = await at(s.url, "tool", "new", "crm", "--platform", "--to", "blog-desk", "--transport", "http");
   const web = await at(s.url, "tool", "new", "browse", "--platform", "--to", "blog-desk", "--template", "web");
   s.close();
   for (const x of [r, http, web]) assert.equal(x.code, 0, x.out);
   assert.deepEqual(writes(s), [
-    { method: "POST", url: "/api/workspaces/blog-desk/assets", body: { kind: "tools", name: "uuid", template: "script", language: "python" } },
-    { method: "POST", url: "/api/workspaces/blog-desk/assets", body: { kind: "tools", name: "crm", template: "http" } },
-    { method: "POST", url: "/api/workspaces/blog-desk/assets", body: { kind: "tools", name: "browse", template: "web" } },
+    { method: "POST", url: "/v1/workspaces/blog-desk/assets", body: { kind: "tools", name: "uuid", template: "script", language: "python" } },
+    { method: "POST", url: "/v1/workspaces/blog-desk/assets", body: { kind: "tools", name: "crm", template: "http" } },
+    { method: "POST", url: "/v1/workspaces/blog-desk/assets", body: { kind: "tools", name: "browse", template: "web" } },
   ]);
 });
 
@@ -160,7 +160,7 @@ test("without --platform, agent new --to still names a workspace of this folder"
 });
 
 test("eval new <name> --to posts { name } to …/evals", async () => {
-  const s = await serve({ "POST /api/workspaces/blog-desk/evals": () => ({ ok: true, path: "evals/writer-quality.md" }) });
+  const s = await serve({ "POST /v1/workspaces/blog-desk/evals": () => ({ ok: true, path: "evals/writer-quality.md" }) });
   const r = await at(s.url, "eval", "new", "writer-quality", "--to", "blog-desk");
   const bad = await at(s.url, "eval", "new", "Bad_Name", "--to", "blog-desk");
   s.close();
@@ -168,11 +168,11 @@ test("eval new <name> --to posts { name } to …/evals", async () => {
   assert.match(r.out, /created eval writer-quality in blog-desk/);
   assert.match(r.out, /foldrun eval writer-quality --to blog-desk/);
   assert.equal(bad.code, 1);
-  assert.deepEqual(writes(s), [{ method: "POST", url: "/api/workspaces/blog-desk/evals", body: { name: "writer-quality" } }]);
+  assert.deepEqual(writes(s), [{ method: "POST", url: "/v1/workspaces/blog-desk/evals", body: { name: "writer-quality" } }]);
 });
 
 test("source new <kind> <name> posts to …/assets — at workspace scope, or inside one agent", async () => {
-  const s = await serve({ "POST /api/workspaces/blog-desk/assets": (b) => ({ ok: true, path: JSON.parse(b).agent ? `agents/${JSON.parse(b).agent}/skills/house-style/SKILL.md` : "knowledge/brand.md" }) });
+  const s = await serve({ "POST /v1/workspaces/blog-desk/assets": (b) => ({ ok: true, path: JSON.parse(b).agent ? `agents/${JSON.parse(b).agent}/skills/house-style/SKILL.md` : "knowledge/brand.md" }) });
   const k = await at(s.url, "source", "new", "knowledge", "brand", "--to", "blog-desk");
   const sk = await at(s.url, "source", "new", "skills", "house-style", "--agent", "writer", "--to", "blog-desk");
   const bad = await at(s.url, "source", "new", "widgets", "x", "--to", "blog-desk");
@@ -184,16 +184,16 @@ test("source new <kind> <name> posts to …/assets — at workspace scope, or in
   assert.equal(bad.code, 1);
   assert.match(bad.out, /kind is tools, knowledge, memory, skills, scripts/);
   assert.deepEqual(writes(s), [
-    { method: "POST", url: "/api/workspaces/blog-desk/assets", body: { kind: "knowledge", name: "brand" } },
-    { method: "POST", url: "/api/workspaces/blog-desk/assets", body: { kind: "skills", name: "house-style", agent: "writer" } },
+    { method: "POST", url: "/v1/workspaces/blog-desk/assets", body: { kind: "knowledge", name: "brand" } },
+    { method: "POST", url: "/v1/workspaces/blog-desk/assets", body: { kind: "skills", name: "house-style", agent: "writer" } },
   ]);
 });
 
-test("library new <kind>/<name> posts { name, template, language } to /api/library/<kind>; memory is a kind", async () => {
+test("library new <kind>/<name> posts { name, template, language } to /v1/library/<kind>; memory is a kind", async () => {
   const s = await serve({
-    "POST /api/library/tools": () => ({ ok: true, path: "uuid/tool.md" }),
-    "POST /api/library/memory": () => ({ ok: true, path: "lessons.md" }),
-    "/api/library/memory": () => ({ kind: "memory", entries: [{ name: "lessons", description: "What runs learned." }] }),
+    "POST /v1/library/tools": () => ({ ok: true, path: "uuid/tool.md" }),
+    "POST /v1/library/memory": () => ({ ok: true, path: "lessons.md" }),
+    "/v1/library/memory": () => ({ kind: "memory", entries: [{ name: "lessons", description: "What runs learned." }] }),
   });
   const t = await at(s.url, "library", "new", "tools/uuid", "--template", "script", "--language", "bash");
   const m = await at(s.url, "library", "new", "memory/lessons");
@@ -206,14 +206,14 @@ test("library new <kind>/<name> posts { name, template, language } to /api/libra
   assert.match(ls.out, /memory 1[\s\S]*lessons\s+What runs learned\./);
   assert.equal(bad.code, 1);
   assert.deepEqual(writes(s), [
-    { method: "POST", url: "/api/library/tools", body: { name: "uuid", template: "script", language: "bash" } },
-    { method: "POST", url: "/api/library/memory", body: { name: "lessons" } },
+    { method: "POST", url: "/v1/library/tools", body: { name: "uuid", template: "script", language: "bash" } },
+    { method: "POST", url: "/v1/library/memory", body: { name: "lessons" } },
   ]);
 });
 
 test("workspaces new <name> --platform posts { name, template: true } — or { name, starter: true }", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cov-"));
-  const s = await serve({ "POST /api/workspaces": (b) => ({ ok: true, name: JSON.parse(b).name, tenant: "default", agents: JSON.parse(b).starter ? 2 : 0, flows: JSON.parse(b).starter ? 1 : 0 }) });
+  const s = await serve({ "POST /v1/workspaces": (b) => ({ ok: true, name: JSON.parse(b).name, tenant: "default", agents: JSON.parse(b).starter ? 2 : 0, flows: JSON.parse(b).starter ? 1 : 0 }) });
   const blank = await cli(["workspaces", "new", "ads-desk", "--platform", "--url", s.url, "--token", "k"], { cwd });
   const starter = await cli(["workspaces", "new", "seo-desk", "--platform", "--starter", "--url", s.url, "--token", "k"], { cwd });
   s.close();
@@ -222,17 +222,17 @@ test("workspaces new <name> --platform posts { name, template: true } — or { n
   assert.equal(starter.code, 0, starter.out);
   assert.match(starter.out, /seo-desk.*2 agents, 1 flow\b/);
   assert.deepEqual(writes(s), [
-    { method: "POST", url: "/api/workspaces", body: { name: "ads-desk", template: true } },
-    { method: "POST", url: "/api/workspaces", body: { name: "seo-desk", starter: true } },
+    { method: "POST", url: "/v1/workspaces", body: { name: "ads-desk", template: true } },
+    { method: "POST", url: "/v1/workspaces", body: { name: "seo-desk", starter: true } },
   ]);
   assert.deepEqual(fs.readdirSync(cwd), [], "nothing made here");
 });
 
 // ------------------------------------------------------------ the account
 
-test("backups requests reads GET /api/account/backups/requests", async () => {
+test("backups requests reads GET /v1/account/backups/requests", async () => {
   const requests = [{ id: "rr-1", tenant: "t", workspace: "blog-desk", target: "yesterday 9am", backupId: null, what: "runs", note: "lost a run", by: "me@x.com", at: "2026-10-04T09:00:00Z", status: "open", notified: true }];
-  const s = await serve({ "/api/account/backups/requests": () => ({ requests }) });
+  const s = await serve({ "/v1/account/backups/requests": () => ({ requests }) });
   const r = await at(s.url, "backups", "requests");
   const j = await at(s.url, "backups", "requests", "--json");
   s.close();
@@ -242,7 +242,7 @@ test("backups requests reads GET /api/account/backups/requests", async () => {
   assert.deepEqual(json(j.out), requests);
 });
 
-test("status --platform --history reads the open GET /api/status/history?days=n, no key sent", async () => {
+test("status --platform --history reads the open GET /v1/status/history?days=n, no key sent", async () => {
   const day = (date: string, k: Partial<Record<string, number>>, uptime: number | null) => ({ date, samples: 288, operational: 0, degraded: 0, outage: 0, maintenance: 0, ...k, uptime });
   const doc = {
     days: 3,
@@ -250,12 +250,12 @@ test("status --platform --history reads the open GET /api/status/history?days=n,
     components: [{ id: "api", name: "Dashboard and API", uptime: 0.99, days: [day("2026-10-03", { operational: 288 }, 1), day("2026-10-04", { outage: 3, operational: 285 }, 0.99), day("2026-10-05", {}, null)] }],
     incidents: [{ id: "i1", kind: "incident", title: "Runs stalled", impact: "major", status: "resolved", components: ["api"], startsAt: "2026-10-04T03:34:00Z", endsAt: null, resolvedAt: "2026-10-04T06:25:00Z", updates: [] }],
   };
-  const s = await serve({ "/api/status/history": () => doc });
+  const s = await serve({ "/v1/status/history": () => doc });
   const r = await cli(["status", "--platform", "--history", "--days", "3", "--url", s.url]);
   const bad = await cli(["status", "--platform", "--history", "--days", "91", "--url", s.url]);
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.equal(s.seen[0].url, "/api/status/history");
+  assert.equal(s.seen[0].url, "/v1/status/history");
   assert.equal(s.seen[0].query.get("days"), "3");
   assert.equal(s.seen[0].headers.authorization, undefined, "an open route");
   assert.match(r.out, /last 3 days/);
@@ -266,12 +266,12 @@ test("status --platform --history reads the open GET /api/status/history?days=n,
   assert.equal(s.seen.length, 1, "a bad --days asks nothing");
 });
 
-test("team lists members, roles and scopes from GET /api/team — and refuses a verb it does not have", async () => {
+test("team lists members, roles and scopes from GET /v1/team — and refuses a verb it does not have", async () => {
   const members = [
     { id: "u1", email: "owner@x.com", createdAt: "2026-01-02T00:00:00Z", owner: true, role: "owner", workspaces: null },
     { id: "u2", email: "ed@x.com", createdAt: "2026-03-04T00:00:00Z", owner: false, role: "editor", workspaces: ["blog-desk"] },
   ];
-  const s = await serve({ "/api/team": () => ({ members }) });
+  const s = await serve({ "/v1/team": () => ({ members }) });
   const r = await at(s.url, "team");
   const j = await at(s.url, "team", "--json");
   const invite = await at(s.url, "team", "promote", "a@b.com");
@@ -286,16 +286,16 @@ test("team lists members, roles and scopes from GET /api/team — and refuses a 
   assert.equal(s.seen.length, 2, "the refused verb sent nothing");
 });
 
-test("team invites lists GET /api/team/invites (--all asks for every one) and revoke sends DELETE …/invites/<id>", async () => {
+test("team invites lists GET /v1/team/invites (--all asks for every one) and revoke sends DELETE …/invites/<id>", async () => {
   const invites = [
     { id: "a".repeat(32), email: "new@x.com", role: "editor", workspaces: ["blog-desk"], invitedBy: "owner@x.com", createdAt: "2026-10-29T00:00:00Z", expiresAt: "2026-11-05T00:00:00Z", status: "pending" },
     { id: "b".repeat(32), email: null, role: "viewer", workspaces: null, invitedBy: "owner@x.com", createdAt: "2026-10-28T00:00:00Z", expiresAt: "2026-11-04T00:00:00Z", status: "pending" },
   ];
   const s = await serve({
-    "/api/team/invites": (_b, q) => ({ invites: q.get("all") === "1" ? [...invites, { ...invites[0], id: "c".repeat(32), status: "accepted" }] : invites }),
-    [`DELETE /api/team/invites/${"a".repeat(32)}`]: () => ({ ok: true, revoked: true, invite: { ...invites[0], status: "revoked" } }),
-    [`DELETE /api/team/invites/${"b".repeat(32)}`]: () => ({ ok: true, revoked: false, invite: { ...invites[1], status: "expired" } }),
-    [`DELETE /api/team/invites/${"d".repeat(32)}`]: () => ({ __status: 409, body: { error: "that invite was already accepted — remove the member instead" } }),
+    "/v1/team/invites": (_b, q) => ({ invites: q.get("all") === "1" ? [...invites, { ...invites[0], id: "c".repeat(32), status: "accepted" }] : invites }),
+    [`DELETE /v1/team/invites/${"a".repeat(32)}`]: () => ({ ok: true, revoked: true, invite: { ...invites[0], status: "revoked" } }),
+    [`DELETE /v1/team/invites/${"b".repeat(32)}`]: () => ({ ok: true, revoked: false, invite: { ...invites[1], status: "expired" } }),
+    [`DELETE /v1/team/invites/${"d".repeat(32)}`]: () => ({ __status: 409, body: { error: "that invite was already accepted — remove the member instead" } }),
   });
   const r = await at(s.url, "team", "invites");
   const all = await at(s.url, "team", "invites", "--all", "--json");
@@ -319,7 +319,7 @@ test("team invites lists GET /api/team/invites (--all asks for every one) and re
   assert.match(again.out, /already expired — nothing changed/);
   assert.equal(used.code, 1);
   assert.match(used.out, /already accepted/);
-  assert.deepEqual(writes(s).map((w) => `${w.method} ${w.url}`), ["a", "b", "d"].map((c) => `DELETE /api/team/invites/${c.repeat(32)}`));
+  assert.deepEqual(writes(s).map((w) => `${w.method} ${w.url}`), ["a", "b", "d"].map((c) => `DELETE /v1/team/invites/${c.repeat(32)}`));
   assert.equal(none.code, 1);
   assert.match(none.out, /which invite\?/);
   assert.equal(odd.code, 1);
@@ -329,7 +329,7 @@ test("team invites lists GET /api/team/invites (--all asks for every one) and re
 // ------------------------------------------------------------ runs, billing, windows
 
 test("stop/rerun --until sends until with the filter to runs/bulk — a span or a date", async () => {
-  const s = await serve({ "/api/workspaces": () => WORKSPACES, "POST /api/workspaces/blog-desk/runs/bulk": () => ({ ok: true, dryRun: true, matched: [] }) });
+  const s = await serve({ "/v1/workspaces": () => WORKSPACES, "POST /v1/workspaces/blog-desk/runs/bulk": () => ({ ok: true, dryRun: true, matched: [] }) });
   const before = Date.now();
   const span = await at(s.url, "stop", "--status", "running", "--until", "2h", "--to", "blog-desk");
   const date = await at(s.url, "rerun", "--until", "2026-10-05T09:00:00Z", "--to", "blog-desk");
@@ -359,8 +359,8 @@ test("billing credit is retired (FOL-94): it sends nothing and points at top-up"
 
 test("observe and triggers send their window as days", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/observe": () => ({ workspace: "blog-desk", sinceDays: 7, runs: 0, failedRuns: 0, steps: 0, costUsd: 0, flows: [], agents: [], tools: [], failures: [] }),
-    "/api/workspaces/blog-desk/triggers": () => ({ days: 3, flows: [], events: [] }),
+    "/v1/workspaces/blog-desk/observe": () => ({ workspace: "blog-desk", sinceDays: 7, runs: 0, failedRuns: 0, steps: 0, costUsd: 0, flows: [], agents: [], tools: [], failures: [] }),
+    "/v1/workspaces/blog-desk/triggers": () => ({ days: 3, flows: [], events: [] }),
   });
   const o = await at(s.url, "observe", "--to", "blog-desk", "--since", "7");
   const t = await at(s.url, "triggers", "--to", "blog-desk", "--since", "3");
@@ -374,21 +374,21 @@ test("observe and triggers send their window as days", async () => {
 
 // ------------------------------------------------------------ files to text
 
-test("text posts the file's bytes to /api/extract; storage text posts { path, write } to …/storage/extract", async () => {
+test("text posts the file's bytes to /v1/extract; storage text posts { path, write } to …/storage/extract", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cov-text-"));
   const file = path.join(dir, "memo.docx");
   fs.writeFileSync(file, "PK bytes");
   const result = { sha256: "0".repeat(64), kind: "document", format: "docx", text: "the memo", engine: { parser: "docling" }, truncated: false, warnings: [], cached: true, ms: 3 };
   const s = await serve({
-    "POST /api/extract": () => result,
-    "POST /api/workspaces/blog-desk/storage/extract": () => ({ ...result, wrote: "memo.docx.txt" }),
+    "POST /v1/extract": () => result,
+    "POST /v1/workspaces/blog-desk/storage/extract": () => ({ ...result, wrote: "memo.docx.txt" }),
   });
   const t = await at(s.url, "text", file);
   const st = await at(s.url, "storage", "text", "memo.docx", "--to", "blog-desk");
   s.close();
   assert.equal(t.code, 0, t.out);
   assert.equal(st.code, 0, st.out);
-  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["POST /api/extract", "POST /api/workspaces/blog-desk/storage/extract"]);
+  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["POST /v1/extract", "POST /v1/workspaces/blog-desk/storage/extract"]);
   assert.equal(s.seen[0].query.get("name"), "memo.docx");
   assert.equal(s.seen[0].body, "PK bytes");
   assert.deepEqual(JSON.parse(s.seen[1].body), { path: "memo.docx", write: true });

@@ -21,7 +21,7 @@ const scheduled = [
 ];
 
 test("schedule lists every clocked flow, soonest first, with the next times", async () => {
-  const s = await serve({ "/api/schedule": () => ({ scheduled }) });
+  const s = await serve({ "/v1/schedule": () => ({ scheduled }) });
   const r = await at(s.url, "schedule");
   s.close();
   assert.equal(r.code, 1, "an unparseable cron line is a failure to report");
@@ -35,7 +35,7 @@ test("schedule lists every clocked flow, soonest first, with the next times", as
 });
 
 test("a cron line the scheduler cannot parse is marked, and is the exit code", async () => {
-  const s = await serve({ "/api/schedule": () => ({ scheduled }) });
+  const s = await serve({ "/v1/schedule": () => ({ scheduled }) });
   const r = await at(s.url, "schedule");
   s.close();
   assert.equal(r.code, 1);
@@ -43,7 +43,7 @@ test("a cron line the scheduler cannot parse is marked, and is the exit code", a
 });
 
 test("--to narrows to one workspace", async () => {
-  const s = await serve({ "/api/schedule": () => ({ scheduled }) });
+  const s = await serve({ "/v1/schedule": () => ({ scheduled }) });
   const r = await at(s.url, "schedule", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -53,7 +53,7 @@ test("--to narrows to one workspace", async () => {
 });
 
 test("nothing scheduled says how a flow gets a clock", async () => {
-  const s = await serve({ "/api/schedule": () => ({ scheduled: [] }) });
+  const s = await serve({ "/v1/schedule": () => ({ scheduled: [] }) });
   const r = await at(s.url, "schedule");
   s.close();
   assert.equal(r.code, 0, r.out);

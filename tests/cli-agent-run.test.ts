@@ -13,7 +13,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { serve, at, failing, WORKSPACES } from "./fake-platform.ts";
 
-const RUN = "/api/workspaces/rank-desk/agents/tracker/run";
+const RUN = "/v1/workspaces/rank-desk/agents/tracker/run";
 
 const record = (status: string) => ({
   id: "run-adhoc-1",
@@ -65,7 +65,7 @@ test("--wait polls through a 202 and then prints the report", async () => {
     [`POST ${RUN}`]: () => ({ ok: false, runId: "run-adhoc-1", status: "running", timedOut: true, steps: [] }),
     // Two more 202s, then the finished run — and finally the full record,
     // which is what `report` asks for once the waiting is over.
-    "/api/workspaces/rank-desk/runs/run-adhoc-1": (_body, query) =>
+    "/v1/workspaces/rank-desk/runs/run-adhoc-1": (_body, query) =>
       query.get("wait") === "true" && ++asked === 1
         ? { ok: false, runId: "run-adhoc-1", status: "running", timedOut: true, steps: [] }
         : record("completed"),
@@ -83,7 +83,7 @@ test("--wait polls through a 202 and then prints the report", async () => {
 test("--wait on a run that FAILS reports the run, not a broken platform", async () => {
   const s = await serve({
     [`POST ${RUN}`]: () => failing(500, { ok: false, runId: "run-adhoc-1", status: "failed", steps: [{ agent: "tracker", status: "failed" }] }),
-    "/api/workspaces/rank-desk/runs/run-adhoc-1": () => record("failed"),
+    "/v1/workspaces/rank-desk/runs/run-adhoc-1": () => record("failed"),
   });
   const r = await at(s.url, "agent", "run", "tracker", "--to", "rank-desk", "--task", "go", "--wait");
   s.close();
@@ -102,7 +102,7 @@ test("no --task is refused before anything is started", async () => {
 });
 
 test("agent new still works, and an unknown verb names both", async () => {
-  const s = await serve({ "/api/workspaces": () => WORKSPACES });
+  const s = await serve({ "/v1/workspaces": () => WORKSPACES });
   const r = await at(s.url, "agent", "wibble", "tracker", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -112,8 +112,8 @@ test("agent new still works, and an unknown verb names both", async () => {
 test("--context sends the conversation (FOL-162); invoke carries it too, and runs --context lists only its runs", async () => {
   const s = await serve({
     [`POST ${RUN}`]: () => ({ ok: true, runId: "run-adhoc-1", test: false, context: "order-42" }),
-    "POST /api/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-flow-1", steps: 1, test: false, context: "order-42" }),
-    "GET /api/workspaces/rank-desk/runs": () => ({
+    "POST /v1/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-flow-1", steps: 1, test: false, context: "order-42" }),
+    "GET /v1/workspaces/rank-desk/runs": () => ({
       runs: [
         { id: "run-a", flow: "adhoc:tracker", status: "completed", startedAt: "2026-11-11T01:00:00.000Z", finishedAt: "2026-11-11T01:01:00.000Z", summary: "first turn", context: { id: "order-42", key: "k" }, steps: [] },
         { id: "run-b", flow: "adhoc:tracker", status: "completed", startedAt: "2026-11-11T00:00:00.000Z", finishedAt: "2026-11-11T00:01:00.000Z", summary: "another chat", context: { id: "order-7", key: "k2" }, steps: [] },
@@ -150,9 +150,9 @@ test("--file hands the run files (FOL-163): a storage path as it is; ./local is 
   fs.writeFileSync(path.join(dir, "brief.pdf"), "%PDF-1.7 brief");
   const s = await serve({
     [`POST ${RUN}`]: () => ({ ok: true, runId: "run-adhoc-1", test: false, inputs: ["reports/q4.pdf"] }),
-    "POST /api/workspaces/rank-desk/storage/upload-url": () => failing(404, { error: "older platform" }),
-    "PUT /api/workspaces/rank-desk/storage": () => ({ file: { path: "x" } }),
-    "POST /api/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-flow-1", steps: 1, test: false }),
+    "POST /v1/workspaces/rank-desk/storage/upload-url": () => failing(404, { error: "older platform" }),
+    "PUT /v1/workspaces/rank-desk/storage": () => ({ file: { path: "x" } }),
+    "POST /v1/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-flow-1", steps: 1, test: false }),
   });
   try {
     const r = await at(s.url, "agent", "run", "tracker", "--to", "rank-desk", "--task", "read", "--file", "reports/q4.pdf", "--file", "storage/img/a.png");

@@ -19,7 +19,7 @@ const entries = [
 ];
 
 test("billing leads with the balance and the ledger under it", async () => {
-  const s = await serve({ "/api/billing": () => ({ enabled: true, balanceUsd: 42.5, entries: entries.slice(1) }) });
+  const s = await serve({ "/v1/billing": () => ({ enabled: true, balanceUsd: 42.5, entries: entries.slice(1) }) });
   const r = await at(s.url, "billing");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -33,7 +33,7 @@ test("billing leads with the balance and the ledger under it", async () => {
 
 test("what the platform says the account should hear is printed, in its words", async () => {
   const notices = ["the wallet is empty — new runs are refused until it is topped up", "models, compute are waived for this account — those parts of each charge are $0"];
-  const s = await serve({ "/api/billing": () => ({ enabled: true, balanceUsd: -376.886539, entries, notices }) });
+  const s = await serve({ "/v1/billing": () => ({ enabled: true, balanceUsd: -376.886539, entries, notices }) });
   const r = await at(s.url, "billing");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -46,7 +46,7 @@ test("the CLI draws no billing conclusion of its own: no notice, nothing said", 
   // A negative balance inside an overdraft, or a fully waived account, is
   // not refused: only the platform knows, so without its notice the CLI
   // says nothing beyond the numbers.
-  const s = await serve({ "/api/billing": () => ({ enabled: true, balanceUsd: -1, entries, notices: [] }) });
+  const s = await serve({ "/v1/billing": () => ({ enabled: true, balanceUsd: -1, entries, notices: [] }) });
   const r = await at(s.url, "billing");
   s.close();
   assert.doesNotMatch(r.out, /wallet is empty/);
@@ -54,7 +54,7 @@ test("the CLI draws no billing conclusion of its own: no notice, nothing said", 
 });
 
 test("a run entry says which flow in which workspace it paid for", async () => {
-  const s = await serve({ "/api/billing": () => ({ enabled: true, balanceUsd: 1, entries }) });
+  const s = await serve({ "/v1/billing": () => ({ enabled: true, balanceUsd: 1, entries }) });
   const r = await at(s.url, "billing");
   s.close();
   assert.match(r.out, /intake-desk\/hourly/);
@@ -62,7 +62,7 @@ test("a run entry says which flow in which workspace it paid for", async () => {
 });
 
 test("billing off on a self-hosted install is said, not hidden", async () => {
-  const s = await serve({ "/api/billing": () => ({ enabled: false, balanceUsd: 0, entries: [] }) });
+  const s = await serve({ "/v1/billing": () => ({ enabled: false, balanceUsd: 0, entries: [] }) });
   const r = await at(s.url, "billing");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -72,7 +72,7 @@ test("billing off on a self-hosted install is said, not hidden", async () => {
 });
 
 test("--limit caps the ledger, and the total is still named", async () => {
-  const s = await serve({ "/api/billing": () => ({ enabled: true, balanceUsd: 1, entries }) });
+  const s = await serve({ "/v1/billing": () => ({ enabled: true, balanceUsd: 1, entries }) });
   const r = await at(s.url, "billing", "--limit", "1");
   s.close();
   assert.match(r.out, /3 entries on the ledger/);
@@ -82,8 +82,8 @@ test("--limit caps the ledger, and the total is still named", async () => {
 
 test("every billing verb on a platform without billing says so, not a bare 404", async () => {
   const s = await serve({
-    "GET /api/billing": () => failing(404, { error: "not found" }),
-    "GET /api/billing/statement": () => failing(404, { error: "not found" }),
+    "GET /v1/billing": () => failing(404, { error: "not found" }),
+    "GET /v1/billing/statement": () => failing(404, { error: "not found" }),
   });
   const plain = await at(s.url, "billing");
   const statement = await at(s.url, "billing", "statement");

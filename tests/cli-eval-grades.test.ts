@@ -27,8 +27,8 @@ const grade = (runId: string, status: string, reason?: string) => ({
 
 test("eval grades prints the rate and each graded run, and exits 1 on a failure", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/evals/digest-quality/grades": (_b, q) => ({
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/evals/digest-quality/grades": (_b, q) => ({
       eval: "digest-quality",
       flow: "digest",
       agent: null,
@@ -56,8 +56,8 @@ test("eval grades prints the rate and each graded run, and exits 1 on a failure"
 
 test("eval grade grades one run now and exits 0 when it passed", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "POST /api/workspaces/blog-desk/evals/digest-quality/grade": (body) => grade(JSON.parse(body).run, "pass"),
+    "/v1/workspaces": () => WORKSPACES,
+    "POST /v1/workspaces/blog-desk/evals/digest-quality/grade": (body) => grade(JSON.parse(body).run, "pass"),
   });
   try {
     const r = await at(fake.url, "eval", "grade", "digest-quality", "--run", "run-x", "--to", "blog-desk");
@@ -73,8 +73,8 @@ test("eval grade grades one run now and exits 0 when it passed", async () => {
 
 test("eval --to lists a grader and runs only the case evals", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/evals": () => ({ evals: [{ name: "digest-quality", trigger: "runs", cases: [] }] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/evals": () => ({ evals: [{ name: "digest-quality", trigger: "runs", cases: [] }] }),
   });
   try {
     const r = await at(fake.url, "eval", "--to", "blog-desk");

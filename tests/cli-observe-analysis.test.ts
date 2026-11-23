@@ -1,4 +1,4 @@
-// `foldrun observe` with the account Observe page's analysis (GET /api/observe):
+// `foldrun observe` with the account Observe page's analysis (GET /v1/observe):
 // the window against the one before, why runs went wrong, agents and tools to
 // watch — 7 days unasked, as the page; and `foldrun eval trends` (GET
 // …/evals/trends), the workspace Observe page's evals by change.
@@ -45,16 +45,16 @@ const analysis = (days: number) => ({
 
 test("observe: 7 days unasked, and the analysis under the table — the window before, causes, agents and tools to watch", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/observe": () => observation("blog-desk", 2),
-    "/api/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
-    "/api/observe": (_b, q) => analysis(Number(q.get("days"))),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/observe": () => observation("blog-desk", 2),
+    "/v1/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
+    "/v1/observe": (_b, q) => analysis(Number(q.get("days"))),
   });
   const r = await at(s.url, "observe");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.ok(s.seen.filter((x) => x.url.endsWith("/observe")).every((x) => x.query.get("days") === "7"), "every call asks for 7 days");
-  assert.ok(s.seen.some((x) => x.url === "/api/observe"));
+  assert.ok(s.seen.some((x) => x.url === "/v1/observe"));
   assert.match(r.out, /last 7 days/);
   // Each workspace's trend against the window before.
   assert.match(r.out, /blog-desk.*▼ 20 pts/);
@@ -75,10 +75,10 @@ test("observe: 7 days unasked, and the analysis under the table — the window b
 
 test("observe --since and --days still pick any window, for the table and the analysis alike", async () => {
   const routes = {
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/observe": () => observation("blog-desk", 0),
-    "/api/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
-    "/api/observe": (_b: string, q: URLSearchParams) => analysis(Number(q.get("days"))),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/observe": () => observation("blog-desk", 0),
+    "/v1/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
+    "/v1/observe": (_b: string, q: URLSearchParams) => analysis(Number(q.get("days"))),
   };
   for (const flag of ["--since", "--days"]) {
     const s = await serve(routes);
@@ -91,20 +91,20 @@ test("observe --since and --days still pick any window, for the table and the an
 });
 
 test("observe --to keeps 30 days unasked, as a workspace's Observe page, and asks for no account analysis", async () => {
-  const s = await serve({ "/api/workspaces/blog-desk/observe": () => observation("blog-desk", 0) });
+  const s = await serve({ "/v1/workspaces/blog-desk/observe": () => observation("blog-desk", 0) });
   const r = await at(s.url, "observe", "--to", "blog-desk");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(s.seen[0].query.get("days"), "30");
-  assert.ok(!s.seen.some((x) => x.url === "/api/observe"));
+  assert.ok(!s.seen.some((x) => x.url === "/v1/observe"));
 });
 
 test("observe --json is one document: the window, the analysis, and every workspace's report", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/observe": () => observation("blog-desk", 2),
-    "/api/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
-    "/api/observe": (_b, q) => analysis(Number(q.get("days"))),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/observe": () => observation("blog-desk", 2),
+    "/v1/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
+    "/v1/observe": (_b, q) => analysis(Number(q.get("days"))),
   });
   const r = await at(s.url, "observe", "--json");
   s.close();
@@ -118,9 +118,9 @@ test("observe --json is one document: the window, the analysis, and every worksp
 
 test("observe against a platform with no account analysis yet: the table alone, and account: null in --json", async () => {
   const routes = {
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/observe": () => observation("blog-desk", 1),
-    "/api/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/observe": () => observation("blog-desk", 1),
+    "/v1/workspaces/rank-desk/observe": () => observation("rank-desk", 0),
   };
   let s = await serve(routes);
   const r = await at(s.url, "observe");
@@ -140,7 +140,7 @@ const entry = (evalName: string, commit: string | null, passed: number, failed: 
 
 test("eval trends prints each eval against its last run on a different commit, and exits 1 on a drop", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/evals/trends": () => ({
+    "/v1/workspaces/blog-desk/evals/trends": () => ({
       workspace: "blog-desk",
       trends: [
         { eval: "quality", latest: entry("quality", "bbbbbbbbbbbb", 2, 2), previous: entry("quality", "aaaaaaaaaaaa", 4, 0), delta: -2 },
@@ -152,7 +152,7 @@ test("eval trends prints each eval against its last run on a different commit, a
   const r = await at(s.url, "eval", "trends", "--to", "blog-desk");
   s.close();
   assert.equal(r.code, 1, r.out);
-  assert.equal(s.seen[0].url, "/api/workspaces/blog-desk/evals/trends");
+  assert.equal(s.seen[0].url, "/v1/workspaces/blog-desk/evals/trends");
   assert.match(r.out, /quality\s+2\/4\s+bbbbbbb\s+4\/4 aaaaaaa\s+-2 — this change made it worse/);
   // A revision id keeps enough to name it; a git sha its short form.
   assert.match(r.out, /edited\s+3\/3\s+r-20261103-a\s+2\/3 ccccccc\s+\+1/);
@@ -161,8 +161,8 @@ test("eval trends prints each eval against its last run on a different commit, a
 
 test("eval trends: no drop exits 0; --json is the document; no history says how to make one", async () => {
   const s = await serve({
-    "GET /api/workspaces/blog-desk/evals/trends": () => ({ workspace: "blog-desk", trends: [{ eval: "q", latest: entry("q", "b1", 3, 0), previous: entry("q", "a1", 3, 0), delta: 0 }] }),
-    "/api/workspaces/rank-desk/evals/trends": () => ({ workspace: "rank-desk", trends: [] }),
+    "GET /v1/workspaces/blog-desk/evals/trends": () => ({ workspace: "blog-desk", trends: [{ eval: "q", latest: entry("q", "b1", 3, 0), previous: entry("q", "a1", 3, 0), delta: 0 }] }),
+    "/v1/workspaces/rank-desk/evals/trends": () => ({ workspace: "rank-desk", trends: [] }),
   });
   const r = await at(s.url, "eval", "trends", "--to", "blog-desk");
   const j = await at(s.url, "eval", "trends", "--to", "blog-desk", "--json");
@@ -178,13 +178,13 @@ test("eval trends: no drop exits 0; --json is the document; no history says how 
 
 test("an eval called trends is still read with --last, not taken for the verb", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/evals": () => ({ evals: [{ name: "trends", agent: "writer", trigger: "manual" }] }),
-    "/api/workspaces/blog-desk/evals/trends/run": () => ({ running: false, result: null }),
+    "/v1/workspaces/blog-desk/evals": () => ({ evals: [{ name: "trends", agent: "writer", trigger: "manual" }] }),
+    "/v1/workspaces/blog-desk/evals/trends/run": () => ({ running: false, result: null }),
   });
   await at(s.url, "eval", "trends", "--to", "blog-desk", "--last");
   s.close();
-  assert.ok(!s.seen.some((x) => x.url === "/api/workspaces/blog-desk/evals/trends"));
-  assert.ok(s.seen.some((x) => x.url === "/api/workspaces/blog-desk/evals"));
+  assert.ok(!s.seen.some((x) => x.url === "/v1/workspaces/blog-desk/evals/trends"));
+  assert.ok(s.seen.some((x) => x.url === "/v1/workspaces/blog-desk/evals"));
 });
 
 test("eval trends --help names it and calls nothing", async () => {
@@ -204,7 +204,7 @@ test("FOL-74: observe --to shows an overlapped start-up as the platform placed i
       { phase: "go", took: sp(0.1), from: sp(8), at: sp(8.1), parallel: 0, waited: sp(4) },
     ],
   };
-  const s = await serve({ "/api/workspaces/blog-desk/observe": () => report });
+  const s = await serve({ "/v1/workspaces/blog-desk/observe": () => report });
   const r = await at(s.url, "observe", "--to", "blog-desk");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -218,7 +218,7 @@ test("FOL-74: observe --to shows an overlapped start-up as the platform placed i
 
 test("observe --to against a platform from before FOL-74: the start-up table without lanes", async () => {
   const sp = (v: number) => ({ n: 6, p50: v, p95: v, max: v });
-  const s = await serve({ "/api/workspaces/blog-desk/observe": () => ({ ...observation("blog-desk", 0), startup: [{ phase: "ready", took: sp(1), at: sp(1) }] }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/observe": () => ({ ...observation("blog-desk", 0), startup: [{ phase: "ready", took: sp(1), at: sp(1) }] }) });
   const r = await at(s.url, "observe", "--to", "blog-desk");
   s.close();
   assert.equal(r.code, 0, r.out);

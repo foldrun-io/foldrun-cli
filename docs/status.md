@@ -20,7 +20,7 @@ that read the same record:
 
 | Component | Operational when | Measured from |
 |---|---|---|
-| Dashboard and API | the web tier answers and its database does | the request itself; the worker also fetches `/api/healthz` through the public address every five minutes (it needs only the `200`; the database it asks itself) |
+| Dashboard and API | the web tier answers and its database does | the request itself; the worker also fetches `/v1/healthz` through the public address every five minutes (it needs only the `200`; the database it asks itself) |
 | Run workers | a worker holds the lease and nothing queued has waited over ten minutes | the worker lease and the queue's oldest job |
 | Scheduler | it has ticked in the last fifteen minutes | the samples themselves — they are written from inside the scheduler's tick, so a stale sample *is* a stopped scheduler |
 | Model providers | `api.anthropic.com` answers, and fewer than two step attempts in the last hour failed with a provider error (overloaded, rate limited, a 5xx; a refused credential only when two accounts saw one — one account's own expired key is that account's) | a reachability check, and the run records |
@@ -58,9 +58,9 @@ What customers see never includes who wrote an update.
 
 ## Reading it from code
 
-`GET /api/status` and `GET /api/status/history?days=90` are open — no key —
+`GET /v1/status` and `GET /v1/status/history?days=90` are open — no key —
 and readable cross-origin from foldrun.io. See [the API](api) for the
-shapes. The answer to `/api/status` is cached for fifteen seconds and never
+shapes. The answer to `/v1/status` is cached for fifteen seconds and never
 calls a provider per request.
 
 ## On your own install

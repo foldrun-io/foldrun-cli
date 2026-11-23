@@ -40,7 +40,7 @@ function run(args: string[], extraEnv: Record<string, string> = {}): Promise<{ o
 test("doctor: every line ✓ against a healthy platform, and the key is shown as a prefix only", async () => {
   const p = await serve((req, res) => {
     res.setHeader("content-type", "application/json");
-    if (req.url === "/api/healthz") {
+    if (req.url === "/v1/healthz") {
       res.end(JSON.stringify({ ok: true, version: "0.9.1", role: "web" }));
       return;
     }
@@ -62,7 +62,7 @@ test("doctor: every line ✓ against a healthy platform, and the key is shown as
     assert.match(r.out, /✓ account\s+acme\s+acme · admin · a@acme\.test · key fr_secre…/);
     assert.doesNotMatch(r.out, /secretsecret/, "the key itself is never printed");
     assert.match(r.out, /✓ dns\s+127\.0\.0\.1 is an address/);
-    assert.match(r.out, /✓ healthz\s+GET \/api\/healthz 200 in \d+ ms · version 0\.9\.1 · role web/);
+    assert.match(r.out, /✓ healthz\s+GET \/v1\/healthz 200 in \d+ ms · version 0\.9\.1 · role web/);
     assert.doesNotMatch(r.out, /✗/);
   } finally {
     p.close();

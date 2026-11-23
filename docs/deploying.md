@@ -57,7 +57,7 @@ overrides that when you mean it.
 
 Every change to a project is a revision — a deploy, a dashboard edit, an
 import — with who, when and a diff, on the project's History page and at
-`/api/workspaces/<ws>/history`. Every revision also keeps a snapshot of the
+`/v1/workspaces/<ws>/history`. Every revision also keeps a snapshot of the
 whole source as it stood just after it: the platform's own deploy history,
 so rolling back never needs a repository.
 

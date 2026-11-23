@@ -1,8 +1,8 @@
 // Files to text: `foldrun text <file>` uploads a local file to POST
-// /api/extract and prints what the platform read from it; `foldrun storage
+// /v1/extract and prints what the platform read from it; `foldrun storage
 // text <path>` does the same for a file already in a workspace's storage
 // (POST …/storage/extract). A long job answers 202 and is polled at GET
-// /api/extract/<id> until it is done or failed.
+// /v1/extract/<id> until it is done or failed.
 //
 //   node --test tests/cli-text.test.ts
 
@@ -34,17 +34,17 @@ const RESULT = {
 
 const json = (out: string) => JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
 /** A 202: the job is still running. */
-const running = (id: string) => raw(JSON.stringify({ id, status: "running", poll: `/api/extract/${id}` }), "application/json", { "retry-after": "0" }, 202);
+const running = (id: string) => raw(JSON.stringify({ id, status: "running", poll: `/v1/extract/${id}` }), "application/json", { "retry-after": "0" }, 202);
 
-test("text <file> posts the bytes to /api/extract with its name and options, and prints the text", async () => {
-  const s = await serve({ "POST /api/extract": () => RESULT });
+test("text <file> posts the bytes to /v1/extract with its name and options, and prints the text", async () => {
+  const s = await serve({ "POST /v1/extract": () => RESULT });
   const r = await at(s.url, "text", pdf, "--lang", "fa", "--ocr", "always", "--engine", "docling", "--wait", "30");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(s.seen.length, 1);
   const [call] = s.seen;
   assert.equal(call.method, "POST");
-  assert.equal(call.url, "/api/extract");
+  assert.equal(call.url, "/v1/extract");
   assert.equal(call.query.get("name"), "report.pdf");
   assert.equal(call.query.get("lang"), "fa");
   assert.equal(call.query.get("ocr"), "always");
@@ -58,24 +58,24 @@ test("text <file> posts the bytes to /api/extract with its name and options, and
 });
 
 test("text sends only the options given", async () => {
-  const s = await serve({ "POST /api/extract": () => RESULT });
+  const s = await serve({ "POST /v1/extract": () => RESULT });
   const r = await at(s.url, "text", pdf);
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.deepEqual([...s.seen[0].query.keys()], ["name"]);
 });
 
-test("a 202 is polled at GET /api/extract/<id> until done, with one progress line", async () => {
+test("a 202 is polled at GET /v1/extract/<id> until done, with one progress line", async () => {
   let polls = 0;
   const s = await serve({
-    "POST /api/extract": () => running("ex_1"),
-    "GET /api/extract/ex_1": () => (++polls < 2 ? running("ex_1") : { id: "ex_1", status: "done", result: { ...RESULT, text: "done after polling" } }),
+    "POST /v1/extract": () => running("ex_1"),
+    "GET /v1/extract/ex_1": () => (++polls < 2 ? running("ex_1") : { id: "ex_1", status: "done", result: { ...RESULT, text: "done after polling" } }),
   });
   const r = await at(s.url, "text", pdf, "--wait", "5s");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(s.seen[0].query.get("wait"), "5");
-  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["POST /api/extract", "GET /api/extract/ex_1", "GET /api/extract/ex_1"]);
+  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["POST /v1/extract", "GET /v1/extract/ex_1", "GET /v1/extract/ex_1"]);
   assert.match(r.out, /reading report\.pdf on the platform \(job ex_1\)/);
   assert.equal(r.out.match(/reading report\.pdf/g)?.length, 1, "one progress line, not one per poll");
   assert.match(r.out, /done after polling/);
@@ -83,8 +83,8 @@ test("a 202 is polled at GET /api/extract/<id> until done, with one progress lin
 
 test("a job that fails prints the API's reason and exits non-zero", async () => {
   const s = await serve({
-    "POST /api/extract": () => running("ex_2"),
-    "GET /api/extract/ex_2": () => ({ id: "ex_2", status: "failed", error: "the PDF is encrypted" }),
+    "POST /v1/extract": () => running("ex_2"),
+    "GET /v1/extract/ex_2": () => ({ id: "ex_2", status: "failed", error: "the PDF is encrypted" }),
   });
   const r = await at(s.url, "text", pdf);
   s.close();
@@ -93,7 +93,7 @@ test("a job that fails prints the API's reason and exits non-zero", async () => 
 });
 
 test("a refusal prints the API's message and exits non-zero", async () => {
-  const s = await serve({ "POST /api/extract": () => failing(415, { error: "this kind of file cannot be read: .exe" }) });
+  const s = await serve({ "POST /v1/extract": () => failing(415, { error: "this kind of file cannot be read: .exe" }) });
   const r = await at(s.url, "text", pdf);
   s.close();
   assert.equal(r.code, 1, r.out);
@@ -101,7 +101,7 @@ test("a refusal prints the API's message and exits non-zero", async () => {
 });
 
 test("--out (and -o) write the text to a file; an existing one needs --force", async () => {
-  const s = await serve({ "POST /api/extract": () => RESULT });
+  const s = await serve({ "POST /v1/extract": () => RESULT });
   const out = path.join(dir, "out", "report.txt");
   const r = await at(s.url, "text", pdf, "--out", out);
   assert.equal(r.code, 0, r.out);
@@ -119,7 +119,7 @@ test("--out (and -o) write the text to a file; an existing one needs --force", a
 });
 
 test("--json prints the whole result object", async () => {
-  const s = await serve({ "POST /api/extract": () => RESULT });
+  const s = await serve({ "POST /v1/extract": () => RESULT });
   const r = await at(s.url, "text", pdf, "--json");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -149,7 +149,7 @@ test("text checks its options and the file before it calls anything", async () =
 
 test("storage text posts { path, options, write } to …/storage/extract and says what it wrote", async () => {
   const s = await serve({
-    "POST /api/workspaces/blog-desk/storage/extract": (b) => ({ ...RESULT, wrote: `${JSON.parse(b).path}.txt` }),
+    "POST /v1/workspaces/blog-desk/storage/extract": (b) => ({ ...RESULT, wrote: `${JSON.parse(b).path}.txt` }),
   });
   const r = await at(s.url, "storage", "text", "storage/inbox/scan.pdf", "--to", "blog-desk", "--lang", "fa", "--ocr", "auto", "--wait", "20");
   s.close();
@@ -162,7 +162,7 @@ test("storage text posts { path, options, write } to …/storage/extract and say
 });
 
 test("storage text --no-write sends write: false; --workspace names the workspace", async () => {
-  const s = await serve({ "POST /api/workspaces/rank-desk/storage/extract": () => RESULT });
+  const s = await serve({ "POST /v1/workspaces/rank-desk/storage/extract": () => RESULT });
   const r = await at(s.url, "storage", "text", "notes/call.m4a", "--workspace", "rank-desk", "--no-write");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -173,13 +173,13 @@ test("storage text --no-write sends write: false; --workspace names the workspac
 test("storage text follows a 202 the same way, at the poll URL the platform names", async () => {
   let polls = 0;
   const s = await serve({
-    "POST /api/workspaces/blog-desk/storage/extract": () => running("ex_9"),
-    "GET /api/extract/ex_9": () => (++polls < 2 ? running("ex_9") : { id: "ex_9", status: "done", result: { ...RESULT, wrote: "a.pdf.txt" } }),
+    "POST /v1/workspaces/blog-desk/storage/extract": () => running("ex_9"),
+    "GET /v1/extract/ex_9": () => (++polls < 2 ? running("ex_9") : { id: "ex_9", status: "done", result: { ...RESULT, wrote: "a.pdf.txt" } }),
   });
   const r = await at(s.url, "storage", "text", "a.pdf", "--to", "blog-desk", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["POST /api/workspaces/blog-desk/storage/extract", "GET /api/extract/ex_9", "GET /api/extract/ex_9"]);
+  assert.deepEqual(s.seen.map((x) => `${x.method} ${x.url}`), ["POST /v1/workspaces/blog-desk/storage/extract", "GET /v1/extract/ex_9", "GET /v1/extract/ex_9"]);
   assert.equal(json(r.out).wrote, "a.pdf.txt");
 });
 

@@ -10,7 +10,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { serve, at, raw } from "./fake-platform.ts";
 
-const WS = "/api/workspaces/desk";
+const WS = "/v1/workspaces/desk";
 const ID = "c".repeat(64);
 const RUN_ID = "run-sm-1";
 const MSG = `${WS}/sessions/code-me/messages`;

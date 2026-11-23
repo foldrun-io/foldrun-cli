@@ -17,7 +17,7 @@ for (const [label, over, expect] of [
   ["not settled", { chargedUsd: null, estimatedUsd: 0.05, settled: false }, /\$0\.0500 estimated, not settled yet/],
 ] as const) {
   test(`report shows the run's money — ${label}`, async () => {
-    const s = await serve({ "/api/workspaces/desk/runs/run-m1": () => run(over), "/api/workspaces": () => ({ workspaces: [{ name: "desk" }] }), "/api/workspaces/desk/runs": () => ({ runs: [run(over)] }) });
+    const s = await serve({ "/v1/workspaces/desk/runs/run-m1": () => run(over), "/v1/workspaces": () => ({ workspaces: [{ name: "desk" }] }), "/v1/workspaces/desk/runs": () => ({ runs: [run(over)] }) });
     const r = await at(s.url, "report", "run-m1", "--to", "desk");
     s.close();
     assert.equal(r.code, 0, r.out);

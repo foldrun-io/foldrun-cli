@@ -72,7 +72,7 @@ test("a platform that accepts and never answers is given up on after FOLDRUN_TIM
     const started = Date.now();
     const r = await run(["whoami", "--url", p.url, "--token", "k"], { FOLDRUN_TIMEOUT: "1" });
     assert.notEqual(r.code, 0);
-    assert.match(r.out, /did not answer GET \/api\/me within 1s/);
+    assert.match(r.out, /did not answer GET \/v1\/me within 1s/);
     assert.match(r.out, /FOLDRUN_TIMEOUT/, "and says how to allow longer");
     assert.ok(Date.now() - started < 10_000, "it did not wait for the kernel");
   } finally {

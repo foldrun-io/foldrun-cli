@@ -24,7 +24,7 @@ const FAILURE = {
 const RUN = { id: "run-x", flow: "daily", status: "failed", startedAt: "2026-11-04T09:00:00Z", finishedAt: "2026-11-04T09:01:00Z", steps: [{ agent: "writer", status: "failed", events: [{ type: "error", text: FAILURE.reason }] }], failure: FAILURE };
 
 test("report prints why a run failed and what to do, beside the step's own words", async () => {
-  const s = await serve({ "/api/workspaces": () => WORKSPACES, "/api/workspaces/blog-desk/runs/run-x": () => RUN });
+  const s = await serve({ "/v1/workspaces": () => WORKSPACES, "/v1/workspaces/blog-desk/runs/run-x": () => RUN });
   const r = await at(s.url, "report", "run-x", "--to", "blog-desk");
   s.close();
   assert.equal(r.code, 1, "a failed run exits 1");
@@ -36,7 +36,7 @@ test("report prints why a run failed and what to do, beside the step's own words
 
 test("report from a platform before FOL-124 (no failure on one run) prints as before", async () => {
   const { failure: _f, ...old } = RUN;
-  const s = await serve({ "/api/workspaces": () => WORKSPACES, "/api/workspaces/blog-desk/runs/run-x": () => old });
+  const s = await serve({ "/v1/workspaces": () => WORKSPACES, "/v1/workspaces/blog-desk/runs/run-x": () => old });
   const r = await at(s.url, "report", "run-x", "--to", "blog-desk");
   s.close();
   assert.doesNotMatch(r.out, /fix:/);
@@ -45,7 +45,7 @@ test("report from a platform before FOL-124 (no failure on one run) prints as be
 
 test("runs lists a failed run with its sentence; an older platform's row with its reason", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/runs": () => ({ runs: [RUN, { ...RUN, id: "run-old", failure: { agent: "editor", reason: "exit code 2" } }], next: null }),
+    "/v1/workspaces/blog-desk/runs": () => ({ runs: [RUN, { ...RUN, id: "run-old", failure: { agent: "editor", reason: "exit code 2" } }], next: null }),
   });
   const r = await at(s.url, "runs", "--to", "blog-desk");
   s.close();
@@ -58,8 +58,8 @@ test("runs rm --until counts what would go, asks, then deletes a workspace's run
   let left = 150;
   const bodies: { action: string; until: string; dryRun?: boolean }[] = [];
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "POST /api/workspaces/blog-desk/runs/bulk": (body) => {
+    "/v1/workspaces": () => WORKSPACES,
+    "POST /v1/workspaces/blog-desk/runs/bulk": (body) => {
       const b = JSON.parse(body);
       bodies.push(b);
       const share = Math.min(100, left);
@@ -67,7 +67,7 @@ test("runs rm --until counts what would go, asks, then deletes a workspace's run
       left -= share;
       return { ok: true, action: "delete", matched: share, succeeded: share, failed: 0, remaining: left, runs: [] };
     },
-    "POST /api/workspaces/rank-desk/runs/bulk": () => ({ ok: true, dryRun: true, action: "delete", matched: [], remaining: 0 }),
+    "POST /v1/workspaces/rank-desk/runs/bulk": () => ({ ok: true, dryRun: true, action: "delete", matched: [], remaining: 0 }),
   });
   const dry = await at(s.url, "runs", "rm", "--until", "30d", "--dry-run");
   assert.equal(dry.code, 0, dry.out);

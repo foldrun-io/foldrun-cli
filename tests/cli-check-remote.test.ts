@@ -23,13 +23,13 @@ You are ${name}. Do the one thing.
 /** A deployed workspace: its file list, and each file when asked for by path. */
 function deployed(files: Record<string, string>) {
   return {
-    "/api/workspaces/rank-desk/source": (_b: string, query: URLSearchParams) => {
+    "/v1/workspaces/rank-desk/source": (_b: string, query: URLSearchParams) => {
       const path = query.get("path");
       if (!path) return { files: Object.keys(files) };
       return { path, content: files[path] ?? "" };
     },
-    "/api/library/tools": () => ({ entries: [] }),
-    "/api/library/skills": () => ({ entries: [] }),
+    "/v1/library/tools": () => ({ entries: [] }),
+    "/v1/library/skills": () => ({ entries: [] }),
   };
 }
 
@@ -89,9 +89,9 @@ test("every source file is fetched by path, and nothing is written into this fol
 
 test("a workspace with nothing in it says so rather than checking an empty folder", async () => {
   const s = await serve({
-    "/api/workspaces/rank-desk/source": () => ({ files: [] }),
-    "/api/library/tools": () => ({ entries: [] }),
-    "/api/library/skills": () => ({ entries: [] }),
+    "/v1/workspaces/rank-desk/source": () => ({ files: [] }),
+    "/v1/library/tools": () => ({ entries: [] }),
+    "/v1/library/skills": () => ({ entries: [] }),
   });
   const r = await at(s.url, "check", "--to", "rank-desk");
   s.close();
@@ -110,7 +110,7 @@ test("--to works from anywhere, including a folder that is not a workspace", asy
 test("--online (FOL-58) asks the platform for the network checks, prints them and what was not checked", async () => {
   const s = await serve({
     ...deployed(clean),
-    "/api/workspaces/rank-desk/check": (_b: string, q: URLSearchParams) => {
+    "/v1/workspaces/rank-desk/check": (_b: string, q: URLSearchParams) => {
       assert.equal(q.get("online"), "1");
       return {
         findings: [{ rule: "supply-chain/known-vulnerability", level: "warn", file: "agents/tracker/agent.md", line: 5, message: "runtime package requests==2.19.0 has 2 known advisories: GHSA-x, PYSEC-y — upgrade it", fingerprint: "f" }],

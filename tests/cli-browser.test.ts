@@ -79,7 +79,7 @@ const gallery = { tools: [{ name: "web", kind: "tools", title: "Web", descriptio
 
 test("browser mcp: initialize, list, and each tool call is one browse.mjs call with the right switches", async () => {
   const dir = home();
-  const s = await serve({ "/api/library/gallery": () => gallery });
+  const s = await serve({ "/v1/library/gallery": () => gallery });
   const msgs = [
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } },
     { jsonrpc: "2.0", method: "notifications/initialized" },
@@ -119,7 +119,7 @@ test("browser mcp: initialize, list, and each tool call is one browse.mjs call w
 
 test("browser mcp without Playwright says how to set it up instead of failing obscurely", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-browser-"));
-  const s = await serve({ "/api/library/gallery": () => gallery });
+  const s = await serve({ "/v1/library/gallery": () => gallery });
   const r = await cli(["browser", "mcp", "--url", s.url, "--token", "k"], {
     env: { FOLDRUN_HOME: dir },
     input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "browser_read", arguments: {} } }) + "\n",

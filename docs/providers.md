@@ -18,7 +18,7 @@ platform admin turned them on.
 
 The simplest way to bring a key: **Settings → Models**, or
 `foldrun account model set <provider> --key <api key>`, or
-`PUT /api/account/model`. Pick a name from the table below (or `custom`
+`PUT /v1/account/model`. Pick a name from the table below (or `custom`
 with a base URL and a format), paste an **API key**, and every step in
 every project runs on it. No `provider:` block is needed; one written in
 an agent, a project or the account's AGENTS.md still wins over it.
@@ -54,7 +54,7 @@ billed in credits at **foldrun's price list**
 
 - **Choose it:** Settings → Models → *foldrun's models*, pick the
   provider, *Use*. Or `foldrun account model use foldrun --provider openai`,
-  or `PUT /api/account/model` with `{ "source": "foldrun", "supply": "openai" }`.
+  or `PUT /v1/account/model` with `{ "source": "foldrun", "supply": "openai" }`.
   An admin chooses, as for the key. `foldrun account model use own` (or the
   same page) goes back: a key you stored is kept while you are on
   foldrun's models, so switching back is one step.
@@ -361,7 +361,7 @@ has to be asked over and over — so it has to be cheap.
 
 Only a newly broken provider is reported. A key that was dead yesterday and
 is dead today is not news, and an alert that arrives every morning is an
-alert people filter. `GET /api/account/providers` shows the last check and
+alert people filter. `GET /v1/account/providers` shows the last check and
 what would be checked; `POST` forces one, for the minute after rotating a
 key. From the terminal, `foldrun account providers` prints the same table
 (✓, ✗ with the verdict, or · for never checked) and `--check` forces one;

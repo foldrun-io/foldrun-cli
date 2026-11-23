@@ -33,9 +33,9 @@ const finished = {
 
 test("stop says what it is about to destroy, then posts it", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-live": () => running,
-    "POST /api/workspaces/blog-desk/runs/run-live/stop": () => ({ ok: true, runId: "run-live", status: "failed" }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-live": () => running,
+    "POST /v1/workspaces/blog-desk/runs/run-live/stop": () => ({ ok: true, runId: "run-live", status: "failed" }),
   });
   const r = await at(s.url, "stop", "run-live", "--to", "blog-desk", "--yes");
   s.close();
@@ -49,8 +49,8 @@ test("stop says what it is about to destroy, then posts it", async () => {
 
 test("stop without --yes on a pipe posts nothing", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-live": () => running,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-live": () => running,
   });
   const r = await at(s.url, "stop", "run-live", "--to", "blog-desk");
   s.close();
@@ -61,8 +61,8 @@ test("stop without --yes on a pipe posts nothing", async () => {
 
 test("a run that already finished is not an error, and is not stopped", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-done": () => finished,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-done": () => finished,
   });
   const r = await at(s.url, "stop", "run-done", "--to", "blog-desk", "--yes");
   s.close();
@@ -73,9 +73,9 @@ test("a run that already finished is not an error, and is not stopped", async ()
 
 test("without --to the workspace is found from the run id", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/rank-desk/runs/run-live": () => running,
-    "POST /api/workspaces/rank-desk/runs/run-live/stop": () => ({ ok: true, runId: "run-live", status: "failed" }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/rank-desk/runs/run-live": () => running,
+    "POST /v1/workspaces/rank-desk/runs/run-live/stop": () => ({ ok: true, runId: "run-live", status: "failed" }),
   });
   const r = await at(s.url, "stop", "run-live", "--yes");
   s.close();

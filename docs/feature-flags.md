@@ -6,7 +6,7 @@ account or a share of accounts at a time. That decision is a feature flag.
 
 An account cannot change its flags — with one exception, the
 [beta](#beta-features). It can see them: **Settings → Feature flags** in the
-dashboard, `foldrun flags` in a terminal, or `GET /api/account/flags`. Each
+dashboard, `foldrun flags` in a terminal, or `GET /v1/account/flags`. Each
 flag says whether it is on for this account and why.
 
 ## What decides a flag
@@ -41,7 +41,7 @@ project, and it can be undone at any time:
 - the dashboard: **Settings → General → Beta features**;
 - `foldrun account beta on` (or `off`; bare `foldrun account beta` shows where
   it stands and the beta flags);
-- `PUT /api/account/beta` with `{ "beta": true }` (or `false`); `GET` answers
+- `PUT /v1/account/beta` with `{ "beta": true }` (or `false`); `GET` answers
   `{ beta, flags }`.
 
 Each change is on the account's audit log as `account.beta_joined` or

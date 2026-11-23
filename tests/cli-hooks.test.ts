@@ -141,7 +141,7 @@ test("check: a tool.call hook on an agent whose web search runs at the model pro
 
 test("hook test --to posts { event } to the deployed workspace's hooks/<name>/test and prints the answer", async () => {
   const s = await serve({
-    "POST /api/workspaces/blog-desk/hooks/guard/test": () => ({ on: "tool.call", ok: true, decision: "deny", reason: "no pushes", ms: 12 }),
+    "POST /v1/workspaces/blog-desk/hooks/guard/test": () => ({ on: "tool.call", ok: true, decision: "deny", reason: "no pushes", ms: 12 }),
   });
   const r = await at(s.url, "hook", "test", "guard", "--to", "blog-desk", "--event", '{"tool":{"name":"Bash","input":{"command":"git push"}}}');
   s.close();
@@ -150,7 +150,7 @@ test("hook test --to posts { event } to the deployed workspace's hooks/<name>/te
   assert.match(r.out, /decision\s+deny/);
   assert.match(r.out, /reason\s+no pushes/);
   const post = s.seen.find((x) => x.method === "POST")!;
-  assert.equal(post.url, "/api/workspaces/blog-desk/hooks/guard/test");
+  assert.equal(post.url, "/v1/workspaces/blog-desk/hooks/guard/test");
   assert.deepEqual(JSON.parse(post.body), { event: { tool: { name: "Bash", input: { command: "git push" } } } });
 });
 
@@ -173,12 +173,12 @@ test("hook ls --to <ws> reads the DEPLOYED workspace's hooks: who turns each on,
     ],
     recent: [{ runId: "run-1", flow: "publish", agent: "writer", step: 2, t: "2026-10-13T01:02:03Z", record: { hook: "no-rm-rf", event: "tool.call", did: "deny", tool: "Bash", reason: "rm -rf is refused", ms: 4 } }],
   };
-  const s = await serve({ "/api/workspaces/blog-desk/hooks": (_b: unknown, q: URLSearchParams) => ({ ...doc, q: q.toString() }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/hooks": (_b: unknown, q: URLSearchParams) => ({ ...doc, q: q.toString() }) });
   const r = await at(s.url, "hook", "ls", "--to", "blog-desk", "--runs", "200", "--all");
   const j = await at(s.url, "hook", "ls", "--to", "blog-desk", "--json");
   s.close();
   assert.equal(s.seen[0].method, "GET");
-  assert.equal(s.seen[0].url, "/api/workspaces/blog-desk/hooks");
+  assert.equal(s.seen[0].url, "/v1/workspaces/blog-desk/hooks");
   assert.equal(s.seen[0].query.get("runs"), "200");
   assert.equal(s.seen[0].query.get("all"), "1");
   assert.equal(r.code, 1, "an invalid hook fails the listing, as locally");

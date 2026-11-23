@@ -246,11 +246,11 @@ function platformDesk() {
   return {
     files,
     routes: {
-      "/api/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
-      "/api/workspaces/blog-desk": () => ({ name: "blog-desk" }),
-      "PATCH /api/workspaces/blog-desk/flows/publish": () => ({ ok: true }),
-      "PATCH /api/workspaces/blog-desk/agents/writer": () => ({ ok: true, changed: true }),
-      "PATCH /api/workspaces/blog-desk/agents/bare": () => ({ ok: true, changed: true }),
+      "/v1/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
+      "/v1/workspaces/blog-desk": () => ({ name: "blog-desk" }),
+      "PATCH /v1/workspaces/blog-desk/flows/publish": () => ({ ok: true }),
+      "PATCH /v1/workspaces/blog-desk/agents/writer": () => ({ ok: true, changed: true }),
+      "PATCH /v1/workspaces/blog-desk/agents/bare": () => ({ ok: true, changed: true }),
     },
   };
 }
@@ -291,8 +291,8 @@ test("agent link --to posts the description first, then the list edit", async ()
   assert.equal(r.code, 0, r.out);
   const patches = s.seen.filter((x) => x.method === "PATCH").map((x) => [x.url, JSON.parse(x.body)]);
   assert.deepEqual(patches, [
-    ["/api/workspaces/blog-desk/agents/bare", { set: { key: "description", value: "Checks facts." } }],
-    ["/api/workspaces/blog-desk/agents/writer", { list: { key: "subagents", name: "bare", action: "add" } }],
+    ["/v1/workspaces/blog-desk/agents/bare", { set: { key: "description", value: "Checks facts." } }],
+    ["/v1/workspaces/blog-desk/agents/writer", { list: { key: "subagents", name: "bare", action: "add" } }],
   ]);
 });
 

@@ -30,7 +30,7 @@ const downloads: Record<string, Buffer> = {
 
 function storage() {
   return {
-    "/api/workspaces/rank-desk/storage": () => listing,
+    "/v1/workspaces/rank-desk/storage": () => listing,
   };
 }
 
@@ -65,7 +65,7 @@ test("ls with no verb at all is still ls, and a prefix narrows it", async () => 
 });
 
 test("an empty store says so rather than printing a header over nothing", async () => {
-  const s = await serve({ "/api/workspaces/rank-desk/storage": () => ({ files: [], driver: "fs", used: 0 }) });
+  const s = await serve({ "/v1/workspaces/rank-desk/storage": () => ({ files: [], driver: "fs", used: 0 }) });
   const r = await at(s.url, "storage", "ls", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 0, r.out);

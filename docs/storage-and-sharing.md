@@ -56,7 +56,7 @@ Google Business Profile post will not accept image data and wants a URL it
 can GET for itself. A share is a public link to one file:
 
 ```
-POST /api/workspaces/<ws>/shares   { "path": "storage/cover.jpg", "ttlDays": 7 }
+POST /v1/workspaces/<ws>/shares   { "path": "storage/cover.jpg", "ttlDays": 7 }
 → https://<your-install>/s/<token>
 ```
 

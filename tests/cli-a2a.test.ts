@@ -84,16 +84,16 @@ test("a2aBlockFor merges the patch over the flow's block as the platform does: p
 
 // ------------------------------------------------------------------ a2a ls
 
-test("a2a ls --to reads GET /api/workspaces/<ws>/a2a: flows with their cards, keys, tasks with the key that asked", async () => {
+test("a2a ls --to reads GET /v1/workspaces/<ws>/a2a: flows with their cards, keys, tasks with the key that asked", async () => {
   let base = "";
-  const s = await serve({ "/api/workspaces/blog-desk/a2a": () => view(base) });
+  const s = await serve({ "/v1/workspaces/blog-desk/a2a": () => view(base) });
   base = s.url;
   const r = await at(s.url, "a2a", "ls", "--to", "blog-desk");
   const j = await at(s.url, "a2a", "ls", "--to", "blog-desk", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.equal(s.seen[0].method, "GET");
-  assert.equal(s.seen[0].url, "/api/workspaces/blog-desk/a2a");
+  assert.equal(s.seen[0].url, "/v1/workspaces/blog-desk/a2a");
   assert.match(r.out, /published\s+publish\s+Lead finder\s+private card/);
   assert.match(r.out, new RegExp(`card\\s+${base}/a2a/acme/blog-desk/flows/publish/\\.well-known/agent-card\\.json`));
   assert.match(r.out, /not published\s+draft/);
@@ -106,7 +106,7 @@ test("a2a ls --to reads GET /api/workspaces/<ws>/a2a: flows with their cards, ke
 
 test("a2a ls prints each secret-and-code agent and how to accept it (FOL-112)", async () => {
   let base = "";
-  const s = await serve({ "/api/workspaces/blog-desk/a2a": () => ({ ...view(base), risks: [{ flow: "publish", agent: "coder", secrets: ["CRM_TOKEN"], accepted: false }, { flow: "draft", agent: "helper", secrets: ["X"], accepted: true }] }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/a2a": () => ({ ...view(base), risks: [{ flow: "publish", agent: "coder", secrets: ["CRM_TOKEN"], accepted: false }, { flow: "draft", agent: "helper", secrets: ["X"], accepted: true }] }) });
   base = s.url;
   const r = await at(s.url, "a2a", "ls", "--to", "blog-desk");
   s.close();
@@ -119,7 +119,7 @@ test("a2a ls prints each secret-and-code agent and how to accept it (FOL-112)", 
 
 test("a2a ls: the accept line names every risky agent of the flow — the list replaces the flow's", async () => {
   let base = "";
-  const s = await serve({ "/api/workspaces/blog-desk/a2a": () => ({ ...view(base), risks: [{ flow: "publish", agent: "coder", secrets: ["A"], accepted: false }, { flow: "publish", agent: "analyst", secrets: ["B"], accepted: true }] }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/a2a": () => ({ ...view(base), risks: [{ flow: "publish", agent: "coder", secrets: ["A"], accepted: false }, { flow: "publish", agent: "analyst", secrets: ["B"], accepted: true }] }) });
   base = s.url;
   const r = await at(s.url, "a2a", "ls", "--to", "blog-desk");
   s.close();
@@ -151,7 +151,7 @@ test("a2a publish --accept-risk on a core without accept_risk refuses clearly an
 
 test("a2a ls: keys null (not an admin) leaves the keys out; no workspace is refused before any request", async () => {
   let base = "";
-  const s = await serve({ "/api/workspaces/blog-desk/a2a": () => ({ ...view(base), keys: null, tasks: [] }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/a2a": () => ({ ...view(base), keys: null, tasks: [] }) });
   base = s.url;
   const r = await at(s.url, "a2a", "ls", "--to", "blog-desk");
   const none = await cli(["a2a", "ls", "--url", s.url, "--token", "k"], { cwd: fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-a2a-empty-")) });
@@ -168,7 +168,7 @@ test("a2a ls: keys null (not an admin) leaves the keys out; no workspace is refu
 
 test("keys create --a2a posts { purpose: a2a, workspace, flows, maxTasks } and prints the key once", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "fr_a2a_a2asecret", id: "k9", prefix: "fr_a2a_a2asecr", purpose: "a2a", workspace: "blog-desk", flows: ["publish", "draft"], maxTasks: 3, role: "viewer", workspaces: ["blog-desk"], expiresAt: null }),
+    "POST /v1/keys": () => ({ ok: true, key: "fr_a2a_a2asecret", id: "k9", prefix: "fr_a2a_a2asecr", purpose: "a2a", workspace: "blog-desk", flows: ["publish", "draft"], maxTasks: 3, role: "viewer", workspaces: ["blog-desk"], expiresAt: null }),
   });
   const r = await at(s.url, "keys", "create", "partner bot", "--a2a", "--to", "blog-desk", "--flows", "publish, draft,publish", "--max-tasks", "3", "--expires", "90d");
   s.close();
@@ -181,7 +181,7 @@ test("keys create --a2a posts { purpose: a2a, workspace, flows, maxTasks } and p
 });
 
 test("keys create --a2a refuses, before any request, without --to or --flows, a bad --max-tasks, or --role", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true }) });
   const noWs = await at(s.url, "keys", "create", "bot", "--a2a", "--flows", "publish");
   const noFlows = await at(s.url, "keys", "create", "bot", "--a2a", "--to", "blog-desk");
   const bad = await at(s.url, "keys", "create", "bot", "--a2a", "--to", "blog-desk", "--flows", "publish", "--max-tasks", "500");
@@ -197,7 +197,7 @@ test("keys create --a2a refuses, before any request, without --to or --flows, a 
 
 test("keys ls shows an A2A key as A2A · <workspace> · <flows>", async () => {
   const s = await serve({
-    "/api/keys": () => ({
+    "/v1/keys": () => ({
       keys: [{ id: "k9", prefix: "fr_a2a_a2a12345", label: "partner bot", role: "viewer", workspaces: ["blog-desk"], purpose: "a2a", a2a: { workspace: "blog-desk", flows: ["publish"], principal: "k9", maxTasks: 10 }, createdAt: "2026-11-01T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }],
     }),
   });
@@ -220,10 +220,10 @@ function platformDesk(flow = FLOW) {
     files,
     setBase: (b: string) => (base = b),
     routes: {
-      "/api/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
-      "/api/workspaces/blog-desk": () => ({ name: "blog-desk" }),
-      "PATCH /api/workspaces/blog-desk/flows/publish": () => ({ ok: true }),
-      "/api/workspaces/blog-desk/a2a": () => view(base),
+      "/v1/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
+      "/v1/workspaces/blog-desk": () => ({ name: "blog-desk" }),
+      "PATCH /v1/workspaces/blog-desk/flows/publish": () => ({ ok: true }),
+      "/v1/workspaces/blog-desk/a2a": () => view(base),
     },
   };
 }
@@ -238,7 +238,7 @@ test("a2a publish --to sends the flow page's PATCH { a2a, expect } and prints th
   const w = writes(s);
   assert.equal(w.length, 1, "one write");
   assert.equal(w[0].method, "PATCH");
-  assert.equal(w[0].url, "/api/workspaces/blog-desk/flows/publish");
+  assert.equal(w[0].url, "/v1/workspaces/blog-desk/flows/publish");
   assert.deepEqual(JSON.parse(w[0].body), { a2a: { publish: true, name: "Lead finder", examples: ["Perth dentists"], public_card: true }, expect: sha(FLOW) });
   assert.match(r.out, /\+ a2a:/, "the diff is shown");
   assert.match(r.out, /\+\s+publish: true/);
@@ -273,7 +273,7 @@ test("a2a publish: the platform's refusal (an editor) is its own words", { skip:
   const d = platformDesk();
   const s = await serve({
     ...d.routes,
-    "PATCH /api/workspaces/blog-desk/flows/publish": () => failing(403, { error: "this would change a2a: in flows/publish.md — changing it needs the admin role (workspace:manage); your role is editor." }),
+    "PATCH /v1/workspaces/blog-desk/flows/publish": () => failing(403, { error: "this would change a2a: in flows/publish.md — changing it needs the admin role (workspace:manage); your role is editor." }),
   });
   const r = await at(s.url, "a2a", "publish", "publish", "--to", "blog-desk");
   s.close();
@@ -312,7 +312,7 @@ test("a2a card: a public card is fetched with no Authorization at all — never 
   let base = "";
   const card = { name: "Lead finder", supportedInterfaces: [{ url: "x", protocolBinding: "JSONRPC", protocolVersion: "1.0" }] };
   const s = await serve({
-    "/api/workspaces/blog-desk/a2a": () => view(base, { publicCard: true }),
+    "/v1/workspaces/blog-desk/a2a": () => view(base, { publicCard: true }),
     "/a2a/acme/blog-desk/flows/publish/.well-known/agent-card.json": () => card,
   });
   base = s.url;
@@ -328,7 +328,7 @@ test("a2a card: a public card is fetched with no Authorization at all — never 
 test("a2a card: a private card without an A2A key prints the URLs and says how; with one, sends only that key", async () => {
   let base = "";
   const s = await serve({
-    "/api/workspaces/blog-desk/a2a": () => view(base),
+    "/v1/workspaces/blog-desk/a2a": () => view(base),
     "/a2a/acme/blog-desk/flows/publish/.well-known/agent-card.json": () => ({ name: "Lead finder" }),
   });
   base = s.url;

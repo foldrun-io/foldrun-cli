@@ -45,7 +45,7 @@ test("what git would commit goes — ignored files and links stay out, the exec 
 test("push: the archive is the body, and the platform's answer is printed", async () => {
   const d = repo({ "a.txt": "hello\n" });
   const id = "a".repeat(64);
-  const s = await serve({ "POST /api/workspaces/desk/snapshots": () => ({ snapshotId: id, files: 1, bytes: 6, compressedBytes: 120, expiresAt: "2026-11-18T00:00:00.000Z", reused: false }) });
+  const s = await serve({ "POST /v1/workspaces/desk/snapshots": () => ({ snapshotId: id, files: 1, bytes: 6, compressedBytes: 120, expiresAt: "2026-11-18T00:00:00.000Z", reused: false }) });
   const r = await at(s.url, "snapshot", "push", d, "--to", "desk");
   s.close();
   assert.equal(r.code, 0, r.out);

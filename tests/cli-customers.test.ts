@@ -10,10 +10,10 @@ const VIEW = { limits: { startsPerMinute: 30, gatewayRpm: 20, gatewayConcurrency
 
 test("customers: ls shows limits (marking a changed one) and blocks; block, unblock and limits call their routes", async () => {
   const s = await serve({
-    "GET /api/customers": () => VIEW,
-    "PATCH /api/customers": (body) => ({ limits: { ...VIEW.limits, ...Object.fromEntries(Object.entries(JSON.parse(body)).map(([k, v]) => [k, v ?? (VIEW.defaults as Record<string, number>)[k]])) }, defaults: VIEW.defaults }),
-    "PUT /api/customers/c-8812/block": () => ({ ok: true, customer: "c-8812", blocked: true }),
-    "DELETE /api/customers/c-bad/block": () => ({ ok: true, customer: "c-bad", blocked: false }),
+    "GET /v1/customers": () => VIEW,
+    "PATCH /v1/customers": (body) => ({ limits: { ...VIEW.limits, ...Object.fromEntries(Object.entries(JSON.parse(body)).map(([k, v]) => [k, v ?? (VIEW.defaults as Record<string, number>)[k]])) }, defaults: VIEW.defaults }),
+    "PUT /v1/customers/c-8812/block": () => ({ ok: true, customer: "c-8812", blocked: true }),
+    "DELETE /v1/customers/c-bad/block": () => ({ ok: true, customer: "c-bad", blocked: false }),
   });
   try {
     const ls = await at(s.url, "customers");
@@ -41,9 +41,9 @@ test("customers: ls shows limits (marking a changed one) and blocks; block, unbl
 
 test("--customer names the run's customer on agent run and invoke; runs --customer lists only its runs", async () => {
   const s = await serve({
-    "POST /api/workspaces/rank-desk/agents/tracker/run": () => ({ ok: true, runId: "run-1", test: false, customer: "c-1" }),
-    "POST /api/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-2", steps: 1, test: false }),
-    "GET /api/workspaces/rank-desk/runs": () => ({
+    "POST /v1/workspaces/rank-desk/agents/tracker/run": () => ({ ok: true, runId: "run-1", test: false, customer: "c-1" }),
+    "POST /v1/workspaces/rank-desk/flows/weekly/run": () => ({ ok: true, runId: "run-2", steps: 1, test: false }),
+    "GET /v1/workspaces/rank-desk/runs": () => ({
       runs: [
         { id: "run-a", flow: "adhoc:tracker", status: "completed", startedAt: "2026-11-11T01:00:00.000Z", finishedAt: "2026-11-11T01:01:00.000Z", summary: "for c-1", customer: "c-1", steps: [] },
         { id: "run-b", flow: "adhoc:tracker", status: "completed", startedAt: "2026-11-11T00:00:00.000Z", finishedAt: "2026-11-11T00:01:00.000Z", summary: "for someone else", customer: "c-2", steps: [] },
@@ -67,8 +67,8 @@ test("--customer names the run's customer on agent run and invoke; runs --custom
 
 test("customers usage lists spend per customer; limits takes --max-open-runs and --daily-model-usd (none takes it away)", async () => {
   const s = await serve({
-    "GET /api/customers/usage": (_b, q) => ({ days: Number(q.get("days")), customers: [{ customer: "c-big", chargedUsd: 4.2, todayUsd: 0.5, calls: 120 }] }),
-    "PATCH /api/customers": (body) => ({ limits: { startsPerMinute: 30, gatewayRpm: 60, gatewayConcurrency: 4, maxOpenRuns: 3, dailyModelUsd: JSON.parse(body).dailyModelUsd ?? null }, defaults: { startsPerMinute: 30, gatewayRpm: 60, gatewayConcurrency: 4, maxOpenRuns: 10, dailyModelUsd: null } }),
+    "GET /v1/customers/usage": (_b, q) => ({ days: Number(q.get("days")), customers: [{ customer: "c-big", chargedUsd: 4.2, todayUsd: 0.5, calls: 120 }] }),
+    "PATCH /v1/customers": (body) => ({ limits: { startsPerMinute: 30, gatewayRpm: 60, gatewayConcurrency: 4, maxOpenRuns: 3, dailyModelUsd: JSON.parse(body).dailyModelUsd ?? null }, defaults: { startsPerMinute: 30, gatewayRpm: 60, gatewayConcurrency: 4, maxOpenRuns: 10, dailyModelUsd: null } }),
   });
   try {
     const u = await at(s.url, "customers", "usage", "--days", "30");
@@ -90,9 +90,9 @@ test("customers usage lists spend per customer; limits takes --max-open-runs and
 
 test("keys create --require-customer sends it; keys set <id> --customer required|optional toggles it; ls marks it", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "fr_api_x", id: "k9", prefix: "fr_api_x", expiresAt: null }),
-    "PATCH /api/keys/k9": (body) => ({ ok: true, id: "k9", requireCustomer: JSON.parse(body).requireCustomer }),
-    "GET /api/keys": () => ({ keys: [{ id: "k9", prefix: "fr_api_x", label: "partner", role: "editor", workspaces: null, createdAt: "2026-11-11T00:00:00.000Z", revokedAt: null, requireCustomer: true }] }),
+    "POST /v1/keys": () => ({ ok: true, key: "fr_api_x", id: "k9", prefix: "fr_api_x", expiresAt: null }),
+    "PATCH /v1/keys/k9": (body) => ({ ok: true, id: "k9", requireCustomer: JSON.parse(body).requireCustomer }),
+    "GET /v1/keys": () => ({ keys: [{ id: "k9", prefix: "fr_api_x", label: "partner", role: "editor", workspaces: null, createdAt: "2026-11-11T00:00:00.000Z", revokedAt: null, requireCustomer: true }] }),
   });
   try {
     assert.equal((await at(s.url, "keys", "create", "partner", "--require-customer")).code, 0);

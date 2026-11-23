@@ -1,5 +1,5 @@
 // `foldrun mcp` (1 Nov 2026): an MCP server on stdio that forwards each
-// JSON-RPC line to the platform's POST /api/mcp with this machine's sign-in.
+// JSON-RPC line to the platform's POST /v1/mcp with this machine's sign-in.
 // Against a fake platform: what is sent (path, key, revision header,
 // read-only), what comes back on stdout (protocol only, one line each, the
 // request's id on a refusal), and what is never forwarded.
@@ -30,10 +30,10 @@ function mcp(url: string, lines: string[], extra: string[] = []): Promise<{ stdo
 }
 const out = (s: string) => s.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 
-/** A platform that answers like /api/mcp: the method echoed back as the result. */
+/** A platform that answers like /v1/mcp: the method echoed back as the result. */
 function platform() {
   return serve({
-    "POST /api/mcp": (body) => {
+    "POST /v1/mcp": (body) => {
       const m = JSON.parse(body);
       if (m.id === undefined) return failing(202, {});
       if (m.method === "initialize") return { jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "foldrun", version: "test" } } };
@@ -42,7 +42,7 @@ function platform() {
   });
 }
 
-test("each line goes to POST /api/mcp with the key, and each answer comes back as one line", async () => {
+test("each line goes to POST /v1/mcp with the key, and each answer comes back as one line", async () => {
   const s = await platform();
   try {
     const r = await mcp(s.url, [
@@ -59,7 +59,7 @@ test("each line goes to POST /api/mcp with the key, and each answer comes back a
 
     assert.equal(s.seen.length, 3);
     for (const seen of s.seen) {
-      assert.equal(seen.url, "/api/mcp");
+      assert.equal(seen.url, "/v1/mcp");
       assert.equal(seen.method, "POST");
       assert.equal(seen.headers.authorization, "Bearer k");
       assert.ok(seen.headers["foldrun-version"], "the API version this CLI was written against");
@@ -96,7 +96,7 @@ test("a line that is not JSON is answered -32700 and never sent", async () => {
 });
 
 test("a refusal before the message was read comes back with the request's id", async () => {
-  const s = await serve({ "POST /api/mcp": () => failing(401, { jsonrpc: "2.0", id: null, error: { code: -32603, message: "invalid API key" } }) });
+  const s = await serve({ "POST /v1/mcp": () => failing(401, { jsonrpc: "2.0", id: null, error: { code: -32603, message: "invalid API key" } }) });
   try {
     const r = await mcp(s.url, [JSON.stringify({ jsonrpc: "2.0", id: "a", method: "tools/list" })]);
     const [answer] = out(r.stdout);
@@ -117,7 +117,7 @@ test("a platform with no MCP endpoint, or a proxy's page, is a JSON-RPC error â€
   } finally {
     old.close();
   }
-  const proxy = await serve({ "POST /api/mcp": () => raw("<html><title>Bad gateway</title></html>", "text/html", {}, 502) });
+  const proxy = await serve({ "POST /v1/mcp": () => raw("<html><title>Bad gateway</title></html>", "text/html", {}, 502) });
   try {
     const r = await mcp(proxy.url, [JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" })]);
     const [answer] = out(r.stdout);
@@ -212,8 +212,8 @@ test("mcp connections lists the AI apps connected over OAuth; mcp disconnect end
   const { at } = await import("./fake-platform.ts");
   const row = { id: "g1", client: "Claude", clientId: "fmcp_c_x", redirectHost: "claude.ai", person: "ana@acme.test", role: "admin", workspaces: null, access: "write", createdAt: "2026-11-01T04:00:00Z", lastUsedAt: null, revokedAt: null };
   const s = await serve({
-    "GET /api/mcp/connections": () => ({ connections: [row], everyone: true }),
-    "DELETE /api/mcp/connections/g1": () => ({ ok: true, id: "g1", revoked: true }),
+    "GET /v1/mcp/connections": () => ({ connections: [row], everyone: true }),
+    "DELETE /v1/mcp/connections/g1": () => ({ ok: true, id: "g1", revoked: true }),
   });
   try {
     const ls = await at(s.url, "mcp", "connections");
@@ -230,7 +230,7 @@ test("mcp connections lists the AI apps connected over OAuth; mcp disconnect end
     const done = await at(s.url, "mcp", "disconnect", "g1", "--yes");
     assert.equal(done.code, 0, done.out);
     assert.match(done.out, /disconnected g1/);
-    assert.ok(s.seen.some((x) => x.method === "DELETE" && x.url === "/api/mcp/connections/g1"));
+    assert.ok(s.seen.some((x) => x.method === "DELETE" && x.url === "/v1/mcp/connections/g1"));
 
     const wrong = await at(s.url, "mcp", "frobnicate");
     assert.notEqual(wrong.code, 0);
@@ -243,7 +243,7 @@ test("mcp connections lists the AI apps connected over OAuth; mcp disconnect end
 test("mcp clients add: registers a machine client with the role, workspaces and access asked, prints the secret once", async () => {
   const sent: unknown[] = [];
   const s = await serve({
-    "/api/mcp/clients": (body) => { sent.push(JSON.parse(body)); return { client_id: "fmcp_c_x", client_secret: "fmcp_cs_y", grant: "g1", token_endpoint: "https://app.test/api/mcp/oauth/token", token_endpoint_auth_method: "client_secret_basic" }; },
+    "/v1/mcp/clients": (body) => { sent.push(JSON.parse(body)); return { client_id: "fmcp_c_x", client_secret: "fmcp_cs_y", grant: "g1", token_endpoint: "https://app.test/v1/mcp/oauth/token", token_endpoint_auth_method: "client_secret_basic" }; },
   });
   const r = await at(s.url, "mcp", "clients", "add", "Nightly bot", "--role", "editor", "--workspaces", "desk,ops", "--write");
   s.close();

@@ -1,5 +1,5 @@
 // FOL-54 step 3: `foldrun issues` lists the account's issues and acts on one
-// through POST /api/issues/<id> — the dashboard's Issues page, same route.
+// through POST /v1/issues/<id> — the dashboard's Issues page, same route.
 //
 //   node --test tests/cli-issues.test.ts
 
@@ -16,7 +16,7 @@ const issue = (over: object = {}) => ({
 });
 
 test("issues lists them with count, reason and what to do; --to and --all reach the query", async () => {
-  const s = await serve({ "/api/issues": (_b, q) => ({ issues: q.get("status") === "all" ? [issue(), issue({ id: "iss_def456", status: "resolved" })] : [issue()] }) });
+  const s = await serve({ "/v1/issues": (_b, q) => ({ issues: q.get("status") === "all" ? [issue(), issue({ id: "iss_def456", status: "resolved" })] : [issue()] }) });
   const r = await at(s.url, "issues", "--to", "blog-desk");
   const all = await at(s.url, "issues", "--all");
   s.close();
@@ -30,7 +30,7 @@ test("issues lists them with count, reason and what to do; --to and --all reach 
 });
 
 test("issues ack / snooze / resolve post the action; a snooze needs --for; a bad verb or id is refused", async () => {
-  const s = await serve({ "POST /api/issues/iss_abc123": (b) => ({ issue: issue({ status: JSON.parse(b).action === "resolve" ? "resolved" : "acknowledged" }) }) });
+  const s = await serve({ "POST /v1/issues/iss_abc123": (b) => ({ issue: issue({ status: JSON.parse(b).action === "resolve" ? "resolved" : "acknowledged" }) }) });
   const ack = await at(s.url, "issues", "ack", "iss_abc123");
   const snooze = await at(s.url, "issues", "snooze", "iss_abc123", "--for", "1d", "--note", "waiting on the vendor");
   const times = await at(s.url, "issues", "snooze", "iss_abc123", "--times", "5");
@@ -55,7 +55,7 @@ test("issues ack / snooze / resolve post the action; a snooze needs --for; a bad
 
 test("insights prints each problem with its cost, fix and evidence (FOL-72 step 8)", async () => {
   const s = await serve({
-    "/api/insights": (_b, q) => ({ days: Number(q.get("days") ?? 7), insights: [{ id: "x", kind: "big-result", workspace: "blog-desk", agent: "writer", tool: "crm_export", title: "crm_export hands writer results up to 60k characters, sent again on every later call", why: "A tool result stays in the conversation.", fix: "Have crm_export return less.", credits: 1240, steps: 4, evidence: [{ workspace: "blog-desk", runId: "run-1", step: 2 }] }] }),
+    "/v1/insights": (_b, q) => ({ days: Number(q.get("days") ?? 7), insights: [{ id: "x", kind: "big-result", workspace: "blog-desk", agent: "writer", tool: "crm_export", title: "crm_export hands writer results up to 60k characters, sent again on every later call", why: "A tool result stays in the conversation.", fix: "Have crm_export return less.", credits: 1240, steps: 4, evidence: [{ workspace: "blog-desk", runId: "run-1", step: 2 }] }] }),
   });
   const r = await at(s.url, "insights", "--days", "14", "--to", "blog-desk");
   s.close();

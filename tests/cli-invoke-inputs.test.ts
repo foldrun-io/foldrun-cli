@@ -23,8 +23,8 @@ const EVALS = {
 
 const platform = () =>
   serve({
-    "/api/workspaces/blog-desk/evals": () => EVALS,
-    "POST /api/workspaces/blog-desk/flows/publish/run": () => ({ ok: true, runId: "run-9", steps: 2, test: true }),
+    "/v1/workspaces/blog-desk/evals": () => EVALS,
+    "POST /v1/workspaces/blog-desk/flows/publish/run": () => ({ ok: true, runId: "run-9", steps: 2, test: true }),
   });
 
 test("--inputs sends the saved set's task; the inputs file wins a name an eval also has", async () => {

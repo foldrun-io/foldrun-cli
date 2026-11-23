@@ -89,7 +89,7 @@ test("connect: consent → exchange → refresh recipe stored on the platform, n
   const platform = await serve(async (req, res) => {
     // PUT, exactly as the real route and `secrets set` — a fake that took
     // POST let the first version of this command ship a 405.
-    if (req.url === "/api/secrets" && req.method === "PUT") {
+    if (req.url === "/v1/secrets" && req.method === "PUT") {
       stored.push({ auth: req.headers.authorization, body: JSON.parse(await readBody(req)) });
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ ok: true }));
@@ -152,12 +152,12 @@ test("connect: a secret with a saved client reconnects through the platform — 
   const platform = await serve(async (req, res) => {
     res.setHeader("content-type", "application/json");
     calls.push(`${req.method} ${req.url}`);
-    if (req.url === "/api/oauth/reconnect" && req.method === "POST") {
+    if (req.url === "/v1/oauth/reconnect" && req.method === "POST") {
       const body = JSON.parse(await readBody(req));
       assert.deepEqual({ secret: body.secret, workspace: body.workspace }, { secret: "LINKEDIN_OAUTH", workspace: "linkedin-desk" });
       reconnected = true;
       res.end(JSON.stringify({ ok: true, url: "https://www.linkedin.com/oauth/v2/authorization?state=abc", client: "linkedin", redirectUri: "https://dev.example/api/oauth/callback" }));
-    } else if (req.url === "/api/oauth/connections") {
+    } else if (req.url === "/v1/oauth/connections") {
       // The callback lands on the platform; the CLI sees connectedAt move.
       res.end(JSON.stringify({ connections: [{ name: "LINKEDIN_OAUTH", workspace: "linkedin-desk", client: "linkedin", status: "ok", daysLeft: null, connectedAt: reconnected && calls.filter((c) => c.endsWith("/connections")).length > 1 ? "2026-09-14T01:00:00.000Z" : "2026-09-06T05:56:03.681Z" }] }));
     } else { res.statusCode = 404; res.end("{}"); }
@@ -177,8 +177,8 @@ test("connect: a secret with a saved client reconnects through the platform — 
     assert.doesNotMatch(out, /client_id:/, "never asks for the client id");
     assert.match(out, /Reusing the saved linkedin client/);
     assert.match(out, /LINKEDIN_OAUTH reconnected/);
-    assert.ok(calls.includes("POST /api/oauth/reconnect"));
-    assert.ok(!calls.some((c) => c.startsWith("PUT /api/secrets")), "the platform callback stores it, not the CLI");
+    assert.ok(calls.includes("POST /v1/oauth/reconnect"));
+    assert.ok(!calls.some((c) => c.startsWith("PUT /v1/secrets")), "the platform callback stores it, not the CLI");
   } finally {
     platform.close();
   }
@@ -195,7 +195,7 @@ test("connect: PKCE by default — the challenge is S256 of the verifier sent wi
     } else { res.statusCode = 404; res.end(); }
   });
   const platform = await serve(async (req, res) => {
-    if (req.url === "/api/secrets" && req.method === "PUT") { await readBody(req); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { await readBody(req); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   try {
@@ -241,7 +241,7 @@ test("connect --token-auth basic: the code goes to the token URL with HTTP Basic
     } else { res.statusCode = 404; res.end(); }
   });
   const platform = await serve(async (req, res) => {
-    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   try {
@@ -316,7 +316,7 @@ test("connect --issuer: the metadata fills the URLs, picks Basic, and the recipe
   const p = await discoverableProvider();
   const stored: { oauth2: Record<string, unknown> }[] = [];
   const platform = await serve(async (req, res) => {
-    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   try {
@@ -370,7 +370,7 @@ test("secrets rm says what revoking the grant at the provider came to, and a fai
   ] as const) {
     const platform = await serve(async (req, res) => {
       res.setHeader("content-type", "application/json");
-      if (req.url === "/api/secrets" && req.method === "DELETE") { await readBody(req); res.end(JSON.stringify({ ok: true, revoked })); }
+      if (req.url === "/v1/secrets" && req.method === "DELETE") { await readBody(req); res.end(JSON.stringify({ ok: true, revoked })); }
       else { res.statusCode = 404; res.end("{}"); }
     });
     const child = spawn(process.execPath, [CLI, "secrets", "rm", "CRM", "--account", "--yes", "--url", platform.url, "--token", "ptok"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1" } });
@@ -432,7 +432,7 @@ test("connect --token-auth jwt --key-file: the exchange is a signed assertion, n
   });
   tokenUrl = `${provider.url}/token`;
   const platform = await serve(async (req, res) => {
-    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   try {
@@ -455,7 +455,7 @@ test("secrets clients add --token-auth jwt --generate-key: the platform makes th
   const jwk = { kty: "EC", crv: "P-256", x: "x", y: "y", kid: "k1", alg: "ES256", use: "sig" };
   const platform = await serve(async (req, res) => {
     res.setHeader("content-type", "application/json");
-    if (req.url === "/api/oauth/clients" && req.method === "POST") { sent = JSON.parse(await readBody(req)); res.end(JSON.stringify({ ok: true, name: "okta", public_jwk: jwk })); }
+    if (req.url === "/v1/oauth/clients" && req.method === "POST") { sent = JSON.parse(await readBody(req)); res.end(JSON.stringify({ ok: true, name: "okta", public_jwk: jwk })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   const child = spawn(process.execPath, [CLI, "secrets", "clients", "add", "okta", "--authorize-url", "https://okta.example/authorize", "--token-url", "https://okta.example/token",
@@ -491,7 +491,7 @@ test("connect --device (RFC 8628): shows the code, polls through pending, stores
     res.statusCode = 404; res.end("{}");
   });
   const platform = await serve(async (req, res) => {
-    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   try {
@@ -518,9 +518,9 @@ test("connect --client <saved> --device: the platform starts it and stores the g
   const platform = await serve(async (req, res) => {
     res.setHeader("content-type", "application/json");
     calls.push(`${req.method} ${req.url}`);
-    if (req.url === "/api/oauth/device" && req.method === "POST") { await readBody(req); res.end(JSON.stringify({ id: "a".repeat(48), user_code: "QWER-TY12", verification_uri: "https://p.example/device", expires_in: 600, interval: 5 })); return; }
-    if (req.url === `/api/oauth/device/${"a".repeat(48)}`) { polls++; res.end(JSON.stringify(polls < 2 ? { status: "pending" } : { status: "connected", name: "TV", stored: "oauth2" })); return; }
-    if (req.url === "/api/oauth/connections") { res.end(JSON.stringify({ connections: [] })); return; }
+    if (req.url === "/v1/oauth/device" && req.method === "POST") { await readBody(req); res.end(JSON.stringify({ id: "a".repeat(48), user_code: "QWER-TY12", verification_uri: "https://p.example/device", expires_in: 600, interval: 5 })); return; }
+    if (req.url === `/v1/oauth/device/${"a".repeat(48)}`) { polls++; res.end(JSON.stringify(polls < 2 ? { status: "pending" } : { status: "connected", name: "TV", stored: "oauth2" })); return; }
+    if (req.url === "/v1/oauth/connections") { res.end(JSON.stringify({ connections: [] })); return; }
     res.statusCode = 404; res.end("{}");
   });
   const child = spawn(process.execPath, [CLI, "connect", "TV", "--client", "kc", "--device", "--scopes", "openid", "--url", platform.url, "--token", "ptok"], { cwd: ROOT, env: { ...process.env, FOLDRUN_DATA: undefined, NO_COLOR: "1", FOLDRUN_DEVICE_POLL_S: "0.05" } });
@@ -532,7 +532,7 @@ test("connect --client <saved> --device: the platform starts it and stores the g
   assert.equal(code, 0, out);
   assert.match(out, /QWER-TY12/);
   assert.match(out, /TV connected/);
-  assert.ok(!calls.includes("POST /api/oauth/start"), "no browser consent was started");
+  assert.ok(!calls.includes("POST /v1/oauth/start"), "no browser consent was started");
 });
 
 test("connect --dpop: the exchange carries a DPoP proof (with the server's nonce after it asks), and the recipe keeps the connection's DPoP key", async () => {
@@ -552,7 +552,7 @@ test("connect --dpop: the exchange carries a DPoP proof (with the server's nonce
     } else { res.statusCode = 404; res.end(); }
   });
   const platform = await serve(async (req, res) => {
-    if (req.url === "/api/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { stored.push(JSON.parse(await readBody(req))); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   try {
@@ -576,7 +576,7 @@ test("secrets set --kind m2m --token-auth mtls stores the certificate and key; c
   const sent: { oauth2: Record<string, unknown> }[] = [];
   const platform = await serve(async (req, res) => {
     res.setHeader("content-type", "application/json");
-    if (req.url === "/api/secrets" && req.method === "PUT") { sent.push(JSON.parse(await readBody(req))); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { sent.push(JSON.parse(await readBody(req))); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   const run = (args: string[]) => new Promise<{ code: number; out: string }>((resolve) => {
@@ -604,7 +604,7 @@ test("secrets set --kind token-exchange: the recipe names the subject secret and
   const sent: { token_exchange: Record<string, unknown> }[] = [];
   const platform = await serve(async (req, res) => {
     res.setHeader("content-type", "application/json");
-    if (req.url === "/api/secrets" && req.method === "PUT") { sent.push(JSON.parse(await readBody(req))); res.end(JSON.stringify({ ok: true })); }
+    if (req.url === "/v1/secrets" && req.method === "PUT") { sent.push(JSON.parse(await readBody(req))); res.end(JSON.stringify({ ok: true })); }
     else { res.statusCode = 404; res.end("{}"); }
   });
   const child = spawn(process.execPath, [CLI, "secrets", "set", "BILLING", "--kind", "token-exchange", "--account", "--token-url", "https://auth.example/token", "--client-id", "tx", "--client-secret", "shh",

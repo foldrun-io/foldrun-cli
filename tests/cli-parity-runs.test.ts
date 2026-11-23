@@ -15,7 +15,7 @@ const patches = (s: { seen: { method: string; body: string }[] }) => s.seen.filt
 // ------------------------------------------------------------ saved views
 
 test("runs views save writes the whole list back with the filters given, replacing a view of that name", async () => {
-  const s = await serve({ "GET /api/me/preferences": () => VIEWS, "PATCH /api/me/preferences": (body) => ({ theme: "system", ...JSON.parse(body) }) });
+  const s = await serve({ "GET /v1/me/preferences": () => VIEWS, "PATCH /v1/me/preferences": (body) => ({ theme: "system", ...JSON.parse(body) }) });
   const r = await at(s.url, "runs", "views", "save", "old", "--status", "failed", "--to", "blog-desk", "--since", "24h", "--tool-error", "--q", "sydney batch", "--min-tokens", "50k");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -29,7 +29,7 @@ test("runs views save writes the whole list back with the filters given, replaci
 });
 
 test("runs views save refuses what a view cannot keep, or no filter at all, before writing", async () => {
-  const s = await serve({ "GET /api/me/preferences": () => VIEWS, "PATCH /api/me/preferences": () => ({}) });
+  const s = await serve({ "GET /v1/me/preferences": () => VIEWS, "PATCH /v1/me/preferences": () => ({}) });
   const verdict = await at(s.url, "runs", "views", "save", "x", "--verdict", "blocked");
   const none = await at(s.url, "runs", "views", "save", "x");
   const nameless = await at(s.url, "runs", "views", "save");
@@ -43,7 +43,7 @@ test("runs views save refuses what a view cannot keep, or no filter at all, befo
 });
 
 test("runs views rm asks (--yes with no terminal) and writes the list without it", async () => {
-  const s = await serve({ "GET /api/me/preferences": () => VIEWS, "PATCH /api/me/preferences": (body) => JSON.parse(body) });
+  const s = await serve({ "GET /v1/me/preferences": () => VIEWS, "PATCH /v1/me/preferences": (body) => JSON.parse(body) });
   const asked = await at(s.url, "runs", "views", "rm", "old");
   assert.notEqual(asked.code, 0);
   assert.match(asked.out, /--yes/);
@@ -63,12 +63,12 @@ const RUN = (id: string, status = "running") => ({ id, flow: "daily", status, st
 
 test("stop <id> <id> finds each run's workspace, asks, then stops them through runs/bulk, one call per workspace", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/r1": () => RUN("r1"),
-    "/api/workspaces/rank-desk/runs/r2": () => RUN("r2"),
-    "/api/workspaces/blog-desk/runs/r3": () => RUN("r3"),
-    "POST /api/workspaces/blog-desk/runs/bulk": (body) => ({ ok: true, runs: JSON.parse(body).runIds.map((runId: string) => ({ runId, ok: true })) }),
-    "POST /api/workspaces/rank-desk/runs/bulk": () => ({ ok: true, runs: [{ runId: "r2", ok: false, error: "already finished" }] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/r1": () => RUN("r1"),
+    "/v1/workspaces/rank-desk/runs/r2": () => RUN("r2"),
+    "/v1/workspaces/blog-desk/runs/r3": () => RUN("r3"),
+    "POST /v1/workspaces/blog-desk/runs/bulk": (body) => ({ ok: true, runs: JSON.parse(body).runIds.map((runId: string) => ({ runId, ok: true })) }),
+    "POST /v1/workspaces/rank-desk/runs/bulk": () => ({ ok: true, runs: [{ runId: "r2", ok: false, error: "already finished" }] }),
   });
   const asked = await at(s.url, "stop", "r1", "r2", "r3");
   assert.notEqual(asked.code, 0);
@@ -79,15 +79,15 @@ test("stop <id> <id> finds each run's workspace, asks, then stops them through r
   assert.equal(r.code, 1, "one refused → exit 1");
   const bulk = s.seen.filter((x) => x.url.endsWith("/runs/bulk"));
   assert.deepEqual(bulk.map((x) => [x.url, JSON.parse(x.body)]), [
-    ["/api/workspaces/blog-desk/runs/bulk", { action: "stop", runIds: ["r1", "r3"] }],
-    ["/api/workspaces/rank-desk/runs/bulk", { action: "stop", runIds: ["r2"] }],
+    ["/v1/workspaces/blog-desk/runs/bulk", { action: "stop", runIds: ["r1", "r3"] }],
+    ["/v1/workspaces/rank-desk/runs/bulk", { action: "stop", runIds: ["r2"] }],
   ]);
   assert.match(r.out, /2 of 3 stopped · 1 refused/);
 });
 
 test("rerun <id> <id> --from 2 reruns them from that step; --agent is for one run; --dry-run touches nothing", async () => {
   const s = await serve({
-    "POST /api/workspaces/blog-desk/runs/bulk": (body) => ({ ok: true, runs: JSON.parse(body).runIds.map((runId: string) => ({ runId, ok: true, newRunId: `${runId}-again` })) }),
+    "POST /v1/workspaces/blog-desk/runs/bulk": (body) => ({ ok: true, runs: JSON.parse(body).runIds.map((runId: string) => ({ runId, ok: true, newRunId: `${runId}-again` })) }),
   });
   const agent = await at(s.url, "rerun", "r1", "r2", "--to", "blog-desk", "--agent", "writer", "--yes");
   assert.notEqual(agent.code, 0);
@@ -106,13 +106,13 @@ test("rerun <id> <id> --from 2 reruns them from that step; --agent is for one ru
 
 test("runs rm <id> <id> lists, asks once, then deletes them through runs/bulk — one refusal does not stop the rest", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "GET /api/workspaces/blog-desk/runs/r1": () => RUN("r1", "completed"),
-    "GET /api/workspaces/blog-desk/runs/r2": () => RUN("r2", "failed"),
-    "GET /api/workspaces/rank-desk/runs/r3": () => RUN("r3", "completed"),
-    "GET /api/workspaces/rank-desk/runs/r4": () => RUN("r4", "completed"),
-    "POST /api/workspaces/blog-desk/runs/bulk": () => ({ ok: true, action: "delete", runs: [{ runId: "r1", ok: false, error: "run not found" }, { runId: "r2", ok: true }] }),
-    "POST /api/workspaces/rank-desk/runs/bulk": () => ({ __status: 403, body: { error: "needs workspace:manage" } }),
+    "/v1/workspaces": () => WORKSPACES,
+    "GET /v1/workspaces/blog-desk/runs/r1": () => RUN("r1", "completed"),
+    "GET /v1/workspaces/blog-desk/runs/r2": () => RUN("r2", "failed"),
+    "GET /v1/workspaces/rank-desk/runs/r3": () => RUN("r3", "completed"),
+    "GET /v1/workspaces/rank-desk/runs/r4": () => RUN("r4", "completed"),
+    "POST /v1/workspaces/blog-desk/runs/bulk": () => ({ ok: true, action: "delete", runs: [{ runId: "r1", ok: false, error: "run not found" }, { runId: "r2", ok: true }] }),
+    "POST /v1/workspaces/rank-desk/runs/bulk": () => ({ __status: 403, body: { error: "needs workspace:manage" } }),
   });
   const asked = await at(s.url, "runs", "rm", "r1", "r2", "--to", "blog-desk");
   assert.notEqual(asked.code, 0);
@@ -120,7 +120,7 @@ test("runs rm <id> <id> lists, asks once, then deletes them through runs/bulk �
   const r = await at(s.url, "runs", "rm", "r1", "r2", "--to", "blog-desk", "--yes");
   assert.equal(r.code, 1, r.out);
   assert.equal(s.seen.filter((x) => x.method === "DELETE").length, 0, "no DELETE per run: the bulk route, as the dashboard's bar");
-  assert.deepEqual(s.seen.filter((x) => x.method === "POST").map((x) => [x.url, JSON.parse(x.body)]), [["/api/workspaces/blog-desk/runs/bulk", { action: "delete", runIds: ["r1", "r2"] }]]);
+  assert.deepEqual(s.seen.filter((x) => x.method === "POST").map((x) => [x.url, JSON.parse(x.body)]), [["/v1/workspaces/blog-desk/runs/bulk", { action: "delete", runIds: ["r1", "r2"] }]]);
   assert.match(r.out, /1 of 2 deleted · 1 refused/);
   assert.match(r.out, /r1.*run not found/);
   const whole = await at(s.url, "runs", "rm", "r3", "r4", "--to", "rank-desk", "--yes");
@@ -142,7 +142,7 @@ const PARKED = {
 };
 
 test("reject --event-wait refuses the step parked on wait: event, naming it, with the dashboard's reason", async () => {
-  const s = await serve({ "GET /api/workspaces/blog-desk/runs/r9": () => PARKED, "POST /api/workspaces/blog-desk/runs/r9/approve": () => ({ ok: true, decision: "reject", steps: [1] }) });
+  const s = await serve({ "GET /v1/workspaces/blog-desk/runs/r9": () => PARKED, "POST /v1/workspaces/blog-desk/runs/r9/approve": () => ({ ok: true, decision: "reject", steps: [1] }) });
   const plain = await at(s.url, "reject", "r9", "--to", "blog-desk");
   assert.notEqual(plain.code, 0);
   assert.match(plain.out, /--event-wait rejects that one/);
@@ -161,7 +161,7 @@ test("reject --event-wait refuses the step parked on wait: event, naming it, wit
 
 test("inbox read --all marks every unread item read, in calls of 200; a tab flag narrows the view asked", async () => {
   const items = Array.from({ length: 250 }, (_, i) => ({ id: `i${i}`, read: i % 50 === 0, kind: "run", bucket: "mine" }));
-  const s = await serve({ "GET /api/me/inbox": () => ({ person: "me@acme.test", items, counts: {} }), "POST /api/me/inbox": () => ({ ok: true }) });
+  const s = await serve({ "GET /v1/me/inbox": () => ({ person: "me@acme.test", items, counts: {} }), "POST /v1/me/inbox": () => ({ ok: true }) });
   const r = await at(s.url, "inbox", "read", "--all");
   const team = await at(s.url, "inbox", "read", "--all", "--team", "--workspace", "blog-desk");
   s.close();
@@ -181,7 +181,7 @@ test("inbox read --all marks every unread item read, in calls of 200; a tab flag
 // --------------------------------------------------------------- assistant
 
 test("assistant --page sends the page context the dashboard sends", async () => {
-  const s = await serve({ "/api/workspaces/desk/assistant": () => ({ ok: true, reply: "That flow runs daily.", files: [], issues: [] }) });
+  const s = await serve({ "/v1/workspaces/desk/assistant": () => ({ ok: true, reply: "That flow runs daily.", files: [], issues: [] }) });
   const r = await at(s.url, "assistant", "what does this do?", "--to", "desk", "--page", "flows — daily.md");
   s.close();
   assert.equal(r.code, 0, r.out);

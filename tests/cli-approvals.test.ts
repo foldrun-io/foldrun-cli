@@ -105,7 +105,7 @@ const runsIn = (runs: any[]) => ({ runs: runs.map((r) => ({ ...r, steps: r.steps
 // ------------------------------------------------------------- approvals
 
 test("approvals says so plainly when nothing is waiting", async () => {
-  const s = await serve({ "/api/approvals": () => ({ approvals: [] }) });
+  const s = await serve({ "/v1/approvals": () => ({ approvals: [] }) });
   const r = await at(s.url, "approvals");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -114,8 +114,8 @@ test("approvals says so plainly when nothing is waiting", async () => {
 
 test("approvals names the workspace, the step, the question and what it previews", async () => {
   const s = await serve({
-    "/api/approvals": () => ({ approvals: [gate] }),
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "/v1/approvals": () => ({ approvals: [gate] }),
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
   });
   const r = await at(s.url, "approvals");
   s.close();
@@ -132,8 +132,8 @@ test("approvals names the workspace, the step, the question and what it previews
 test("approvals --to keeps one workspace's gates", async () => {
   const other = { ...gate, workspace: "rank-desk", runId: "run-bbb" };
   const s = await serve({
-    "/api/approvals": () => ({ approvals: [gate, other] }),
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "/v1/approvals": () => ({ approvals: [gate, other] }),
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
   });
   const r = await at(s.url, "approvals", "--to", "blog-desk");
   s.close();
@@ -146,8 +146,8 @@ test("approvals --to keeps one workspace's gates", async () => {
 
 test("approve without --yes on a pipe refuses, and posts nothing", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
   });
   const r = await at(s.url, "approve", "run-aaa", "--to", "blog-desk");
   s.close();
@@ -158,9 +158,9 @@ test("approve without --yes on a pipe refuses, and posts nothing", async () => {
 
 test("approve --yes posts the decision, and says what it is about to release first", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
-    "POST /api/workspaces/blog-desk/runs/run-aaa/approve": () => ({ ok: true, decision: "approve", steps: [2] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "POST /v1/workspaces/blog-desk/runs/run-aaa/approve": () => ({ ok: true, decision: "approve", steps: [2] }),
   });
   const r = await at(s.url, "approve", "run-aaa", "--to", "blog-desk", "--yes", "--note", "skip the Sydney batch");
   s.close();
@@ -175,9 +175,9 @@ test("approve --yes posts the decision, and says what it is about to release fir
 
 test("reject sends the note as the reason too, and needs no confirmation", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
-    "POST /api/workspaces/blog-desk/runs/run-aaa/approve": () => ({ ok: true, decision: "reject", steps: [2] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "POST /v1/workspaces/blog-desk/runs/run-aaa/approve": () => ({ ok: true, decision: "reject", steps: [2] }),
   });
   const r = await at(s.url, "reject", "run-aaa", "--to", "blog-desk", "--note", "the draft names a price");
   s.close();
@@ -189,9 +189,9 @@ test("reject sends the note as the reason too, and needs no confirmation", async
 
 test("--step decides one gate, by the number the report prints", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
-    "POST /api/workspaces/blog-desk/runs/run-aaa/approve": () => ({ ok: true, decision: "approve", steps: [2] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "POST /v1/workspaces/blog-desk/runs/run-aaa/approve": () => ({ ok: true, decision: "approve", steps: [2] }),
   });
   const r = await at(s.url, "approve", "run-aaa", "--to", "blog-desk", "--yes", "--step", "3");
   s.close();
@@ -201,8 +201,8 @@ test("--step decides one gate, by the number the report prints", async () => {
 
 test("a step that is not waiting is refused, with the ones that are", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
   });
   const r = await at(s.url, "approve", "run-aaa", "--to", "blog-desk", "--yes", "--step", "1");
   s.close();
@@ -224,9 +224,9 @@ const eventRun = {
 
 test("approve --payload releases the wait: event step with the body, JSON as JSON", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-evt": () => eventRun,
-    "POST /api/workspaces/blog-desk/runs/run-evt/approve": () => ({ ok: true, decision: "approve", steps: [1] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-evt": () => eventRun,
+    "POST /v1/workspaces/blog-desk/runs/run-evt/approve": () => ({ ok: true, decision: "approve", steps: [1] }),
   });
   const r = await at(s.url, "approve", "run-evt", "--to", "blog-desk", "--yes", "--payload", '{"brief":"spring sale"}');
   s.close();
@@ -238,9 +238,9 @@ test("approve --payload @file sends the file; plain text stays text", async () =
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-payload-")), "brief.txt");
   fs.writeFileSync(file, "the spring sale brief");
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-evt": () => eventRun,
-    "POST /api/workspaces/blog-desk/runs/run-evt/approve": () => ({ ok: true, decision: "approve", steps: [1] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-evt": () => eventRun,
+    "POST /v1/workspaces/blog-desk/runs/run-evt/approve": () => ({ ok: true, decision: "approve", steps: [1] }),
   });
   const r = await at(s.url, "approve", "run-evt", "--to", "blog-desk", "--yes", "--payload", `@${file}`);
   s.close();
@@ -250,8 +250,8 @@ test("approve --payload @file sends the file; plain text stays text", async () =
 
 test("approve --payload on a run with no wait: event step is refused, nothing posted", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
   });
   const r = await at(s.url, "approve", "run-aaa", "--to", "blog-desk", "--yes", "--payload", "hi");
   s.close();
@@ -262,8 +262,8 @@ test("approve --payload on a run with no wait: event step is refused, nothing po
 
 test("reject --payload is refused before anything is sent", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-evt": () => eventRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-evt": () => eventRun,
   });
   const r = await at(s.url, "reject", "run-evt", "--to", "blog-desk", "--payload", "hi");
   s.close();
@@ -274,8 +274,8 @@ test("reject --payload is refused before anything is sent", async () => {
 
 test("a finished run has no gate, and says so instead of approving", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-ok": () => completedRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-ok": () => completedRun,
   });
   const r = await at(s.url, "approve", "run-ok", "--to", "blog-desk", "--yes");
   s.close();
@@ -286,8 +286,8 @@ test("a finished run has no gate, and says so instead of approving", async () =>
 
 test("without --to the run's workspace is found, and a run in none of them says which door was tried", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/rank-desk/runs/run-ok": () => completedRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/rank-desk/runs/run-ok": () => completedRun,
   });
   const found = await at(s.url, "report", "run-ok");
   assert.equal(found.code, 0, found.out);
@@ -303,9 +303,9 @@ test("without --to the run's workspace is found, and a run in none of them says 
 
 test("runs merges every workspace, newest first, with the summary underneath", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": () => runsIn([failedRun]),
-    "/api/workspaces/rank-desk/runs": () => runsIn([completedRun]),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": () => runsIn([failedRun]),
+    "/v1/workspaces/rank-desk/runs": () => runsIn([completedRun]),
   });
   const r = await at(s.url, "runs");
   s.close();
@@ -320,9 +320,9 @@ test("runs merges every workspace, newest first, with the summary underneath", a
 
 test("runs --status keeps only those, and says so when nothing matches", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": () => runsIn([failedRun]),
-    "/api/workspaces/rank-desk/runs": () => runsIn([completedRun]),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": () => runsIn([failedRun]),
+    "/v1/workspaces/rank-desk/runs": () => runsIn([completedRun]),
   });
   const failed = await at(s.url, "runs", "--status", "failed");
   assert.equal(failed.code, 0, failed.out);
@@ -337,9 +337,9 @@ test("runs --status keeps only those, and says so when nothing matches", async (
 
 test("runs --since drops what is older, and a bad span is refused before any call", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": () => runsIn([failedRun]),
-    "/api/workspaces/rank-desk/runs": () => runsIn([completedRun]),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": () => runsIn([failedRun]),
+    "/v1/workspaces/rank-desk/runs": () => runsIn([completedRun]),
   });
   const old = await at(s.url, "runs", "--since", "1h");
   assert.equal(old.code, 0, old.out);
@@ -360,21 +360,21 @@ test("runs --since drops what is older, and a bad span is refused before any cal
 
 test("runs --to asks one workspace and --limit caps the list", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/runs": () => runsIn([failedRun, { ...completedRun, id: "run-two", startedAt: "2026-09-14T19:00:00.000Z" }]),
+    "/v1/workspaces/blog-desk/runs": () => runsIn([failedRun, { ...completedRun, id: "run-two", startedAt: "2026-09-14T19:00:00.000Z" }]),
   });
   const r = await at(s.url, "runs", "--to", "blog-desk", "--limit", "1");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /run-bad/);
   assert.doesNotMatch(r.out, /run-two/);
-  assert.ok(!s.seen.some((x) => x.url === "/api/workspaces"), "--to asks for no workspace list");
+  assert.ok(!s.seen.some((x) => x.url === "/v1/workspaces"), "--to asks for no workspace list");
 });
 
 test("a workspace that will not answer is named, and the rest still print", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": () => failing(500, { error: "the box is mid-deploy" }),
-    "/api/workspaces/rank-desk/runs": () => runsIn([completedRun]),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": () => failing(500, { error: "the box is mid-deploy" }),
+    "/v1/workspaces/rank-desk/runs": () => runsIn([completedRun]),
   });
   const r = await at(s.url, "runs");
   s.close();
@@ -388,8 +388,8 @@ test("a workspace that will not answer is named, and the rest still print", asyn
 
 test("report reads a completed run end to end: header, step, verify, files, links", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-ok": () => completedRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-ok": () => completedRun,
   });
   const r = await at(s.url, "report", "run-ok", "--to", "blog-desk");
   s.close();
@@ -408,8 +408,8 @@ test("report reads a completed run end to end: header, step, verify, files, link
 
 test("report on a failed run shows the error and the last events, and exits 1", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-bad": () => failedRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-bad": () => failedRun,
   });
   const r = await at(s.url, "report", "run-bad", "--to", "blog-desk");
   s.close();
@@ -422,8 +422,8 @@ test("report on a failed run shows the error and the last events, and exits 1", 
 
 test("report on a parked run ends with what is still waiting, and how to release it", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-aaa": () => waitingRun,
   });
   const r = await at(s.url, "report", "run-aaa", "--to", "blog-desk");
   s.close();
@@ -434,8 +434,8 @@ test("report on a parked run ends with what is still waiting, and how to release
 
 test("report --json is the record itself, and nothing else", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs/run-ok": () => completedRun,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs/run-ok": () => completedRun,
   });
   const r = await at(s.url, "report", "run-ok", "--to", "blog-desk", "--json");
   s.close();
@@ -449,10 +449,10 @@ test("report --json is the record itself, and nothing else", async () => {
 
 test("every one of them works from an account folder, a flat one, and nowhere in particular", async () => {
   const s = await serve({
-    "/api/approvals": () => ({ approvals: [] }),
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": () => runsIn([failedRun]),
-    "/api/workspaces/rank-desk/runs": () => runsIn([completedRun]),
+    "/v1/approvals": () => ({ approvals: [] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": () => runsIn([failedRun]),
+    "/v1/workspaces/rank-desk/runs": () => runsIn([completedRun]),
   });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-approvals-"));
   const account = path.join(home, "acme");

@@ -20,9 +20,9 @@ const bodies = (s: { seen: { method: string; body: string }[] }, method: string)
 
 test("account and workspace clear compute <figure> send just those figures as null", async () => {
   const s = await serve({
-    "PATCH /api/account": () => ({ ok: true, defaults: {} }),
-    "PATCH /api/workspaces/desk": () => ({ ok: true }),
-    "/api/workspaces/desk/source": () => ({ content: "---\nname: desk\n---\n" }),
+    "PATCH /v1/account": () => ({ ok: true, defaults: {} }),
+    "PATCH /v1/workspaces/desk": () => ({ ok: true }),
+    "/v1/workspaces/desk/source": () => ({ content: "---\nname: desk\n---\n" }),
   });
   const one = await at(s.url, "account", "clear", "compute", "disk");
   const two = await at(s.url, "workspace", "clear", "compute", "vcpu", "memory", "--to", "desk");
@@ -39,7 +39,7 @@ test("account and workspace clear compute <figure> send just those figures as nu
 
 test("flow compute --clear disk drops one figure on the platform and in the file", async () => {
   const s = await serve({
-    "PATCH /api/workspaces/desk/flows/daily": () => ({ ok: true, flow: { name: "daily", compute: { vcpu: 2, memGiB: null, diskGiB: null } } }),
+    "PATCH /v1/workspaces/desk/flows/daily": () => ({ ok: true, flow: { name: "daily", compute: { vcpu: 2, memGiB: null, diskGiB: null } } }),
   });
   const r = await at(s.url, "flow", "compute", "daily", "--clear", "disk", "--to", "desk");
   s.close();
@@ -78,8 +78,8 @@ test("flow compute --clear disk drops one figure on the platform and in the file
 test("account clear notify email keeps the URL and the events; clear notify url keeps the email", async () => {
   let notify: any = { url: "https://hooks.example.test/x", email: "ops@example.test", events: ["failed", "completed"] };
   const s = await serve({
-    "GET /api/account": () => ({ defaults: { notify } }),
-    "PATCH /api/account": (b: string) => ({ ok: true, defaults: { notify: JSON.parse(b).notify } }),
+    "GET /v1/account": () => ({ defaults: { notify } }),
+    "PATCH /v1/account": (b: string) => ({ ok: true, defaults: { notify: JSON.parse(b).notify } }),
   });
   const email = await at(s.url, "account", "clear", "notify", "email");
   const url = await at(s.url, "account", "clear", "notify", "url");
@@ -104,8 +104,8 @@ test("account clear notify email keeps the URL and the events; clear notify url 
 
 test("workspace clear notify url reads the workspace's own block and keeps the email", async () => {
   const s = await serve({
-    "/api/workspaces/desk/source": () => ({ content: "---\nname: desk\nnotify:\n  url: https://hooks.example.test/y\n  email: desk@example.test\n  events: [failed]\n---\n" }),
-    "PATCH /api/workspaces/desk": () => ({ ok: true }),
+    "/v1/workspaces/desk/source": () => ({ content: "---\nname: desk\nnotify:\n  url: https://hooks.example.test/y\n  email: desk@example.test\n  events: [failed]\n---\n" }),
+    "PATCH /v1/workspaces/desk": () => ({ ok: true }),
   });
   const r = await at(s.url, "workspace", "clear", "notify", "url", "--to", "desk");
   s.close();
@@ -148,8 +148,8 @@ test("a2a publish --clear-name in a folder removes the card's name from the flow
 
 test("wallet set auto-top-up off keeps the threshold and refill; wallet clear email sends null", async () => {
   const s = await serve({
-    "GET /api/billing/wallet": () => ({ enabled: true, summary: {}, cardSaved: true, autoTopUp: { enabled: true, thresholdUsd: 10, amountUsd: 50 }, email: "ap@acme.test" }),
-    "PUT /api/billing/wallet": () => ({ ok: true }),
+    "GET /v1/billing/wallet": () => ({ enabled: true, summary: {}, cardSaved: true, autoTopUp: { enabled: true, thresholdUsd: 10, amountUsd: 50 }, email: "ap@acme.test" }),
+    "PUT /v1/billing/wallet": () => ({ ok: true }),
   });
   const off = await at(s.url, "billing", "wallet", "set", "auto-top-up", "off");
   const clear = await at(s.url, "billing", "wallet", "clear", "email");
@@ -165,7 +165,7 @@ test("wallet set auto-top-up off keeps the threshold and refill; wallet clear em
 
 test("wallet shows a kept auto top-up as off, with its figures", async () => {
   const s = await serve({
-    "GET /api/billing/wallet": () => ({ enabled: true, summary: { balanceUsd: 5 }, cardSaved: true, autoTopUp: { enabled: false, thresholdUsd: 10, amountUsd: 50 }, email: null }),
+    "GET /v1/billing/wallet": () => ({ enabled: true, summary: { balanceUsd: 5 }, cardSaved: true, autoTopUp: { enabled: false, thresholdUsd: 10, amountUsd: 50 }, email: null }),
   });
   const r = await at(s.url, "billing", "wallet");
   s.close();
@@ -175,12 +175,12 @@ test("wallet shows a kept auto top-up as off, with its figures", async () => {
 
 test("billing details set --clear-address / --clear-email / --clear-abn drop that one and keep the rest", async () => {
   const s = await serve({
-    "GET /api/billing/details": () => ({
+    "GET /v1/billing/details": () => ({
       details: { legalName: "Acme Pty Ltd", email: "ap@acme.test", abn: "51824753556", address: { line1: "1 Main St", city: "Sydney", country: "AU" } },
       stripe: true,
       customer: true,
     }),
-    "PUT /api/billing/details": (b: string) => ({ ok: true, details: JSON.parse(b), synced: true }),
+    "PUT /v1/billing/details": (b: string) => ({ ok: true, details: JSON.parse(b), synced: true }),
   });
   const addr = await at(s.url, "billing", "details", "set", "--clear-address");
   const rest = await at(s.url, "billing", "details", "set", "--clear-email", "--clear-abn");
@@ -197,7 +197,7 @@ test("billing details set --clear-address / --clear-email / --clear-abn drop tha
 });
 
 test("a refused wallet read on auto-top-up off says it is the owner's / hosted", async () => {
-  const s = await serve({ "GET /api/billing/wallet": () => failing(501, { error: "billing is not part of this edition" }) });
+  const s = await serve({ "GET /v1/billing/wallet": () => failing(501, { error: "billing is not part of this edition" }) });
   const r = await at(s.url, "billing", "wallet", "set", "auto-top-up", "off");
   s.close();
   assert.notEqual(r.code, 0);
@@ -211,8 +211,8 @@ const series = (name: string, totalUsd: number, runs = 1, change: number | null 
 
 test("usage prints by flow and by agent, most charged first, capped by --limit", async () => {
   const s = await serve({
-    "/api/usage": () => ({ tenant: "acme", totals: { runs: 3 }, workspaces: [] }),
-    "/api/usage/history": () => ({
+    "/v1/account/usage": () => ({ tenant: "acme", totals: { runs: 3 }, workspaces: [] }),
+    "/v1/account/usage/history": () => ({
       from: "2026-09-10T00:00:00Z",
       to: "2026-11-05T00:00:00Z",
       bucket: "week",

@@ -3,13 +3,13 @@
 What every route has in common: how to sign a request, which version answers
 it, how fast you may call, how to retry safely, and what an error looks like.
 The routes themselves are in [api](api.md); the machine-readable description
-is `GET /api/openapi.json` (OpenAPI 3.1, no key needed), and the dashboard
+is `GET /v1/openapi.json` (OpenAPI 3.1, no key needed), and the dashboard
 renders it at **Docs → API reference**.
 
 ## Authentication
 
 ```sh
-curl -H "Authorization: Bearer $FOLDRUN_TOKEN" "$FOLDRUN_URL/api/workspaces"
+curl -H "Authorization: Bearer $FOLDRUN_TOKEN" "$FOLDRUN_URL/v1/workspaces"
 ```
 
 A key comes from **Settings → API keys** and carries a role (viewer, editor,
@@ -30,7 +30,7 @@ Foldrun-Version: 2026-10-01
 Every response says which version answered it, in `Foldrun-Version`.
 
 - **No header**: for an API key, your account's pin (**Settings → API keys → API**, or
-  `PATCH /api/account/api {"version": "2026-10-01"}`), and with no pin, the
+  `PATCH /v1/account/api {"version": "2026-10-01"}`), and with no pin, the
   current version. The dashboard always uses the current version: it ships
   with the platform, so a pin never applies to it.
 - **An unknown version** — a typo, a date that was never released, one
@@ -50,8 +50,9 @@ The versions so far:
 
 | Version | What changed |
 |---|---|
-| `2026-11-22` | One API, as Anthropic's: every `/api` refusal is Anthropic's error body, `{ "type": "error", "error": { "type", "message" } }`, with a `code` and figures inside `error` — the body `/v1` answers with. The key may be sent as `x-api-key` as well as `Authorization: Bearer` (that part breaks nothing). A caller pinned earlier, and a browser, keep `{ "error": "..." }`. |
-| `2026-10-26` | `GET /api/usage`: `ledger.providerCostUsd` and `ledger.marginUsd` are withdrawn. They were the platform's own accounting of your lines, not part of your account. A caller pinned to `2026-10-01` still gets both keys, as `null`: the values are withheld, not reproduced. |
+| `2026-11-23` | One URL format: every route is `/v1/<route>` and `/api` is gone. `GET /v1/version` drops `paths`, which said how an install spelled its routes; a caller pinned earlier gets it back saying `/v1`. |
+| `2026-11-22` | One API, as Anthropic's: every refusal is Anthropic's error body, `{ "type": "error", "error": { "type", "message" } }`, with a `code` and figures inside `error` — the body `/v1` answers with. The key may be sent as `x-api-key` as well as `Authorization: Bearer` (that part breaks nothing). A caller pinned earlier, and a browser, keep `{ "error": "..." }`. |
+| `2026-10-26` | `GET /v1/account/usage`: `ledger.providerCostUsd` and `ledger.marginUsd` are withdrawn. They were the platform's own accounting of your lines, not part of your account. A caller pinned to `2026-10-01` still gets both keys, as `null`: the values are withheld, not reproduced. |
 | `2026-10-01` | The first dated version. Every CLI released so far sends it. |
 
 The CLI sends the version it was built for on every call. When a platform
@@ -67,7 +68,7 @@ shows the platform, and warns when its commands would be refused.
   replaces it is released. A pin to a retired version is answered as the
   current version, never refused.
 - Every breaking change is announced in **What's new** (the dashboard's
-  changelog, `GET /api/changelog` and `foldrun changelog`) on the day it
+  changelog, `GET /v1/changelog` and `foldrun changelog`) on the day it
   ships: the version that brought it and what changed, and every deprecated
   route with the date it stops answering.
 - **Checked before it ships.** Every change to the platform is compared with
@@ -96,8 +97,8 @@ Every authenticated request counts against two buckets, and both must have
 room: one for **the key or person** making it, one for **the whole account**
 (three times the first). Reads (`GET`, `HEAD`) and writes count separately,
 per one-minute window. Health, status and version reads
-(`/api/healthz`, `/api/status`, `/api/version`), signing out and ending a
-support view are never counted or refused; neither is the public `GET /api/pricing`:
+(`/v1/healthz`, `/v1/status`, `/v1/version`), signing out and ending a
+support view are never counted or refused; neither is the public `GET /v1/pricing`:
 
 | Plan | Reads / key | Writes / key | Reads / account | Writes / account |
 |---|---|---|---|---|
@@ -120,7 +121,7 @@ Over the limit the answer is `429`, with `Retry-After` in seconds and
 { "error": "rate limit: this API key may make 120 writes a minute — retry in 41s", "retry_after": 41 }
 ```
 
-Your account's limits are on **Settings → API keys → API** and at `GET /api/account/api`.
+Your account's limits are on **Settings → API keys → API** and at `GET /v1/account/api`.
 The counters are shared by every server in the deployment. A self-hosted
 install can switch them off with `FOLDRUN_API_RATE_LIMIT=off` (for example
 behind its own gateway).
@@ -217,14 +218,12 @@ curl -H "x-api-key: $FOLDRUN_TOKEN" https://api.foldrun.dev/v1/workspaces/my-des
 
 The path carries the API's generation, `v1`; the `Foldrun-Version` header
 ([Versions](#versions)) carries every dated change inside it, as Stripe's and
-Anthropic's do. Each platform route keeps its name from the
-[reference](api.md), with `/v1` in place of `/api`. One differs: the account's
-usage is `/v1/account/usage/…` (`/api/usage/…`), because `/v1/usage` is a
-key's own spend. The older `/api/…` spelling keeps working on the same
-address. `GET /api/version` says which one an install serves as
-`paths.platform`; a self-hosted install with no API address of its own
-serves `/api` only. Dev serves `/v1` today at `https://api.foldrun.dev`;
-production gets it with `https://api.foldrun.io`. Settings → API keys → API shows it, and `GET /api/version`
+Anthropic's do. Every platform route is named as in the
+[reference](api.md); the account's usage is `/v1/account/usage/…`, because
+`/v1/usage` is a key's own spend. There is no other spelling: `/api` is gone
+(23 Nov 2026), and a self-hosted install with no API address of its own
+serves the same `/v1` paths on its one address. Dev is `https://api.foldrun.dev`;
+production gets `https://api.foldrun.io`. Settings → API keys → API shows it, and `GET /v1/version`
 names it as `urls.api` (with the dashboard's own address as `urls.app`).
 `foldrun login` moves a machine's calls there by itself. Signing in,
 invitations, approvals and the other pages a person opens stay on the
@@ -236,8 +235,8 @@ says so.
 The models are called on the gateway, in Anthropic's Messages format, with a
 **gateway key** (made on Settings → API keys as the *Gateway* kind, or
 `foldrun keys create <label> --gateway`). It opens the model routes alone,
-never `/api`. The gateway's address is shown when the key is made
-(`gatewayUrl` on `GET /api/keys`).
+never a platform route. The gateway's address is shown when the key is made
+(`gatewayUrl` on `GET /v1/keys`).
 
 | Route | For |
 |---|---|
@@ -263,7 +262,7 @@ curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-
 ## Pagination
 
 There is no cursor yet. The lists that can grow — runs — answer newest first
-and take `limit` (`/api/workspaces/<ws>/runs?limit=`, default 50, at most
+and take `limit` (`/v1/workspaces/<ws>/runs?limit=`, default 50, at most
 500). Everything else (flows, agents, keys,
 secrets, projects) comes whole. A cursor, when one is added, will be a new
 optional parameter and will not move the API version.

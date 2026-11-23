@@ -37,7 +37,7 @@ const USAGE = {
 };
 
 test("usage meters: pots, each meter with quantity, rate and credits, the plan fee, sizes and tokens by model", async () => {
-  const s = await serve({ "/api/usage": () => USAGE });
+  const s = await serve({ "/v1/account/usage": () => USAGE });
   const r = await at(s.url, "usage", "meters");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -57,17 +57,17 @@ test("usage meters: pots, each meter with quantity, rate and credits, the plan f
 });
 
 test("usage meters --since/--until become the API's from and to", async () => {
-  const s = await serve({ "/api/usage": () => USAGE });
+  const s = await serve({ "/v1/account/usage": () => USAGE });
   const r = await at(s.url, "usage", "meters", "--since", "2026-10-01", "--until", "2026-10-31");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.equal(s.seen[0].url, "/api/usage");
+  assert.equal(s.seen[0].url, "/v1/account/usage");
   assert.equal(s.seen[0].query.get("from"), "2026-10-01");
   assert.equal(s.seen[0].query.get("to"), "2026-10-31");
 });
 
 test("usage meters refuses a day that is not YYYY-MM-DD before any request", async () => {
-  const s = await serve({ "/api/usage": () => USAGE });
+  const s = await serve({ "/v1/account/usage": () => USAGE });
   const r = await at(s.url, "usage", "meters", "--since", "last week");
   s.close();
   assert.notEqual(r.code, 0);
@@ -76,7 +76,7 @@ test("usage meters refuses a day that is not YYYY-MM-DD before any request", asy
 });
 
 test("usage meters --json is the period, credits, tokens, compute and billed", async () => {
-  const s = await serve({ "/api/usage": () => ({ ...USAGE, totals: { runs: 1 }, workspaces: [] }) });
+  const s = await serve({ "/v1/account/usage": () => ({ ...USAGE, totals: { runs: 1 }, workspaces: [] }) });
   const r = await at(s.url, "usage", "meters", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -85,7 +85,7 @@ test("usage meters --json is the period, credits, tokens, compute and billed", a
 });
 
 test("usage meters for a scoped key: no pots, no plan fee, no ledger total — and no error", async () => {
-  const s = await serve({ "/api/usage": () => ({ ...USAGE, credits: null, billed: null, compute: { ...USAGE.compute, planFee: null } }) });
+  const s = await serve({ "/v1/account/usage": () => ({ ...USAGE, credits: null, billed: null, compute: { ...USAGE.compute, planFee: null } }) });
   const r = await at(s.url, "usage", "meters");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -93,7 +93,7 @@ test("usage meters for a scoped key: no pots, no plan fee, no ledger total — a
 });
 
 test("usage meters with no model calls says so", async () => {
-  const s = await serve({ "/api/usage": () => ({ ...USAGE, tokens: { totals: { calls: 0, billedCredits: 0, byokTokens: 0 }, byModel: [] } }) });
+  const s = await serve({ "/v1/account/usage": () => ({ ...USAGE, tokens: { totals: { calls: 0, billedCredits: 0, byokTokens: 0 }, byModel: [] } }) });
   const r = await at(s.url, "usage", "meters");
   s.close();
   assert.match(r.out, /no model calls in this period/);
@@ -109,7 +109,7 @@ const CATALOGUE = {
 };
 
 test("usage rates: each meter in dollars and credits, the plan, the plans, the example and the model prices", async () => {
-  const s = await serve({ "/api/usage/rates": () => ({ rates: RATES, plan: { ...PLAN, status: "active", resetsAt: null }, catalogue: CATALOGUE }) });
+  const s = await serve({ "/v1/account/usage/rates": () => ({ rates: RATES, plan: { ...PLAN, status: "active", resetsAt: null }, catalogue: CATALOGUE }) });
   const r = await at(s.url, "usage", "rates");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -126,11 +126,11 @@ test("usage rates: each meter in dollars and credits, the plan, the plans, the e
 
 test("usage rates --json is the API's answer whole; nothing billed is said, not failed", async () => {
   const doc = { rates: RATES, plan: null, catalogue: CATALOGUE };
-  let s = await serve({ "/api/usage/rates": () => doc });
+  let s = await serve({ "/v1/account/usage/rates": () => doc });
   let r = await at(s.url, "usage", "rates", "--json");
   s.close();
   assert.deepEqual(JSON.parse(r.out.slice(r.out.indexOf("{"))), doc);
-  s = await serve({ "/api/usage/rates": () => ({ rates: null, plan: null, catalogue: null }) });
+  s = await serve({ "/v1/account/usage/rates": () => ({ rates: null, plan: null, catalogue: null }) });
   r = await at(s.url, "usage", "rates");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -138,7 +138,7 @@ test("usage rates --json is the API's answer whole; nothing billed is said, not 
 });
 
 test("usage rates: a refusal is the platform's sentence and a non-zero exit", async () => {
-  const s = await serve({ "/api/usage/rates": () => failing(401, { error: "that key is not valid" }) });
+  const s = await serve({ "/v1/account/usage/rates": () => failing(401, { error: "that key is not valid" }) });
   const r = await at(s.url, "usage", "rates");
   s.close();
   assert.notEqual(r.code, 0);

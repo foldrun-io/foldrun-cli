@@ -749,7 +749,7 @@ edited by a person.
 
 ## [20.8.0] — 2026-11-11
 
-- feat(account): deploy sends the account's own AGENTS.md, pull fetches it (GET/PUT /api/account/agents-md) ([0da23ee](https://github.com/foldrun-io/foldrun-cli/commit/0da23ee))
+- feat(account): deploy sends the account's own AGENTS.md, pull fetches it (GET/PUT /v1/account/agents-md) ([0da23ee](https://github.com/foldrun-io/foldrun-cli/commit/0da23ee))
 
 ### docs
 
@@ -950,7 +950,7 @@ edited by a person.
 
 - `foldrun signup status`
 
-- feat(cli): foldrun signup status — the open /api/signup, no key sent ([a3dc64a](https://github.com/foldrun-io/foldrun-cli/commit/a3dc64a))
+- feat(cli): foldrun signup status — the open /v1/signup, no key sent ([a3dc64a](https://github.com/foldrun-io/foldrun-cli/commit/a3dc64a))
 - fix(cli): the default platform is https://dash.foldrun.io ([f12fc9a](https://github.com/foldrun-io/foldrun-cli/commit/f12fc9a))
 
 ## [19.1.0] — 2026-11-07
@@ -2518,7 +2518,7 @@ changes are listed under 0.7.0 below.
 
 ### status --platform
 
-- the platform's status, each component and any live incident or maintenance, from the open /api/status; plain status opens with the one-line verdict; docs synced (status, security, api, cli) ([bf1864c](https://github.com/foldrun-io/foldrun-cli/commit/bf1864c))
+- the platform's status, each component and any live incident or maintenance, from the open /v1/status; plain status opens with the one-line verdict; docs synced (status, security, api, cli) ([bf1864c](https://github.com/foldrun-io/foldrun-cli/commit/bf1864c))
 
 ### storage put
 

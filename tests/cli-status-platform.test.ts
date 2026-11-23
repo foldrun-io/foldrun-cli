@@ -1,5 +1,5 @@
 // `foldrun status --platform`: the platform's own status and any incident,
-// from the open /api/status — no key sent — and what it says when the
+// from the open /v1/status — no key sent — and what it says when the
 // platform does not answer. Through the real binary against a fake platform.
 //
 //   node --test tests/cli-status-platform.test.ts
@@ -26,19 +26,19 @@ const report = (over: Record<string, unknown> = {}) => ({
 });
 
 test("status --platform: every component, the overall verdict, no key needed or sent", async () => {
-  const s = await serve({ "/api/status": () => report() });
+  const s = await serve({ "/v1/status": () => report() });
   const r = await cli(["status", "--platform", "--url", s.url]);
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /All systems operational/);
   for (const name of ["Dashboard and API", "Run workers", "Scheduler", "Model providers", "Email", "Storage"]) assert.match(r.out, new RegExp(`${name}\\s+operational`));
-  assert.deepEqual(s.seen.map((x) => x.url), ["/api/status"]);
+  assert.deepEqual(s.seen.map((x) => x.url), ["/v1/status"]);
   assert.equal(s.seen[0].headers.authorization, undefined, "an open route: no key sent");
 });
 
 test("status --platform: a live incident and a maintenance window, with their latest update", async () => {
   const s = await serve({
-    "/api/status": () =>
+    "/v1/status": () =>
       report({
         status: "outage",
         description: "Major outage",
@@ -57,7 +57,7 @@ test("status --platform: a live incident and a maintenance window, with their la
 });
 
 test("status --platform --json prints the answer as is", async () => {
-  const s = await serve({ "/api/status": () => report() });
+  const s = await serve({ "/v1/status": () => report() });
   const r = await cli(["status", "--platform", "--json", "--url", s.url]);
   s.close();
   assert.equal(r.code, 0, r.out);

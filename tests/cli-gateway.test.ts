@@ -9,7 +9,7 @@ import { serve, at, cli } from "./fake-platform.ts";
 
 test("keys create --gateway posts { purpose: gateway, capUsd, dailyUsd } and prints the key once, with the Claude Code lines", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "mda_gwsecret", id: "g1", prefix: "mda_gwsecre", purpose: "gateway", capUsd: 20, dailyUsd: 5, expiresAt: "2027-02-08T00:00:00Z", gatewayUrl: "https://gateway.example.test" }),
+    "POST /v1/keys": () => ({ ok: true, key: "mda_gwsecret", id: "g1", prefix: "mda_gwsecre", purpose: "gateway", capUsd: 20, dailyUsd: 5, expiresAt: "2027-02-08T00:00:00Z", gatewayUrl: "https://gateway.example.test" }),
   });
   const r = await at(s.url, "keys", "create", "laptop", "--gateway", "--cap", "20", "--daily", "5");
   s.close();
@@ -25,7 +25,7 @@ test("keys create --gateway posts { purpose: gateway, capUsd, dailyUsd } and pri
 });
 
 test("keys create --gateway refuses, before any request, with no limit, a bad limit, or a role", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true }) });
   const none = await at(s.url, "keys", "create", "x", "--gateway");
   const bad = await at(s.url, "keys", "create", "x", "--gateway", "--cap", "-3");
   const role = await at(s.url, "keys", "create", "x", "--gateway", "--cap", "5", "--role", "admin");
@@ -43,7 +43,7 @@ test("keys create --gateway refuses, before any request, with no limit, a bad li
 
 test("keys ls shows a gateway key's limits and what it has spent", async () => {
   const s = await serve({
-    "/api/keys": () => ({
+    "/v1/keys": () => ({
       keys: [{ id: "g1", prefix: "mda_gw123456", label: "laptop", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: 20, dailyUsd: 5, spentUsd: 3.42, todayUsd: 1.27 }, createdAt: "2026-11-10T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }],
       gatewayUrl: "https://gateway.example.test",
     }),
@@ -56,7 +56,7 @@ test("keys ls shows a gateway key's limits and what it has spent", async () => {
 });
 
 test("--gateway is a switch: a word after it is not swallowed as its value", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "mda_x", id: "g2", purpose: "gateway", capUsd: 5, dailyUsd: null, gatewayUrl: null }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true, key: "mda_x", id: "g2", purpose: "gateway", capUsd: 5, dailyUsd: null, gatewayUrl: null }) });
   const r = await at(s.url, "keys", "create", "--gateway", "laptop", "--cap", "5");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -66,8 +66,8 @@ test("--gateway is a switch: a word after it is not swallowed as its value", asy
 
 test("keys create --gateway --login posts credential: login, takes no limit, and keys ls says it is not metered", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "mda_login", id: "g3", purpose: "gateway", credential: "login", capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
-    "/api/keys": () => ({ keys: [{ id: "g3", prefix: "mda_login123", label: "mine", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: null, dailyUsd: null, credential: "login" }, createdAt: "2026-11-10T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }], gatewayUrl: null }),
+    "POST /v1/keys": () => ({ ok: true, key: "mda_login", id: "g3", purpose: "gateway", credential: "login", capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
+    "/v1/keys": () => ({ keys: [{ id: "g3", prefix: "mda_login123", label: "mine", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: null, dailyUsd: null, credential: "login" }, createdAt: "2026-11-10T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }], gatewayUrl: null }),
   });
   const r = await at(s.url, "keys", "create", "mine", "--gateway", "--login");
   const withCap = await at(s.url, "keys", "create", "mine", "--gateway", "--login", "--cap", "5");
@@ -85,7 +85,7 @@ test("keys create --gateway --login posts credential: login, takes no limit, and
 
 test("keys create --gateway --login --plan max posts the plan; --plan is pro or max and goes with --login", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "mda_max", id: "g4", purpose: "gateway", credential: "login", plan: "max", capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
+    "POST /v1/keys": () => ({ ok: true, key: "mda_max", id: "g4", purpose: "gateway", credential: "login", plan: "max", capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
   });
   const r = await at(s.url, "keys", "create", "big", "--gateway", "--login", "--plan", "max");
   const odd = await at(s.url, "keys", "create", "big", "--gateway", "--login", "--plan", "ultra");
@@ -103,8 +103,8 @@ test("keys create --gateway --login --plan max posts the plan; --plan is pro or 
 
 test("keys set changes the tiers named, keeps the rest, and clears with - or --clear", async () => {
   const s = await serve({
-    "/api/keys": () => ({ keys: [{ id: "g5", prefix: "mda_g5", label: "laptop", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: 5, dailyUsd: null, models: { haiku: "deepseek/deepseek-v4" } }, createdAt: "2026-11-10T00:00:00Z", revokedAt: null }], gatewayUrl: null }),
-    "PATCH /api/keys/g5": (body: string) => ({ ok: true, id: "g5", models: JSON.parse(body).models }),
+    "/v1/keys": () => ({ keys: [{ id: "g5", prefix: "mda_g5", label: "laptop", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: 5, dailyUsd: null, models: { haiku: "deepseek/deepseek-v4" } }, createdAt: "2026-11-10T00:00:00Z", revokedAt: null }], gatewayUrl: null }),
+    "PATCH /v1/keys/g5": (body: string) => ({ ok: true, id: "g5", models: JSON.parse(body).models }),
   });
   const set = await at(s.url, "keys", "set", "g5", "--sonnet", "openai/gpt-6");
   const drop = await at(s.url, "keys", "set", "g5", "--haiku", "-");
@@ -135,7 +135,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const gw = () => ({ "POST /api/keys": () => ({ ok: true, key: "fr_gw_cc_secret", id: "g9", purpose: "gateway", capUsd: 20, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }) });
+const gw = () => ({ "POST /v1/keys": () => ({ ok: true, key: "fr_gw_cc_secret", id: "g9", purpose: "gateway", capUsd: 20, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }) });
 const inDir = (url: string, dir: string, ...args: string[]) => cli([...args, "--url", url, "--token", "k"], { env: { CLAUDE_CONFIG_DIR: dir } });
 
 test("keys create --gateway --claude-code writes the URL and key into a new Claude Code settings file, readable only by you", async () => {
@@ -194,7 +194,7 @@ test("--claude-code refuses a settings file it cannot safely rewrite, before any
 
 test("--claude-code on a platform with no gateway URL writes nothing and says so", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
-  const s = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_gw_x", id: "g8", purpose: "gateway", capUsd: 5, dailyUsd: null, gatewayUrl: null }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true, key: "fr_gw_x", id: "g8", purpose: "gateway", capUsd: 5, dailyUsd: null, gatewayUrl: null }) });
   const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "5", "--claude-code");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -219,7 +219,7 @@ test("--claude-code writes from the file as it is after the key is made, so a ch
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
   const file = path.join(dir, "settings.json");
   fs.writeFileSync(file, JSON.stringify({ model: "opus" }));
-  const s = await serve({ "POST /api/keys": () => {
+  const s = await serve({ "POST /v1/keys": () => {
     fs.writeFileSync(file, JSON.stringify({ model: "sonnet", theme: "dark" }));
     return { ok: true, key: "fr_gw_cc_secret", id: "g9", purpose: "gateway", capUsd: 20, dailyUsd: null, gatewayUrl: "https://gateway.example.test" };
   } });
@@ -233,7 +233,7 @@ test("--claude-code: a file broken after the key is made is left alone, and the 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
   const file = path.join(dir, "settings.json");
   fs.writeFileSync(file, "{}");
-  const s = await serve({ "POST /api/keys": () => {
+  const s = await serve({ "POST /v1/keys": () => {
     fs.writeFileSync(file, "{ broken");
     return { ok: true, key: "fr_gw_cc_secret", id: "g9", purpose: "gateway", capUsd: 20, dailyUsd: null, gatewayUrl: "https://gateway.example.test" };
   } });
@@ -329,7 +329,7 @@ test("gateway with no subcommand says what it does", async () => {
 
 test("keys create --gateway --account posts credential account with its wallet budget (0 when not given) and says plan first", async () => {
   const s = await serve({
-    "POST /api/keys": (body: string) => {
+    "POST /v1/keys": (body: string) => {
       const b = JSON.parse(body);
       return { ok: true, key: "fr_gw_acct", id: "a1", purpose: "gateway", credential: "account", walletUsd: b.walletUsd, capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" };
     },
@@ -345,7 +345,7 @@ test("keys create --gateway --account posts credential account with its wallet b
 });
 
 test("--wallet goes with --account; --account and --login are refused together; a bad --wallet is refused — all before any request", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true }) });
   const lone = await at(s.url, "keys", "create", "x", "--gateway", "--daily", "5", "--wallet", "3");
   const both = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--login");
   const bad = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "5", "--wallet", "-1");
@@ -359,8 +359,8 @@ test("--wallet goes with --account; --account and --login are refused together; 
 
 test("keys set <id> --wallet <usd> sends walletUsd alone; keys ls shows an account key's credits against its budget", async () => {
   const s = await serve({
-    "PATCH /api/keys/a1": (body: string) => ({ ok: true, id: "a1", walletUsd: JSON.parse(body).walletUsd }),
-    "/api/keys": () => ({
+    "PATCH /v1/keys/a1": (body: string) => ({ ok: true, id: "a1", walletUsd: JSON.parse(body).walletUsd }),
+    "/v1/keys": () => ({
       keys: [{ id: "a1", prefix: "fr_gw_acct", label: "laptop", role: "viewer", workspaces: null, purpose: "gateway", gateway: { capUsd: null, dailyUsd: 50, spentUsd: 9, todayUsd: 2, credential: "account", walletUsd: 20, walletSpentUsd: 4.5 }, createdAt: "2026-11-20T00:00:00Z", revokedAt: null, expiresAt: null, lastUsedAt: null }],
       gatewayUrl: "https://gateway.example.test",
     }),
@@ -375,7 +375,7 @@ test("keys set <id> --wallet <usd> sends walletUsd alone; keys ls shows an accou
 });
 
 test("--account or --wallet without --gateway, and keys set --wallet with another change, are refused before any request", async () => {
-  const s = await serve({ "POST /api/keys": () => ({ ok: true }), "PATCH /api/keys/a1": () => ({ ok: true }) });
+  const s = await serve({ "POST /v1/keys": () => ({ ok: true }), "PATCH /v1/keys/a1": () => ({ ok: true }) });
   const noGw = await at(s.url, "keys", "create", "x", "--account");
   const walletOnly = await at(s.url, "keys", "create", "x", "--wallet", "3");
   const both = await at(s.url, "keys", "set", "a1", "--customer", "required", "--wallet", "0");
@@ -388,8 +388,8 @@ test("--account or --wallet without --gateway, and keys set --wallet with anothe
 
 test("keys create --gateway --account on a platform that ignores the kind: the key it made is revoked and never shown", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "fr_gw_plain", id: "p1", purpose: "gateway", capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" }),
-    "DELETE /api/keys": () => ({ ok: true }),
+    "POST /v1/keys": () => ({ ok: true, key: "fr_gw_plain", id: "p1", purpose: "gateway", capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" }),
+    "DELETE /v1/keys": () => ({ ok: true }),
   });
   const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
   s.close();
@@ -402,8 +402,8 @@ test("keys create --gateway --account on a platform that ignores the kind: the k
 
 test("keys set --wallet succeeds only when the platform confirms the budget (an explicit 0 included)", async () => {
   const s = await serve({
-    "PATCH /api/keys/a1": () => ({ ok: true, id: "a1" }),
-    "PATCH /api/keys/a2": () => ({ ok: true, id: "a2", walletUsd: 0 }),
+    "PATCH /v1/keys/a1": () => ({ ok: true, id: "a1" }),
+    "PATCH /v1/keys/a2": () => ({ ok: true, id: "a2", walletUsd: 0 }),
   });
   const ignored = await at(s.url, "keys", "set", "a1", "--wallet", "0");
   const zero = await at(s.url, "keys", "set", "a2", "--wallet", "0");
@@ -416,8 +416,8 @@ test("keys set --wallet succeeds only when the platform confirms the budget (an 
 
 test("keys create --gateway --account: a key back with other limits than asked is revoked too", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "fr_gw_x", id: "p2", purpose: "gateway", credential: "account", walletUsd: 5, capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
-    "DELETE /api/keys": () => ({ ok: true }),
+    "POST /v1/keys": () => ({ ok: true, key: "fr_gw_x", id: "p2", purpose: "gateway", credential: "account", walletUsd: 5, capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
+    "DELETE /v1/keys": () => ({ ok: true }),
   });
   const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
   s.close();
@@ -428,8 +428,8 @@ test("keys create --gateway --account: a key back with other limits than asked i
 
 test("keys create --gateway --account: the right kind at other limits is revoked and said so (not taken for an older platform)", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "fr_gw_y", id: "p3", purpose: "gateway", credential: "account", walletUsd: 1, capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" }),
-    "DELETE /api/keys": () => ({ ok: true }),
+    "POST /v1/keys": () => ({ ok: true, key: "fr_gw_y", id: "p3", purpose: "gateway", credential: "account", walletUsd: 1, capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" }),
+    "DELETE /v1/keys": () => ({ ok: true }),
   });
   const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
   s.close();
@@ -441,7 +441,7 @@ test("keys create --gateway --account: the right kind at other limits is revoked
 // One key (22 Nov 2026): an API key that may also call foldrun's models.
 test("keys create --model-access posts modelAccess on an API key, prints its limits, and revokes a key a platform made without it", async () => {
   const s = await serve({
-    "POST /api/keys": () => ({ ok: true, key: "fr_api_onekey", id: "a1", prefix: "fr_api_onek", role: "editor", workspaces: null, expiresAt: null, modelAccess: { capUsd: null, dailyUsd: 50, walletUsd: 5 }, gatewayUrl: "https://api.example.test" }),
+    "POST /v1/keys": () => ({ ok: true, key: "fr_api_onekey", id: "a1", prefix: "fr_api_onek", role: "editor", workspaces: null, expiresAt: null, modelAccess: { capUsd: null, dailyUsd: 50, walletUsd: 5 }, gatewayUrl: "https://api.example.test" }),
   });
   const r = await at(s.url, "keys", "create", "ci", "--model-access", "--daily", "50", "--wallet", "5");
   s.close();
@@ -450,7 +450,7 @@ test("keys create --model-access posts modelAccess on an API key, prints its lim
   assert.match(r.out, /models: plan first, then up to \$5\.00 of credits · \$50\.00 a day/);
   assert.equal(r.out.split("fr_api_onekey").length - 1, 1, "the key is printed once");
 
-  const old = await serve({ "POST /api/keys": () => ({ ok: true, key: "fr_api_plain", id: "a2", prefix: "fr_api_plai", role: "editor", workspaces: null }), "DELETE /api/keys": () => ({ ok: true }) });
+  const old = await serve({ "POST /v1/keys": () => ({ ok: true, key: "fr_api_plain", id: "a2", prefix: "fr_api_plai", role: "editor", workspaces: null }), "DELETE /v1/keys": () => ({ ok: true }) });
   const refused = await at(old.url, "keys", "create", "ci", "--model-access", "--daily", "5");
   old.close();
   assert.equal(refused.code, 1, refused.out);
@@ -458,7 +458,7 @@ test("keys create --model-access posts modelAccess on an API key, prints its lim
   assert.doesNotMatch(refused.out, /fr_api_plain/, "the key it made instead is never shown");
   assert.deepEqual(JSON.parse(old.seen[1].body), { id: "a2" });
 
-  const z = await serve({ "POST /api/keys": () => ({ ok: true }) });
+  const z = await serve({ "POST /v1/keys": () => ({ ok: true }) });
   const none = await at(z.url, "keys", "create", "x", "--model-access");
   const stray = await at(z.url, "keys", "create", "x", "--daily", "5");
   const mixed = await at(z.url, "keys", "create", "x", "--model-access", "--gateway", "--daily", "5");
@@ -472,7 +472,7 @@ test("keys create --model-access posts modelAccess on an API key, prints its lim
 
 test("keys ls shows an API key's model access beside its role", async () => {
   const s = await serve({
-    "GET /api/keys": () => ({ keys: [{ id: "a1", prefix: "fr_api_onek", label: "ci", role: "editor", workspaces: null, createdAt: "2026-11-22T00:00:00Z", revokedAt: null, gateway: { capUsd: null, dailyUsd: 50, credential: "account", walletUsd: 5, spentUsd: 1, todayUsd: 1, walletSpentUsd: 0 } }] }),
+    "GET /v1/keys": () => ({ keys: [{ id: "a1", prefix: "fr_api_onek", label: "ci", role: "editor", workspaces: null, createdAt: "2026-11-22T00:00:00Z", revokedAt: null, gateway: { capUsd: null, dailyUsd: 50, credential: "account", walletUsd: 5, spentUsd: 1, todayUsd: 1, walletSpentUsd: 0 } }] }),
   });
   const r = await at(s.url, "keys", "ls");
   s.close();

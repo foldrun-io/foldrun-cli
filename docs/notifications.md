@@ -180,7 +180,7 @@ Project settings has a button that sends one real message to the saved
 destination and reports what came back, including the provider's own words
 on a failure. Those words are the value: "domain not verified" and "you can
 only send to your own address" send you to two different pages, and a status
-code sends you to neither. `POST /api/workspaces/<ws>/notify/test` is the
+code sends you to neither. `POST /v1/workspaces/<ws>/notify/test` is the
 same thing. A project gets 10 test sends an hour; past that the button
 says to wait.
 
@@ -259,7 +259,7 @@ webhook deliveries*: every delivery, its status, its attempts, and a
 **Redeliver** button. From a terminal, `foldrun webhooks deliveries --to
 <ws>` (`--failed` for the ones that gave up) and `foldrun webhooks
 redeliver <id> --to <ws>`; over HTTP, `GET
-/api/workspaces/<ws>/notify/deliveries` and `POST
+/v1/workspaces/<ws>/notify/deliveries` and `POST
 …/deliveries/<id>/redeliver`. A redelivery is one attempt, now, with the
 same id and body, signed afresh. The log shows a gate's approve and
 reject links as `[redacted]`: they decide without a login, and every role
@@ -363,7 +363,7 @@ come from foldrun; the platform never sends those through your key.
 Every mail the platform sends belongs to a category, and each person
 chooses which they take — under **Profile → Notifications**, with `foldrun
 notifications` / `foldrun notifications set <category> on|off`, or through
-`GET`/`PATCH /api/me/notifications`. The choice is asked at the moment of
+`GET`/`PATCH /v1/me/notifications`. The choice is asked at the moment of
 sending, so it holds for every mail, from every part of the platform.
 
 | category | what | can be turned off |
@@ -385,7 +385,7 @@ notifications set run-alerts off --to seo-desk`).
 
 **Unsubscribing from a mail.** Every mail in an optional category carries a
 one-click unsubscribe, as RFC 8058 describes: `List-Unsubscribe:
-<https://…/api/unsubscribe?token=…>` and `List-Unsubscribe-Post:
+<https://…/v1/unsubscribe?token=…>` and `List-Unsubscribe-Post:
 List-Unsubscribe=One-Click`, so the mail client's own Unsubscribe button
 works, plus a "Stop …" link at the bottom that opens a page asking first
 (opening a link never unsubscribes — inbox scanners open links). The token

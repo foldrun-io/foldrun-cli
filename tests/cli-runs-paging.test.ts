@@ -47,10 +47,10 @@ const EVERY = [...BLOG, ...RANK].sort(order).map((r) => r.id);
 
 const platform = (opts: { paged?: boolean } = {}) =>
   serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": runsRoute(BLOG, opts),
-    "/api/workspaces/rank-desk/runs": runsRoute(RANK, opts),
-    "/api/workspaces/rank-desk/runs/run-r2": () => RANK[1],
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": runsRoute(BLOG, opts),
+    "/v1/workspaces/rank-desk/runs": runsRoute(RANK, opts),
+    "/v1/workspaces/rank-desk/runs/run-r2": () => RANK[1],
   });
 
 const idsOf = (out: string) => (JSON.parse(out.slice(out.indexOf("{"))) as { runs: { id: string }[] }).runs.map((r) => r.id);
@@ -109,9 +109,9 @@ test("a filter the CLI applies still reaches past a busy desk's first 500", asyn
   // blog-desk: 520 newer successes, then a failure; rank-desk: one failure.
   const busy = [...Array.from({ length: 520 }, (_, i) => row(`run-ok${String(i).padStart(3, "0")}`, 1000 + i)), row("run-old-fail", 5, "failed")];
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": runsRoute(busy),
-    "/api/workspaces/rank-desk/runs": runsRoute([row("run-rank-fail", 2, "failed")]),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": runsRoute(busy),
+    "/v1/workspaces/rank-desk/runs": runsRoute([row("run-rank-fail", 2, "failed")]),
   });
   const r = await at(s.url, "runs", "--status", "failed", "--json");
   s.close();
@@ -146,17 +146,17 @@ test("--page takes a page number, and not beside --all", async () => {
 const FILES = {
   runId: "run-r2",
   files: [
-    { agent: "writer", path: "draft.md", bytes: 2048, href: "/api/workspaces/rank-desk/runs/run-r2/archive?agent=writer&path=draft.md" },
-    { agent: "writer", path: "img/cover.png", bytes: 3 * 1024 * 1024, href: "/api/workspaces/rank-desk/runs/run-r2/archive?agent=writer&path=img%2Fcover.png" },
+    { agent: "writer", path: "draft.md", bytes: 2048, href: "/v1/workspaces/rank-desk/runs/run-r2/archive?agent=writer&path=draft.md" },
+    { agent: "writer", path: "img/cover.png", bytes: 3 * 1024 * 1024, href: "/v1/workspaces/rank-desk/runs/run-r2/archive?agent=writer&path=img%2Fcover.png" },
   ],
   totalBytes: 2048 + 3 * 1024 * 1024,
 };
 
 test("runs outputs lists what the run archived, finding its workspace", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/rank-desk/runs/run-r2": () => RANK[1],
-    "/api/workspaces/rank-desk/runs/run-r2/files": () => FILES,
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/rank-desk/runs/run-r2": () => RANK[1],
+    "/v1/workspaces/rank-desk/runs/run-r2/files": () => FILES,
   });
   const r = await at(s.url, "runs", "outputs", "run-r2");
   const json = await at(s.url, "runs", "outputs", "run-r2", "--to", "rank-desk", "--json");
@@ -172,8 +172,8 @@ test("runs outputs lists what the run archived, finding its workspace", async ()
 
 test("runs outputs says so when nothing was archived, and needs one run id", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/runs/run-b1/files": () => ({ runId: "run-b1", files: [], totalBytes: 0 }),
-    "/api/workspaces/blog-desk/runs/run-gone/files": () => failing(404, { error: "run not found" }),
+    "/v1/workspaces/blog-desk/runs/run-b1/files": () => ({ runId: "run-b1", files: [], totalBytes: 0 }),
+    "/v1/workspaces/blog-desk/runs/run-gone/files": () => failing(404, { error: "run not found" }),
   });
   const none = await at(s.url, "runs", "outputs", "run-b1", "--to", "blog-desk");
   const gone = await at(s.url, "runs", "outputs", "run-gone", "--to", "blog-desk");
@@ -189,9 +189,9 @@ test("runs outputs says so when nothing was archived, and needs one run id", asy
 
 test("runs --all on a platform from before paging refuses, instead of a list cut at 500", async () => {
   const s = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/runs": () => ({ runs: [] }),
-    "/api/workspaces/rank-desk/runs": () => ({ runs: [] }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/runs": () => ({ runs: [] }),
+    "/v1/workspaces/rank-desk/runs": () => ({ runs: [] }),
   });
   const r = await at(s.url, "runs", "--all", "--json");
   s.close();
@@ -200,7 +200,7 @@ test("runs --all on a platform from before paging refuses, instead of a list cut
 });
 
 test("runs --json on an account with no workspaces is still the { runs, next } document", async () => {
-  const s = await serve({ "/api/workspaces": () => ({ workspaces: [] }) });
+  const s = await serve({ "/v1/workspaces": () => ({ workspaces: [] }) });
   const r = await at(s.url, "runs", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);

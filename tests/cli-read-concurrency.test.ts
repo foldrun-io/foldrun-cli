@@ -46,16 +46,16 @@ async function slowPlatform(files: Map<string, Map<string, string>>) {
       inFlight--;
       res.setHeader("content-type", "application/json");
       const send = (o: unknown) => res.end(JSON.stringify(o));
-      if (url.pathname === "/api/workspaces") return send({ workspaces: [...files.keys()].map((name) => ({ name })) });
-      const m = /^\/api\/workspaces\/([^/]+)\/source$/.exec(url.pathname);
+      if (url.pathname === "/v1/workspaces") return send({ workspaces: [...files.keys()].map((name) => ({ name })) });
+      const m = /^\/v1\/workspaces\/([^/]+)\/source$/.exec(url.pathname);
       if (m) {
         const own = files.get(m[1]) ?? new Map();
         const rel = url.searchParams.get("path");
         return send(rel ? { path: rel, content: own.get(rel) ?? "" } : { files: [...own.keys()] });
       }
-      if (url.pathname === "/api/account") return send({ defaults: { timezone: "UTC" } });
-      if (url.pathname === "/api/account/pause") return send({ paused: false, account: null, workspaces: {} });
-      if (url.pathname === "/api/status") return send({ status: "operational", description: "all systems operational", incidents: [] });
+      if (url.pathname === "/v1/account") return send({ defaults: { timezone: "UTC" } });
+      if (url.pathname === "/v1/account/pause") return send({ paused: false, account: null, workspaces: {} });
+      if (url.pathname === "/v1/status") return send({ status: "operational", description: "all systems operational", incidents: [] });
       res.statusCode = 404;
       return send({ error: "not found" });
     }, DELAY_MS);

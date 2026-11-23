@@ -71,7 +71,7 @@ against its most recent run on a *different* commit, the biggest drop first.
 Not the run before — two runs on one commit differ only by the model, and a
 "regression" that is really variance teaches people to ignore the real ones.
 `foldrun eval trends --to <workspace>` prints the same table and exits 1 when a
-change made an eval worse; `GET /api/workspaces/<ws>/evals/trends` answers it.
+change made an eval worse; `GET /v1/workspaces/<ws>/evals/trends` answers it.
 
 On a platform an eval's run goes through the same queue as every other run,
 so it counts against the account's `concurrency:` and waits its turn.

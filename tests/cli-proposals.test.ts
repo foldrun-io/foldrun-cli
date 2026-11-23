@@ -23,11 +23,11 @@ const ready = {
   files: [{ path: "agents/writer/agent.md", before: "Write the digest.\n", content: "Write the digest.\nName the source of every claim.\n", sha256: "abc" }],
   issues: [],
 };
-const base = "/api/workspaces/blog-desk/proposals";
+const base = "/v1/workspaces/blog-desk/proposals";
 
 test("proposals lists them, show prints the reasoning and the change", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [base]: (_b, q) => ({ proposals: q.get("status") === "applied" ? [] : [ready] }),
     [`GET ${base}/${P}`]: () => ready,
   });
@@ -50,7 +50,7 @@ test("proposals lists them, show prints the reasoning and the change", async () 
 
 test("apply asks first: no terminal and no --yes writes nothing", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [`GET ${base}/${P}`]: () => ready,
     [`POST ${base}/${P}`]: (body) => ({ ...ready, status: JSON.parse(body).action === "apply" ? "applied" : "dismissed", applied: ["agents/writer/agent.md"] }),
   });
@@ -74,8 +74,8 @@ test("apply asks first: no terminal and no --yes writes nothing", async () => {
 test("eval improve asks for one and waits for the draft", async () => {
   let polls = 0;
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
-    "POST /api/workspaces/blog-desk/evals/digest-quality/improve": () => ({ ...ready, status: "drafting", files: [], reply: "" }),
+    "/v1/workspaces": () => WORKSPACES,
+    "POST /v1/workspaces/blog-desk/evals/digest-quality/improve": () => ({ ...ready, status: "drafting", files: [], reply: "" }),
     [`GET ${base}/${P}`]: () => (++polls < 2 ? { ...ready, status: "drafting" } : ready),
   });
   try {
@@ -94,7 +94,7 @@ test("eval improve asks for one and waits for the draft", async () => {
 test("show is an ordered diff: a reorder or a removed duplicate shows, and --json apply keeps stdout one document", async () => {
   const reorder = { ...ready, files: [{ path: "flows/digest.md", before: "1. [[writer]] — Write.\n2. [[editor]] — Edit.\nkeep\nkeep\n", content: "1. [[editor]] — Edit.\n2. [[writer]] — Write.\nkeep\n", sha256: "x" }] };
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [`GET ${base}/${P}`]: () => reorder,
     [`POST ${base}/${P}`]: () => ({ ...reorder, status: "applied", applied: ["flows/digest.md"] }),
   });

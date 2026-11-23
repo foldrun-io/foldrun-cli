@@ -18,7 +18,7 @@ const report = {
 };
 
 test("one row per flow: fired vs started, each reason with its count, and a quarantine is loud", async () => {
-  const s = await serve({ "/api/workspaces/rank-desk/triggers": () => report });
+  const s = await serve({ "/v1/workspaces/rank-desk/triggers": () => report });
   const r = await at(s.url, "triggers", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 1, "a flow switched off is worth a non-zero exit");
@@ -33,7 +33,7 @@ test("one row per flow: fired vs started, each reason with its count, and a quar
 });
 
 test("--since widens the window, and a quiet workspace says so", async () => {
-  const s = await serve({ "/api/workspaces/rank-desk/triggers": () => ({ days: 30, flows: [], events: [], deliveries: [] }) });
+  const s = await serve({ "/v1/workspaces/rank-desk/triggers": () => ({ days: 30, flows: [], events: [], deliveries: [] }) });
   const r = await at(s.url, "triggers", "--since", "30", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 0, r.out);

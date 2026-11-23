@@ -22,7 +22,7 @@ The same findings appear in four other places, from the same rules in
 - **The dashboard**: the project's **Checks** page lists every finding on
   the deployed copy, grouped by rule, each linking to its file. The editor
   shows a file's own findings above it.
-- **The API**: `GET /api/workspaces/<ws>/check` answers with the same
+- **The API**: `GET /v1/workspaces/<ws>/check` answers with the same
   findings as JSON (`?security=1`, `?rule=`). See [api](api).
 - **A save**: saving a file in the dashboard editor checks the project as
   it would be with that file. An error a deploy would refuse is refused
@@ -95,7 +95,7 @@ and the tool text of MCP servers reached by URL
 ([`content/mcp-tool-text`](#content-mcp-tool-text)).
 
 - **When you ask:** Checks → **Online checks**, `foldrun check --to <ws>
-  --online`, or `GET /api/workspaces/<ws>/check?online=1` — editor and
+  --online`, or `GET /v1/workspaces/<ws>/check?online=1` — editor and
   above, since it sends the platform out to OSV and your MCP servers. The
   answer is kept for 10 minutes while the files are unchanged, and a
   project gets six fresh online passes per 10 minutes.

@@ -437,7 +437,7 @@ async function platformScaffold(kind, name, flags, layout) {
   const one = { agents: "agent", flows: "flow", tools: "tool" }[kind];
   const url = platformFor(flags, `${one} new --platform`);
   const ws = platformWorkspace(flags, layout, `${one} new ${name} --platform`);
-  let route = `/api/workspaces/${enc(ws)}/${kind}`;
+  let route = `/v1/workspaces/${enc(ws)}/${kind}`;
   let body;
   if (kind === "agents") {
     body = { name, ...(typeof flags.description === "string" ? { description: flags.description } : {}), ...(typeof flags.model === "string" ? { model: flags.model } : {}) };
@@ -449,7 +449,7 @@ async function platformScaffold(kind, name, flags, layout) {
   } else {
     // A script tool, as `tool new` makes here — the platform's own default
     // with no template is an http one.
-    route = `/api/workspaces/${enc(ws)}/assets`;
+    route = `/v1/workspaces/${enc(ws)}/assets`;
     const template = typeof flags.template === "string" ? flags.template : typeof flags.transport === "string" ? flags.transport : "script";
     body = { kind: "tools", name, template, ...(typeof flags.language === "string" ? { language: flags.language } : {}) };
   }
@@ -471,7 +471,7 @@ async function remoteListCmd(kind, flags, layout) {
   const one = kind === "agents" ? "agent" : "flow";
   const url = platformFor(flags, `${one} ls`);
   const ws = platformWorkspace(flags, layout, `${one} ls`);
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/${kind}`);
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/${kind}`);
   let list = r[kind] ?? [];
   // --stale [days]: the agents nobody has run lately — with a number, not
   // run in that many days (never run included); bare, the ones past the
@@ -748,11 +748,11 @@ async function platformLibrary(flags) {
     return { url, tools: new Set(), skills: new Set(), warning: `${url} is the platform but this machine is not signed in — library tools there cannot be seen` };
   }
   const names = async (kind) => {
-    const res = await fetch(new URL(`/api/library/${kind}`, url), {
+    const res = await fetch(new URL(`/v1/library/${kind}`, url), {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(8_000),
     });
-    if (!res.ok) throw new Error(`/api/library/${kind} → HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`/v1/library/${kind} → HTTP ${res.status}`);
     const body = /** @type {any} */ (await res.json());
     return new Set((body.entries ?? []).map((e) => e.name).filter(Boolean));
   };
@@ -768,7 +768,7 @@ async function platformLibrary(flags) {
 
 /**
  * The Google Chrome and Playwright Chromium versions in the platform's runner
- * image, from its open /api/version (`browser_versions.chrome` and
+ * image, from its open /v1/version (`browser_versions.chrome` and
  * `.chromium`, which the deploy read out of the image's engines manifest).
  * Each null when there is no platform, it cannot be reached, or it did not
  * say — check then compares nothing for that engine. Asked once per platform
@@ -781,7 +781,7 @@ async function platformBrowsers(url) {
   if (!platformBrowsersCache.has(url)) {
     platformBrowsersCache.set(url, (async () => {
       try {
-        const res = await fetch(new URL("/api/version", url), { signal: AbortSignal.timeout(8_000) });
+        const res = await fetch(new URL("/v1/version", url), { signal: AbortSignal.timeout(8_000) });
         if (!res.ok) return none;
         const bv = /** @type {any} */ (await res.json())?.browser_versions;
         const pick = (v) => (typeof v === "string" && /^\d+(\.\d+)+$/.test(v) ? v : null);
@@ -1272,7 +1272,7 @@ async function checkProblems(workspace, flags = {}) {
     for (const w of a.networkProblems ?? []) note("error", `agents/${a.name}`, w);
     // What works but should change: the old `session:` key, and a pinned
     // user_agent whose Chrome is not the runner image's (the platform's
-    // /api/version says which Chrome; FOLDRUN_RUNNER_ENGINES on a server).
+    // /v1/version says which Chrome; FOLDRUN_RUNNER_ENGINES on a server).
     if (webWarnings) {
       try {
         const matter = (await import("gray-matter")).default;
@@ -1788,7 +1788,7 @@ async function useGallery(flags) {
   if (!url) return;
   const dir = galleryCacheDir(url);
   try {
-    const body = await remoteCall(url, { ...flags, quiet: true }, "/api/library/gallery", {}, { seconds: 15 });
+    const body = await remoteCall(url, { ...flags, quiet: true }, "/v1/library/gallery", {}, { seconds: 15 });
     if (Array.isArray(body.tools) && body.tools.length) writeGalleryCache(dir, body.tools);
   } catch (err) {
     if (fs.existsSync(dir)) console.error(c.dim(`  gallery: using the copy from ${fs.readFileSync(path.join(dir, ".fetched"), "utf8").trim()} (${err instanceof Error ? err.message.split("\n")[0] : err})`));
@@ -1803,11 +1803,11 @@ async function galleryCmd(positional, flags) {
   const [verb, name] = positional;
   if (verb === "upgrade") {
     if (!name) throw new Error("which one? `foldrun gallery upgrade <tool or skill>` — `foldrun gallery` lists them");
-    const body = await remoteCall(url, flags, "/api/library/gallery", { method: "POST", body: JSON.stringify({ tool: name }) });
+    const body = await remoteCall(url, flags, "/v1/library/gallery", { method: "POST", body: JSON.stringify({ tool: name }) });
     console.log(`\n  ${c.green("upgraded")} ${c.bold(name)} ${c.dim(`in the account library to the gallery's current version (${body.path}) — the previous copy is one revision back`)}\n`);
     return 0;
   }
-  const body = await remoteCall(url, flags, "/api/library/gallery");
+  const body = await remoteCall(url, flags, "/v1/library/gallery");
   const tools = body.tools ?? [];
   if (verb === "pull") {
     const dir = galleryCacheDir(url);
@@ -2003,7 +2003,7 @@ async function runEvals(name, flags = {}) {
  */
 async function deployOverHttp(url, workspace, files, flags, expectRemoved) {
   const token = await renewedToken(url, flags);
-  const endpoint = `${url.replace(/\/+$/, "")}/api/workspaces/${encodeURIComponent(workspace)}/deploy`;
+  const endpoint = `${url.replace(/\/+$/, "")}/v1/workspaces/${encodeURIComponent(workspace)}/deploy`;
 
   let res;
   try {
@@ -2280,13 +2280,13 @@ function appFor(url, flags) {
   return p ? p.app : key;
 }
 
-/** GET /api/version's `urls` — { api, app } or null (an older platform, or
+/** GET /v1/version's `urls` — { api, app } or null (an older platform, or
  *  one address for both). Open: asked before a key exists. */
 async function platformUrls(url) {
   try {
     // Answered by `url` itself: a redirect is no answer from it, so it can
     // never vouch for an address it was not asked at (Codex review).
-    const res = await remoteFetch(url, "/api/version", { redirect: "manual" }, { seconds: 15 });
+    const res = await remoteFetch(url, "/v1/version", { redirect: "manual" }, { seconds: 15 });
     if (res.status !== 200) return null;
     const body = /** @type {any} */ (await res.json().catch(() => null));
     const u = body?.urls;
@@ -2300,7 +2300,7 @@ async function platformUrls(url) {
       }
     };
     if (!u || typeof u !== "object") return null;
-    return { api: web(u.api), app: web(u.app), paths: pathPlanOf(body) };
+    return { api: web(u.api), app: web(u.app) };
   } catch {
     return null;
   }
@@ -2323,14 +2323,14 @@ async function signedInAddresses(url, token, account) {
   const urls = await urlsAt(url);
   const same = async (at) => {
     try {
-      const res = await remoteFetch(at, "/api/me", { redirect: "manual" }, { token, seconds: 15 });
+      const res = await remoteFetch(at, "/v1/me", { redirect: "manual" }, { token, seconds: 15 });
       return res.status === 200 && /** @type {any} */ (await res.json().catch(() => null))?.account === account;
     } catch {
       return false;
     }
   };
   // Both ways before any key leaves for another address: the other one's own
-  // /api/version (open, no key) must name the same pair. One server's word
+  // /v1/version (open, no key) must name the same pair. One server's word
   // alone never sends a key elsewhere (Codex review, 21 Nov 2026).
   // Either may be null (an install that names only its API): the pair is
   // compared as named, nulls included.
@@ -2349,11 +2349,7 @@ async function signedInAddresses(url, token, account) {
     urls?.app && urls.app !== api && (urls.app === url || (await checked(urls.app))) ? urls.app
     : api !== url && !urls?.app ? url
     : null;
-  // How the address the key is kept at spells its routes: its own answer,
-  // and only when it names itself as the API (23 Nov 2026, /v1).
-  const own = await urlsAt(api);
-  const paths = own && own.api === api ? own.paths : null;
-  return { url: api, app, paths };
+  return { url: api, app };
 }
 
 const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOKEN / pass --token";
@@ -2459,64 +2455,6 @@ function retryAfterMs(res, seconds) {
 }
 
 /**
- * How each platform spells its routes (23 Nov 2026, the platform under /v1
- * like Stripe's and Anthropic's). Learned once, at `foldrun login`, from the
- * open `/api/version` of the address the key is kept at, and stored in its
- * profile as `paths`: an API host whose `paths.platform` is "/v1" gets
- * `/v1/<route>`; anything else (an older platform, a self-hosted one, a
- * profile from before, `FOLDRUN_URL` with no profile) keeps `/api/<route>`,
- * which every platform still serves. No request per run. `renames` comes
- * from the platform too, so the CLI holds no copy of the map: `/api/usage`
- * is `/v1/account/usage` because `/v1/usage` is a key's own spend.
- * FOLDRUN_API_PATHS=api keeps /api everywhere.
- */
-/** @typedef {{ v1: boolean, renames: Record<string, string> }} PathPlan */
-/** @type {PathPlan} */
-const API_PATHS = { v1: false, renames: {} };
-
-/** The plan an /api/version answer gives, or null for /api. @param {any} body @returns {PathPlan | null} */
-export function pathPlanOf(body) {
-  if (body?.paths?.platform !== "/v1") return null;
-  const r = body.paths.renames && typeof body.paths.renames === "object" ? body.paths.renames : {};
-  return { v1: true, renames: Object.fromEntries(Object.entries(r).filter(([a, b]) => typeof a === "string" && a.startsWith("/api/") && typeof b === "string" && b.startsWith("/v1/"))) };
-}
-
-/** Signing in spells every route as /api, which every platform serves:
- *  a plan saved before a platform went back to /api must never stop the
- *  sign-in that would replace it (Codex review). */
-let SIGNING_IN = false;
-
-/**
- * The plan of the profile whose key this request carries, at this address —
- * never another account's at the same host (Codex review). A key that is no
- * profile's (FOLDRUN_TOKEN alone), or no key: /api.
- * @param {string} url @param {string | undefined} token @returns {PathPlan}
- */
-export function platformPaths(url, token) {
-  if (SIGNING_IN || !token || process.env.FOLDRUN_API_PATHS === "api") return API_PATHS;
-  const at = normaliseUrl(url);
-  /** @type {any} */
-  const saved = listProfiles().find((p) => p.token === token && normaliseUrl(p.url) === at)?.paths;
-  return saved && saved.v1 === true ? { v1: true, renames: saved.renames && typeof saved.renames === "object" ? saved.renames : {} } : API_PATHS;
-}
-
-/**
- * An `/api/<route>` path as this platform spells it: `/v1/<route>` (or its
- * rename) under a /v1 plan, unchanged otherwise. Only `/api/…` moves.
- * @param {string} apiPath @param {{ v1: boolean, renames: Record<string, string> }} plan
- */
-export function spelledPath(apiPath, plan) {
-  if (!plan.v1 || !apiPath.startsWith("/api/")) return apiPath;
-  const q = apiPath.indexOf("?");
-  const path = q < 0 ? apiPath : apiPath.slice(0, q);
-  const query = q < 0 ? "" : apiPath.slice(q);
-  for (const [from, to] of Object.entries(plan.renames)) {
-    if (path === from || path.startsWith(`${from}/`)) return to + path.slice(from.length) + query;
-  }
-  return `/v1${path.slice("/api".length)}${query}`;
-}
-
-/**
  * One request to a platform: the auth header, a User-Agent, and a clock.
  *
  * Without the clock a box that accepts the TCP connection and never answers
@@ -2528,7 +2466,7 @@ export function spelledPath(apiPath, plan) {
  * @param {{ token?: string, seconds?: number }} [opts]
  */
 async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = {}) {
-  const target = new URL(spelledPath(apiPath, platformPaths(url, token)), url);
+  const target = new URL(apiPath, url);
   const method = (init.method ?? "GET").toUpperCase();
   const headers = {
     "user-agent": USER_AGENT,
@@ -2701,7 +2639,7 @@ function updateNotice(res) {
 /**
  * `foldrun version` — this CLI, the core it runs, and (when a platform is
  * known) what that platform is running: its release, API version and the
- * component shas behind it. Asks /api/version, which is open, so a machine
+ * component shas behind it. Asks /v1/version, which is open, so a machine
  * that is not signed in can still see what it would be talking to.
  */
 async function versionCmd(flags) {
@@ -2718,10 +2656,10 @@ async function versionCmd(flags) {
   if (url) {
     try {
       const token = flags.token ?? env("FOLDRUN_TOKEN") ?? chosenProfile(flags)?.token ?? undefined;
-      // No Foldrun-Version: /api/version describes the platform, and a CLI the
+      // No Foldrun-Version: /v1/version describes the platform, and a CLI the
       // platform would refuse still needs to see it — the mismatch is said below.
-      const res = await remoteFetch(url, "/api/version", { headers: { "foldrun-version": "" } }, { token, seconds: timeoutSeconds(flags) });
-      if (!res.ok) throw new Error(`/api/version → HTTP ${res.status}`);
+      const res = await remoteFetch(url, "/v1/version", { headers: { "foldrun-version": "" } }, { token, seconds: timeoutSeconds(flags) });
+      if (!res.ok) throw new Error(`/v1/version → HTTP ${res.status}`);
       platform = { url, .../** @type {Record<string, any>} */ (await res.json()) };
     } catch (err) {
       unreachable = explain(err);
@@ -2777,12 +2715,12 @@ async function versionCmd(flags) {
 /**
  * Renew this machine's `foldrun login` key before it ends (FOL-71). Such a
  * key lives 90 days; with under RENEW_DAYS left the CLI rotates it itself
- * (POST /api/keys/<own id>/rotate — a cli-login key may, whatever its role)
+ * (POST /v1/keys/<own id>/rotate — a cli-login key may, whatever its role)
  * and stores the new one, so a machine in use never sees it end. Once per
  * command, only for a key `login` minted and stored here — never --token or
  * FOLDRUN_TOKEN, whose holder chose them — and it never fails the command
  * it rides on: any problem leaves the old key in place to try next time.
- * Costs a request only when the end is near or not yet known (/api/me, at
+ * Costs a request only when the end is near or not yet known (/v1/me, at
  * most daily for a key that does not renew, e.g. on an older platform).
  */
 const RENEW_DAYS = 14;
@@ -2800,7 +2738,7 @@ async function renewIfDue(flags) {
     if (p.renews === false && p.checkedAt && now - Date.parse(p.checkedAt) < DAY_MS) return;
     const { name, current: _c, url: at, loggedInAt: _l, ...entry } = p;
     const save = (fields) => saveCredential(at, { ...entry, ...fields }, { name, makeDefault: false });
-    const meRes = await remoteFetch(at, "/api/me", {}, { token: p.token });
+    const meRes = await remoteFetch(at, "/v1/me", {}, { token: p.token });
     if (!meRes.ok) return;
     const a = /** @type {any} */ (await meRes.json())?.actor ?? {};
     if (a.kind !== "key" || a.origin !== "cli-login") return void save({ renews: false, checkedAt: new Date(now).toISOString() });
@@ -2809,7 +2747,7 @@ async function renewIfDue(flags) {
     // rotation lands, so a credentials file this CLI cannot write would lose
     // the new key and sign the machine out. Then the old one runs to its end.
     if (!credentialsWritable()) return;
-    const res = await remoteFetch(at, `/api/keys/${enc(a.id)}/rotate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, { token: p.token });
+    const res = await remoteFetch(at, `/v1/keys/${enc(a.id)}/rotate`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, { token: p.token });
     if (!res.ok) return;
     const r = /** @type {any} */ (await res.json());
     if (typeof r.key !== "string") return;
@@ -3255,10 +3193,7 @@ export function sseFields(frame) {
 async function streamOnce(url, flags, ws, runId, seen, open = new Map(), print = {}) {
   const token = await renewedToken(url, flags);
   const idle = streamIdleSeconds();
-  const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
-  // As this profile's platform spells it (/v1 or /api); the literal above
-  // stays for the API → CLI coverage scan (foldrun-web surface-coverage).
-  target.pathname = spelledPath(target.pathname, platformPaths(url, token));
+  const target = new URL(`/v1/workspaces/${ws}/runs/${runId}/stream`, url);
   const ctrl = new AbortController();
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
@@ -3354,7 +3289,7 @@ async function followRemote(url, flags, ws, runId, seen = new Map(), open = new 
       let run;
       for (let read = 1; ; read++) {
         try {
-          run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+          run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`);
           break;
         } catch (readErr) {
           if (!droppedConnection(readErr) || read >= 3) throw readErr;
@@ -3718,7 +3653,7 @@ async function siteLogin(positional, flags, layout) {
     const named = takeWorkspace([], layout);
     const scope = flags.account === true ? undefined : flags.to ?? named ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
     if (remote) {
-      await remoteCall(remote, platformFlags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, value, workspace: scope }) });
+      await remoteCall(remote, platformFlags, "/v1/secrets", { method: "PUT", body: JSON.stringify({ name, value, workspace: scope }) });
     } else {
       (await core()).setSecret("default", name, value, scope);
     }
@@ -3880,7 +3815,7 @@ function workspacesFlag(flags) {
  * workspaces may use an ACCOUNT secret: every one (the default), only those
  * named (GitHub's "selected repositories" for an organisation secret), or
  * none. Every other workspace finds it not set. No names and no flag prints
- * what it is now. On the platform (PATCH /api/secrets { name, workspaces },
+ * what it is now. On the platform (PATCH /v1/secrets { name, workspaces },
  * an admin over every workspace), or this machine's vault with --local —
  * where, as on the platform, only workspaces that exist may be named.
  */
@@ -3898,7 +3833,7 @@ async function secretWorkspacesCmd(args, flags, url, layout) {
         ? `${c.bold(name)} may be used only in ${list.join(", ")} — every other project finds it not set`
         : `${c.bold(name)} may be used in no project`;
   if (!named.length && flags.all !== true && flags.none !== true) {
-    const entries = url ? (await remoteCall(url, flags, "/api/secrets")).secrets : (await core()).listSecrets("default");
+    const entries = url ? (await remoteCall(url, flags, "/v1/secrets")).secrets : (await core()).listSecrets("default");
     const hit = entries.find((s) => s.name === name && s.scope === "account");
     if (!hit) throw new Error(`no secret ${name} in the account — this limits an account secret; a project's own is that project's already`);
     console.log(`\n  ${describe(hit.workspaces)}${hit.workspaces ? "" : c.dim(` — limit it: foldrun secrets workspaces ${name} <workspace> …`)}\n`);
@@ -3915,7 +3850,7 @@ async function secretWorkspacesCmd(args, flags, url, layout) {
     guard.ifWorkspaces = v === "all" ? null : v === "none" ? [] : v.split(",").map((x) => x.trim()).filter(Boolean);
   }
   const stored = url
-    ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, workspaces, ...guard }) })).workspaces
+    ? (await remoteCall(url, flags, "/v1/secrets", { method: "PATCH", body: JSON.stringify({ name, workspaces, ...guard }) })).workspaces
     : await localSetWorkspaces(name, workspaces, layout, guard);
   console.log(`\n  ${c.green("✓")} ${describe(stored)}\n`);
   return 0;
@@ -3953,8 +3888,8 @@ async function unusedSavedClient(url, flags, name) {
   const app = name.toLowerCase().replaceAll("_", "-");
   try {
     const [{ clients = [] }, { connections = [] }] = await Promise.all([
-      remoteCall(url, flags, "/api/oauth/clients"),
-      remoteCall(url, flags, "/api/oauth/connections"),
+      remoteCall(url, flags, "/v1/oauth/clients"),
+      remoteCall(url, flags, "/v1/oauth/connections"),
     ]);
     if (!clients.some((k) => k.name === app)) return null;
     return connections.some((x) => x.client === app) ? null : app;
@@ -3987,7 +3922,7 @@ async function secretsCmd(positional, flags, layout) {
 
   if (verb === "ls" || verb === undefined) {
     const body = url
-      ? await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)
+      ? await remoteCall(url, flags, `/v1/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)
       : { secrets: (await core()).listSecrets("default", scope) };
     const entries = body.secrets ?? [];
     if (flags.json === true) {
@@ -4015,7 +3950,7 @@ async function secretsCmd(positional, flags, layout) {
     // OAuth grants only: which still refresh, which are failing or about to
     // expire, and whether a no-prompt reconnect exists for each.
     if (!url) throw new Error("secrets status reads the platform's connection health — sign in first (foldrun login)");
-    const { connections } = await remoteCall(url, flags, "/api/oauth/connections");
+    const { connections } = await remoteCall(url, flags, "/v1/oauth/connections");
     if (!connections.length) {
       console.log(`\n  ${c.dim("no OAuth connections")}\n`);
       return 0;
@@ -4045,7 +3980,7 @@ async function secretsCmd(positional, flags, layout) {
     const given = [...positional.slice(2), ...siteFlags(flags)];
     if (!given.length && flags.clear !== true) {
       const entries = url
-        ? (await remoteCall(url, flags, `/api/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
+        ? (await remoteCall(url, flags, `/v1/secrets${scope ? `?workspace=${encodeURIComponent(scope)}` : ""}`)).secrets
         : (await core()).listSecrets("default", scope);
       const hit = entries.find((s) => s.name === name);
       if (!hit) throw new Error(`no secret ${name}${scope ? ` in project ${scope}` : " in the account"}`);
@@ -4056,7 +3991,7 @@ async function secretsCmd(positional, flags, layout) {
     }
     const sites = flags.clear === true ? [] : given;
     const stored = url
-      ? (await remoteCall(url, flags, "/api/secrets", { method: "PATCH", body: JSON.stringify({ name, sites, workspace: scope }) })).sites
+      ? (await remoteCall(url, flags, "/v1/secrets", { method: "PATCH", body: JSON.stringify({ name, sites, workspace: scope }) })).sites
       : await localSetSites(name, sites, scope);
     console.log(stored.length
       ? `\n  ${c.green("✓")} ${name} is sent only to ${stored.join(", ")} — on the platform the egress proxy fills it, and it never enters a sandbox\n`
@@ -4084,7 +4019,7 @@ async function secretsCmd(positional, flags, layout) {
       // Connections form does for a client certificate). It used to be
       // dropped here without a word.
       const sites = siteFlags(flags);
-      if (url) await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope, ...(sites.length ? { sites } : {}), ...withLimit }) });
+      if (url) await remoteCall(url, flags, "/v1/secrets", { method: "PUT", body: JSON.stringify({ name, ...body, workspace: scope, ...(sites.length ? { sites } : {}), ...withLimit }) });
       else {
         const { k, limit } = await localLimit();
         local(k, name, body, scope, limit);
@@ -4114,7 +4049,7 @@ async function secretsCmd(positional, flags, layout) {
       const refresh_token = await promptHidden("  refresh_token: ");
       const config = { token_url, client_id, ...(client_secret !== undefined ? { client_secret } : {}), refresh_token, ...(token_auth ? { token_auth } : {}), ...(token_auth === "private_key_jwt" ? keyFields : {}) };
       if (url) {
-        await remoteCall(url, flags, "/api/secrets", {
+        await remoteCall(url, flags, "/v1/secrets", {
           method: "PUT",
           body: JSON.stringify({ name, oauth2: config, workspace: scope, ...withLimit }),
         });
@@ -4131,7 +4066,7 @@ async function secretsCmd(positional, flags, layout) {
     if (!value) throw new Error("empty value — nothing stored");
     const sites = siteFlags(flags);
     if (url) {
-      await remoteCall(url, flags, "/api/secrets", {
+      await remoteCall(url, flags, "/v1/secrets", {
         method: "PUT",
         body: JSON.stringify({ name, value, workspace: scope, ...(sites.length ? { sites } : {}), ...withLimit }),
       });
@@ -4150,7 +4085,7 @@ async function secretsCmd(positional, flags, layout) {
     /** @type {any} */
     let revoked;
     if (url) {
-      ({ revoked } = await remoteCall(url, flags, "/api/secrets", {
+      ({ revoked } = await remoteCall(url, flags, "/v1/secrets", {
         method: "DELETE",
         body: JSON.stringify({ name, workspace: scope }),
       }));
@@ -4172,7 +4107,7 @@ async function secretsCmd(positional, flags, layout) {
     const app = url && !scope ? await unusedSavedClient(url, flags, name) : null;
     if (app && flags["with-client"] === true) {
       if (await confirmed(flags, "secrets rm --with-client", `also delete the saved OAuth client ${app}, which no connection uses now? [y/N] `)) {
-        await remoteCall(url, flags, "/api/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: app }) });
+        await remoteCall(url, flags, "/v1/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: app }) });
         console.log(`  ${c.green("✓")} saved OAuth client ${app} removed`);
       } else console.log(`  ${c.dim(`saved OAuth client ${app} kept`)}`);
     } else if (app) {
@@ -4271,7 +4206,7 @@ async function remoteLogs(url, positional, flags) {
   const ws = flags.to ?? path.basename(process.env.FOLDRUN_WORKSPACE ?? process.cwd());
   const runId = positional[0];
   if (!runId) {
-    const { runs } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?limit=20`);
+    const { runs } = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs?limit=20`);
     if (!runs?.length) {
       console.log(`\n  ${c.dim(`no runs in ${ws} on ${url}`)}\n`);
       return 0;
@@ -4285,7 +4220,7 @@ async function remoteLogs(url, positional, flags) {
     console.log(`\n  ${c.dim("foldrun logs <run-id> --to " + ws + " for the full trail; --follow tails a live one")}\n`);
     return 0;
   }
-  let run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  let run = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}`);
   console.log(`\n  ${c.bold(run.flow)}  ${c.dim(run.id)}  ${c.dim(run.status)}\n`);
   const seen = new Map();
   const open = new Map();
@@ -4303,7 +4238,7 @@ async function remoteLogs(url, positional, flags) {
  */
 async function savedInputs(url, flags, ws, flow, name) {
   if (typeof flags.task === "string") throw new Error("--inputs and --task both name the task — pick one");
-  const { evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`);
+  const { evals = [] } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals`);
   const mine = evals
     .filter((e) => e.flow === flow)
     .sort((a, b) => Number(b.inputs === true) - Number(a.inputs === true));
@@ -4419,7 +4354,7 @@ async function flowInputsCmd(positional, flags, layout) {
 
   if (!saving) {
     let evals;
-    if (platform) ({ evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`));
+    if (platform) ({ evals = [] } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals`));
     else {
       const { parseEval } = await core();
       const evalsDir = path.join(dir, "evals");
@@ -4454,7 +4389,7 @@ async function flowInputsCmd(positional, flags, layout) {
   const message = `input set "${heading}" saved for ${flow}`;
 
   if (platform) {
-    const at = `/api/workspaces/${enc(ws)}/source`;
+    const at = `/v1/workspaces/${enc(ws)}/source`;
     /** @type {{ content?: string, sha256?: string } | null} */
     let current = null;
     try {
@@ -4547,7 +4482,7 @@ async function invoke(target, flags, layout) {
   const files = await runInputs(url, flags, ws);
   let body;
   try {
-    body = await remoteCall(url, flags, `/api/workspaces/${ws}/flows/${target}/run${wait}`, {
+    body = await remoteCall(url, flags, `/v1/workspaces/${ws}/flows/${target}/run${wait}`, {
       method: "POST",
       // The route reads the Idempotency-Key header before the body's key, and
       // every write carries a fresh one — so --once must BE that header.
@@ -4584,7 +4519,7 @@ async function invoke(target, flags, layout) {
   }
   while (flags.wait === true && body?.timedOut === true && body.runId) {
     try {
-      body = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${body.runId}${wait}`);
+      body = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${body.runId}${wait}`);
     } catch (err) {
       if (err?.body?.runId && err.body.status) return reportFailedRun(err.body, ws);
       throw err;
@@ -4749,7 +4684,7 @@ async function connect(positional, flags) {
     /** @type {any} */
     let started = null;
     try {
-      started = await remoteCall(url, flags, "/api/oauth/reconnect", {
+      started = await remoteCall(url, flags, "/v1/oauth/reconnect", {
         method: "POST",
         body: JSON.stringify({ secret: name, workspace: workspaceName, provider: providerName }),
       });
@@ -4757,7 +4692,7 @@ async function connect(positional, flags) {
       if (err.status !== 404) throw err;
     }
     if (started?.url) {
-      const before = (await remoteCall(url, flags, "/api/oauth/connections")).connections
+      const before = (await remoteCall(url, flags, "/v1/oauth/connections")).connections
         .find((s) => s.name === name && (s.workspace ?? undefined) === workspaceName)?.connectedAt ?? null;
       console.log(`\n  Reusing the saved ${c.bold(started.client)} client — nothing to type.`);
       console.log(`  ${c.dim(`consent returns to ${started.redirectUri} (it must be registered on the app)`)}`);
@@ -4769,7 +4704,7 @@ async function connect(positional, flags) {
       const deadline = Date.now() + 10 * 60 * 1000;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 3000));
-        const row = (await remoteCall(url, flags, "/api/oauth/connections")).connections
+        const row = (await remoteCall(url, flags, "/v1/oauth/connections")).connections
           .find((s) => s.name === name && (s.workspace ?? undefined) === workspaceName);
         if (row?.connectedAt && row.connectedAt !== before) {
           console.log(`\n  ${c.green("✓")} ${name} reconnected on ${url}${workspaceName ? ` · ${workspaceName}` : " · account"}\n`);
@@ -4974,7 +4909,7 @@ async function connect(positional, flags) {
     // consent — the code is single-use and nothing secret is kept locally —
     // so say that rather than leave "HTTP 405" to explain itself.
     try {
-      await remoteCall(url, flags, "/api/secrets", { method: "PUT", body: JSON.stringify(body) });
+      await remoteCall(url, flags, "/v1/secrets", { method: "PUT", body: JSON.stringify(body) });
     } catch (err) {
       throw new Error(`${providerName ?? "the provider"} approved, but storing ${name} on ${url} failed: ${err instanceof Error ? err.message : err}. The consent is spent; fix the platform side and run this again.`);
     }
@@ -5036,7 +4971,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *  key) — `foldrun code` then needs no second key. Quiet on any failure. */
 async function sayModelAccess(url, token) {
   try {
-    const me = await remoteCall(url, { token, quiet: true }, "/api/me");
+    const me = await remoteCall(url, { token, quiet: true }, "/v1/me");
     const m = me?.actor?.modelAccess;
     if (m && me.modelsUrl) console.log(`  ${c.dim(`this sign-in also calls foldrun's models (${modelAccessLine(m)}) — foldrun code uses it as is`)}`);
   } catch {
@@ -5045,15 +4980,14 @@ async function sayModelAccess(url, token) {
 }
 
 async function login(flags) {
-  SIGNING_IN = true;
   const url = normaliseUrl(flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? DEFAULT_PLATFORM);
 
   if (typeof flags.token === "string") {
     // Verify before storing: a wrong key stored is a wrong key on every
     // later command, each failing one step further from the cause.
-    const me = await remoteCall(url, { token: flags.token, quiet: true }, "/api/me");
+    const me = await remoteCall(url, { token: flags.token, quiet: true }, "/v1/me");
     const at = await signedInAddresses(url, flags.token, me.account);
-    const name = saveCredential(at.url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role, ...(at.app ? { app: at.app } : {}), ...(at.paths ? { paths: at.paths } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
+    const name = saveCredential(at.url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
     console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
     if (at.app) console.log(`  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}`);
     await sayModelAccess(at.url, flags.token);
@@ -5064,7 +4998,7 @@ async function login(flags) {
   /** @type {any} */
   let start;
   try {
-    const res = await remoteFetch(url, "/api/cli/login", {
+    const res = await remoteFetch(url, "/v1/cli/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ hostname: os.hostname() }),
@@ -5091,7 +5025,7 @@ async function login(flags) {
     try {
       // Through the shared client: a poll that hangs used to hang the
       // sign-in; now it is cut at FOLDRUN_TIMEOUT and asked again.
-      const res = await remoteFetch(url, `/api/cli/login/${start.id}`);
+      const res = await remoteFetch(url, `/v1/cli/login/${start.id}`);
       poll = await res.json().catch(() => ({}));
     } catch {
       continue; // a blip; the next poll asks again
@@ -5106,7 +5040,7 @@ async function login(flags) {
       // The one API (21 Nov 2026): a platform with an API address of its own
       // gets this machine's calls there; its dashboard stays for pages.
       const at = await signedInAddresses(url, poll.token, poll.account);
-      const name = saveCredential(at.url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true, ...(at.app ? { app: at.app } : {}), ...(at.paths ? { paths: at.paths } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
+      const name = saveCredential(at.url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
       console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}`);
       if (at.app) console.log(`  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}`);
       await sayModelAccess(at.url, poll.token);
@@ -5138,9 +5072,9 @@ async function logout(flags) {
   let revoked = false;
   if (entry.minted) {
     try {
-      const me = await remoteCall(url, { token: entry.token, quiet: true }, "/api/me");
+      const me = await remoteCall(url, { token: entry.token, quiet: true }, "/v1/me");
       if (me.actor?.kind === "key" && me.actor.id) {
-        await remoteCall(url, { token: entry.token, quiet: true }, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: me.actor.id }) });
+        await remoteCall(url, { token: entry.token, quiet: true }, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id: me.actor.id }) });
         revoked = true;
       }
     } catch {
@@ -5159,7 +5093,7 @@ async function logout(flags) {
 async function whoami(flags) {
   const url = remoteUrl(flags);
   if (!url) throw new Error(NOT_SIGNED_IN);
-  const me = await remoteCall(url, flags, "/api/me");
+  const me = await remoteCall(url, flags, "/v1/me");
   const who = me.actor.kind === "user" ? me.actor.email : `API key ${me.actor.prefix ?? ""}… ${c.dim(`"${me.actor.label ?? ""}"${me.actor.createdBy ? ` by ${me.actor.createdBy}` : ""}`)}`;
   console.log(`\n  ${c.bold(who)}`);
   console.log(`  platform    ${url}`);
@@ -5265,7 +5199,7 @@ async function doctor(flags) {
     const t0 = performance.now();
     const took = () => `${Math.round(performance.now() - t0)} ms`;
     try {
-      const res = await remoteFetch(url, "/api/healthz", {}, { token });
+      const res = await remoteFetch(url, "/v1/healthz", {}, { token });
       const text = await res.text();
       let body = {};
       try {
@@ -5275,7 +5209,7 @@ async function doctor(flags) {
       }
       const fields = ["version", "role"].filter((k) => body[k] != null).map((k) => `${k} ${body[k]}`).join(" · ");
       const firstLine = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-      line(res.ok, "healthz", `GET /api/healthz ${res.status} in ${took()}${fields ? ` · ${fields}` : ""}${res.ok ? "" : ` — ${(res.headers.get("content-type") ?? "?").split(";")[0]}: ${firstLine.slice(0, 120)}`}`);
+      line(res.ok, "healthz", `GET /v1/healthz ${res.status} in ${took()}${fields ? ` · ${fields}` : ""}${res.ok ? "" : ` — ${(res.headers.get("content-type") ?? "?").split(";")[0]}: ${firstLine.slice(0, 120)}`}`);
     } catch (err) {
       line(false, "healthz", `${explain(err)} ${c.dim(`(${took()})`)}`);
     }
@@ -5318,7 +5252,7 @@ async function keysCmd(positional, flags) {
   if (!url) throw new Error(NOT_SIGNED_IN);
 
   if (verb === "ls" || verb === "list" || verb === undefined) {
-    const { keys } = await remoteCall(url, flags, "/api/keys");
+    const { keys } = await remoteCall(url, flags, "/v1/keys");
     if (!keys.length) {
       console.log(`\n  ${c.dim("no API keys — foldrun keys create <label>")}\n`);
       return 0;
@@ -5394,16 +5328,16 @@ async function keysCmd(positional, flags) {
       if (dailyUsd === undefined && capUsd === undefined) throw new Error("model access needs a limit of its own: --daily <usd> per UTC day, or --cap <usd> in all (or both)");
       body.modelAccess = { ...(dailyUsd !== undefined ? { dailyUsd } : {}), ...(capUsd !== undefined ? { capUsd } : {}), walletUsd: flags.wallet === undefined ? 0 : walletFlag(flags.wallet) };
     }
-    const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+    const made = await remoteCall(url, flags, "/v1/keys", { method: "POST", body: JSON.stringify(body) });
     // Asked for model access, told nothing of it: a platform from before
     // one key made a platform key — revoked, never handed out as more.
     if (body.modelAccess && !made?.modelAccess) {
-      await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
+      await remoteCall(url, flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
       throw new Error(`the platform made ${made.id} without model access — it was revoked; this platform does not give API keys model access yet (\`foldrun keys create <label> --gateway\` makes a model-only key)`);
     }
     // Asked to scope it, told it is not scoped: never hand that key out.
     if (Array.isArray(body.workspaces) && made.workspaces === null) {
-      await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
+      await remoteCall(url, flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id: made.id }) }).catch(() => {});
       throw new Error(`the platform made ${made.id} for every project, not ${body.workspaces.join(",")} — it was revoked; this platform cannot scope a key`);
     }
     console.log(`\n  ${c.green("✓")} ${c.bold(arg)}  ${c.dim(made.id)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}${made.modelAccess ? c.dim(`  models: ${modelAccessLine(made.modelAccess)}`) : ""}\n`);
@@ -5415,7 +5349,7 @@ async function keysCmd(positional, flags) {
   if (verb === "revoke" || verb === "rm") {
     if (!arg) throw new Error("which key? foldrun keys revoke <id> — ids are in `foldrun keys ls`");
     if (!(await sureToDelete(flags, "keys revoke", `API key ${arg} on ${url} (anything using it stops working)`))) return 1;
-    await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: arg }) });
+    await remoteCall(url, flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id: arg }) });
     console.log(`\n  ${c.green("✓")} revoked ${arg}\n`);
     return 0;
   }
@@ -5424,7 +5358,7 @@ async function keysCmd(positional, flags) {
   if (verb === "delete") {
     if (!arg) throw new Error("which key? foldrun keys delete <id> — ids are in `foldrun keys ls`");
     if (!(await sureToDelete(flags, "keys delete", `API key ${arg} on ${url} (revoked first if it is live — anything using it stops working — then removed from the list)`))) return 1;
-    const done = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}`, { method: "DELETE" });
+    const done = await remoteCall(url, flags, `/v1/keys/${encodeURIComponent(arg)}`, { method: "DELETE" });
     console.log(`\n  ${c.green("✓")} deleted ${arg}${done?.revoked ? " (it was live: revoked now)" : ""}\n`);
     return 0;
   }
@@ -5436,13 +5370,13 @@ async function keysCmd(positional, flags) {
     if (grace === "0" && !(await sureToDelete(flags, "keys rotate", `API key ${arg} on ${url}, now (anything using it stops working — --grace 1h keeps it for an hour)`))) return 1;
     let made;
     try {
-      made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}/rotate`, { method: "POST", body: JSON.stringify({ grace }) });
+      made = await remoteCall(url, flags, `/v1/keys/${encodeURIComponent(arg)}/rotate`, { method: "POST", body: JSON.stringify({ grace }) });
     } catch (err) {
       // Already rotated: the platform names the new key by prefix; the
       // command takes an id, so say the command — the new key is the one to
       // rotate, also when its secret was lost.
       if (!(err instanceof HttpError && err.status === 409 && /already rotated/.test(err.message))) throw err;
-      const { keys = [] } = await remoteCall(url, flags, "/api/keys").catch(() => ({}));
+      const { keys = [] } = await remoteCall(url, flags, "/v1/keys").catch(() => ({}));
       const next = keys.find((k) => k.id === arg)?.replacedBy;
       throw new Error(`${err.message}${next ? `\n  → foldrun keys rotate ${next}${grace === "0" ? "" : ` --grace ${grace}`}` : ""}`);
     }
@@ -5463,7 +5397,7 @@ async function keysCmd(positional, flags) {
     if (!arg) throw new Error("which key? foldrun keys set <id> --customer required|optional");
     if (["opus", "sonnet", "haiku"].some((t) => flags[t] !== undefined) || flags.clear === true) throw new Error("set the customer requirement and the model map in two commands: keys set <id> --customer …, then keys set <id> --sonnet …");
     if (flags.customer !== "required" && flags.customer !== "optional") throw new Error("--customer is required or optional");
-    const r = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ requireCustomer: flags.customer === "required" }) });
+    const r = await remoteCall(url, flags, `/v1/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ requireCustomer: flags.customer === "required" }) });
     console.log(`\n  ${c.green("✓")} ${arg}: a customer is ${r.requireCustomer ? "required on every run and gateway call" : "no longer required"}\n`);
     return 0;
   }
@@ -5473,7 +5407,7 @@ async function keysCmd(positional, flags) {
     if (!arg) throw new Error("which key? foldrun keys set <id> --wallet <usd>");
     if (["opus", "sonnet", "haiku", "customer"].some((t) => flags[t] !== undefined) || flags.clear === true) throw new Error("set the wallet budget on its own: keys set <id> --wallet <usd>");
     const walletUsd = walletFlag(flags.wallet);
-    const r = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ walletUsd }) });
+    const r = await remoteCall(url, flags, `/v1/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ walletUsd }) });
     // Success only when the platform says the budget is what was asked (Codex).
     if (r?.walletUsd !== walletUsd) throw new Error("the platform did not confirm the wallet budget — it may not offer it yet; foldrun keys ls shows what the key has");
     console.log(`\n  ${c.green("✓")} ${arg}: ${r.walletUsd ? `bought credits may pay up to $${Number(r.walletUsd).toFixed(2)} of its calls` : "the plan alone pays for its calls"}\n`);
@@ -5486,7 +5420,7 @@ async function keysCmd(positional, flags) {
 /**
  * `foldrun keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]` —
  * a key for an OUTSIDE agent: it opens /a2a/<account>/<ws>/… for those
- * flows (each also published with a2a:) and no /api route.
+ * flows (each also published with a2a:) and no platform route.
  */
 async function keysCreateA2a(url, label, flags) {
   if (flags.role !== undefined || flags.workspaces !== undefined) {
@@ -5502,7 +5436,7 @@ async function keysCreateA2a(url, label, flags) {
     body.maxTasks = n;
   }
   if (typeof flags.expires === "string") body.expires = flags.expires;
-  const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+  const made = await remoteCall(url, flags, "/v1/keys", { method: "POST", body: JSON.stringify(body) });
   console.log(
     `\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(`A2A · ${made.workspace ?? flags.to} · ${(made.flows ?? flows).join(", ")} · up to ${made.maxTasks ?? body.maxTasks ?? 10} open`)}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`,
   );
@@ -5516,7 +5450,7 @@ async function keysCreateA2a(url, label, flags) {
  * `foldrun keys set <id> --sonnet openai/gpt-6 [--opus …] [--haiku …]` — a
  * gateway key's model map: which model each Claude Code tier runs on with
  * that key. The tiers named change; the rest stay. `-` clears one tier,
- * `--clear` every one. PATCH /api/keys/<id> { models }.
+ * `--clear` every one. PATCH /v1/keys/<id> { models }.
  */
 async function keysSetModels(url, id, flags) {
   if (!id) throw new Error("which key? foldrun keys set <id> --sonnet openai/gpt-6 — ids are in `foldrun keys ls`");
@@ -5526,7 +5460,7 @@ async function keysSetModels(url, id, flags) {
   for (const t of named) if (typeof flags[t] !== "string" || !flags[t]) throw new Error(`--${t} needs a model, e.g. --${t} openai/gpt-6 (or - to clear it)`);
   let models = null;
   if (flags.clear !== true) {
-    const { keys = [] } = await remoteCall(url, flags, "/api/keys");
+    const { keys = [] } = await remoteCall(url, flags, "/v1/keys");
     const key = keys.find((k) => k.id === id);
     if (!key) throw new Error(`no key ${id} — \`foldrun keys ls\` lists them`);
     if (key.purpose !== "gateway") throw new Error(`${id} is not a gateway key — only a gateway key has a model map`);
@@ -5537,7 +5471,7 @@ async function keysSetModels(url, id, flags) {
     }
     models = Object.keys(next).length ? next : null;
   }
-  const made = await remoteCall(url, flags, `/api/keys/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ models }) });
+  const made = await remoteCall(url, flags, `/v1/keys/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ models }) });
   const line = modelsLine(made.models);
   console.log(`\n  ${c.green("✓")} ${c.bold(id)}  ${line ? c.dim(line) : c.dim("runs Claude Code's models as named")}\n`);
   return 0;
@@ -5594,7 +5528,7 @@ function usdFlag(v, name) {
  * `foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]` — a
  * key for a CODING agent (Claude Code, or any tool that takes an Anthropic
  * base URL and key): it spends the account's credits on foldrun's Anthropic
- * models through the gateway, up to its own limits, and opens no /api route.
+ * models through the gateway, up to its own limits, and opens no platform route.
  * An admin of every workspace mints it.
  */
 async function keysCreateGateway(url, label, flags) {
@@ -5631,7 +5565,7 @@ async function keysCreateGateway(url, label, flags) {
   // As for an API key: a bare --expires is refused, never read as 90 days (Codex review).
   if (flags.expires !== undefined && typeof flags.expires !== "string") throw new Error("--expires needs a span: 30d, 90d, 365d or never");
   body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
-  const made = await remoteCall(url, flags, "/api/keys", { method: "POST", body: JSON.stringify(body) });
+  const made = await remoteCall(url, flags, "/v1/keys", { method: "POST", body: JSON.stringify(body) });
   // Asked for an account key: never show or install one of another kind.
   if (body.credential === "account" && (await checkAccountKey(url, flags, made, { walletUsd: body.walletUsd, dailyUsd: body.dailyUsd, capUsd: body.capUsd })) === "revoked") throw new Error(OTHER_KIND);
   console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential, plan: made.plan, walletUsd: made.walletUsd, walletSpentUsd: 0 }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
@@ -6063,7 +5997,7 @@ async function auditCmd(positional, flags) {
   if (positional[0]) q.set("action", positional[0]);
   if (flags.csv === true) {
     q.set("format", "csv");
-    const { bytes, name } = await remoteBytes(url, flags, `/api/audit?${q}`, "the audit log");
+    const { bytes, name } = await remoteBytes(url, flags, `/v1/audit?${q}`, "the audit log");
     if (typeof flags.file !== "string") {
       writeExact(bytes);
       return 0;
@@ -6075,7 +6009,7 @@ async function auditCmd(positional, flags) {
   let next = null;
   for (let page = 0; page < 100; page++) {
     if (next) q.set("cursor", next);
-    const got = await remoteCall(url, flags, `/api/audit?${q}`);
+    const got = await remoteCall(url, flags, `/v1/audit?${q}`);
     entries.push(...(got.entries ?? []));
     next = got.next ?? null;
     if (!next || flags.all !== true) break;
@@ -6125,7 +6059,7 @@ async function sourceCmd(positional, flags, layout) {
   // before), and never for a delete: a delete names its project.
   const ws = flags.to ?? (verb === "rm" || verb === "delete" || inProjectFolder(layout) ? undefined : savedDefault(flags));
   if (!ws) throw new Error("which project? pass --to <workspace>");
-  const base = `/api/workspaces/${encodeURIComponent(ws)}/source`;
+  const base = `/v1/workspaces/${encodeURIComponent(ws)}/source`;
 
   if (verb === "ls" || verb === "list" || verb === undefined) {
     const { files } = await remoteCall(url, flags, base);
@@ -6208,7 +6142,7 @@ async function sourceCmd(positional, flags, layout) {
       ...(typeof flags.template === "string" ? { template: flags.template } : {}),
       ...(typeof flags.language === "string" ? { language: flags.language } : {}),
     };
-    const r = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/assets`, { method: "POST", body: JSON.stringify(body) });
+    const r = await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(ws)}/assets`, { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("✓")} ${ws}/${r.path ?? b}  ${c.dim(`a new ${a.replace(/s$/, "")}${flags.agent ? ` for ${flags.agent}` : ""} · revision recorded`)}\n`);
     return 0;
   }
@@ -6217,7 +6151,7 @@ async function sourceCmd(positional, flags, layout) {
 
 /**
  * `foldrun source share <path> --to <ws>` — the dashboard's "Move to shared":
- * POST /api/workspaces/<ws>/source/share, which moves it on the server in one
+ * POST /v1/workspaces/<ws>/source/share, which moves it on the server in one
  * call. A skill or folder tool (skills/x/SKILL.md, tools/x/tool.md, or the
  * folder) moves whole; a folder holding a file the library cannot hold (an
  * image, a binary) is refused and nothing moves. It asks the platform what
@@ -6228,7 +6162,7 @@ async function sourceCmd(positional, flags, layout) {
  */
 async function sourceShare(url, flags, ws, spec) {
   if (!spec) throw new Error("which file? `foldrun source share skills/house-style --to <workspace>` — a skill, tool, script, knowledge or memory file");
-  const route = `/api/workspaces/${enc(ws)}/source/share`;
+  const route = `/v1/workspaces/${enc(ws)}/source/share`;
   const ask = (extra) => remoteCall(url, flags, route, { method: "POST", body: JSON.stringify({ path: spec, ...(flags.overwrite === true ? { overwrite: true } : {}), ...extra }) });
   let plan;
   try {
@@ -6317,7 +6251,7 @@ const digest = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(
 
 /** Every source file of one workspace on the platform, by path. */
 async function remoteWorkspaceFiles(url, flags, ws, isSourcePath) {
-  const { files } = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/source`);
+  const { files } = await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(ws)}/source`);
   const wanted = (files ?? []).filter(isSourcePath);
   // The API has no "every file with its text" read, so it is one request per
   // file — asked READ_WIDTH at a time rather than one after another (a
@@ -6326,7 +6260,7 @@ async function remoteWorkspaceFiles(url, flags, ws, isSourcePath) {
     const { content } = await remoteCall(
       url,
       flags,
-      `/api/workspaces/${encodeURIComponent(ws)}/source?path=${encodeURIComponent(rel)}`,
+      `/v1/workspaces/${encodeURIComponent(ws)}/source?path=${encodeURIComponent(rel)}`,
     );
     return content;
   });
@@ -6342,7 +6276,7 @@ async function remoteLibrary(url, flags, kinds) {
     kinds.map(async (kind) => {
       let entries;
       try {
-        ({ entries } = await remoteCall(url, flags, `/api/library/${kind}`));
+        ({ entries } = await remoteCall(url, flags, `/v1/library/${kind}`));
       } catch {
         return []; // an older platform without this kind
       }
@@ -6362,7 +6296,7 @@ async function remoteLibrary(url, flags, kinds) {
         for (const one of wanted) todo.push({ kind, path: one });
       }
       return pool(todo, READ_WIDTH, async ({ kind, path: one }) => {
-        const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${encodeURIComponent(one)}`);
+        const { content } = await remoteCall(url, flags, `/v1/library/${kind}?path=${encodeURIComponent(one)}`);
         return { kind, path: one, content };
       });
     }),
@@ -6372,18 +6306,18 @@ async function remoteLibrary(url, flags, kinds) {
 
 /** The workspaces the platform holds, by name. */
 async function remoteWorkspaceNames(url, flags) {
-  const { workspaces } = await remoteCall(url, flags, "/api/workspaces");
+  const { workspaces } = await remoteCall(url, flags, "/v1/workspaces");
   return (workspaces ?? []).map((w) => w.name).filter(Boolean).sort();
 }
 
 /**
  * The account's own AGENTS.md — the shared context and defaults every agent
- * in every workspace reads — through GET/PUT /api/account/agents-md (11 Nov
+ * in every workspace reads — through GET/PUT /v1/account/agents-md (11 Nov
  * 2026; cloudhost's CI copied it into every workspace for want of it). A
  * platform older than that answers 404: said once, as the old gap was.
  */
 const NO_ACCOUNT_FILE_API =
-  "this platform has no /api/account/agents-md yet, so the account's AGENTS.md is not synced — edit it in Settings, or update the platform.";
+  "this platform has no /v1/account/agents-md yet, so the account's AGENTS.md is not synced — edit it in Settings, or update the platform.";
 
 /** The managed coding-agent block (guide.mjs) is the CLI's, never a running
  *  agent's (core withoutAgentRules): two copies that differ only there are the same. */
@@ -6398,7 +6332,7 @@ function sameAccountMd(a, b) {
  *  route (404); { refused } when this caller may not read it (403). */
 async function remoteAccountAgentsMd(url, flags) {
   try {
-    return await remoteCall(url, flags, "/api/account/agents-md");
+    return await remoteCall(url, flags, "/v1/account/agents-md");
   } catch (err) {
     if (err instanceof HttpError && err.status === 404) return null;
     if (err instanceof HttpError && err.status === 403) return { refused: err.message };
@@ -6427,7 +6361,7 @@ async function deployAccountAgentsMd(url, flags, content, dry) {
     return 0;
   }
   try {
-    const done = await remoteCall(url, flags, "/api/account/agents-md", { method: "PUT", body: JSON.stringify({ content, ifMatch: there.exists ? there.sha256 : null, message: "foldrun deploy" }) });
+    const done = await remoteCall(url, flags, "/v1/account/agents-md", { method: "PUT", body: JSON.stringify({ content, ifMatch: there.exists ? there.sha256 : null, message: "foldrun deploy" }) });
     const warns = (done.issues ?? []).filter((i) => i.level !== "error").length;
     console.log(`  ${c.green("✓")} AGENTS.md ${c.dim(`(account) sent — every project reads it${warns ? ` · ${warns} warning${warns === 1 ? "" : "s"}` : ""}`)}`);
     return 0;
@@ -6473,7 +6407,7 @@ async function deployAccount(layout, flags, only) {
     worst = Math.max(worst, code);
   }
 
-  // The library, file by file: /api/library/<kind> writes one path at a time,
+  // The library, file by file: /v1/library/<kind> writes one path at a time,
   // which is the only endpoint there is. Locally it goes straight through the
   // same writer the dashboard uses, so a revision is recorded either way.
   if (tree.library.length) {
@@ -6481,7 +6415,7 @@ async function deployAccount(layout, flags, only) {
       console.log(`  ${c.dim(`library · ${tree.library.length} files (not sent — dry run)`)}`);
     } else if (url) {
       for (const f of tree.library) {
-        await remoteCall(url, flags, `/api/library/${f.kind}`, {
+        await remoteCall(url, flags, `/v1/library/${f.kind}`, {
           method: "PUT",
           body: JSON.stringify({ path: f.path, content: f.content }),
         });
@@ -6518,7 +6452,7 @@ async function deployIdentity(url, flags) {
   const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : (profile?.name ?? "?");
   let who = "";
   try {
-    const me = await remoteCall(url, { ...flags, quiet: true }, "/api/me");
+    const me = await remoteCall(url, { ...flags, quiet: true }, "/v1/me");
     who = me.actor?.kind === "user" ? me.actor.email : `key "${me.actor?.label ?? me.actor?.prefix ?? ""}"`;
     if (me.account) who += `, account ${me.account}`;
   } catch {
@@ -6650,7 +6584,7 @@ async function deployOne(url, tenant, workspace, files, flags, layout, from) {
 
 /**
  * The runtimes a deployed workspace's agents need, and whether each is built
- * (GET /api/workspaces/<ws>/runtimes). With waitSeconds, polls while any is
+ * (GET /v1/workspaces/<ws>/runtimes). With waitSeconds, polls while any is
  * still pending or building. A platform without the endpoint says nothing:
  * older installs simply build on first run, as they always did.
  */
@@ -6659,7 +6593,7 @@ async function reportRuntimes(url, workspace, flags, { waitSeconds = 0 } = {}) {
   let runtimes = [];
   for (;;) {
     try {
-      runtimes = (await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(workspace)}/runtimes`)).runtimes ?? [];
+      runtimes = (await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(workspace)}/runtimes`)).runtimes ?? [];
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return [];
       throw err;
@@ -6713,13 +6647,13 @@ async function runtimesCmd(flags, layout) {
 /** Levels as the status page colours them. */
 const LEVEL_PAINT = { operational: (t) => c.green(t), maintenance: (t) => c.amber(t), degraded: (t) => c.amber(t), outage: (t) => c.red(t), unknown: (t) => c.dim(t) };
 
-/** GET /api/status — open, so no key is sent or needed. Null when the
+/** GET /v1/status — open, so no key is sent or needed. Null when the
  *  platform does not answer, which is itself the answer.
  *  @returns {Promise<{ report?: any, error?: string }>} */
 async function fetchPlatformStatus(url, flags) {
   try {
-    const res = await remoteFetch(url, "/api/status", {}, { seconds: timeoutSeconds(flags) });
-    if (!res.ok && res.status !== 503) return { error: `/api/status → HTTP ${res.status}` };
+    const res = await remoteFetch(url, "/v1/status", {}, { seconds: timeoutSeconds(flags) });
+    if (!res.ok && res.status !== 503) return { error: `/v1/status → HTTP ${res.status}` };
     return { report: await res.json() };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
@@ -6741,7 +6675,7 @@ function printIncidents(report) {
 /**
  * `foldrun status --platform` — is the platform up: overall, each
  * component, and any incident or maintenance the operator posted. Reads the
- * open GET /api/status; exits 1 when the platform does not answer.
+ * open GET /v1/status; exits 1 when the platform does not answer.
  */
 async function platformStatusCmd(flags) {
   if (flags.history === true) return platformHistoryCmd(flags);
@@ -6773,7 +6707,7 @@ async function platformStatusCmd(flags) {
 /**
  * `foldrun signup status` — can a stranger sign up on this platform, and
  * how: free sign-up, paid sign-up, and the plans it sells while paid is in
- * effect. The open GET /api/signup the public site's buttons read; no key is
+ * effect. The open GET /v1/signup the public site's buttons read; no key is
  * ever sent with it, whatever platform --url names. For an operator checking
  * what foldrun.io now sees after flipping a switch (the console shows each
  * switch as set and as in effect), or a self-hoster checking theirs.
@@ -6785,7 +6719,7 @@ async function signupCmd(positional, flags) {
   const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
   let res;
   try {
-    res = await remoteFetch(appFor(url), "/api/signup", {}, { seconds: timeoutSeconds(flags) });
+    res = await remoteFetch(appFor(url), "/v1/signup", {}, { seconds: timeoutSeconds(flags) });
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     if (flags.json === true) console.log(JSON.stringify({ url, error }, null, 2));
@@ -6796,7 +6730,7 @@ async function signupCmd(positional, flags) {
   const body = await res.json().catch(() => null);
   const shaped = body && typeof body === "object" && typeof body.free === "boolean" && typeof body.paid === "boolean" && Array.isArray(body.plans);
   if (!res.ok || !shaped) {
-    const error = !res.ok ? `/api/signup → HTTP ${res.status}` : "/api/signup answered something that is not { free, paid, plans }";
+    const error = !res.ok ? `/v1/signup → HTTP ${res.status}` : "/v1/signup answered something that is not { free, paid, plans }";
     if (flags.json === true) console.log(JSON.stringify({ url, error }, null, 2));
     else console.log(`\n  ${c.red("✗")} ${error} — ${url}\n`);
     return 1;
@@ -6826,16 +6760,16 @@ async function signupCmd(positional, flags) {
 /**
  * `foldrun status --platform --history [--days n]` — what the status page
  * draws as bars: each component's uptime per day over the window (1–90,
- * default 90), and the incidents in it. The open GET /api/status/history.
+ * default 90), and the incidents in it. The open GET /v1/status/history.
  */
 async function platformHistoryCmd(flags) {
   const url = remoteUrl(flags) ?? DEFAULT_PLATFORM;
   const days = flags.days === undefined ? 90 : Number(flags.days);
   if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error(`--days is a whole number from 1 to 90 — not "${flags.days}"`);
-  const res = await remoteFetch(url, `/api/status/history?days=${days}`, {}, { seconds: timeoutSeconds(flags) });
+  const res = await remoteFetch(url, `/v1/status/history?days=${days}`, {}, { seconds: timeoutSeconds(flags) });
   /** @type {any} */
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new HttpError(body.error ?? `/api/status/history → HTTP ${res.status}`, res.status, body);
+  if (!res.ok) throw new HttpError(body.error ?? `/v1/status/history → HTTP ${res.status}`, res.status, body);
   if (flags.json === true) {
     console.log(JSON.stringify(body, null, 2));
     return 0;
@@ -7055,7 +6989,7 @@ async function workspacesUseCmd(name, flags) {
   assertName(name);
   const url = p.url;
   try {
-    await remoteCall(url, { ...flags, profile: p.name }, `/api/workspaces/${encodeURIComponent(name)}`);
+    await remoteCall(url, { ...flags, profile: p.name }, `/v1/workspaces/${encodeURIComponent(name)}`);
   } catch (err) {
     if (err?.status === 404) throw new Error(`no project "${name}" on ${url} — \`foldrun workspaces new ${name} --platform\` makes it`);
     throw err;
@@ -7082,7 +7016,7 @@ async function workspacesCmd(positional, flags, layout) {
     if (!url) throw new Error("--platform needs a platform — pass --url, or `foldrun login` first");
     if (!name) throw new Error("which project? `foldrun workspaces new <name> --platform`");
     assertName(name);
-    const r = await remoteCall(url, flags, "/api/workspaces", {
+    const r = await remoteCall(url, flags, "/v1/workspaces", {
       method: "POST",
       body: JSON.stringify(flags.starter === true ? { name, starter: true } : { name, template: true }),
     });
@@ -7105,7 +7039,7 @@ async function workspacesCmd(positional, flags, layout) {
       if (flags.yes !== true) {
         throw new Error(`this deletes ${name} and every run in it on ${url}, for everyone — add --yes if that is what you mean`);
       }
-      await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(name)}`, { method: "DELETE" });
+      await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(name)}`, { method: "DELETE" });
       console.log(`\n  ${c.green("✓")} deleted ${c.bold(name)} on ${url}\n`);
       return 0;
     }
@@ -7174,7 +7108,7 @@ async function workspacesCmd(positional, flags, layout) {
 }
 
 /**
- * Whether a stored sign-in still works: one GET /api/me with its key, all
+ * Whether a stored sign-in still works: one GET /v1/me with its key, all
  * at once, a few seconds each. `refused`: the platform answered and said no
  * (a revoked, expired or unknown key, an account that is gone). `unreachable`:
  * nothing answered (an install that is down, a laptop offline, a 5xx).
@@ -7188,7 +7122,7 @@ async function signInWorks(p, seconds = 6) {
   try {
     // Resolved as remoteFetch resolves every call (against the origin), so
     // the check asks the endpoint real commands use (Codex review).
-    const res = await fetch(new URL("/api/me", p.url), {
+    const res = await fetch(new URL("/v1/me", p.url), {
       headers: { authorization: `Bearer ${p.token}`, "user-agent": `foldrun-cli/${CLI_VERSION}` },
       signal: AbortSignal.timeout(seconds * 1000),
     });
@@ -7211,7 +7145,7 @@ async function signInWorks(p, seconds = 6) {
  * --token to reach the others.
  *
  * Only sign-ins that still work are listed (owner, 10 Nov 2026): each is
- * asked once (GET /api/me), and one whose key is refused or whose platform
+ * asked once (GET /v1/me), and one whose key is refused or whose platform
  * does not answer is left out — counted in one line, so the stale keys in
  * the file are never silently forgotten. The active one is always shown,
  * marked when it fails, since every bare command uses it. `--all` lists
@@ -7314,7 +7248,7 @@ function humanBytes(n) {
  * `foldrun storage ls --all` — every workspace's files, as the dashboard's
  * account Storage page: a block per workspace, those with files first and
  * the busiest first, then the names of the empty ones. The workspaces are
- * the ones this key may open (GET /api/workspaces), each listed by its own
+ * the ones this key may open (GET /v1/workspaces), each listed by its own
  * storage route.
  */
 // ----------------------------------------------------------- files to text
@@ -7354,7 +7288,7 @@ function extractOptions(flags) {
 }
 
 /**
- * A /api/extract answer as { status, body, retryAfterMs }, or the API's own
+ * A /v1/extract answer as { status, body, retryAfterMs }, or the API's own
  * message thrown. Read by hand rather than through remoteCall: the 202's
  * Retry-After sets the next poll, and remoteCall keeps only the body.
  * @param {Response} res @param {string} url @param {Record<string, any>} flags @param {string} apiPath
@@ -7388,7 +7322,7 @@ async function extractAnswer(res, url, flags, apiPath) {
 async function followExtract(url, flags, first, what) {
   let { body, retryAfterMs } = first;
   if (body?.status !== "running" || !body.id) return body;
-  const pollPath = typeof body.poll === "string" && body.poll.startsWith("/api/") ? body.poll : `/api/extract/${enc(String(body.id))}`;
+  const pollPath = typeof body.poll === "string" && body.poll.startsWith("/v1/") ? body.poll : `/v1/extract/${enc(String(body.id))}`;
   const started = Date.now();
   if (flags.quiet !== true) console.error(`  ${c.dim(`reading ${what} on the platform (job ${body.id}) — this can take a while for a long scan or recording`)}`);
   while (body?.status === "running") {
@@ -7431,7 +7365,7 @@ function printExtracted(result, flags) {
 
 /**
  * `foldrun text <file>` — a local file (a PDF, a scan, a document, a sheet,
- * a recording) turned into text by the platform: POST /api/extract with the
+ * a recording) turned into text by the platform: POST /v1/extract with the
  * bytes, then the job polled when the platform answers 202.
  * @param {string[]} positional @param {Record<string, any>} flags
  */
@@ -7449,7 +7383,7 @@ async function textCmd(positional, flags) {
   // The request holds for --wait at most, plus the upload itself.
   const seconds = explicitTimeout(flags) ?? Math.max(timeoutSeconds(flags), (opts.wait ?? 50) + 30, Math.ceil(bytes.length / 200_000));
   const token = await renewedToken(url, flags);
-  const apiPath = `/api/extract?${q}`;
+  const apiPath = `/v1/extract?${q}`;
   const res = await remoteFetch(url, apiPath, { method: "POST", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token, seconds });
   const result = await followExtract(url, flags, await extractAnswer(res, url, flags, apiPath), path.basename(file));
   printExtracted(result, flags);
@@ -7470,7 +7404,7 @@ async function storageTextCmd(url, ws, positional, flags) {
   const opts = extractOptions(flags);
   const seconds = explicitTimeout(flags) ?? Math.max(timeoutSeconds(flags), (opts.wait ?? 50) + 30);
   const token = await renewedToken(url, flags);
-  const apiPath = `/api/workspaces/${enc(ws)}/storage/extract`;
+  const apiPath = `/v1/workspaces/${enc(ws)}/storage/extract`;
   const res = await remoteFetch(
     url,
     apiPath,
@@ -7484,12 +7418,12 @@ async function storageTextCmd(url, ws, positional, flags) {
 }
 
 async function storageLsAll(url, prefix, flags) {
-  const { workspaces = [] } = await remoteCall(url, flags, "/api/workspaces");
+  const { workspaces = [] } = await remoteCall(url, flags, "/v1/workspaces");
   const inPrefix = (f) => (prefix ? f.path === prefix || f.path.startsWith(prefix.replace(/\/*$/, "/")) : true);
   const desks = await Promise.all(
     workspaces.map(async (w) => {
       try {
-        const body = await remoteCall(url, flags, `/api/workspaces/${enc(w.name)}/storage`);
+        const body = await remoteCall(url, flags, `/v1/workspaces/${enc(w.name)}/storage`);
         return { workspace: w.name, ...body, files: (body.files ?? []).filter(inPrefix) };
       } catch (err) {
         return { workspace: w.name, files: [], error: err instanceof Error ? err.message : String(err) };
@@ -7548,7 +7482,7 @@ async function storageCmd(positional, flags, layout) {
   if (verb === "text") return storageTextCmd(url, ws, positional, flags);
 
   if (verb === "ls") {
-    const body = await remoteCall(url, flags, `/api/workspaces/${ws}/storage`);
+    const body = await remoteCall(url, flags, `/v1/workspaces/${ws}/storage`);
     const prefix = positional[1];
     const files = (body.files ?? []).filter((f) => (prefix ? f.path === prefix || f.path.startsWith(prefix.replace(/\/*$/, "/")) : true));
     if (!files.length) {
@@ -7585,7 +7519,7 @@ async function storageCmd(positional, flags, layout) {
     if (flags.forever === true && flags.ttl !== undefined) throw new Error("--forever or --ttl <days>, not both");
     const ttlDays = flags.forever === true ? null : flags.ttl !== undefined ? Number(flags.ttl) : undefined;
     if (ttlDays !== undefined && ttlDays !== null && !(Number.isFinite(ttlDays) && ttlDays > 0)) throw new Error("--ttl is a number of days, more than zero");
-    const body = await remoteCall(url, flags, `/api/workspaces/${ws}/shares`, {
+    const body = await remoteCall(url, flags, `/v1/workspaces/${ws}/shares`, {
       method: "POST",
       body: JSON.stringify({ path: rel.startsWith("storage/") ? rel : `storage/${rel}`, ...(ttlDays !== undefined ? { ttlDays } : {}) }),
     });
@@ -7594,7 +7528,7 @@ async function storageCmd(positional, flags, layout) {
     return 0;
   }
   if (verb === "shares") {
-    const { shares = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares`);
+    const { shares = [] } = await remoteCall(url, flags, `/v1/workspaces/${ws}/shares`);
     const now = Date.now();
     const live = (x) => !x.revokedAt && (!x.expiresAt || Date.parse(x.expiresAt) > now);
     const rows = flags.all === true ? shares : shares.filter(live);
@@ -7618,7 +7552,7 @@ async function storageCmd(positional, flags, layout) {
     const token = positional[1];
     if (!token) throw new Error("`foldrun storage unshare <token|id>` — `foldrun storage shares` lists them (an id, sh_…, where the token is not yours to see)");
     if (!(await sureToDelete(flags, "storage unshare", `share link ${token} (anyone holding it gets 404)`))) return 1;
-    const { revoked } = await remoteCall(url, flags, `/api/workspaces/${ws}/shares?${token.startsWith("sh_") ? "id" : "token"}=${encodeURIComponent(token)}`, { method: "DELETE" });
+    const { revoked } = await remoteCall(url, flags, `/v1/workspaces/${ws}/shares?${token.startsWith("sh_") ? "id" : "token"}=${encodeURIComponent(token)}`, { method: "DELETE" });
     if (!revoked) {
       console.log(`\n  ${c.dim(`nothing revoked — ${token} is not a live link of this account's`)}\n`);
       return 1;
@@ -7684,7 +7618,7 @@ async function storageCmd(positional, flags, layout) {
     const rel = positional[1];
     if (!rel) throw new Error("`foldrun storage rm <path>` — `foldrun storage ls` names them");
     if (!(await sureToDelete(flags, "storage rm", `${ws}/storage/${rel}`))) return 1;
-    await remoteCall(url, flags, `/api/workspaces/${ws}/storage?path=${encodeURIComponent(rel)}`, { method: "DELETE" });
+    await remoteCall(url, flags, `/v1/workspaces/${ws}/storage?path=${encodeURIComponent(rel)}`, { method: "DELETE" });
     console.log(`\n  ${c.green("✓")} ${ws}/storage/${rel} removed\n`);
     return 0;
   }
@@ -7699,7 +7633,7 @@ async function storageCmd(positional, flags, layout) {
   // --preview: the platform reads the file (a PDF, a sheet, a deck, a zip)
   // and answers what is in it as data — the storage browser's preview.
   if (verb === "cat" && flags.preview === true) {
-    printPreview(await remoteCall(url, flags, `/api/workspaces/${ws}/storage/preview?path=${encodeURIComponent(rel)}`), rel);
+    printPreview(await remoteCall(url, flags, `/v1/workspaces/${ws}/storage/preview?path=${encodeURIComponent(rel)}`), rel);
     return 0;
   }
 
@@ -7708,7 +7642,7 @@ async function storageCmd(positional, flags, layout) {
   // follows redirects — not remoteCall, which parses JSON and would make a
   // markdown file look like a broken platform.
   const token = await renewedToken(url, flags);
-  const res = await remoteFetch(url, `/api/workspaces/${ws}/storage/download?path=${encodeURIComponent(rel)}`, {}, { token });
+  const res = await remoteFetch(url, `/v1/workspaces/${ws}/storage/download?path=${encodeURIComponent(rel)}`, {}, { token });
   if (!res.ok) {
     const said = await res.text();
     let why = said.slice(0, 200);
@@ -7760,7 +7694,7 @@ async function rerunCmd(runId, flags, layout) {
     throw new Error("where from? --from <step> (as the flow numbers them) or --agent <name> (the first step that agent runs)");
   }
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const body = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/rerun`, {
+  const body = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}/rerun`, {
     method: "POST",
     // --instruction: what that step is told this once (FOL-72 step 6).
     body: JSON.stringify({ ...(agent ? { agent } : { step: from }), ...(typeof flags.instruction === "string" ? { instruction: flags.instruction } : {}) }),
@@ -7849,7 +7783,7 @@ async function triggersCmd(flags, layout) {
   const ws = typeof flags.to === "string" ? flags.to : (layout?.kind === "empty" ? null : takeWorkspace([], layout)) ?? savedDefault(flags);
   if (!ws) throw new Error("which project? `foldrun triggers --to <workspace>` — or run it inside one");
   const days = Number(flags.since) > 0 ? Math.floor(Number(flags.since)) : 7;
-  const body = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/triggers?days=${days}`);
+  const body = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/triggers?days=${days}`);
   const rows = body.flows ?? [];
   if (flags.json === true) {
     console.log(JSON.stringify(body, null, 2));
@@ -7945,7 +7879,7 @@ function printTriggerDeliveries(deliveries, limit) {
  */
 async function scheduleCmd(flags) {
   const url = platformFor(flags, "schedule");
-  const { scheduled = [] } = await remoteCall(url, flags, "/api/schedule");
+  const { scheduled = [] } = await remoteCall(url, flags, "/v1/schedule");
   const rows = typeof flags.to === "string" ? scheduled.filter((r) => r.workspace === flags.to) : scheduled;
 
   if (!rows.length) {
@@ -7991,8 +7925,8 @@ async function scheduleCmd(flags) {
  */
 async function providersCmd(url, flags) {
   const body = flags.check === true
-    ? { ...(await remoteCall(url, flags, "/api/account/providers")), lastCheck: (await remoteCall(url, flags, "/api/account/providers", { method: "POST", body: "{}" })).lastCheck }
-    : await remoteCall(url, flags, "/api/account/providers");
+    ? { ...(await remoteCall(url, flags, "/v1/account/providers")), lastCheck: (await remoteCall(url, flags, "/v1/account/providers", { method: "POST", body: "{}" })).lastCheck }
+    : await remoteCall(url, flags, "/v1/account/providers");
   const configured = body.configured ?? [];
   const last = body.lastCheck ?? null;
   if (!configured.length) {
@@ -8017,7 +7951,7 @@ async function providersCmd(url, flags) {
 
 /**
  * `foldrun account model` — what every step runs on unless a provider: block
- * names another (/api/account/model): the account's own model key, or
+ * names another (/v1/account/model): the account's own model key, or
  * foldrun's models (the platform's keys for one provider, billed in credits
  * at foldrun's price list — hosted only).
  *
@@ -8091,18 +8025,18 @@ async function accountModelCmd(url, positional, flags) {
   };
   const out = (r) => (flags.json === true ? console.log(JSON.stringify(r, null, 2)) : show(r));
   const put = (body) =>
-    remoteCall(url, flags, "/api/account/model", {
+    remoteCall(url, flags, "/v1/account/model", {
       method: "PUT",
       body: JSON.stringify(body),
       headers: { "idempotency-key": crypto.randomUUID() },
     });
   if (!verb) {
-    const r = await remoteCall(url, flags, "/api/account/model");
+    const r = await remoteCall(url, flags, "/v1/account/model");
     out(r);
     return runnable(r) ? 0 : 1;
   }
   if (verb === "remove") {
-    out(await remoteCall(url, flags, "/api/account/model", { method: "DELETE" }));
+    out(await remoteCall(url, flags, "/v1/account/model", { method: "DELETE" }));
     return 0;
   }
   if (verb === "use") {
@@ -8130,7 +8064,7 @@ async function accountModelCmd(url, positional, flags) {
     return runnable(r) ? 0 : 1;
   }
   if (verb === "prices") {
-    const r = await remoteCall(url, flags, "/api/account/model");
+    const r = await remoteCall(url, flags, "/v1/account/model");
     const f = fm(r);
     const only = typeof flags.provider === "string" ? flags.provider : null;
     const prices = (f?.prices ?? []).filter((p) => !only || p.provider === only);
@@ -8197,7 +8131,7 @@ async function accountModelCmd(url, positional, flags) {
  */
 async function billingCmd(flags) {
   const url = platformFor(flags, "billing");
-  const body = await remoteCall(url, flags, "/api/billing");
+  const body = await remoteCall(url, flags, "/v1/billing");
   const balance = Number(body.balanceUsd ?? 0);
   const entries = body.entries ?? [];
 
@@ -8243,7 +8177,7 @@ async function billingCmd(flags) {
 const NOTIFY_EVENTS = ["failed", "awaiting-approval", "completed"];
 
 /** Why a caller limited to some workspaces sees "set" for the account's
- *  notify: URL or telemetry: (GET /api/account answers `hidden: true`). */
+ *  notify: URL or telemetry: (GET /v1/account answers `hidden: true`). */
 const HIDDEN_NOTE = "where it goes is shown only to a member or key with every project";
 
 /** The account's defaults, as one readable block. */
@@ -8276,7 +8210,7 @@ function networkEnforceText(on, above, aboveOn = false) {
  *  this credential may not read the account (a workspace-scoped key). */
 async function accountEnforces(url, flags) {
   try {
-    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const { defaults } = await remoteCall(url, flags, "/v1/account");
     return defaults?.networkEnforce === true;
   } catch (err) {
     if (err instanceof HttpError && (err.status === 403 || err.status === 404)) return null;
@@ -8309,7 +8243,7 @@ function onOff(key, value, how) {
 async function telemetryCmd(url, args, flags) {
   const [sub, endpoint] = args;
   if (!sub) {
-    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const { defaults } = await remoteCall(url, flags, "/v1/account");
     const t = defaults?.telemetry;
     if (!t) {
       console.log(`\n  ${c.dim("runs are not sent anywhere — foldrun account telemetry set https://<collector>/v1/traces --header authorization=\${OTEL_TOKEN}")}\n`);
@@ -8325,13 +8259,13 @@ async function telemetryCmd(url, args, flags) {
     return 0;
   }
   if (sub === "test") {
-    const r = await remoteCall(url, flags, "/api/account/telemetry/test", { method: "POST", body: "{}" });
+    const r = await remoteCall(url, flags, "/v1/account/telemetry/test", { method: "POST", body: "{}" });
     if (r.ok) console.log(`\n  ${c.green("✓")} ${r.endpoint} took it — ${r.spans} spans, HTTP ${r.status}. Look for the trace "run foldrun-telemetry-test".\n`);
     else console.log(`\n  ${c.red("✗")} not delivered to ${r.endpoint} — ${r.error}\n`);
     return r.ok ? 0 : 1;
   }
   if (sub === "clear") {
-    await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify({ telemetry: null }) });
+    await remoteCall(url, flags, "/v1/account", { method: "PATCH", body: JSON.stringify({ telemetry: null }) });
     console.log(`\n  ${c.green("✓")} runs are no longer sent\n`);
     return 0;
   }
@@ -8347,7 +8281,7 @@ async function telemetryCmd(url, args, flags) {
     if (i < 1) throw new Error(`--header is name=value (name= drops it), e.g. --header authorization='\${OTEL_TOKEN}' — not "${h}"`);
     given[h.slice(0, i).trim().toLowerCase()] = h.slice(i + 1).trim();
   }
-  const { defaults } = await remoteCall(url, flags, "/api/account");
+  const { defaults } = await remoteCall(url, flags, "/v1/account");
   const current = defaults?.telemetry;
   if (current?.hidden) throw new Error("the account's telemetry is hidden from this key (it needs access to every project) — set it from a key or login that has them all");
   const headers = { ...(current?.headers ?? {}) };
@@ -8356,7 +8290,7 @@ async function telemetryCmd(url, args, flags) {
     else delete headers[k];
   }
   const kept = Object.keys(headers).filter((k) => !(k in given));
-  const r = await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify({ telemetry: { otlp: endpoint, ...(Object.keys(headers).length ? { headers } : {}) } }) });
+  const r = await remoteCall(url, flags, "/v1/account", { method: "PATCH", body: JSON.stringify({ telemetry: { otlp: endpoint, ...(Object.keys(headers).length ? { headers } : {}) } }) });
   console.log(`\n  ${c.green("✓")} every run that finishes is sent to ${r.defaults?.telemetry?.endpoint ?? endpoint} — \`foldrun account telemetry test\` proves it arrives`);
   if (kept.length) console.log(`  ${c.dim(`kept the header${kept.length === 1 ? "" : "s"} already set: ${kept.join(", ")} (--header name= drops one)`)}`);
   console.log();
@@ -8366,13 +8300,13 @@ async function telemetryCmd(url, args, flags) {
 // ---------------------------------------------------------- the four jobs
 //
 // governance, guardrail, observability, evaluation — what each AGENTS.md
-// field does, as the platform maps it (GET /api/account/jobs). The CLI reads
+// field does, as the platform maps it (GET /v1/account/jobs). The CLI reads
 // the map from the platform rather than from @foldrun/core, so it always
 // matches the platform it is talking to.
 
-/** GET /api/account/jobs, for the account or one workspace. */
+/** GET /v1/account/jobs, for the account or one workspace. */
 function jobsOf(url, flags, workspace) {
-  return remoteCall(url, flags, `/api/account/jobs${workspace ? `?workspace=${enc(workspace)}` : ""}`);
+  return remoteCall(url, flags, `/v1/account/jobs${workspace ? `?workspace=${enc(workspace)}` : ""}`);
 }
 
 /**
@@ -8455,7 +8389,7 @@ function shortValue(v) {
 async function identityCmd(flags) {
   const url = platformFor(flags, "identity");
   const ws = typeof flags.to === "string" ? flags.to : null;
-  const info = await remoteCall(url, flags, `/api/identity${ws ? `?workspace=${enc(ws)}` : ""}`);
+  const info = await remoteCall(url, flags, `/v1/identity${ws ? `?workspace=${enc(ws)}` : ""}`);
   if (flags.json === true) {
     console.log(JSON.stringify(info, null, 2));
     return 0;
@@ -8576,9 +8510,9 @@ async function accountCmd(positional, flags) {
 
   if (!verb) {
     // Both asked at once; the pause answer is read after the defaults print.
-    const pausing = pauseState(remoteCall(url, flags, "/api/account/pause"));
+    const pausing = pauseState(remoteCall(url, flags, "/v1/account/pause"));
     pausing.catch(() => {});
-    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const { defaults } = await remoteCall(url, flags, "/v1/account");
     printDefaults(defaults ?? {});
     const halt = await pausing;
     const own = Object.keys(halt?.workspaces ?? {});
@@ -8590,8 +8524,8 @@ async function accountCmd(positional, flags) {
   if (verb === "telemetry") return telemetryCmd(url, positional.slice(1), flags);
   if (verb === "pause" || verb === "resume") {
     return pauseCmd(flags, verb, "every project in the account", {
-      post: (body) => remoteCall(url, flags, "/api/account/pause", { method: "POST", body }),
-      del: () => remoteCall(url, flags, "/api/account/pause", { method: "DELETE" }),
+      post: (body) => remoteCall(url, flags, "/v1/account/pause", { method: "POST", body }),
+      del: () => remoteCall(url, flags, "/v1/account/pause", { method: "DELETE" }),
     });
   }
   if (verb === "model") return accountModelCmd(url, positional.slice(1), flags);
@@ -8619,7 +8553,7 @@ async function accountCmd(positional, flags) {
     // emptied field does; the platform keeps the others.
     patch = { compute: computeClears(positional.slice(2), "`foldrun account clear compute [vcpu] [memory] [disk]` — none named clears all three") };
   } else if (verb === "clear" && key === "notify" && positional.length > 2) {
-    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const { defaults } = await remoteCall(url, flags, "/v1/account");
     patch = { notify: notifyWithout(defaults?.notify, positional[2], "foldrun account clear notify") };
   } else if (verb === "clear") {
     patch = { [key]: null };
@@ -8638,7 +8572,7 @@ async function accountCmd(positional, flags) {
       throw new Error("`foldrun account set notify email <address>` or `set notify url <https://…>` — and --events failed,awaiting-approval,completed");
     }
     if (!value && flags.events === undefined) throw new Error(`\`foldrun account set notify ${channel} <value>\` — or --events alone to change only what is notified on`);
-    const { defaults } = await remoteCall(url, flags, "/api/account");
+    const { defaults } = await remoteCall(url, flags, "/v1/account");
     const current = defaults?.notify ?? {};
     const events =
       typeof flags.events === "string"
@@ -8671,7 +8605,7 @@ async function accountCmd(positional, flags) {
     };
   }
 
-  const answer = await remoteCall(url, flags, "/api/account", { method: "PATCH", body: JSON.stringify(patch) });
+  const answer = await remoteCall(url, flags, "/v1/account", { method: "PATCH", body: JSON.stringify(patch) });
   printDefaults(answer.defaults ?? {});
   console.log(`\n  ${c.green("✓")} ${verb === "clear" ? `${key} cleared` : `${key} set`} — every project in this account reads it\n`);
   return 0;
@@ -8829,7 +8763,7 @@ async function answerCmd(positional, flags) {
   const url = platformFor(flags, "answer");
   const runId = positional[0];
   if (!runId) throw new Error("which run? `foldrun answer <run-id> \"…\"` — `foldrun approvals` lists the questions");
-  const { questions = [] } = await remoteCall(url, flags, "/api/approvals");
+  const { questions = [] } = await remoteCall(url, flags, "/v1/approvals");
   const mine = questions.filter((q) => q.runId === runId && (typeof flags.question !== "string" || q.id === flags.question));
   if (!mine.length) throw new Error(`${runId} is not asking anything right now — \`foldrun approvals\` lists what is`);
   const q = mine[0];
@@ -8844,7 +8778,7 @@ async function answerCmd(positional, flags) {
     text = q.options[n - 1];
   }
   if (!text) throw new Error(`what is the answer? \`foldrun answer ${runId} "…"\`${q.options?.length ? " or --option <n>" : ""}`);
-  const res = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(q.workspace)}/runs/${encodeURIComponent(runId)}/answer`, {
+  const res = await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(q.workspace)}/runs/${encodeURIComponent(runId)}/answer`, {
     method: "POST",
     body: JSON.stringify({ question: q.id, answer: text }),
   });
@@ -8870,7 +8804,7 @@ async function messageCmd(positional, flags, layout) {
     step = Number(flags.step);
   }
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const sent = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${encodeURIComponent(runId)}/message`, {
+  const sent = await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(ws)}/runs/${encodeURIComponent(runId)}/message`, {
     method: "POST",
     body: JSON.stringify(step === undefined ? { text } : { text, step }),
   });
@@ -8891,7 +8825,7 @@ async function sessionsCmd(positional, flags, layout) {
   const context = positional[1];
   const ws = typeof flags.to === "string" ? flags.to : (layout?.kind === "empty" ? null : takeWorkspace([], layout)) ?? savedDefault(flags);
   if (!ws) throw new Error("which project? `--to <project>` (or run it in the project's folder)");
-  const base = (ctx) => `/api/workspaces/${encodeURIComponent(ws)}/sessions/${encodeURIComponent(ctx)}/messages`;
+  const base = (ctx) => `/v1/workspaces/${encodeURIComponent(ws)}/sessions/${encodeURIComponent(ctx)}/messages`;
   if (verb === "send") {
     const text = positional.slice(2).join(" ").trim();
     if (!context || !text) throw new Error('`foldrun sessions send <conversation> "…"` — the conversation id `foldrun code` shows in its session line');
@@ -8946,7 +8880,7 @@ async function workspaceOfRun(url, flags, layout, runId) {
 
   const found = await pool(order, 8, async (ws) => {
     try {
-      await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+      await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}`);
       return ws;
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
@@ -9006,14 +8940,14 @@ const eventSteps = (run) =>
  * `foldrun approvals` — everything across the account that is waiting for a
  * person to say yes.
  *
- * One entry per GATE, the way /api/approvals counts them: a run with two `!`
+ * One entry per GATE, the way /v1/approvals counts them: a run with two `!`
  * steps in one group is two decisions, and a list that folded them into one
  * line named one agent and asked neither question.
  */
 /** `foldrun runs views` — your saved run searches (FOL-72 step 9). */
 async function runViewsCmd(flags) {
   const url = platformFor(flags, "runs");
-  const { runViews = [] } = await remoteCall(url, flags, "/api/me/preferences");
+  const { runViews = [] } = await remoteCall(url, flags, "/v1/me/preferences");
   if (flags.json === true) return console.log(JSON.stringify(runViews, null, 2)), 0;
   if (!runViews.length) return console.log(`\n  ${c.dim("no saved views — save one from the runs page's search")}\n`), 0;
   console.log();
@@ -9028,7 +8962,7 @@ const VIEW_FLAGS = [["status", "status"], ["flow", "flow"], ["to", "workspace"],
 
 /**
  * `foldrun runs views save <name> [filters]` and `runs views rm <name>` — the
- * runs page's "save view" (PATCH /api/me/preferences { runViews }). The route
+ * runs page's "save view" (PATCH /v1/me/preferences { runViews }). The route
  * replaces the whole list, so it is read, changed and written back; a view
  * saved under a name already taken replaces it, as the dashboard does.
  */
@@ -9037,7 +8971,7 @@ async function runViewsEditCmd([verb, ...rest], flags) {
   const name = rest.join(" ").trim();
   if (verb !== "save" && verb !== "rm") throw new Error(`\`foldrun runs views\` lists your saved views; its verbs are save <name> and rm <name> — not ${verb}`);
   if (!name) throw new Error(`\`foldrun runs views ${verb} <name>\`${verb === "save" ? " --status failed --since 7d … (the filters to keep)" : " — `foldrun runs views` lists them"}`);
-  const { runViews = [] } = await remoteCall(url, flags, "/api/me/preferences");
+  const { runViews = [] } = await remoteCall(url, flags, "/v1/me/preferences");
   let list;
   if (verb === "save") {
     if (name.length > 40) throw new Error("a view's name is 1 to 40 characters");
@@ -9051,7 +8985,7 @@ async function runViewsEditCmd([verb, ...rest], flags) {
     if (!query.size) throw new Error("a view needs at least one filter — --status, --flow, --to, --since, --q, --tool, --tool-error, --agent, --model, --min-tokens, --min-secs or --context");
     list = [...runViews.filter((v) => v.name !== name), { name, query: query.toString() }];
     const since = query.get("since");
-    const d = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
+    const d = await remoteCall(url, flags, "/v1/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
     if (flags.json === true) return console.log(JSON.stringify(d.runViews ?? [], null, 2)), 0;
     console.log(`\n  ${c.green("✓")} ${runViews.some((v) => v.name === name) ? "replaced" : "saved"} the view ${c.bold(name)}  ${c.dim(query.toString())}`);
     if (since && !["today", "7d", "30d"].includes(since)) console.log(`  ${c.dim(`the runs page's windows are today, 7d and 30d — it shows since=${since} unfiltered; foldrun runs --view applies it`)}`);
@@ -9061,7 +8995,7 @@ async function runViewsEditCmd([verb, ...rest], flags) {
   if (!runViews.some((v) => v.name === name)) throw new Error(`no saved view called ${name}${runViews.length ? ` — yours: ${runViews.map((v) => v.name).join(", ")}` : ""}`);
   if (!(await sureToDelete(flags, "runs views rm", `The saved view ${name}`))) return 1;
   list = runViews.filter((v) => v.name !== name);
-  const d = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
+  const d = await remoteCall(url, flags, "/v1/me/preferences", { method: "PATCH", body: JSON.stringify({ runViews: list }) });
   if (flags.json === true) return console.log(JSON.stringify(d.runViews ?? [], null, 2)), 0;
   console.log(`\n  ${c.green("✓")} deleted the view ${c.bold(name)}\n`);
   return 0;
@@ -9070,11 +9004,11 @@ async function runViewsEditCmd([verb, ...rest], flags) {
 // ---------------------------------------------------------------- insights
 
 /** `foldrun insights` (FOL-72 step 8): recurring problems found in the runs,
- *  with evidence, what they cost and what to do — GET /api/insights. */
+ *  with evidence, what they cost and what to do — GET /v1/insights. */
 async function insightsCmd(flags) {
   const url = platformFor(flags, "insights");
   const qs = new URLSearchParams({ ...(flags.days !== undefined ? { days: String(flags.days) } : {}), ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) });
-  const { insights = [], days = 7 } = await remoteCall(url, flags, `/api/insights${qs.size ? `?${qs}` : ""}`);
+  const { insights = [], days = 7 } = await remoteCall(url, flags, `/v1/insights${qs.size ? `?${qs}` : ""}`);
   if (flags.json === true) return console.log(JSON.stringify(insights, null, 2)), 0;
   if (!insights.length) {
     console.log(`\n  ${c.dim(`nothing recurring in the last ${days} days`)}\n`);
@@ -9114,7 +9048,7 @@ function issueDoctor(issue) {
  *  issue's newest run, in that run's workspace. */
 /**
  * `foldrun inbox` — what is waiting on you across your workspaces (GET
- * /api/me/inbox): gates, questions agents ask, open issues, proposed fixes,
+ * /v1/me/inbox): gates, questions agents ask, open issues, proposed fixes,
  * your runs that went wrong this week. Assigned to you and started by you by
  * default; `--team` for the rest of what waits in your workspaces, `--all`
  * for every bucket, `--dismissed` for what you set aside, `--kind
@@ -9127,7 +9061,7 @@ function issueDoctor(issue) {
  * `foldrun mcp` — this account as an MCP server over stdio, for an AI app
  * (Claude Code, Claude Desktop, Cursor, Codex): `claude mcp add foldrun --
  * foldrun mcp`. Each line on stdin is one JSON-RPC message, forwarded to the
- * platform's POST /api/mcp with this machine's sign-in; each answer is one
+ * platform's POST /v1/mcp with this machine's sign-in; each answer is one
  * line on stdout. The tools live on the platform, so they are always the
  * platform's own — this end holds no list to go stale. stdout carries
  * nothing but protocol; every note goes to stderr.
@@ -9141,7 +9075,7 @@ async function mcpCmd(positional, flags) {
     if (!arg || extra.length) throw new Error("which connection? `foldrun mcp disconnect <id>` — ids are in `foldrun mcp connections`");
     const url = platformFor(flags, "mcp disconnect");
     if (!(await sureToDelete(flags, "mcp disconnect", `the AI app connection ${arg} on ${url} (every token it holds stops working)`))) return 1;
-    await remoteCall(url, flags, `/api/mcp/connections/${encodeURIComponent(arg)}`, { method: "DELETE" });
+    await remoteCall(url, flags, `/v1/mcp/connections/${encodeURIComponent(arg)}`, { method: "DELETE" });
     console.log(`\n  ${c.green("✓")} disconnected ${arg}\n`);
     return 0;
   }
@@ -9169,7 +9103,7 @@ async function mcpCmd(positional, flags) {
     }
     return tokenFor(url, flags);
   };
-  const apiPath = `/api/mcp${flags["read-only"] === true ? "?readonly=1" : ""}`;
+  const apiPath = `/v1/mcp${flags["read-only"] === true ? "?readonly=1" : ""}`;
   // Long tool calls (a run's whole record) get longer than a CLI read.
   const seconds = explicitTimeout(flags) ?? 120;
   /** The revision `initialize` settled on, sent on every later request. */
@@ -9213,8 +9147,8 @@ async function mcpCmd(positional, flags) {
     let body;
     try {
       body = JSON.parse(text);
-      // JSON, but not the protocol: an /api error from a platform that has no
-      // /api/mcp (`{ error: "…" }`), or a proxy's own JSON.
+      // JSON, but not the protocol: an /v1 error from a platform that has no
+      // /v1/mcp (`{ error: "…" }`), or a proxy's own JSON.
       if (body?.jsonrpc !== "2.0") throw new Error("not JSON-RPC");
     } catch {
       console.error(`foldrun mcp: ${apiPath} → HTTP ${res.status}: ${text.slice(0, 200)}`);
@@ -9251,7 +9185,7 @@ async function mcpCmd(positional, flags) {
 }
 
 /**
- * `foldrun mcp clients add <name>` — register a machine client for /api/mcp
+ * `foldrun mcp clients add <name>` — register a machine client for /v1/mcp
  * (client credentials, part G): no person approves its tokens. --role,
  * --workspaces a,b, --write (else read only), --token-auth basic|post|jwt
  * (jwt with --jwks-file: the client's public keys). The secret is printed
@@ -9275,12 +9209,12 @@ async function mcpMachineClientsCmd(sub, rest, flags) {
     token_auth: auth,
     ...(auth === "private_key_jwt" ? { jwks: JSON.parse(fs.readFileSync(flags["jwks-file"], "utf8")) } : {}),
   };
-  const made = await remoteCall(url, flags, "/api/mcp/clients", { method: "POST", body: JSON.stringify(body) });
+  const made = await remoteCall(url, flags, "/v1/mcp/clients", { method: "POST", body: JSON.stringify(body) });
   console.log(`\n  ${c.green("✓")} registered ${c.bold(rest[0])} ${c.dim(`(${body.access === "write" ? "read and act" : "read only"} · ${body.role} · ${workspaces ? workspaces.join(", ") : "the projects you can open"})`)}\n`);
   console.log(`    client_id      ${made.client_id}`);
   if (made.client_secret) console.log(`    client_secret  ${made.client_secret}   ${c.amber("— shown once")}`);
   console.log(`    token URL      ${made.token_endpoint}`);
-  console.log(`\n  ${c.dim("grant_type=client_credentials at the token URL, then Bearer the access token to /api/mcp. `foldrun mcp disconnect " + made.grant + "` ends it.")}\n`);
+  console.log(`\n  ${c.dim("grant_type=client_credentials at the token URL, then Bearer the access token to /v1/mcp. `foldrun mcp disconnect " + made.grant + "` ends it.")}\n`);
   return 0;
 }
 
@@ -9289,14 +9223,14 @@ async function mcpMachineClientsCmd(sub, rest, flags) {
  *  one for an admin; your own otherwise. */
 async function mcpConnectionsCmd(flags) {
   const url = platformFor(flags, "mcp connections");
-  const view = await remoteCall(url, flags, `/api/mcp/connections${flags.all === true ? "?all=1" : ""}`);
+  const view = await remoteCall(url, flags, `/v1/mcp/connections${flags.all === true ? "?all=1" : ""}`);
   if (flags.json) {
     console.log(JSON.stringify(view, null, 2));
     return 0;
   }
   const rows = view.connections ?? [];
   console.log(`\n  ${c.bold("AI apps connected over OAuth")} ${c.dim(view.everyone ? "· everyone's" : "· yours")}`);
-  if (!rows.length) console.log(`\n  ${c.dim("none — claude.ai connects itself when you add this platform's /api/mcp as a custom connector")}`);
+  if (!rows.length) console.log(`\n  ${c.dim("none — claude.ai connects itself when you add this platform's /v1/mcp as a custom connector")}`);
   for (const r of rows) {
     const used = r.lastUsedAt ? `last used ${String(r.lastUsedAt).slice(0, 16).replace("T", " ")}` : "not used yet";
     console.log(`\n  ${c.bold(r.client)} ${c.dim(`· ${r.machine ? "machine client" : r.redirectHost} · ${r.access === "read" ? "read only" : "read and act"} · ${r.workspaces ? r.workspaces.join(", ") : "all projects"}`)}${r.revokedAt ? c.red(" · disconnected") : ""}`);
@@ -9320,16 +9254,16 @@ async function inboxCmd(positional, flags) {
       const q = new URLSearchParams({ bucket: flags.team === true ? "team" : flags.started === true ? "started" : flags.mine === true ? "mine" : "all" });
       if (typeof flags.kind === "string") q.set("kind", flags.kind);
       if (typeof flags.workspace === "string") q.set("workspace", flags.workspace);
-      const view = await remoteCall(url, flags, `/api/me/inbox?${q}`);
+      const view = await remoteCall(url, flags, `/v1/me/inbox?${q}`);
       const unread = (view.items ?? []).filter((i) => !i.read).map((i) => i.id);
       for (let i = 0; i < unread.length; i += 200) {
-        await remoteCall(url, flags, "/api/me/inbox", { method: "POST", body: JSON.stringify({ ids: unread.slice(i, i + 200), action }) });
+        await remoteCall(url, flags, "/v1/me/inbox", { method: "POST", body: JSON.stringify({ ids: unread.slice(i, i + 200), action }) });
       }
       console.log(`\n  ${unread.length ? c.green(`marked read ${unread.length} item${unread.length === 1 ? "" : "s"}`) : c.dim("nothing unread")}\n`);
       return 0;
     }
     if (!ids.length) throw new Error(`\`foldrun inbox ${verb} <id>…\` — the ids are the first column of \`foldrun inbox\``);
-    await remoteCall(url, flags, "/api/me/inbox", { method: "POST", body: JSON.stringify({ ids, action }) });
+    await remoteCall(url, flags, "/v1/me/inbox", { method: "POST", body: JSON.stringify({ ids, action }) });
     console.log(`\n  ${c.green(action === "dismiss" ? "set aside" : action === "restore" ? "put back" : `marked ${action}`)} ${ids.length} item${ids.length === 1 ? "" : "s"}\n`);
     return 0;
   }
@@ -9341,7 +9275,7 @@ async function inboxCmd(positional, flags) {
   if (flags.dismissed === true) q.set("dismissed", "1");
   if (typeof flags.kind === "string") q.set("kind", flags.kind);
   if (typeof flags.workspace === "string") q.set("workspace", flags.workspace);
-  const view = await remoteCall(url, flags, `/api/me/inbox${q.size ? `?${q}` : ""}`);
+  const view = await remoteCall(url, flags, `/v1/me/inbox${q.size ? `?${q}` : ""}`);
   const items = (view.items ?? []).filter((i) => (flags.unread === true ? !i.read : true));
   if (flags.json) {
     console.log(JSON.stringify({ ...view, items }, null, 2));
@@ -9366,7 +9300,7 @@ async function issuesCmd(positional, flags, layout) {
   const [verb, id] = positional;
   if (verb === "doctor") {
     if (!id || !/^iss_[a-z0-9]{2,32}$/.test(id)) throw new Error("`foldrun issues doctor <issue-id>` — the id is the iss_… on each line of `foldrun issues`");
-    const { issue } = await remoteCall(url, flags, `/api/issues/${id}`);
+    const { issue } = await remoteCall(url, flags, `/v1/issues/${id}`);
     const doc = issueDoctor(issue);
     if (!doc) throw new Error(`${id} is a missed schedule: no run started, so there is nothing for the doctor to read — open the flow's schedule instead`);
     return assistantCmd([doc.prompt], { ...flags, to: doc.workspace }, layout);
@@ -9383,21 +9317,21 @@ async function issuesCmd(positional, flags, layout) {
       ...(flags.times !== undefined ? { times: Number(flags.times) } : {}),
       ...(typeof flags.note === "string" ? { note: flags.note } : {}),
     };
-    const { issue } = await remoteCall(url, flags, `/api/issues/${id}`, { method: "POST", body: JSON.stringify(body) });
+    const { issue } = await remoteCall(url, flags, `/v1/issues/${id}`, { method: "POST", body: JSON.stringify(body) });
     if (flags.json === true) return console.log(JSON.stringify(issue, null, 2)), 0;
     console.log(`\n  ${c.green("✓")} ${issue.id} is ${issue.status}${issue.snoozedUntil ? ` until ${when(issue.snoozedUntil)}` : ""}${issue.snoozedFor ? ` for ${issue.snoozedFor} more` : ""} — ${issue.what}\n`);
     return 0;
   }
   if (verb === "show") {
     if (!id) throw new Error("`foldrun issues show <issue-id>`");
-    const { issue } = await remoteCall(url, flags, `/api/issues/${id}`);
+    const { issue } = await remoteCall(url, flags, `/v1/issues/${id}`);
     if (flags.json === true) return console.log(JSON.stringify(issue, null, 2)), 0;
     printIssue(issue, true);
     return 0;
   }
   const status = typeof flags.status === "string" ? flags.status : flags.all === true ? "all" : "active";
   const qs = new URLSearchParams({ status, ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) });
-  const { issues = [] } = await remoteCall(url, flags, `/api/issues?${qs}`);
+  const { issues = [] } = await remoteCall(url, flags, `/v1/issues?${qs}`);
   if (flags.json === true) return console.log(JSON.stringify(issues, null, 2)), 0;
   if (!issues.length) {
     console.log(`\n  ${c.dim(status === "active" ? "no open issues" : `no ${status} issues`)}\n`);
@@ -9428,7 +9362,7 @@ function printIssue(i, full) {
 async function approvalsCmd(flags) {
   const url = platformFor(flags, "approvals");
   const only = typeof flags.to === "string" ? flags.to : null;
-  const { approvals = [], questions = [] } = await remoteCall(url, flags, "/api/approvals");
+  const { approvals = [], questions = [] } = await remoteCall(url, flags, "/v1/approvals");
   const waiting = only ? approvals.filter((a) => a.workspace === only) : approvals;
   const asking = only ? questions.filter((q) => q.workspace === only) : questions;
 
@@ -9460,7 +9394,7 @@ async function approvalsCmd(flags) {
     const ids = [...new Set(waiting.filter((a) => a.workspace === ws).map((a) => a.runId))];
     await pool(ids, 6, async (id) => {
       try {
-        runs.set(`${ws}/${id}`, await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${id}`));
+        runs.set(`${ws}/${id}`, await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${id}`));
       } catch {
         /* the index already told us enough to name it */
       }
@@ -9506,7 +9440,7 @@ async function decideCmd(decision, runId, flags, layout) {
     throw new Error(`which run? \`foldrun ${decision} <run-id>\` — \`foldrun approvals\` lists what is waiting`);
   }
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  const run = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}`);
   // --payload releases a `wait: event` step as its event URL would, so those
   // are the steps it chooses from; every other decision is a person's gate.
   const payload = flags.payload === undefined ? undefined : eventPayload(flags.payload);
@@ -9557,7 +9491,7 @@ async function decideCmd(decision, runId, flags, layout) {
     // One call per step, each naming it: a reject with no step refuses every
     // step that waits, a person's gate included. The dashboard's reason.
     for (const { index } of chosen) {
-      const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+      const answer = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}/approve`, {
         method: "POST",
         body: JSON.stringify({ decision, step: index, reason: note ?? "rejected while waiting for its event", ...(note ? { note } : {}) }),
       });
@@ -9570,7 +9504,7 @@ async function decideCmd(decision, runId, flags, layout) {
       ...(only === null ? {} : { step: only }),
       ...(payload === undefined ? {} : { payload }),
     };
-    const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/approve`, {
+    const answer = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}/approve`, {
       method: "POST",
       body: JSON.stringify(body),
     });
@@ -9618,7 +9552,7 @@ async function stopCmd(runId, flags, layout) {
   const url = platformFor(flags, "stop");
   if (!runId) throw new Error("which run? `foldrun stop <run-id>` — `foldrun runs --status running` lists them");
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  const run = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}`);
 
   if (run.status === "completed" || run.status === "failed") {
     // Not an error worth a stack: the thing you wanted — it is not running —
@@ -9643,7 +9577,7 @@ async function stopCmd(runId, flags, layout) {
     return 1;
   }
 
-  const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/stop`, { method: "POST" });
+  const answer = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}/stop`, { method: "POST" });
   console.log(
     `\n  ${c.green("✓")} stopped ${runId} in ${ws}${answer.status ? ` — now ${answer.status}` : ""}` +
       `\n  ${c.dim(`foldrun report ${runId} --to ${ws} for what it got through first`)}\n`,
@@ -9668,7 +9602,7 @@ async function stopCmd(runId, flags, layout) {
  * through the platform — what `storage put` and `--input ./file` both do.
  */
 async function uploadToStorage(url, token, ws, rel, bytes) {
-  const base = `/api/workspaces/${encodeURIComponent(ws)}/storage`;
+  const base = `/v1/workspaces/${encodeURIComponent(ws)}/storage`;
   const said = async (res) => {
     const text = await res.text();
     try { return JSON.parse(text).error ?? text.slice(0, 200); } catch { return text.slice(0, 200); }
@@ -9730,7 +9664,7 @@ async function runsCmd(flags, layout) {
   // filter in it — status, since, workspace, flow, q and the search's own —
   // applies as if typed; a flag typed too wins (Codex review).
   if (typeof flags.view === "string") {
-    const { runViews = [] } = await remoteCall(url, flags, "/api/me/preferences");
+    const { runViews = [] } = await remoteCall(url, flags, "/v1/me/preferences");
     const view = runViews.find((v) => v.name === flags.view);
     if (!view) throw new Error(`no saved view called ${flags.view}${runViews.length ? ` — yours: ${runViews.map((v) => v.name).join(", ")}` : " — save one on the runs page"}`);
     const as = { workspace: "to", min_tokens: "min-tokens", min_secs: "min-secs" };
@@ -9834,7 +9768,7 @@ async function runsCmd(flags, layout) {
         const forApi = new URLSearchParams([...search].filter(([k]) => ["tool", "tool_error", "agent", "model", "min_tokens", "min_secs", "context", "customer"].includes(k)));
         forApi.set("limit", String(perWorkspace));
         if (cursor) forApi.set("before", cursor);
-        const answer = await remoteCall(url, flags, `/api/workspaces/${ws}/runs?${forApi}`);
+        const answer = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs?${forApi}`);
         // A platform from before paging answers no `next` and ignores before=.
         return { ws, runs: (answer.runs ?? []).map((r) => ({ ...r, workspace: ws })), next: answer.next ?? null, unpaged: !("next" in answer) };
       } catch (err) {
@@ -9959,7 +9893,7 @@ async function runsCursorOf(url, flags, layout, before) {
   const v = before.trim();
   if (v.includes("~") || /^\d{4}-\d{2}-\d{2}/.test(v)) return v;
   const ws = await workspaceOfRun(url, flags, layout, v);
-  const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(v)}`);
+  const run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(v)}`);
   if (typeof run.startedAt !== "string") throw new Error(`run ${v} has no start time to page from`);
   return runCursor({ startedAt: run.startedAt, id: v });
 }
@@ -10129,7 +10063,7 @@ async function reportCallCmd(runId, callId, flags, layout) {
   const url = platformFor(flags, "report");
   if (!runId || !callId) throw new Error("`foldrun report <run-id> call <call-id>` — `foldrun report <run-id> --calls` lists the recorded calls");
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const { call } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/calls/${encodeURIComponent(callId)}`);
+  const { call } = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}/calls/${encodeURIComponent(callId)}`);
   if (flags.json === true) return console.log(JSON.stringify(call, null, 2)), 0;
   console.log(`\n  ${c.bold(call.tool)}  ${c.dim(call.id)}`);
   for (const [label, text, whole, wasCut] of [["input", call.input, call.inputChars, call.inputCut], ["output", call.output, call.outputChars, call.outputCut]]) {
@@ -10145,7 +10079,7 @@ async function reportCallCmd(runId, callId, flags, layout) {
 /** `foldrun report <run-id> --tree` — the run as one tree, run → step →
  *  model call → tool call, from GET …/runs/<id>/trace (FOL-72 step 5). */
 async function reportTreeCmd(url, flags, ws, runId) {
-  const { tree, failure = [] } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/trace`);
+  const { tree, failure = [] } = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}/trace`);
   if (flags.json === true) return console.log(JSON.stringify({ tree, failure }, null, 2)), 0;
   // The deepest span on the way to the failure is the one to point at.
   const culprit = failure.length ? failure[failure.length - 1] : null;
@@ -10176,7 +10110,7 @@ async function reportTreeCmd(url, flags, ws, runId) {
  *  last good run (or the one named), from GET …/compare (FOL-72 step 6). */
 async function reportCompareCmd(url, flags, ws, runId) {
   const other = typeof flags.compare === "string" ? flags.compare : null;
-  const { comparison: cmp, chosen } = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}/compare${other ? `?with=${encodeURIComponent(other)}` : ""}`);
+  const { comparison: cmp, chosen } = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}/compare${other ? `?with=${encodeURIComponent(other)}` : ""}`);
   if (flags.json === true) return console.log(JSON.stringify({ comparison: cmp, chosen }, null, 2)), 0;
   console.log(`\n  ${c.bold(runId)} ${c.dim(`(${cmp.run.status})`)} beside ${c.bold(cmp.base.id)} ${c.dim(`(${chosen}, ${cmp.base.status})`)}`);
   const files = !cmp.revisionChanged
@@ -10203,7 +10137,7 @@ async function reportCmd(runId, flags, layout) {
   const ws = await workspaceOfRun(url, flags, layout, runId);
   if (flags.tree === true) return reportTreeCmd(url, flags, ws, runId);
   if (flags.compare !== undefined) return reportCompareCmd(url, flags, ws, runId);
-  const run = await remoteCall(url, flags, `/api/workspaces/${ws}/runs/${runId}`);
+  const run = await remoteCall(url, flags, `/v1/workspaces/${ws}/runs/${runId}`);
 
   if (flags.json === true) {
     console.log(JSON.stringify(run, null, 2));
@@ -10440,7 +10374,7 @@ async function toolTestCmd(positional, flags, layout) {
     r = await remoteCall(
       url,
       flags,
-      `/api/workspaces/${encodeURIComponent(ws)}/tools/${encodeURIComponent(name)}/test`,
+      `/v1/workspaces/${encodeURIComponent(ws)}/tools/${encodeURIComponent(name)}/test`,
       {
         method: "POST",
         // `path:` is the http transport's probe path, appended to `base:`.
@@ -10516,7 +10450,7 @@ async function agentRunCmd(positional, flags, layout) {
   // agent can think for many minutes.
   const WAIT_PIECE_S = 25;
   const wait = flags.wait === true ? `?wait=true&timeout=${WAIT_PIECE_S}` : "";
-  const base = `/api/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
+  const base = `/v1/workspaces/${encodeURIComponent(ws)}/agents/${encodeURIComponent(name)}`;
   if (flags.context !== undefined && typeof flags.context !== "string") throw new Error("which conversation? `--context <id>`");
   const files = await runInputs(url, flags, ws);
   // --snapshot [dir|id]: a folder for the agent to work on (Part B3). It
@@ -10561,7 +10495,7 @@ async function agentRunCmd(positional, flags, layout) {
   }
 
   while (body?.timedOut === true) {
-    body = await waited(() => remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/runs/${runId}${wait}`));
+    body = await waited(() => remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(ws)}/runs/${runId}${wait}`));
   }
   // The same report `foldrun report` prints, from the same code — a summary
   // written twice is a summary that disagrees with itself by Friday.
@@ -10579,7 +10513,7 @@ async function checkOnline(url, flags, ws) {
   const answer = await remoteCall(
     url,
     flags,
-    `/api/workspaces/${enc(ws)}/check?online=1&rule=supply-chain/known-vulnerability,content/mcp-tool-text`,
+    `/v1/workspaces/${enc(ws)}/check?online=1&rule=supply-chain/known-vulnerability,content/mcp-tool-text`,
     {},
     { seconds: Math.max(timeoutSeconds(flags), 120) },
   );
@@ -10650,7 +10584,7 @@ async function checkRemote(flags, layout) {
     // asked for matches nothing: only the rescan is wanted from it.
     if (flags.online !== true && checkOptions(flags).format === "text") {
       try {
-        const r = await remoteCall(url, { ...flags, quiet: true }, `/api/workspaces/${enc(ws)}/check?rule=rescan-only`, {}, { seconds: 15 });
+        const r = await remoteCall(url, { ...flags, quiet: true }, `/v1/workspaces/${enc(ws)}/check?rule=rescan-only`, {}, { seconds: 15 });
         if (r?.rescan?.checkedAt) say(`  ${c.dim(`the daily rescan last ran ${r.rescan.checkedAt} — new security findings go to notify:`)}`);
       } catch {}
     }
@@ -10767,14 +10701,14 @@ async function hooksHere(flags, layout) {
 }
 
 /** `hook ls --to <ws>`: the DEPLOYED workspace's hooks and what they did
- *  lately — GET /api/workspaces/<ws>/hooks, the dashboard's Hooks panel. */
+ *  lately — GET /v1/workspaces/<ws>/hooks, the dashboard's Hooks panel. */
 async function hookLsRemote(flags) {
   const url = platformFor(flags, "hook ls");
   const ws = String(flags.to);
   const q = new URLSearchParams();
   if (flags.all === true) q.set("all", "1");
   if (flags.runs !== undefined) q.set("runs", String(flags.runs));
-  const r = /** @type {{ hooks: any[], recent: any[] }} */ (await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(ws)}/hooks${q.size ? `?${q}` : ""}`));
+  const r = /** @type {{ hooks: any[], recent: any[] }} */ (await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(ws)}/hooks${q.size ? `?${q}` : ""}`));
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -10918,7 +10852,7 @@ async function hookTestCmd(positional, flags, layout) {
     const r = /** @type {any} */ (await remoteCall(
       url,
       flags,
-      `/api/workspaces/${enc(ws)}/hooks/${enc(name)}/test`,
+      `/v1/workspaces/${enc(ws)}/hooks/${enc(name)}/test`,
       { method: "POST", body: JSON.stringify({ event }) },
     ));
     const a = r?.answer ?? r ?? {};
@@ -11040,10 +10974,10 @@ async function openDesk(flags, layout, what, flowName) {
   if (namesPlatform(flags)) {
     const url = platformFor(flags, what);
     const ws = platformWorkspace(flags, layout, what);
-    const { files = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`);
+    const { files = [] } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source`);
     const wanted = files.filter(isSourcePath);
     const contents = await pool(wanted, 8, async (rel) => {
-      const { content } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=${enc(rel)}`);
+      const { content } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=${enc(rel)}`);
       return [rel, content];
     });
     return { platform: true, url, ws, label: `${ws} on ${url}`, files: new Map(contents) };
@@ -11367,7 +11301,7 @@ async function flowAddCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit, expect: textSha(raw) }) });
+    await remoteCall(desk.url, flags, `/v1/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit, expect: textSha(raw) }) });
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     writeIfUnchanged(desk, rel, raw, next);
@@ -11417,7 +11351,7 @@ async function flowDupStepCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "duplicate", step: i }, expect: textSha(raw) }) });
+    await remoteCall(desk.url, flags, `/v1/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ edit: { op: "duplicate", step: i }, expect: textSha(raw) }) });
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     writeIfUnchanged(desk, rel, raw, next);
@@ -11480,7 +11414,7 @@ async function flowRmStepCmd(positional, flags, layout) {
   }
   if (desk.platform) {
     const change = picked.length === 1 ? { edit: { op: "remove", step: i } } : { edits: picked.map((step) => ({ op: "remove", step })) };
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...change, expect: textSha(raw) }) });
+    await remoteCall(desk.url, flags, `/v1/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...change, expect: textSha(raw) }) });
     console.log(`  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the canvas writes it`)}\n`);
   } else {
     writeIfUnchanged(desk, rel, raw, next);
@@ -11531,7 +11465,7 @@ const NOT_IMPORTED = /^(memory|outputs|state|workspace|\.claude)(\/|$)|^\.claude
  * `foldrun agent import <workspace>/<agent> [--as <name>]` — bring an agent
  * you already have in another workspace into this one: its agent.md and its
  * own skills/, scripts/, knowledge/ — never its memory. With `--to <ws>` it
- * is the platform's POST /api/workspaces/<ws>/agents/import; without, it
+ * is the platform's POST /v1/workspaces/<ws>/agents/import; without, it
  * copies between workspaces of this account folder, into the one you stand
  * in (or `--workspace <name>`).
  */
@@ -11541,7 +11475,7 @@ async function agentImportCmd(positional, flags, layout) {
   if (flags.list === true) {
     const url = platformFor(flags, "agent import --list");
     const ws = platformWorkspace(flags, layout, "agent import --list");
-    const { workspaces = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/import`);
+    const { workspaces = [] } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/agents/import`);
     if (flags.json === true) {
       console.log(JSON.stringify(workspaces, null, 2));
       return 0;
@@ -11566,7 +11500,7 @@ async function agentImportCmd(positional, flags, layout) {
 
   if (typeof flags.to === "string") {
     const url = platformFor(flags, "agent import");
-    const body = await remoteCall(url, flags, `/api/workspaces/${encodeURIComponent(flags.to)}/agents/import`, {
+    const body = await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(flags.to)}/agents/import`, {
       method: "POST",
       body: JSON.stringify({ from, agent, ...(as ? { as } : {}) }),
     });
@@ -11719,7 +11653,7 @@ async function agentLinkCmd(positional, flags, layout) {
   for (const e of edits) {
     if (desk.platform) {
       for (const body of e.bodies) {
-        await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/agents/${enc(e.agent)}`, { method: "PATCH", body: JSON.stringify(body) });
+        await remoteCall(desk.url, flags, `/v1/workspaces/${enc(desk.ws)}/agents/${enc(e.agent)}`, { method: "PATCH", body: JSON.stringify(body) });
       }
     } else {
       writeIfUnchanged(desk, e.rel, e.before, e.after);
@@ -11857,7 +11791,7 @@ async function agentNetworkCmd(positional, flags, layout) {
     return 0;
   }
   if (desk.platform) {
-    await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/agents/${enc(name)}`, { method: "PATCH", body: JSON.stringify({ network: setting }) });
+    await remoteCall(desk.url, flags, `/v1/workspaces/${enc(desk.ws)}/agents/${enc(name)}`, { method: "PATCH", body: JSON.stringify({ network: setting }) });
   } else {
     assertUnchanged(desk, rel, raw);
     writeIfUnchanged(desk, rel, raw, next);
@@ -11988,7 +11922,7 @@ async function flowHookCmd(positional, flags, layout) {
   if (!flow) throw new Error("which flow? `foldrun flow hook <flow> --to <workspace>`");
   const url = platformFor(flags, "flow hook");
   const ws = platformWorkspace(flags, layout, `flow hook ${flow}`);
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/hooks/${enc(flow)}`);
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/hooks/${enc(flow)}`);
   const full = r.url ?? new URL(r.path, url).toString();
   if (flags.json) {
     console.log(JSON.stringify({ flow, url: full, path: r.path }));
@@ -12013,7 +11947,7 @@ async function rotateHookCmd(positional, flags, layout) {
     console.log(`\n  ${c.dim("nothing rotated")}\n`);
     return 1;
   }
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/hooks/${enc(flow)}/rotate`, { method: "POST" });
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/hooks/${enc(flow)}/rotate`, { method: "POST" });
   console.log(`\n  ${c.green("✓")} ${c.bold(new URL(r.path, url).toString())}`);
   console.log(`  ${c.dim("the new URL — a credential; give it to whatever posts to this flow")}\n`);
   return 0;
@@ -12050,7 +11984,7 @@ function printEvalResult(result) {
  * POST with the result itself (older ones) is read as before.
  */
 async function remoteEvalRun(url, flags, ws, name) {
-  const path = `/api/workspaces/${enc(ws)}/evals/${enc(name)}/run`;
+  const path = `/v1/workspaces/${enc(ws)}/evals/${enc(name)}/run`;
   const started = await remoteCall(url, flags, path, { method: "POST", body: JSON.stringify({ async: true }) }, { seconds: explicitTimeout(flags) ?? 900 });
   if (!started?.started) return started;
   console.log(`  ${c.dim(`run ${started.runId}`)}`);
@@ -12087,7 +12021,7 @@ async function remoteEvalsCmd(name, flags, layout) {
     if (typeof flags.run !== "string" || !flags.run.trim()) throw new Error("--run takes the run id the eval printed — `foldrun eval <name> --to <ws> --run <id>`");
     if (!name) throw new Error("--run reads one eval's run — name it: `foldrun eval <name> --to <ws> --run <id>`");
   }
-  const { evals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`);
+  const { evals = [] } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals`);
   const named = evals.filter((e) => !name || e.name === name);
   if (!named.length) {
     throw new Error(name ? `no eval "${name}" in ${ws} — it has ${evals.map((e) => e.name).join(", ") || "none"}` : `no evals in ${ws} on ${url}`);
@@ -12103,7 +12037,7 @@ async function remoteEvalsCmd(name, flags, layout) {
     console.log(`\n  ${c.bold(info.name)} ${c.dim(`${info.cases?.length ?? "?"} cases · ${ws}`)}`);
     // --run <id>: that run's verdict, run nothing (GET …/run?run=).
     if (typeof flags.run === "string") {
-      const view = await remoteEvalRunView(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(info.name)}/run`, flags.run);
+      const view = await remoteEvalRunView(url, flags, `/v1/workspaces/${enc(ws)}/evals/${enc(info.name)}/run`, flags.run);
       if (view.state === "running") {
         console.log(`  ${c.dim(`run ${flags.run} is still running, since ${view.startedAt}`)}`);
         failed++;
@@ -12116,7 +12050,7 @@ async function remoteEvalsCmd(name, flags, layout) {
     }
     // --last: what the platform has, run nothing (GET …/run).
     if (flags.last === true) {
-      const state = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(info.name)}/run`);
+      const state = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals/${enc(info.name)}/run`);
       if (state.running) console.log(`  ${c.dim(`running since ${state.startedAt} — no result yet`)}`);
       if (state.error) {
         console.log(`  ${c.red("✗")} the last run could not finish — ${state.error}`);
@@ -12169,7 +12103,7 @@ function printGrade(g) {
 async function evalTrendsCmd(flags, layout) {
   const url = platformFor(flags, "eval trends");
   const ws = platformWorkspace(flags, layout, "eval trends");
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/trends`);
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals/trends`);
   const trends = r.trends ?? [];
   const worse = trends.some((t) => t.delta != null && t.delta < 0);
   if (flags.json === true) {
@@ -12218,7 +12152,7 @@ async function evalGradesCmd(name, flags, layout) {
   if (flags.days !== undefined) q.set("days", String(flags.days));
   if (typeof flags.status === "string") q.set("status", flags.status);
   if (flags.limit !== undefined) q.set("limit", String(flags.limit));
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(name)}/grades${q.size ? `?${q}` : ""}`);
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals/${enc(name)}/grades${q.size ? `?${q}` : ""}`);
   if (flags.json) {
     console.log(JSON.stringify(r, null, 2));
     return r.summary?.failed ? 1 : 0;
@@ -12245,7 +12179,7 @@ async function evalGradeCmd(name, flags, layout) {
   }
   const url = platformFor(flags, "eval grade");
   const ws = platformWorkspace(flags, layout, `eval grade ${name}`);
-  const g = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(name)}/grade`, { method: "POST", body: JSON.stringify({ run: flags.run.trim() }) });
+  const g = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals/${enc(name)}/grade`, { method: "POST", body: JSON.stringify({ run: flags.run.trim() }) });
   if (flags.json) console.log(JSON.stringify(g, null, 2));
   else {
     console.log("");
@@ -12295,7 +12229,7 @@ async function evalCompareCmd(name, flags, layout) {
   if (!name) throw new Error("which eval? `foldrun eval compare <eval> --models fast,default --to <workspace>`");
   const url = platformFor(flags, "eval compare");
   const ws = platformWorkspace(flags, layout, `eval compare ${name}`);
-  const base = `/api/workspaces/${enc(ws)}/evals/${enc(name)}/compare`;
+  const base = `/v1/workspaces/${enc(ws)}/evals/${enc(name)}/compare`;
   if (flags.list === true) {
     const r = await remoteCall(url, flags, base);
     if (flags.json) return console.log(JSON.stringify(r, null, 2)), 0;
@@ -12442,7 +12376,7 @@ async function proposalsCmd(positional, flags, layout) {
   const id = positional[1];
   if (verb === "show" || verb === "apply" || verb === "dismiss") {
     if (!id) throw new Error(`which proposal? \`foldrun proposals ${verb} <id> --to ${ws}\``);
-    const p = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals/${enc(id)}`);
+    const p = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/proposals/${enc(id)}`);
     if (verb === "show") {
       if (flags.json) return console.log(JSON.stringify(p, null, 2)), 0;
       console.log(`\n  ${c.bold(p.id)} ${PROPOSAL_LABEL[p.status] ?? p.status} · ${p.eval} · ${c.dim(`${String(p.createdAt).slice(0, 16).replace("T", " ")} · ${p.by === "auto" ? "opened after repeated failures" : `asked by ${p.by}`}`)}`);
@@ -12474,7 +12408,7 @@ async function proposalsCmd(positional, flags, layout) {
         return 1;
       }
     }
-    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals/${enc(id)}`, { method: "POST", body: JSON.stringify({ action: verb }) });
+    const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/proposals/${enc(id)}`, { method: "POST", body: JSON.stringify({ action: verb }) });
     if (flags.json) console.log(JSON.stringify(r, null, 2));
     else console.log(`\n  ${c.green(PROPOSAL_LABEL[r.status] ?? r.status)} ${r.id}${r.applied?.length ? c.dim(` — wrote ${r.applied.join(", ")}`) : ""}\n`);
     return 0;
@@ -12483,7 +12417,7 @@ async function proposalsCmd(positional, flags, layout) {
   const q = new URLSearchParams();
   if (typeof flags.status === "string") q.set("status", flags.status);
   if (typeof flags.eval === "string") q.set("eval", flags.eval);
-  const { proposals = [] } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals${q.size ? `?${q}` : ""}`);
+  const { proposals = [] } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/proposals${q.size ? `?${q}` : ""}`);
   if (flags.json) return console.log(JSON.stringify(proposals, null, 2)), 0;
   if (!proposals.length) {
     console.log(`\n  ${c.dim(`no proposed fixes in ${ws}`)}\n`);
@@ -12508,7 +12442,7 @@ async function evalImproveCmd(name, flags, layout) {
   if (!name) throw new Error("which eval? `foldrun eval improve <eval> --to <workspace>`");
   const url = platformFor(flags, "eval improve");
   const ws = platformWorkspace(flags, layout, `eval improve ${name}`);
-  const p = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals/${enc(name)}/improve`, { method: "POST", body: "{}" });
+  const p = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals/${enc(name)}/improve`, { method: "POST", body: "{}" });
   const say = flags.json ? (s) => console.error(s) : (s) => console.log(s);
   say(`\n  ${c.dim(`proposal ${p.id} — the assistant is drafting it from ${p.failures?.length ?? 0} failure(s)`)}`);
   if (flags.wait === false || flags["no-wait"] === true) {
@@ -12519,7 +12453,7 @@ async function evalImproveCmd(name, flags, layout) {
   const deadline = Date.now() + (explicitTimeout(flags) ?? 300) * 1000;
   for (;;) {
     await new Promise((r) => setTimeout(r, Number(process.env.FOLDRUN_EVAL_POLL_MS) || 4000));
-    const now = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/proposals/${enc(p.id)}`);
+    const now = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/proposals/${enc(p.id)}`);
     if (now.status !== "drafting") return proposalsCmd(["show", p.id], flags, layout).then(() => (now.status === "ready" ? 0 : 1));
     if (Date.now() > deadline) {
       if (flags.json) console.log(JSON.stringify(now, null, 2));
@@ -12538,7 +12472,7 @@ async function promoteCmd(runId, flags, layout) {
   if (!runId) throw new Error('which run? `foldrun promote <run-id> --eval <name> --expect "contains: …"`');
   const ws = await workspaceOfRun(url, flags, layout, runId);
   const expect = many(flags.expect);
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/promote`, {
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}/promote`, {
     method: "POST",
     body: JSON.stringify({
       ...(typeof flags.eval === "string" ? { evalName: flags.eval } : {}),
@@ -12591,7 +12525,7 @@ async function bulkCmd(action, flags) {
   }
   const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
   const plans = await pool(names, 8, async (ws) => {
-    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action, ...filter, dryRun: true }) });
+    const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action, ...filter, dryRun: true }) });
     return { ws, ids: r.matched ?? [] };
   });
   return bulkApply(action, plans, filter.from, flags, url);
@@ -12651,7 +12585,7 @@ async function bulkApply(action, plans, from, flags, url) {
   for (const { ws, ids: all } of plans.filter((x) => x.ids.length)) {
     for (let i = 0; i < all.length; i += 100) {
       const ids = all.slice(i, i + 100);
-      const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, {
+      const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/bulk`, {
         method: "POST",
         body: JSON.stringify({ action, runIds: ids, ...(action === "rerun" ? { from: filter.from } : {}) }),
       });
@@ -12676,11 +12610,11 @@ async function runRmCmd(runId, flags, layout) {
   const url = platformFor(flags, "runs rm");
   if (!runId) throw new Error("which run? `foldrun runs rm <run-id>` — `foldrun runs` lists them");
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+  const run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`);
   const live = run.status !== "completed" && run.status !== "failed";
   const what = `run ${runId} (${run.flow} in ${ws}, ${run.status}) — its record and archived outputs${live ? "; it is still going and is stopped first" : ""}. The ledger line stays`;
   if (!(await sureToDelete(flags, "runs rm", what))) return 1;
-  await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`, { method: "DELETE" });
+  await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`, { method: "DELETE" });
   console.log(`\n  ${c.green("✓")} ${runId} deleted from ${ws}\n`);
   return 0;
 }
@@ -12700,7 +12634,7 @@ async function runsRmUntilCmd(ids, flags) {
   const until = untilInstant(flags.until);
   const names = typeof flags.to === "string" ? [flags.to] : await remoteWorkspaceNames(url, flags);
   const plans = await pool(names, 8, async (ws) => {
-    const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", until, dryRun: true }) });
+    const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", until, dryRun: true }) });
     return { ws, count: (Array.isArray(r.matched) ? r.matched.length : 0) + (Number(r.remaining) || 0) };
   });
   const total = plans.reduce((n, p) => n + p.count, 0);
@@ -12721,7 +12655,7 @@ async function runsRmUntilCmd(ids, flags) {
   console.log();
   for (const p of plans.filter((x) => x.count)) {
     for (let round = 0; round < 10_000; round++) {
-      const r = await remoteCall(url, flags, `/api/workspaces/${enc(p.ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", until }) });
+      const r = await remoteCall(url, flags, `/v1/workspaces/${enc(p.ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", until }) });
       deleted += r.succeeded ?? 0;
       for (const x of (r.runs ?? []).filter((x) => !x.ok)) {
         bad++;
@@ -12745,7 +12679,7 @@ async function runsRmManyCmd(ids, flags, layout) {
   const unique = [...new Set(ids)];
   const runs = await pool(unique, 4, async (id) => {
     const ws = await workspaceOfRun(url, flags, layout, id);
-    const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(id)}`);
+    const run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(id)}`);
     return { id, ws, run };
   });
   console.log();
@@ -12764,7 +12698,7 @@ async function runsRmManyCmd(ids, flags, layout) {
       /** @type {any} */
       let r;
       try {
-        r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", runIds: ids }) });
+        r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/bulk`, { method: "POST", body: JSON.stringify({ action: "delete", runIds: ids }) });
       } catch (err) {
         // Refused whole (a 403 without workspace:manage): every run it carried.
         for (const id of ids) console.log(`  ${c.red("✗")} ${ws} ${id}${c.dim(` — ${explain(err)}`)}`);
@@ -12819,7 +12753,7 @@ function writeDownload(bytes, fallback, flags, from) {
 
 /**
  * `foldrun api spec [--out <file>]` — the platform's OpenAPI 3.1 document
- * (GET /api/openapi.json, open: no sign-in needed), to stdout or a file.
+ * (GET /v1/openapi.json, open: no sign-in needed), to stdout or a file.
  * @param {string[]} positional @param {Record<string, any>} flags
  */
 async function apiCmd(positional, flags) {
@@ -12830,14 +12764,14 @@ async function apiCmd(positional, flags) {
   }
   const url = remoteUrl(flags);
   if (!url) throw new Error("no platform to ask — foldrun login, or --url / FOLDRUN_URL");
-  const res = await remoteFetch(url, "/api/openapi.json", {}, { seconds: timeoutSeconds(flags) });
+  const res = await remoteFetch(url, "/v1/openapi.json", {}, { seconds: timeoutSeconds(flags) });
   const text = await res.text();
-  if (!res.ok) throw new HttpError(`/api/openapi.json → HTTP ${res.status}: ${text.slice(0, 160)}`, res.status, {});
+  if (!res.ok) throw new HttpError(`/v1/openapi.json → HTTP ${res.status}: ${text.slice(0, 160)}`, res.status, {});
   let doc;
   try {
     doc = JSON.parse(text);
   } catch {
-    throw new Error(`/api/openapi.json did not answer JSON — is ${new URL(url).host} a foldrun platform new enough to publish one?`);
+    throw new Error(`/v1/openapi.json did not answer JSON — is ${new URL(url).host} a foldrun platform new enough to publish one?`);
   }
   const out = typeof flags.out === "string" ? flags.out : typeof flags.file === "string" ? flags.file : "-";
   const pretty = JSON.stringify(doc, null, 2) + "\n";
@@ -12887,7 +12821,7 @@ async function exportCmd(positional, flags, layout) {
   const kind = typeof flags.flow === "string" ? "flow" : typeof flags.agent === "string" ? "agent" : "workspace";
   const name = kind === "flow" ? flags.flow : kind === "agent" ? flags.agent : null;
   const qs = name ? `?kind=${kind}&name=${enc(name)}` : "";
-  const { bytes, name: served } = await remoteBytes(url, flags, `/api/workspaces/${enc(ws)}/export${qs}`, `export ${name ? `${kind} ${name} from ` : ""}${ws}`);
+  const { bytes, name: served } = await remoteBytes(url, flags, `/v1/workspaces/${enc(ws)}/export${qs}`, `export ${name ? `${kind} ${name} from ` : ""}${ws}`);
   return writeDownload(bytes, served ?? (name ? `${ws}-${kind}-${name}.zip` : `${ws}.zip`), flags, name ? `${ws} · ${kind} ${name}` : ws);
 }
 
@@ -12909,7 +12843,7 @@ async function importCmd(positional, flags, layout) {
   const send = async (query) => {
     const res = await remoteFetch(
       url,
-      `/api/workspaces/${enc(ws)}/import${query}`,
+      `/v1/workspaces/${enc(ws)}/import${query}`,
       { method: "POST", body: bytes, headers: { "content-type": "application/zip" } },
       { token, seconds: timeoutSeconds(flags) },
     );
@@ -13216,7 +13150,7 @@ async function pushPacked(url, flags, ws, packed, /** @type {AbortSignal | undef
   const token = await renewedToken(url, flags);
   const res = await remoteFetch(
     url,
-    `/api/workspaces/${enc(ws)}/snapshots`,
+    `/v1/workspaces/${enc(ws)}/snapshots`,
     { method: "POST", body: packed.archive, headers: { "content-type": "application/gzip" }, ...(signal ? { signal } : {}) },
     { token, seconds: timeoutSeconds(flags) },
   );
@@ -13273,7 +13207,7 @@ async function runPatch(url, flags, ws, run, agentFlag) {
   const agents = [...new Set((run.steps ?? []).filter((s) => !s.subagentOf).map((s) => s.agent))];
   const agent = typeof agentFlag === "string" ? agentFlag : agents.length === 1 ? agents[0] : null;
   if (!agent) throw new Error(`run ${run.id} has steps by ${agents.join(", ")} — say whose patch with --agent <name>`);
-  const archive = (rel) => `/api/workspaces/${enc(ws)}/runs/${enc(run.id)}/archive?agent=${enc(agent)}&path=${enc(rel)}`;
+  const archive = (rel) => `/v1/workspaces/${enc(ws)}/runs/${enc(run.id)}/archive?agent=${enc(agent)}&path=${enc(rel)}`;
   let meta;
   try {
     const { bytes } = await remoteBytes(url, flags, archive("snapshot.json"), `${agent}/snapshot.json in ${run.id}`);
@@ -13495,7 +13429,7 @@ async function reportPatchCmd(runId, flags, layout) {
   if (!runId) throw new Error("`foldrun report <run-id> patch` — which run?");
   const url = platformFor(flags, "report patch");
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+  const run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`);
   if (isLive(run)) throw new Error(`run ${runId} is still ${run.status} — the patch is made when it ends (\`foldrun logs ${runId} --to ${ws} --follow\`)`);
   const p = await runPatch(url, flags, ws, run, flags.agent);
   if (p.status === "unchanged") {
@@ -13562,7 +13496,7 @@ every path as snapshot/….
 /** @param {boolean} [chosen] picked as "+ New project" from the list: made without asking again */
 async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
   try {
-    await remoteCall(url, flags, `/api/workspaces/${enc(ws)}`);
+    await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}`);
     return false;
   } catch (err) {
     if (!(err instanceof HttpError && err.status === 404)) throw err;
@@ -13573,7 +13507,7 @@ async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
   console.log(`  ${c.dim("foldrun code can make it — blank, with a coder agent (agents/coder/agent.md: tools [write, code], model default) to edit like any other.")}`);
   if (!chosen && !(await confirmed(flags, "foldrun code", `create ${ws}? [y/N] `))) throw new Error(`nothing created — \`foldrun workspaces new ${ws} --platform\` makes it, or name one that exists with --to`);
   try {
-    await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ name: ws, template: true, ifAbsent: true }) });
+    await remoteCall(url, flags, "/v1/workspaces", { method: "POST", body: JSON.stringify({ name: ws, template: true, ifAbsent: true }) });
   } catch (err) {
     if (!(err instanceof HttpError && err.status === 409)) throw err;
     return false; // made meanwhile: used as it is
@@ -13584,7 +13518,7 @@ async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
 
 /** @param {boolean} [fresh] the project was made this moment: add the agent without asking twice */
 async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents`);
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/agents`);
   if ((r.agents ?? []).some((a) => a.name === agent)) return;
   if (agent !== "coder") throw new Error(`no agent "${agent}" in ${ws} — \`foldrun agent ls --to ${ws}\` lists them; leave out --agent and foldrun code offers to make one called coder`);
   if (!fresh) {
@@ -13596,7 +13530,7 @@ async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
   // session, or someone while this one waited for the yes — is used, never
   // written over (Codex).
   try {
-    await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, {
+    await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source`, {
       method: "PUT",
       body: JSON.stringify({ path: "agents/coder/agent.md", content: CODER_AGENT, message: "foldrun code: the coder agent", ifMatch: null }),
     });
@@ -13629,7 +13563,7 @@ async function messagesForTurn(s, interactive) {
   const { url, flags, ws } = s;
   let waiting = [];
   try {
-    const got = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
+    const got = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
     waiting = Array.isArray(got?.messages) ? got.messages : [];
   } catch {
     return [];
@@ -13672,7 +13606,7 @@ async function codeTurn(s, task, include = []) {
   const stop = () => {
     if (!cancel.runId || cancel.stop !== "none") return;
     cancel.stop = "inflight";
-    cancel.stopPromise = remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(cancel.runId)}/stop`, { method: "POST", body: "{}" }).then(
+    cancel.stopPromise = remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(cancel.runId)}/stop`, { method: "POST", body: "{}" }).then(
       () => (cancel.stop = "acked"),
       (err) => {
         cancel.stop = "none";
@@ -13749,7 +13683,7 @@ async function codeTurn(s, task, include = []) {
     if (cancel.asked) return "cancelled";
     let started;
     try {
-      started = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/agents/${enc(agent)}/run`, {
+      started = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/agents/${enc(agent)}/run`, {
         method: "POST",
         body: JSON.stringify({ task, snapshot: String(snap.snapshotId), context: s.context, ...(include.length ? { messages: include } : {}), ...(flags.test === true ? { test: true } : {}) }),
       });
@@ -13772,7 +13706,7 @@ async function codeTurn(s, task, include = []) {
     if (cancel.asked) stop(); // pressed while the run was being started
     s.lastRun = runId;
     console.log(`  ${c.violet("◆")} ${c.grey(`${started.test ? "a test turn — " : ""}the agent is on it · Ctrl-C stops it`)}\n`);
-    run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+    run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`);
     seen = new Map();
     open = new Map();
     const view = { skipResult: true, quiet: flags.verbose !== true };
@@ -13782,7 +13716,7 @@ async function codeTurn(s, task, include = []) {
     printNew(run, seen, open, view);
     if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view })) ?? run;
     if (isLive(run)) {
-      run = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}`);
+      run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`);
       printNew(run, seen, open, view);
     }
     dropHeldReply(run, seen, open);
@@ -14079,7 +14013,7 @@ async function codeModel(url, flags, ws, agent, want, s) {
   const file = `agents/${agent}/agent.md`;
   if (!want && codeInteractive && process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
     // A list to choose from, as Claude Code's /model (19 Nov 2026).
-    const cur = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=${enc(file)}`).catch(() => null);
+    const cur = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=${enc(file)}`).catch(() => null);
     const now = frontmatterModel(String(cur?.content ?? "")) ?? "default";
     const picked = await pickModel(now);
     if (!picked || picked === now) {
@@ -14096,7 +14030,7 @@ async function codeModel(url, flags, ws, agent, want, s) {
     return;
   }
   if (!CODE_MODEL.test(want)) throw new Error(`"${want}" is not a model — fast, default, max, or a model id`);
-  const at = `/api/workspaces/${enc(ws)}/source`;
+  const at = `/v1/workspaces/${enc(ws)}/source`;
   /** @type {{ content?: string, sha256?: string }} */
   let cur;
   try {
@@ -14248,7 +14182,7 @@ function pickOne({ title, subtitle = "", choices, tick = null }) {
  */
 async function pickProject(url, flags, dir, guess) {
   // A list that cannot be read stops here: never a quiet "+ New project" (Codex).
-  const got = await remoteCall(url, flags, "/api/workspaces");
+  const got = await remoteCall(url, flags, "/v1/workspaces");
   /** @type {string[]} */
   const names = (Array.isArray(got?.workspaces) ? got.workspaces : []).map((w) => (typeof w === "string" ? w : w?.name)).filter((n) => typeof n === "string");
   const rows = Math.max(3, Math.min(15, (process.stdout.rows || 24) - 9));
@@ -14332,7 +14266,7 @@ async function localKeyFor(s, cancel) {
     s.signInRefused = false;
   }
   if (!s.keySlot || s.signInModels === undefined) {
-    const me = await remoteCall(s.url, s.flags, "/api/me");
+    const me = await remoteCall(s.url, s.flags, "/v1/me");
     if (typeof me?.account !== "string" || !me.account) throw new Error("could not tell which account this is — foldrun whoami");
     s.keySlot = `${s.url}#${me.account}`;
     // One key (22 Nov 2026): a sign-in that may call foldrun's models is the
@@ -14344,7 +14278,7 @@ async function localKeyFor(s, cancel) {
     s.slotToken = held;
     // Where this platform answers models NOW (23 Nov 2026: dev-llm retired
     // for api.foldrun.dev). A key kept on this computer goes there too, not
-    // to the address it was made at — the same /api/me the sign-in's models
+    // to the address it was made at — the same /v1/me the sign-in's models
     // URL is read from, over this profile's own address.
     s.modelsUrl = typeof me.modelsUrl === "string" && me.modelsUrl ? me.modelsUrl.replace(/\/+$/, "") : null;
     s.signInModels = !s.signInRefused && me?.actor?.modelAccess && typeof me.modelsUrl === "string" && me.modelsUrl && held ? { id: String(me.actor.id ?? ""), url: me.modelsUrl.replace(/\/+$/, ""), token: held } : null;
@@ -14400,7 +14334,7 @@ async function localKeyFor(s, cancel) {
         console.log(`  ${c.dim(`the old key was not revoked — foldrun keys rm ${have.id}`)}`);
         return made;
       }
-      if (made && have.id) await remoteCall(s.url, s.flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: have.id }) }).catch(() => console.log(`  ${c.dim(`the old key was not revoked — foldrun keys rm ${have.id}`)}`));
+      if (made && have.id) await remoteCall(s.url, s.flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id: have.id }) }).catch(() => console.log(`  ${c.dim(`the old key was not revoked — foldrun keys rm ${have.id}`)}`));
       return made;
     });
   }
@@ -14615,10 +14549,10 @@ async function askOlderKind(cancel) {
 /** Mint the older kind ($20 in all) and keep it, under the lock. */
 async function mintOlderLocalKey(s, file) {
   const label = localKeyLabel();
-  const made = await remoteCall(s.url, s.flags, "/api/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", capUsd: LOCAL_OLDER_KEY_CAP_USD, expires: "365d" }) });
+  const made = await remoteCall(s.url, s.flags, "/v1/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", capUsd: LOCAL_OLDER_KEY_CAP_USD, expires: "365d" }) });
   if (typeof made?.key !== "string" || typeof made?.gatewayUrl !== "string") await refuseUnusable(s.url, s.flags, made);
   if (made.capUsd !== LOCAL_OLDER_KEY_CAP_USD) {
-    await remoteCall(s.url, s.flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: String(made.id ?? "") }) }).catch(() => {
+    await remoteCall(s.url, s.flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id: String(made.id ?? "") }) }).catch(() => {
       throw new Error(`the key came back without its $${LOCAL_OLDER_KEY_CAP_USD} limit and revoking it failed — remove it yourself: foldrun keys rm ${made.id}`);
     });
     throw new Error(`the key came back without its $${LOCAL_OLDER_KEY_CAP_USD} limit — it was revoked, nothing else changed`);
@@ -14634,7 +14568,7 @@ async function keepNewKey(s, file, made, entry, label) {
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     try {
-      await remoteCall(s.url, s.flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id: String(made.id ?? "") }) });
+      await remoteCall(s.url, s.flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id: String(made.id ?? "") }) });
     } catch {
       throw new Error(`the key was made but could not be kept here (${why}), and revoking it failed — remove it yourself: foldrun keys rm ${made.id}`);
     }
@@ -14654,7 +14588,7 @@ async function refuseUnusable(url, flags, made) {
   const id = made?.id ? String(made.id) : "";
   if (id) {
     try {
-      await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id }) });
+      await remoteCall(url, flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id }) });
     } catch {
       throw new Error(`the platform made a key it gave no usable secret or gateway for, and revoking it failed — remove it yourself: foldrun keys rm ${id}`);
     }
@@ -14676,7 +14610,7 @@ async function checkAccountKey(url, flags, made, want) {
   // No id to revoke: nothing is claimed as cleaned up (Codex).
   if (!id) throw new Error("this platform made another kind of key (not plan-first, or not at the limits asked) and did not say which — check foldrun keys ls and remove it there");
   try {
-    await remoteCall(url, flags, "/api/keys", { method: "DELETE", body: JSON.stringify({ id }) });
+    await remoteCall(url, flags, "/v1/keys", { method: "DELETE", body: JSON.stringify({ id }) });
   } catch {
     throw new Error(`this platform made another kind of key (not plan-first, or not at the limits asked), and revoking it failed — remove it yourself: foldrun keys rm ${id}`);
   }
@@ -14690,7 +14624,7 @@ async function makeLocalKey(s, file) {
   const label = localKeyLabel();
   let made;
   try {
-    made = await remoteCall(s.url, s.flags, "/api/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", credential: "account", dailyUsd: LOCAL_KEY_DAILY_USD, walletUsd: LOCAL_KEY_WALLET_USD, expires: "365d" }) });
+    made = await remoteCall(s.url, s.flags, "/v1/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", credential: "account", dailyUsd: LOCAL_KEY_DAILY_USD, walletUsd: LOCAL_KEY_WALLET_USD, expires: "365d" }) });
   } catch (err) {
     if (err instanceof HttpError && err.status === 403) throw new Error("only an admin of every project may make a model key — ask one, or use foldrun code --cloud");
     // A platform from before plan-first keys refuses the kind: the older one
@@ -14838,7 +14772,7 @@ async function codingPlanOf(/** @type {any} */ s, fresh = false) {
   /** @type {any} */
   let got;
   try {
-    got = await remoteCall(s.url, s.flags, "/api/billing/coding-plan");
+    got = await remoteCall(s.url, s.flags, "/v1/billing/coding-plan");
   } catch (err) {
     // Not offered here (no billing, no database): no plan, said once.
     if (err instanceof HttpError && (err.status === 404 || err.status === 501)) {
@@ -14929,7 +14863,7 @@ async function walletReady(/** @type {any} */ s, /** @type {string | null} */ ti
   /** @type {any} */
   let cr;
   try {
-    cr = (await remoteCall(s.url, s.flags, "/api/usage"))?.credits;
+    cr = (await remoteCall(s.url, s.flags, "/v1/account/usage"))?.credits;
   } catch {
     return true;
   }
@@ -14958,13 +14892,13 @@ async function walletReady(/** @type {any} */ s, /** @type {string | null} */ ti
 /**
  * The person's foldrun plan, as the line after each turn names it (owner,
  * 20 Nov 2026: their plan on foldrun, not their Anthropic one). Read once a
- * session from GET /api/usage/rates; "foldrun" alone where the platform
+ * session from GET /v1/account/usage/rates; "foldrun" alone where the platform
  * names no plan (an install without billing) or cannot be read.
  */
 async function foldrunPlanLabel(/** @type {any} */ s) {
   if (typeof s.planLabel === "string") return s.planLabel;
   try {
-    const d = await remoteCall(s.url, s.flags, "/api/usage/rates");
+    const d = await remoteCall(s.url, s.flags, "/v1/account/usage/rates");
     const name = typeof d?.plan?.name === "string" ? oneLine(d.plan.name).trim().replace(/\s+plan$/i, "").slice(0, 40) : "";
     s.planLabel = name ? `foldrun ${name} plan` : "foldrun";
   } catch {
@@ -15032,7 +14966,7 @@ async function runCloudAgents(s, input, signal, h) {
   const { url, flags, ws, agent, dir } = s;
   /** @type {Array<{ n: number, task: string, id: string, run: any, done: boolean }>} */
   const runs = [];
-  const base = `/api/workspaces/${enc(ws)}`;
+  const base = `/v1/workspaces/${enc(ws)}`;
   /** A start whose answer was lost: the run may exist without an id here. */
   let unsure = false;
   /** Stop every run still going; answers the ids whose stop the platform did not take. */
@@ -15336,7 +15270,7 @@ async function codeLocalTurn(s, text) {
     // model named outright is the wallet's (Codex review, 20 Nov 2026).
     let model = "default";
     try {
-      const cur = await remoteCall(s.url, s.flags, `/api/workspaces/${enc(s.ws)}/source?path=${enc(`agents/${s.agent}/agent.md`)}`);
+      const cur = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${enc(`agents/${s.agent}/agent.md`)}`);
       model = frontmatterModel(String(cur?.content ?? "")) ?? "default";
     } catch {
       /* the default tier */
@@ -15902,7 +15836,7 @@ async function codeCmd(positional, flags, layout) {
         continue;
       }
       try {
-        await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/sessions/${enc(m[1])}/messages`, { method: "POST", body: JSON.stringify({ text: m[2].trim(), from: s.context }) });
+        await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/sessions/${enc(m[1])}/messages`, { method: "POST", body: JSON.stringify({ text: m[2].trim(), from: s.context }) });
         console.log(`  ${c.green("✓")} sent to ${plainText(m[1])} ${c.dim("— it waits until that session's person includes it in a turn")}\n`);
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
@@ -15911,7 +15845,7 @@ async function codeCmd(positional, flags, layout) {
     }
     if (line === "/messages") {
       try {
-        const got = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
+        const got = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
         const list = Array.isArray(got?.messages) ? got.messages : [];
         if (!list.length) console.log(`  ${c.dim(`nothing waiting — others send here with /send ${s.context} <text>`)}\n`);
         else console.log(`${list.map(sessionMessageLine).join("\n")}\n  ${c.dim("your next message asks whether to include them")}\n`);
@@ -16427,7 +16361,7 @@ async function reportGetCmd(runId, spec, flags, layout) {
   const agent = spec.slice(0, slash);
   const rel = spec.slice(slash + 1);
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const { bytes } = await remoteBytes(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/archive?agent=${enc(agent)}&path=${enc(rel)}`, `${spec} in ${runId}`);
+  const { bytes } = await remoteBytes(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}/archive?agent=${enc(agent)}&path=${enc(rel)}`, `${spec} in ${runId}`);
   return writeDownload(bytes, path.basename(rel), flags, `${runId} · ${spec}`);
 }
 
@@ -16443,7 +16377,7 @@ async function runsOutputsCmd(args, flags, layout) {
   }
   const url = platformFor(flags, "runs outputs");
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const answer = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/files`);
+  const answer = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}/files`);
   if (flags.json === true) {
     console.log(JSON.stringify(answer, null, 2));
     return 0;
@@ -16537,7 +16471,7 @@ function printObservation(o) {
 }
 
 /**
- * The account Observe page's analysis (GET /api/observe), printed under the
+ * The account Observe page's analysis (GET /v1/observe), printed under the
  * per-workspace table: the window against the one before it, why runs went
  * wrong, the agents and tools to watch.
  */
@@ -16590,7 +16524,7 @@ function printAccountAnalysis(a) {
 
 /**
  * `foldrun observe` — where the account fails, retries and spends, per
- * workspace, then the account Observe page's analysis (GET /api/observe):
+ * workspace, then the account Observe page's analysis (GET /v1/observe):
  * the window against the one before, why runs went wrong, the agents and
  * tools to watch. 7 days unasked, as the page. `--to <workspace>` for one in
  * full — flows, agents, tools, the recent failures in their own words — 30
@@ -16606,7 +16540,7 @@ async function observeCmd(flags) {
   const [obs, account] = await Promise.all([
     pool(names, 8, async (ws) => {
       try {
-        return await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/observe?days=${since}`);
+        return await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/observe?days=${since}`);
       } catch (err) {
         if (one) throw err;
         unreachable.push([ws, explain(err)]);
@@ -16616,7 +16550,7 @@ async function observeCmd(flags) {
     // A platform from before 5 Nov 2026 has no account analysis: the table alone.
     one
       ? null
-      : remoteCall(url, flags, `/api/observe?days=${since}`).catch((err) => {
+      : remoteCall(url, flags, `/v1/observe?days=${since}`).catch((err) => {
           if (err instanceof HttpError && err.status === 404) return null;
           throw err;
         }),
@@ -16673,7 +16607,7 @@ async function usageCmd(flags) {
   // How many rows of the by-flow and by-agent tables (the Usage page's).
   const limit = flags.limit === undefined ? 10 : Number(flags.limit);
   if (!Number.isInteger(limit) || limit < 0) throw new Error("--limit is a whole number of rows for by flow and by agent, 0 to hide them");
-  const [u, h] = await Promise.all([remoteCall(url, flags, "/api/usage"), remoteCall(url, flags, `/api/usage/history?days=${days}`)]);
+  const [u, h] = await Promise.all([remoteCall(url, flags, "/v1/account/usage"), remoteCall(url, flags, `/v1/account/usage/history?days=${days}`)]);
   if (flags.json === true) {
     console.log(JSON.stringify({ usage: u, history: h }, null, 2));
     return 0;
@@ -16823,11 +16757,11 @@ function usagePeriodQuery(flags) {
  * used by meter: the two credit pots, compute and storage and network with
  * quantity, rate and credits, the plan fee, each step size, and tokens by
  * provider and model with your own key at 0 billed (the Usage page's
- * Compute and Tokens tabs; GET /api/usage?from&to).
+ * Compute and Tokens tabs; GET /v1/account/usage?from&to).
  */
 async function usageMetersCmd(flags) {
   const url = platformFor(flags, "usage meters");
-  const u = await remoteCall(url, flags, `/api/usage${usagePeriodQuery(flags)}`);
+  const u = await remoteCall(url, flags, `/v1/account/usage${usagePeriodQuery(flags)}`);
   if (flags.json === true) {
     const { period, credits, tokens, compute, billed } = u;
     console.log(JSON.stringify({ period, credits, tokens, compute, billed }, null, 2));
@@ -16873,11 +16807,11 @@ async function usageMetersCmd(flags) {
 /**
  * `foldrun usage rates` — what each meter costs this account, its plan and
  * the plans on offer, and the price list for foldrun's models (the Usage
- * page's Rates tab; GET /api/usage/rates).
+ * page's Rates tab; GET /v1/account/usage/rates).
  */
 async function usageRatesCmd(flags) {
   const url = platformFor(flags, "usage rates");
-  const d = await remoteCall(url, flags, "/api/usage/rates");
+  const d = await remoteCall(url, flags, "/v1/account/usage/rates");
   if (flags.json === true) {
     console.log(JSON.stringify(d, null, 2));
     return 0;
@@ -16918,11 +16852,11 @@ async function usageRatesCmd(flags) {
 /**
  * `foldrun usage compute` — the cores and GiB the account's running steps
  * may hold together and in one step, what they hold now, and the steps
- * waiting for room (Settings → Policies → Governance, GET /api/usage/compute).
+ * waiting for room (Settings → Policies → Governance, GET /v1/account/usage/compute).
  */
 async function usageComputeCmd(flags) {
   const url = platformFor(flags, "usage compute");
-  const d = await remoteCall(url, flags, "/api/usage/compute");
+  const d = await remoteCall(url, flags, "/v1/account/usage/compute");
   if (flags.json === true) {
     console.log(JSON.stringify(d, null, 2));
     return 0;
@@ -16992,14 +16926,14 @@ async function billingVerbCmd(positional, flags) {
     const month = sub ?? new Date().toISOString().slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(month)) throw new Error(`\`foldrun billing statement [YYYY-MM]\` — not "${month}"`);
     if (flags.csv === true) {
-      const { bytes, name } = await remoteBytes(url, flags, `/api/billing/statement?month=${month}&format=csv`, `statement ${month}`);
+      const { bytes, name } = await remoteBytes(url, flags, `/v1/billing/statement?month=${month}&format=csv`, `statement ${month}`);
       if (typeof flags.file !== "string") {
         writeExact(bytes);
         return 0;
       }
       return writeDownload(bytes, name ?? `foldrun-${month}.csv`, flags, `the ${month} statement`);
     }
-    const s = await remoteCall(url, flags, `/api/billing/statement?month=${month}`);
+    const s = await remoteCall(url, flags, `/v1/billing/statement?month=${month}`);
     console.log(`\n  ${c.bold(`statement ${s.month}`)}  ${c.dim(`spent ${usd(s.spentUsd)} · added ${usd(s.addedUsd)}${s.removedUsd ? ` · removed ${usd(s.removedUsd)}` : ""}`)}\n`);
     const rows = s.rows ?? [];
     if (!rows.length) console.log(`  ${c.dim("no ledger lines this month")}`);
@@ -17013,7 +16947,7 @@ async function billingVerbCmd(positional, flags) {
 
   if (verb === "wallet") {
     if (!sub) {
-      const w = await remoteCall(url, flags, "/api/billing/wallet");
+      const w = await remoteCall(url, flags, "/v1/billing/wallet");
       const s = w.summary ?? {};
       console.log(`\n  ${c.bold("wallet")}  ${usd(s.balanceUsd)}  ${c.dim(w.enabled ? "billing on" : "billing off")}`);
       console.log(`  ${c.dim(`burn ${usd(s.burnPerDayUsd)}/day · 7d ${usd(s.spend7dUsd)} · 30d ${usd(s.spend30dUsd)} · month to date ${usd(s.monthToDateUsd)}`)}`);
@@ -17031,7 +16965,7 @@ async function billingVerbCmd(positional, flags) {
     // emptied field sends the same).
     if (sub === "clear") {
       if (rest[0] !== "email") throw new Error("`foldrun billing wallet clear email` — no address for receipts and low-balance warnings; `wallet set auto-top-up off` turns the refill off");
-      await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet", { method: "PUT", body: JSON.stringify({ email: null }) }), "changing the wallet");
+      await ownerOnly(() => remoteCall(url, flags, "/v1/billing/wallet", { method: "PUT", body: JSON.stringify({ email: null }) }), "changing the wallet");
       console.log(`\n  ${c.green("✓")} no receipt email — the low-balance warning has nowhere to go until one is set\n`);
       return 0;
     }
@@ -17045,7 +16979,7 @@ async function billingVerbCmd(positional, flags) {
     } else if (rest[1] === "off") {
       // Off keeps the threshold and the refill for next time, as the
       // wallet page's switch does; null would forget them.
-      const a = (await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet"), "changing the wallet")).autoTopUp;
+      const a = (await ownerOnly(() => remoteCall(url, flags, "/v1/billing/wallet"), "changing the wallet")).autoTopUp;
       body = { autoTopUp: a && a.thresholdUsd > 0 && a.amountUsd >= 5 ? { enabled: false, thresholdUsd: a.thresholdUsd, amountUsd: a.amountUsd } : null };
     } else {
       const threshold = Number(flags.threshold);
@@ -17055,7 +16989,7 @@ async function billingVerbCmd(positional, flags) {
       }
       body = { autoTopUp: { enabled: true, thresholdUsd: threshold, amountUsd: amount } };
     }
-    await ownerOnly(() => remoteCall(url, flags, "/api/billing/wallet", { method: "PUT", body: JSON.stringify(body) }), "changing the wallet");
+    await ownerOnly(() => remoteCall(url, flags, "/v1/billing/wallet", { method: "PUT", body: JSON.stringify(body) }), "changing the wallet");
     const said = body.email
       ? `receipts go to ${body.email}`
       : body.autoTopUp?.enabled
@@ -17066,7 +17000,7 @@ async function billingVerbCmd(positional, flags) {
   }
 
   if (verb === "details") {
-    const current = await remoteCall(url, flags, "/api/billing/details");
+    const current = await remoteCall(url, flags, "/v1/billing/details");
     const d = current.details ?? null;
     const addr = (a) => (a ? [a.line1, a.line2, a.city, [a.state, a.postcode].filter(Boolean).join(" "), a.country].filter(Boolean).join(", ") : null);
     if (!sub) {
@@ -17105,20 +17039,20 @@ async function billingVerbCmd(positional, flags) {
       ...(flags["clear-abn"] !== true && (typeof flags.abn === "string" ? flags.abn : d?.abn) ? { abn: typeof flags.abn === "string" ? flags.abn : d.abn } : {}),
       ...(address ? { address } : {}),
     };
-    const r = await ownerOnly(() => remoteCall(url, flags, "/api/billing/details", { method: "PUT", body: JSON.stringify(next) }), "changing the billing details");
+    const r = await ownerOnly(() => remoteCall(url, flags, "/v1/billing/details", { method: "PUT", body: JSON.stringify(next) }), "changing the billing details");
     console.log(`\n  ${c.green("✓")} invoices are made out to ${c.bold(r.details?.legalName ?? next.legalName)}${r.details?.abn ? c.dim(` · ABN ${r.details.abn}`) : ""}`);
     console.log(`  ${c.dim(r.synced ? "the Stripe customer says the same" : `kept here; not on Stripe yet${r.syncError ? ` — ${r.syncError}` : ""}`)}\n`);
     return 0;
   }
 
   if (verb === "portal") {
-    const r = await ownerOnly(() => remoteCall(url, flags, "/api/billing/portal", { method: "POST", body: "{}" }), "the billing portal");
+    const r = await ownerOnly(() => remoteCall(url, flags, "/v1/billing/portal", { method: "POST", body: "{}" }), "the billing portal");
     console.log(`\n  ${c.bold(r.url)}\n  ${c.dim("Stripe's own pages for the card, the invoices and the plan — the link lasts minutes")}\n`);
     return 0;
   }
 
   if (verb === "credit") {
-    // Credit by hand is gone (FOL-94): the platform's POST /api/billing
+    // Credit by hand is gone (FOL-94): the platform's POST /v1/billing
     // answers 404 to every caller. A customer adds credit through checkout;
     // the platform team credits an account from its console. Nothing is sent.
     throw new Error("credit is not added by hand — `foldrun billing top-up <usd>` opens Stripe's checkout; for a credit from the platform, ask the platform team");
@@ -17130,7 +17064,7 @@ async function billingVerbCmd(positional, flags) {
 async function workspaceDefaults(url, flags, ws) {
   let content = "";
   try {
-    ({ content } = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=AGENTS.md`));
+    ({ content } = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=AGENTS.md`));
   } catch (err) {
     if (!(err instanceof HttpError && err.status === 404)) throw err;
   }
@@ -17174,15 +17108,15 @@ async function workspaceCmd(positional, flags, layout) {
     const d = await workspaceDefaults(url, flags, ws);
     aboveOn = await accountEnforces(url, flags);
     show({ description: typeof d.description === "string" ? d.description : "", timezone: d.timezone ?? null, budget: d.budget ?? null, notify: d.notify ?? null, networkEnforce: d.network_enforce === true, compute: computeOfFile(d.compute) }, ws);
-    const halt = await pauseState(remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`));
+    const halt = await pauseState(remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/pause`));
     if (halt) console.log(`  paused       ${halt.paused ? c.red(`${halt.paused.scope === "account" ? "by the account: " : ""}${pauseLine(halt.paused)}`) : c.dim("no")}`);
     console.log(`\n  ${c.dim(`foldrun workspace set timezone Australia/Sydney --to ${ws} · set budget 20/week · set notify email you@example.com · set name <new> · clear budget`)}\n`);
     return 0;
   }
   if (verb === "pause" || verb === "resume") {
     return pauseCmd(flags, verb, `workspace ${ws}`, {
-      post: (body) => remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`, { method: "POST", body }),
-      del: () => remoteCall(url, flags, `/api/workspaces/${enc(ws)}/pause`, { method: "DELETE" }),
+      post: (body) => remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/pause`, { method: "POST", body }),
+      del: () => remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/pause`, { method: "DELETE" }),
     });
   }
   if (verb !== "set" && verb !== "clear") throw new Error(`unknown project verb "${verb}" — set <key> <value>, clear <key>, pause, resume (bare: show them)`);
@@ -17225,7 +17159,7 @@ async function workspaceCmd(positional, flags, layout) {
       return 1;
     }
   }
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}`, { method: "PATCH", body: JSON.stringify(patch) });
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}`, { method: "PATCH", body: JSON.stringify(patch) });
   const turnedOff = key === "network_enforce" && patch.network_enforce !== true;
   if (turnedOff) aboveOn = await accountEnforces(url, flags);
   if (r.defaults) show(r.defaults, r.name ?? ws);
@@ -17243,7 +17177,7 @@ async function notifyCmd(positional, flags, layout) {
   if (positional[0] !== "test") throw new Error("`foldrun notify test --to <workspace>` — sends one test notification to whatever that project's notify: resolves to");
   const url = platformFor(flags, "notify test");
   const ws = platformWorkspace(flags, layout, "notify test");
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/notify/test`, { method: "POST" });
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/notify/test`, { method: "POST" });
   console.log(`\n  ${r.ok ? c.green("✓") : c.red("✗")} ${c.bold(r.destination ?? "?")}  ${c.dim(ws)}`);
   console.log(`  ${r.ok ? c.dim(r.detail) : r.detail}\n`);
   return r.ok ? 0 : 1;
@@ -17261,7 +17195,7 @@ async function webhooksCmd(positional, flags, layout) {
   const verb = positional[0] ?? "deliveries";
   const url = platformFor(flags, `webhooks ${verb}`);
   const ws = platformWorkspace(flags, layout, `webhooks ${verb}`);
-  const base = `/api/workspaces/${enc(ws)}/notify/deliveries`;
+  const base = `/v1/workspaces/${enc(ws)}/notify/deliveries`;
   if (verb === "redeliver") {
     const id = positional[1];
     if (!id) throw new Error("`foldrun webhooks redeliver <delivery-id> --to <workspace>` — the id is in `foldrun webhooks deliveries`");
@@ -17325,13 +17259,13 @@ async function notificationsCmd(positional, flags) {
       throw new Error("`foldrun notifications set <category> on|off` (--to <workspace> for one project) — `foldrun notifications` lists the categories");
     }
     const body = { category, enabled: value === "on", ...(typeof flags.to === "string" ? { workspace: flags.to } : {}) };
-    const r = await remoteCall(url, flags, "/api/me/notifications", { method: "PATCH", body: JSON.stringify(body) });
+    const r = await remoteCall(url, flags, "/v1/me/notifications", { method: "PATCH", body: JSON.stringify(body) });
     const cat = (r.categories ?? []).find((x) => x.category === category);
     console.log(`\n  ${c.green("✓")} ${c.bold(cat?.label ?? category)} ${value}${typeof flags.to === "string" ? ` for ${flags.to}` : ""}  ${c.dim(`for ${r.email}`)}\n`);
     return 0;
   }
   if (positional[0]) throw new Error("`foldrun notifications` or `foldrun notifications set <category> on|off`");
-  const r = await remoteCall(url, flags, "/api/me/notifications");
+  const r = await remoteCall(url, flags, "/v1/me/notifications");
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -17369,7 +17303,7 @@ const FLAG_SOURCES = {
  * `foldrun account beta [on|off]` — the account's beta (13 Nov 2026): in it,
  * every flag marked beta is on for the account before its rollout reaches
  * everyone. Bare: where it stands and the beta flags. on/off: join or leave
- * (an admin of every workspace; GET/PUT /api/account/beta).
+ * (an admin of every workspace; GET/PUT /v1/account/beta).
  * @param {string} url
  * @param {string[]} rest
  * @param {Record<string, any>} flags
@@ -17378,8 +17312,8 @@ async function accountBetaCmd(url, rest, flags) {
   const want = rest[0];
   if (want !== undefined && want !== "on" && want !== "off") throw new Error("`foldrun account beta` shows it, `foldrun account beta on` joins the beta, `foldrun account beta off` leaves it");
   const r = want === undefined
-    ? await remoteCall(url, flags, "/api/account/beta")
-    : await remoteCall(url, flags, "/api/account/beta", { method: "PUT", body: JSON.stringify({ beta: want === "on" }) });
+    ? await remoteCall(url, flags, "/v1/account/beta")
+    : await remoteCall(url, flags, "/v1/account/beta", { method: "PUT", body: JSON.stringify({ beta: want === "on" }) });
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -17398,7 +17332,7 @@ async function accountBetaCmd(url, rest, flags) {
 async function flagsCmd(positional, flags) {
   const url = platformFor(flags, "flags");
   if (positional[0]) throw new Error("`foldrun flags` lists this account's feature flags — only the platform's operator changes them, not from here");
-  const r = await remoteCall(url, flags, "/api/account/flags");
+  const r = await remoteCall(url, flags, "/v1/account/flags");
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -17432,7 +17366,7 @@ async function historyCmd(positional, flags, layout) {
   const url = platformFor(flags, "history");
   const ws = platformWorkspace(flags, layout, "history");
   const file = positional[0];
-  const base = `/api/workspaces/${enc(ws)}/history`;
+  const base = `/v1/workspaces/${enc(ws)}/history`;
   if (typeof flags.id === "string") {
     const rev = await remoteCall(url, flags, `${base}?id=${enc(flags.id)}${file ? `&path=${enc(file)}` : ""}`);
     console.log(`\n  ${c.bold(rev.id)}  ${c.dim(`${when(rev.at)} · ${rev.by}${rev.commit ? ` · ${String(rev.commit).slice(0, 7)}` : ""}`)}`);
@@ -17475,7 +17409,7 @@ async function onboardingCmd(flags) {
   const url = platformFor(flags, "onboarding");
   const ws = typeof flags.to === "string" && flags.to ? flags.to : null;
   if (flags.to !== undefined && !ws) throw new Error("`foldrun onboarding --to <workspace>` — name the project whose checklist you want");
-  const o = await remoteCall(url, flags, `/api/me/onboarding${ws ? `?workspace=${encodeURIComponent(ws)}` : ""}`);
+  const o = await remoteCall(url, flags, `/v1/me/onboarding${ws ? `?workspace=${encodeURIComponent(ws)}` : ""}`);
   if (flags.json === true) {
     console.log(JSON.stringify(o, null, 2));
     return 0;
@@ -17529,15 +17463,15 @@ async function backupsCmd(positional, flags) {
       backupId: typeof flags.backup === "string" ? flags.backup : null,
       note: typeof flags.note === "string" ? flags.note : null,
     };
-    const { request } = await remoteCall(url, flags, "/api/account/backups/requests", { method: "POST", body: JSON.stringify(body) });
+    const { request } = await remoteCall(url, flags, "/v1/account/backups/requests", { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("✓")} asked ${c.dim(`· ${request.id} · ${what} in ${request.workspace ?? "every project"} as at ${request.target}`)}`);
     console.log(`  ${request.notified ? c.dim("the platform team has been emailed; nothing is restored until they do it") : c.yellow("recorded, but the email to the platform team did not send — contact them as well")}\n`);
     return 0;
   }
   if (verb === "requests") {
     // Every restore this account has asked the platform team for, and where
-    // each stands (GET /api/account/backups/requests) — `backups` shows five.
-    const { requests = [] } = await remoteCall(url, flags, "/api/account/backups/requests");
+    // each stands (GET /v1/account/backups/requests) — `backups` shows five.
+    const { requests = [] } = await remoteCall(url, flags, "/v1/account/backups/requests");
     if (flags.json === true) {
       console.log(JSON.stringify(requests, null, 2));
       return 0;
@@ -17555,7 +17489,7 @@ async function backupsCmd(positional, flags) {
     return 0;
   }
   if (verb !== "ls" && verb !== "list") throw new Error(`unknown backups verb "${verb}" — ls, request, requests`);
-  const b = await remoteCall(url, flags, "/api/account/backups");
+  const b = await remoteCall(url, flags, "/v1/account/backups");
   if (flags.json === true) {
     console.log(JSON.stringify(b, null, 2));
     return 0;
@@ -17603,7 +17537,7 @@ async function restoreCmd(positional, flags) {
   const ws = positional[0];
   if (!ws) throw new Error("`foldrun restore <workspace> --to <revision|time|3d> [--dry-run]`");
   if (typeof flags.to !== "string" || !flags.to.trim()) throw new Error("--to <revision, date or age> — the point to restore to, e.g. --to 2026-09-28T14:00 or --to 3d");
-  const base = `/api/workspaces/${enc(ws)}/restore`;
+  const base = `/v1/workspaces/${enc(ws)}/restore`;
   const plan = await remoteCall(url, flags, base, { method: "POST", body: JSON.stringify({ to: flags.to, dryRun: true }) });
   console.log(`\n  ${c.bold(ws)} → ${c.bold(revShort(plan.to.id ?? plan.to.sha))}  ${c.dim(`${when(plan.to.at)} · ${plan.to.by} · ${firstLine(plan.to.message, 60)}`)}`);
   if (plan.noop) {
@@ -17645,7 +17579,7 @@ async function restoreCmd(positional, flags) {
 async function accountExportCmd(url, flags) {
   let got;
   try {
-    got = await remoteBytes(url, flags, "/api/account/export", "account export");
+    got = await remoteBytes(url, flags, "/v1/account/export", "account export");
   } catch (err) {
     if (err instanceof HttpError && err.status === 403) throw new Error(`account export is the account owner's alone — ${err.message}`);
     throw err;
@@ -17713,7 +17647,7 @@ async function flowEditCmd(flags, layout, { flow, what, label, compute, bodies }
     // second write can never land on a file someone else changed between.
     let seen = raw;
     for (const { body, after } of bodies(raw, meta)) {
-      await remoteCall(desk.url, flags, `/api/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...body, expect: textSha(seen) }) });
+      await remoteCall(desk.url, flags, `/v1/workspaces/${enc(desk.ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ ...body, expect: textSha(seen) }) });
       seen = after;
     }
     console.log(`${added.length ? "\n" : ""}  ${c.green("✓")} ${rel} ${c.dim(`in ${desk.ws} — a revision on the platform, as the dashboard writes it`)}\n`);
@@ -17855,7 +17789,7 @@ async function flowComputeCmd(positional, flags, layout) {
       console.log(`\n  ${c.bold(flow)} ${c.dim(`in ${ws}`)} — would send compute ${JSON.stringify(asked)} (merged over what the flow says)\n  ${c.dim("--dry-run: nothing sent")}\n`);
       return 0;
     }
-    const d = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ compute: asked }) });
+    const d = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/flows/${enc(flow)}`, { method: "PATCH", body: JSON.stringify({ compute: asked }) });
     console.log(`\n  ${c.green("✓")} ${c.bold(flow)} ${c.dim(`in ${ws}`)} — each run may hold ${computeText(d.flow?.compute, "no cap of its own")}\n`);
     return 0;
   }
@@ -17920,7 +17854,7 @@ async function flowFilterCmd(positional, flags, layout) {
   if (namesPlatform(flags)) {
     const url = platformFor(flags, "flow filter");
     const ws = platformWorkspace(flags, layout, "flow filter");
-    answer = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/flows/${enc(flow)}/filter`, { method: "POST", body: JSON.stringify({ payload }) });
+    answer = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/flows/${enc(flow)}/filter`, { method: "POST", body: JSON.stringify({ payload }) });
   } else {
     const desk = await openDesk(flags, layout, `flow filter ${flow}`, flow);
     const rel = await flowFileOf(desk, flow);
@@ -18054,7 +17988,7 @@ async function flowDraftCmd(positional, flags, layout) {
   const ws = platformWorkspace(flags, layout, "flow draft");
   const existing = typeof flags.flow === "string" ? flags.flow : undefined;
   console.log(`\n  ${c.dim(`drafting in ${ws}${existing ? ` (redraft of ${existing})` : ""} — one model call, charged like a step…`)}`);
-  const d = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/flows/draft`, { method: "POST", body: JSON.stringify({ description, ...(existing ? { flow: existing } : {}) }) }, { seconds: Math.max(timeoutSeconds(flags), 180) });
+  const d = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/flows/draft`, { method: "POST", body: JSON.stringify({ description, ...(existing ? { flow: existing } : {}) }) }, { seconds: Math.max(timeoutSeconds(flags), 180) });
   /** @type {{ path: string, content: string, before: string | null, sha256?: string | null }[]} */
   const files = d.files ?? [];
   if (d.notes) console.log(`\n  ${d.notes}`);
@@ -18087,7 +18021,7 @@ async function flowDraftCmd(positional, flags, layout) {
   const message = `drafted with AI: ${description.replace(/\s+/g, " ").slice(0, 80)}`;
   for (const f of files) {
     try {
-      await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: f.path, content: f.content, message, ifMatch: f.sha256 ?? null }) });
+      await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: f.path, content: f.content, message, ifMatch: f.sha256 ?? null }) });
       console.log(`  ${c.green("✓")} ${f.path}`);
     } catch (err) {
       console.log(`  ${c.red("✗")} ${f.path} — ${err instanceof Error ? err.message : err}`);
@@ -18105,7 +18039,7 @@ async function assistantHistoryCmd(url, flags) {
   if (typeof flags.q === "string" && flags.q.trim()) q.set("q", flags.q.trim());
   if (typeof flags.workspace === "string") q.set("workspace", flags.workspace);
   if (typeof flags.limit === "string") q.set("limit", flags.limit);
-  const d = await remoteCall(url, flags, `/api/assistant/conversations${q.size ? `?${q}` : ""}`);
+  const d = await remoteCall(url, flags, `/v1/assistant/conversations${q.size ? `?${q}` : ""}`);
   const list = d.conversations ?? [];
   if (flags.json) {
     console.log(JSON.stringify(d, null, 2));
@@ -18126,7 +18060,7 @@ async function assistantHistoryCmd(url, flags) {
 
 /** `foldrun assistant show <id>` — one kept conversation, whole. */
 async function assistantShowCmd(url, flags, id) {
-  const d = await remoteCall(url, flags, `/api/assistant/conversations/${enc(id)}`);
+  const d = await remoteCall(url, flags, `/v1/assistant/conversations/${enc(id)}`);
   if (flags.json) {
     console.log(JSON.stringify(d, null, 2));
     return 0;
@@ -18143,7 +18077,7 @@ async function assistantShowCmd(url, flags, id) {
 /** `foldrun assistant rm <id>` — delete one kept conversation (asks; --yes). */
 async function assistantRmCmd(url, flags, id) {
   if (!(await sureToDelete(flags, "assistant rm", `Delete the conversation ${id}`))) return 0;
-  await remoteCall(url, flags, `/api/assistant/conversations/${enc(id)}`, { method: "DELETE" });
+  await remoteCall(url, flags, `/v1/assistant/conversations/${enc(id)}`, { method: "DELETE" });
   console.log(`  ${c.green("✓")} deleted ${id}\n`);
   return 0;
 }
@@ -18186,7 +18120,7 @@ async function assistantCmd(positional, flags, layout) {
   let conversation = typeof flags.conversation === "string" ? flags.conversation : null;
   if (conversation) {
     // Carry a kept one on: its messages and its unsaved files come back.
-    const kept = await remoteCall(url, flags, `/api/assistant/conversations/${enc(conversation)}`);
+    const kept = await remoteCall(url, flags, `/v1/assistant/conversations/${enc(conversation)}`);
     messages = (kept.messages ?? []).map((m) => ({ role: m.role, content: m.content }));
     files = kept.files ?? [];
     if (!ws) ws = kept.workspace;
@@ -18211,7 +18145,7 @@ async function assistantCmd(positional, flags, layout) {
       d = await remoteCall(
         url,
         flags,
-        `/api/workspaces/${enc(ws)}/assistant`,
+        `/v1/workspaces/${enc(ws)}/assistant`,
         // --page: what the dashboard sends as the page you are on ("flows — daily.md").
         { method: "POST", body: JSON.stringify({ messages, files: files.map(({ path: p, content }) => ({ path: p, content })), ...(conversation ? { conversation } : {}), ...(typeof flags.page === "string" && flags.page.trim() ? { page: flags.page.trim() } : {}) }) },
         { seconds: Math.max(timeoutSeconds(flags), 300) },
@@ -18259,7 +18193,7 @@ async function assistantCmd(positional, flags, layout) {
     // ifAbsent: the server refuses a name that exists (409) rather than
     // deploying over it — atomically, where a list-then-create could race.
     try {
-      await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ name, template: true, ifAbsent: true }) });
+      await remoteCall(url, flags, "/v1/workspaces", { method: "POST", body: JSON.stringify({ name, template: true, ifAbsent: true }) });
     } catch (err) {
       if (err instanceof HttpError && err.status === 409) {
         console.log(`  ${c.red("✗")} a project called ${name} exists — nothing created\n`);
@@ -18284,7 +18218,7 @@ async function assistantCmd(positional, flags, layout) {
     const message = `written with the assistant: ${note.replace(/\s+/g, " ").slice(0, 80)}`;
     for (const f of [...files]) {
       try {
-        await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: f.path, content: f.content, message, ifMatch: f.sha256 ?? null }) });
+        await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: f.path, content: f.content, message, ifMatch: f.sha256 ?? null }) });
         console.log(`  ${c.green("✓")} ${f.path}`);
         files = files.filter((x) => x.path !== f.path);
         issues = issues.filter((i) => !(i.where === f.path || i.where.startsWith(`${f.path}:`)));
@@ -18400,13 +18334,13 @@ async function historyRestoreCmd(positional, flags, layout) {
   if (!file || typeof flags.id !== "string") throw new Error("`foldrun history restore <path> --id <revision> --to <workspace>` — `foldrun history <path>` lists the revisions");
   const url = platformFor(flags, "history restore");
   const ws = platformWorkspace(flags, layout, "history restore");
-  const rev = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/history?id=${enc(flags.id)}&path=${enc(file)}`);
+  const rev = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/history?id=${enc(flags.id)}&path=${enc(file)}`);
   const f = (rev.files ?? [])[0];
   if (!f) throw new Error(`revision ${flags.id} did not touch ${file}`);
   if (f.after === null || f.after === undefined) throw new Error(`revision ${flags.id} deleted ${file} — \`foldrun source rm ${file} --to ${ws}\` does that`);
   let current = { content: null, sha256: null };
   try {
-    current = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source?path=${enc(file)}`);
+    current = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=${enc(file)}`);
   } catch (err) {
     if (!(err instanceof HttpError && err.status === 404)) throw err;
   }
@@ -18429,7 +18363,7 @@ async function historyRestoreCmd(positional, flags, layout) {
   // The dashboard's own message, so the two read alike in the history.
   // A restore is an exact version someone picked: saved unchecked, and it
   // says so when today's checks would refuse it, as the dashboard does (FOL-57).
-  const saved = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/source`, {
+  const saved = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source`, {
     method: "PUT",
     body: JSON.stringify({ path: file, content: f.after, message: `restored ${label} from history`, ifMatch: current.sha256 ?? null }),
   });
@@ -18441,7 +18375,7 @@ async function historyRestoreCmd(positional, flags, layout) {
 /** `foldrun schedule tick` — Settings' "Run scheduler now": fire what is due now. */
 async function scheduleTickCmd(flags) {
   const url = platformFor(flags, "schedule tick");
-  const r = await remoteCall(url, flags, "/api/schedule", { method: "POST", body: "{}" });
+  const r = await remoteCall(url, flags, "/v1/schedule", { method: "POST", body: "{}" });
   const fired = r.fired ?? [];
   console.log(fired.length ? `\n  ${c.green("✓")} fired ${fired.join(", ")}\n` : `\n  ${c.dim("nothing due right now — the scheduler checks every 30 seconds anyway")}\n`);
   return 0;
@@ -18470,7 +18404,7 @@ async function libraryCmd(positional, flags) {
     // Listing everything, a kind an older platform does not have yet (hooks
     // before 11 Oct 2026) is left out rather than failing the whole list;
     // asked for by name, it fails with the platform's own answer.
-    const lists = await Promise.all(kinds.map((k) => remoteCall(url, flags, `/api/library/${k}`).catch((err) => {
+    const lists = await Promise.all(kinds.map((k) => remoteCall(url, flags, `/v1/library/${k}`).catch((err) => {
       if (spec) throw err;
       return null;
     })));
@@ -18486,7 +18420,7 @@ async function libraryCmd(positional, flags) {
   }
   if (verb === "cat") {
     const { kind, rel } = split(spec);
-    const { content } = await remoteCall(url, flags, `/api/library/${kind}?path=${enc(rel)}`);
+    const { content } = await remoteCall(url, flags, `/v1/library/${kind}?path=${enc(rel)}`);
     writeExact(content ?? "");
     return 0;
   }
@@ -18496,25 +18430,25 @@ async function libraryCmd(positional, flags) {
     if (typeof flags.file === "string" && flags.file !== "-") content = fs.readFileSync(flags.file, "utf8");
     else if (process.stdin.isTTY) throw new Error("what goes in it? --file <path>, or pipe it in");
     else content = fs.readFileSync(0, "utf8");
-    await remoteCall(url, flags, `/api/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: rel, content }) });
+    await remoteCall(url, flags, `/v1/library/${kind}`, { method: "PUT", body: JSON.stringify({ path: rel, content }) });
     console.log(`\n  ${c.green("✓")} library/${kind}/${rel} ${c.dim(`${humanBytes(Buffer.byteLength(content))} — every project in the account sees it`)}\n`);
     return 0;
   }
   if (verb === "new") {
-    // The Library page's New (POST /api/library/<kind>): the platform writes
+    // The Library page's New (POST /v1/library/<kind>): the platform writes
     // the template — a blank one, a tool of a transport, or a gallery entry
     // under this name (--template).
     const { kind, rel: name } = split(spec);
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw new Error(`"${name}" is not a name — kebab-case only, e.g. skills/house-style`);
     const body = { name, ...(typeof flags.template === "string" ? { template: flags.template } : {}), ...(typeof flags.language === "string" ? { language: flags.language } : {}) };
-    const r = await remoteCall(url, flags, `/api/library/${kind}`, { method: "POST", body: JSON.stringify(body) });
+    const r = await remoteCall(url, flags, `/v1/library/${kind}`, { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("✓")} library/${kind}/${r.path ?? name} ${c.dim("— every project in the account sees it")}\n`);
     return 0;
   }
   if (verb === "rm") {
     const { kind, rel } = split(spec);
     if (!(await sureToDelete(flags, "library rm", `library/${kind}/${rel} — every project that names it loses it`))) return 1;
-    await remoteCall(url, flags, `/api/library/${kind}`, { method: "DELETE", body: JSON.stringify({ path: rel }) });
+    await remoteCall(url, flags, `/v1/library/${kind}`, { method: "DELETE", body: JSON.stringify({ path: rel }) });
     console.log(`\n  ${c.green("✓")} removed library/${kind}/${rel}\n`);
     return 0;
   }
@@ -18530,7 +18464,7 @@ async function oauthClientsCmd(positional, flags) {
   const url = platformFor(flags, "secrets clients");
   const [, verb, name] = positional;
   if (!verb || verb === "ls") {
-    const { clients = [] } = await remoteCall(url, flags, "/api/oauth/clients");
+    const { clients = [] } = await remoteCall(url, flags, "/v1/oauth/clients");
     if (!clients.length) {
       console.log(`\n  ${c.dim("no saved OAuth clients — foldrun secrets clients add <name> --provider google …")}\n`);
       return 0;
@@ -18552,7 +18486,7 @@ async function oauthClientsCmd(positional, flags) {
   if (verb === "rm") {
     if (!name) throw new Error("`foldrun secrets clients rm <name>`");
     if (!(await sureToDelete(flags, "secrets clients rm", `the saved OAuth client ${name} (secrets made from it keep working; reconnecting them will ask for the client again)`))) return 1;
-    await remoteCall(url, flags, "/api/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: name }) });
+    await remoteCall(url, flags, "/v1/oauth/clients", { method: "DELETE", body: JSON.stringify({ client: name }) });
     console.log(`\n  ${c.green("✓")} ${name} removed\n`);
     return 0;
   }
@@ -18580,9 +18514,9 @@ async function oauthClientsCmd(positional, flags) {
     /** @type {any} */
     let found = null;
     if (typeof flags.issuer === "string") {
-      // The platform reads the metadata (POST /api/oauth/discover, through its
+      // The platform reads the metadata (POST /v1/oauth/discover, through its
       // SSRF guard) — the same call the Connections form's Discover makes.
-      ({ config: found } = await remoteCall(url, flags, "/api/oauth/discover", {
+      ({ config: found } = await remoteCall(url, flags, "/v1/oauth/discover", {
         method: "POST",
         body: JSON.stringify({ issuer: flags.issuer, has_secret: !!client_secret, ...(pkce ? {} : { pkce: false }), ...(token_auth ? { token_auth } : {}) }),
       }));
@@ -18607,7 +18541,7 @@ async function oauthClientsCmd(positional, flags) {
     if (token_auth === "private_key_jwt") Object.assign(config, keyFields ?? { generate_key: true });
     if (certFields) Object.assign(config, certFields);
     if (flags.dpop === true) Object.assign(config, { dpop: true });
-    const saved = await remoteCall(url, flags, "/api/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
+    const saved = await remoteCall(url, flags, "/v1/oauth/clients", { method: "POST", body: JSON.stringify({ name, config }) });
     if (saved?.public_jwk && !keyFields) showPublicJwk(saved.public_jwk);
     console.log(`\n  ${c.green("✓")} saved ${name} ${c.dim(`— \`foldrun connect NAME --client ${name}\` runs a consent from it`)}\n`);
     return 0;
@@ -18624,19 +18558,19 @@ async function connectFromClient(name, flags) {
   if (flags.dpop === true) throw new Error("--dpop is the saved app's setting, not a connection's: `foldrun secrets clients add <name> --dpop …` makes every connection from it DPoP-bound");
   const url = platformFor(flags, "connect --client");
   const workspace = typeof flags.to === "string" ? flags.to : undefined;
-  const before = (await remoteCall(url, flags, "/api/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace)?.connectedAt ?? null;
+  const before = (await remoteCall(url, flags, "/v1/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace)?.connectedAt ?? null;
   // --scopes: this connection's own, instead of the saved client's default;
   // the platform keeps them with the connection for its reconnects.
   const scopes = typeof flags.scopes === "string" && flags.scopes.trim() ? { scopes: flags.scopes } : {};
   if (flags.device === true) {
     // The platform asks the provider for a device code and stores the grant
-    // when a poll finds it approved (POST /api/oauth/device, …/device/<id>).
-    const d = await remoteCall(url, flags, "/api/oauth/device", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
+    // when a poll finds it approved (POST /v1/oauth/device, …/device/<id>).
+    const d = await remoteCall(url, flags, "/v1/oauth/device", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
     showDeviceCode(d);
     let interval = Number(env("FOLDRUN_DEVICE_POLL_S") ?? d.interval ?? 5);
     for (;;) {
       await new Promise((r) => setTimeout(r, interval * 1000));
-      const r = await remoteCall(url, flags, `/api/oauth/device/${d.id}`, { method: "POST" });
+      const r = await remoteCall(url, flags, `/v1/oauth/device/${d.id}`, { method: "POST" });
       if (r.status === "slow_down") interval += 5;
       else if (r.status === "connected") {
         console.log(`\n  ${c.green("✓")} ${name} connected on ${url}${workspace ? ` · ${workspace}` : " · account"}\n`);
@@ -18645,7 +18579,7 @@ async function connectFromClient(name, flags) {
     }
   }
   // Not served on the API host: the dashboard's address (appFor).
-  const started = await remoteCall(appFor(url, flags), flags, "/api/oauth/start", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
+  const started = await remoteCall(appFor(url, flags), flags, "/v1/oauth/start", { method: "POST", body: JSON.stringify({ client: flags.client, secret: name, ...(workspace ? { workspace } : {}), ...scopes }) });
   const opened = flags["no-browser"] === true || !process.stdout.isTTY ? false : await openInBrowser(started.url);
   // The platform answers a hand-off page: a signed-in person accepts the
   // connection there, then the provider's consent runs in that browser.
@@ -18655,7 +18589,7 @@ async function connectFromClient(name, flags) {
   const deadline = Date.now() + 10 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, Number(env("FOLDRUN_CONNECT_POLL_MS") ?? 3000)));
-    const row = (await remoteCall(url, flags, "/api/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace);
+    const row = (await remoteCall(url, flags, "/v1/oauth/connections")).connections?.find((s) => s.name === name && (s.workspace ?? undefined) === workspace);
     if (row?.connectedAt && row.connectedAt !== before) {
       console.log(`\n  ${c.green("✓")} ${name} connected on ${url}${workspace ? ` · ${workspace}` : " · account"}\n`);
       return 0;
@@ -18802,7 +18736,7 @@ async function billingPlansCmd(verb, sub, flags) {
     return 0;
   };
   if (verb === "plans") {
-    const p = await remoteCall(url, flags, "/api/billing/plans");
+    const p = await remoteCall(url, flags, "/v1/billing/plans");
     const cur = p.current;
     console.log(`\n  ${c.bold("plans")}  ${c.dim(`one credit is ${usd(p.creditUsd)}${cur?.plan ? ` · on ${cur.plan} (${cur.status})` : " · Free: 300 credits a month, bought credits on top"}`)}`);
     for (const x of p.plans ?? []) {
@@ -18821,7 +18755,7 @@ async function billingPlansCmd(verb, sub, flags) {
         console.log(`\n  ${c.dim("nothing changed")}\n`);
         return 0;
       }
-      const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/subscribe", { method: "DELETE" }), "cancelling the plan");
+      const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/subscribe", { method: "DELETE" }), "cancelling the plan");
       console.log(`\n  ${c.green("✓")} the plan stops ${r.endsAt ? `on ${String(r.endsAt).slice(0, 10)}` : "at the end of this cycle"} ${c.dim("— `foldrun billing plan resume` undoes it until then")}\n`);
       return 0;
     }
@@ -18830,7 +18764,7 @@ async function billingPlansCmd(verb, sub, flags) {
       console.log(`\n  ${c.dim("nothing changed")}\n`);
       return 0;
     }
-    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/subscribe", { method: "POST", body: JSON.stringify(body) }), "choosing a plan");
+    const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/subscribe", { method: "POST", body: JSON.stringify(body) }), "choosing a plan");
     if (r.url) return follow(r.url, `the ${sub} plan`);
     console.log(`\n  ${c.green("✓")} ${r.resumed ? `${r.plan} resumed — it renews as before` : r.unchanged ? `already on ${sub}` : `moving to ${r.plan}; the invoice Stripe raises grants the new credits`}\n`);
     return 0;
@@ -18838,11 +18772,11 @@ async function billingPlansCmd(verb, sub, flags) {
   if (verb === "top-up") {
     const amount = Number(sub);
     if (!(amount > 0)) throw new Error("`foldrun billing top-up <usd>` — how much to add, e.g. 50");
-    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/checkout", { method: "POST", body: JSON.stringify({ usd: amount }) }), "a top-up");
+    const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/checkout", { method: "POST", body: JSON.stringify({ usd: amount }) }), "a top-up");
     return follow(r.url, `a ${usd(amount)} top-up`);
   }
   if (verb === "card") {
-    const r = await billingOnly(() => remoteCall(url, flags, "/api/billing/card", { method: "POST", body: "{}" }), "saving a card");
+    const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/card", { method: "POST", body: "{}" }), "saving a card");
     return follow(r.url, "saving a card for auto top-up");
   }
   throw new Error(`unknown billing verb "${verb}"`);
@@ -18860,14 +18794,14 @@ async function apiVersionCmd(positional, flags) {
   if (verb === "pin" || verb === "unpin") {
     if (verb === "pin" && !/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) throw new Error("`foldrun api version pin YYYY-MM-DD` — one of the versions `foldrun api version` lists");
     try {
-      facts = await remoteCall(url, flags, "/api/account/api", { method: "PATCH", body: JSON.stringify({ version: verb === "pin" ? date : null }) });
+      facts = await remoteCall(url, flags, "/v1/account/api", { method: "PATCH", body: JSON.stringify({ version: verb === "pin" ? date : null }) });
     } catch (err) {
       if (err instanceof HttpError && err.status === 403) throw new Error(`pinning the API version needs keys:manage (an admin) — ${err.message}`);
       throw err;
     }
     console.log(`\n  ${c.green("✓")} ${verb === "pin" ? `requests with no Foldrun-Version header now get ${date}` : "unpinned — requests with no header get the current version"}`);
   } else if (verb === undefined) {
-    facts = await remoteCall(url, flags, "/api/account/api");
+    facts = await remoteCall(url, flags, "/v1/account/api");
   } else {
     throw new Error(`unknown api version verb "${verb}" — pin <YYYY-MM-DD> or unpin`);
   }
@@ -18917,12 +18851,12 @@ async function preferencesCmd(positional, flags) {
   let p;
   if (verb === "set") {
     if (key !== "theme" || !THEMES_CLI.includes(value)) throw new Error(`\`foldrun preferences set theme ${THEMES_CLI.join("|")}\``);
-    p = await remoteCall(url, flags, "/api/me/preferences", { method: "PATCH", body: JSON.stringify({ theme: value }) });
+    p = await remoteCall(url, flags, "/v1/me/preferences", { method: "PATCH", body: JSON.stringify({ theme: value }) });
     console.log(`\n  ${c.green("✓")} theme ${p.theme} ${c.dim("— on every browser you sign in on")}\n`);
     return 0;
   }
   if (verb !== undefined) throw new Error("`foldrun preferences` shows them; `preferences set theme <system|light|dark>` changes it");
-  p = await remoteCall(url, flags, "/api/me/preferences");
+  p = await remoteCall(url, flags, "/v1/me/preferences");
   if (flags.json === true) {
     console.log(JSON.stringify(p, null, 2));
     return 0;
@@ -18951,12 +18885,12 @@ async function customersCmd(positional, flags) {
   if (verb === "block" || verb === "unblock") {
     if (!id) throw new Error(`\`foldrun customers ${verb} <customer-id>\` — the id you put on its runs`);
     if (verb === "block") {
-      await remoteCall(url, flags, `/api/customers/${enc(id)}/block`, { method: "PUT", body: JSON.stringify(typeof flags.reason === "string" ? { reason: flags.reason } : {}) });
+      await remoteCall(url, flags, `/v1/customers/${enc(id)}/block`, { method: "PUT", body: JSON.stringify(typeof flags.reason === "string" ? { reason: flags.reason } : {}) });
       console.log(`\n  ${c.green("✓")} ${id} blocked ${c.dim("— its runs stop at their next model call, its gateway calls are refused")}\n`);
       return 0;
     }
     if (!(await sureToDelete(flags, "customers unblock", `the block on ${id}`))) return 1;
-    await remoteCall(url, flags, `/api/customers/${enc(id)}/block`, { method: "DELETE" });
+    await remoteCall(url, flags, `/v1/customers/${enc(id)}/block`, { method: "DELETE" });
     console.log(`\n  ${c.green("✓")} ${id} unblocked\n`);
     return 0;
   }
@@ -18976,7 +18910,7 @@ async function customersCmd(positional, flags) {
       else throw new Error("--daily-model-usd is dollars a day (e.g. 5 or 2.50), or none");
     }
     if (!Object.keys(patch).length) throw new Error("`foldrun customers limits --starts-per-minute N --max-open-runs N --gateway-rpm N --gateway-concurrency N --daily-model-usd D` (default / none puts one back)");
-    const r = await remoteCall(url, flags, "/api/customers", { method: "PATCH", body: JSON.stringify(patch) });
+    const r = await remoteCall(url, flags, "/v1/customers", { method: "PATCH", body: JSON.stringify(patch) });
     if (flags.json === true) console.log(JSON.stringify(r, null, 2));
     else console.log(`\n  ${c.green("✓")} per customer: ${customerLimitsLine(r.limits)}\n`);
     return 0;
@@ -18984,7 +18918,7 @@ async function customersCmd(positional, flags) {
   if (verb === "usage") {
     const days = flags.days === undefined ? 7 : Number(flags.days);
     if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error("--days is 1 to 90");
-    const r = await remoteCall(url, flags, `/api/customers/usage?days=${days}`);
+    const r = await remoteCall(url, flags, `/v1/customers/usage?days=${days}`);
     if (flags.json === true) {
       console.log(JSON.stringify(r, null, 2));
       return 0;
@@ -19000,7 +18934,7 @@ async function customersCmd(positional, flags) {
     return 0;
   }
   if (verb !== undefined && verb !== "ls") throw new Error("`foldrun customers` — ls, usage, block <id>, unblock <id>, limits");
-  const r = await remoteCall(url, flags, "/api/customers");
+  const r = await remoteCall(url, flags, "/v1/customers");
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -19021,7 +18955,7 @@ async function customersCmd(positional, flags) {
 async function changelogCmd(flags) {
   const url = platformFor(flags, "changelog");
   const limit = Number(flags.limit) > 0 ? Math.min(50, Math.floor(Number(flags.limit))) : 5;
-  const r = await remoteCall(url, flags, `/api/changelog?limit=${limit}`);
+  const r = await remoteCall(url, flags, `/v1/changelog?limit=${limit}`);
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -19077,7 +19011,7 @@ async function findCmd(positional, flags) {
   const url = platformFor(flags, "find");
   const q = positional.join(" ").trim();
   if (!q) throw new Error("`foldrun find <words>` — a name, a run id, or words from a run's headline");
-  const { hits = [] } = await remoteCall(url, flags, `/api/search?q=${enc(q)}`);
+  const { hits = [] } = await remoteCall(url, flags, `/v1/search?q=${enc(q)}`);
   if (flags.json === true) {
     console.log(JSON.stringify(hits, null, 2));
     return 0;
@@ -19099,13 +19033,13 @@ async function findCmd(positional, flags) {
 /** `foldrun workspaces demo` — "Try the demo pipeline": the demo workspace, made on the platform. */
 /**
  * `foldrun workspaces show <name>` — what is deployed in one workspace (GET
- * /api/workspaces/<name>): its agents, its flows and how they fire, and its
+ * /v1/workspaces/<name>): its agents, its flows and how they fire, and its
  * files, counted by top-level folder.
  */
 async function workspacesShowCmd(name, flags) {
   const url = platformFor(flags, "workspaces show");
   if (!name) throw new Error("which project? `foldrun workspaces show <name>`");
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(name)}`);
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(name)}`);
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -19149,7 +19083,7 @@ async function evalNewCmd(name, flags, layout) {
   const url = platformFor(flags, "eval new");
   const ws = platformWorkspace(flags, layout, `eval new ${name}`);
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw new Error(`"${name}" is not an eval name — kebab-case only, e.g. researcher-quality`);
-  const r = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/evals`, { method: "POST", body: JSON.stringify({ name }) });
+  const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/evals`, { method: "POST", body: JSON.stringify({ name }) });
   console.log(`\n  ${c.green("created")} eval ${c.bold(name)} in ${ws} ${c.dim(`on ${url}`)}`);
   console.log(`    ${c.dim(r.path ?? `evals/${name}.md`)}`);
   console.log(`\n  ${c.dim(`its cases are placeholders: foldrun source cat ${r.path ?? `evals/${name}.md`} --to ${ws}, then foldrun eval ${name} --to ${ws}`)}\n`);
@@ -19158,7 +19092,7 @@ async function evalNewCmd(name, flags, layout) {
 
 /**
  * `foldrun team` — who is in the account, their role and which workspaces
- * they may open (GET /api/team). The writes are a person's: `invite`,
+ * they may open (GET /v1/team). The writes are a person's: `invite`,
  * `role`, `access` and `remove` are taken from this machine's own `foldrun
  * login` key (owner decision, 4 Nov 2026), which acts at the lower of its
  * role and the person's — an owner's key is an admin, so making, changing or
@@ -19179,7 +19113,7 @@ async function teamCmd(positional, flags) {
     throw new Error(`\`foldrun team\` lists the members; \`team invite\`, \`team role\`, \`team access\`, \`team remove\` and \`team invites\` change them — not "${positional[0]}"`);
   }
   const url = platformFor(flags, "team");
-  const { members = [] } = await remoteCall(url, flags, "/api/team");
+  const { members = [] } = await remoteCall(url, flags, "/v1/team");
   if (flags.json === true) {
     console.log(JSON.stringify(members, null, 2));
     return 0;
@@ -19210,10 +19144,10 @@ function memberScopeFlag(flags) {
   return flags.workspaces.split(",").map((w) => w.trim()).filter(Boolean);
 }
 
-/** One member, by address (any case) or id, from GET /api/team. */
+/** One member, by address (any case) or id, from GET /v1/team. */
 async function memberNamed(url, flags, who, verb) {
   if (!who) throw new Error(`whom? \`foldrun team ${verb} <email|id>\` — \`foldrun team\` lists them`);
-  const { members = [] } = await remoteCall(url, flags, "/api/team");
+  const { members = [] } = await remoteCall(url, flags, "/v1/team");
   const m = members.find((x) => x.id === who || String(x.email).toLowerCase() === String(who).toLowerCase());
   if (!m) throw new Error(`no member "${who}" — \`foldrun team\` lists them`);
   return m;
@@ -19223,7 +19157,7 @@ const SCOPE_TEXT = (w) => (w === null || w === undefined ? "every project" : w.l
 
 /**
  * `foldrun team invite [email] [--role viewer|editor|admin] [--workspaces
- * a,b | --all] [--no-send]` — POST /api/team. With an address only that
+ * a,b | --all] [--no-send]` — POST /v1/team. With an address only that
  * person can accept it, and it is mailed unless --no-send; without one the
  * link works for whoever has it. Either way the link is printed here, once:
  * it is shown to its maker alone and works one time, for seven days.
@@ -19236,7 +19170,7 @@ async function teamInviteCmd(positional, flags) {
   if (flags.none === true) throw new Error("an invite opens some projects: --workspaces <names>, or --all for every one");
   const workspaces = memberScopeFlag(flags);
   const body = { role, ...(workspaces !== undefined ? { workspaces } : {}), ...(email ? { email } : {}), ...(flags["no-send"] === true ? { send: false } : {}) };
-  const r = await remoteCall(url, flags, "/api/team", { method: "POST", body: JSON.stringify(body) });
+  const r = await remoteCall(url, flags, "/v1/team", { method: "POST", body: JSON.stringify(body) });
   if (flags.json === true) {
     console.log(JSON.stringify({ ...r, link: r.path ? new URL(r.path, url).toString() : null }, null, 2));
     return 0;
@@ -19251,7 +19185,7 @@ async function teamInviteCmd(positional, flags) {
 }
 
 /** `foldrun team role <email|id> <viewer|editor|admin>` — PATCH
- *  /api/team/members/<id> { role }. Their keys above the new role stop. */
+ *  /v1/team/members/<id> { role }. Their keys above the new role stop. */
 async function teamRoleCmd(positional, flags) {
   const url = platformFor(flags, "team role");
   const [who, role] = positional;
@@ -19259,7 +19193,7 @@ async function teamRoleCmd(positional, flags) {
   if (role === "owner") throw new Error("owner is not a role you set — the owner transfers the account, in Settings → Team");
   if (!["viewer", "editor", "admin"].includes(role)) throw new Error(`not a role: "${role}" — viewer, editor or admin`);
   const m = await memberNamed(url, flags, who, "role");
-  const r = await remoteCall(url, flags, `/api/team/members/${enc(m.id)}`, { method: "PATCH", body: JSON.stringify({ role }) });
+  const r = await remoteCall(url, flags, `/v1/team/members/${enc(m.id)}`, { method: "PATCH", body: JSON.stringify({ role }) });
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -19269,13 +19203,13 @@ async function teamRoleCmd(positional, flags) {
 }
 
 /** `foldrun team access <email|id> --workspaces a,b | --all | --none` —
- *  PATCH /api/team/members/<id> { workspaces }. Never wider than yours. */
+ *  PATCH /v1/team/members/<id> { workspaces }. Never wider than yours. */
 async function teamAccessCmd(positional, flags) {
   const url = platformFor(flags, "team access");
   const workspaces = memberScopeFlag(flags);
   if (workspaces === undefined) throw new Error("which projects? `foldrun team access <email|id> --workspaces a,b` (or --all, or --none)");
   const m = await memberNamed(url, flags, positional[0], "access");
-  const r = await remoteCall(url, flags, `/api/team/members/${enc(m.id)}`, { method: "PATCH", body: JSON.stringify({ workspaces }) });
+  const r = await remoteCall(url, flags, `/v1/team/members/${enc(m.id)}`, { method: "PATCH", body: JSON.stringify({ workspaces }) });
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -19285,7 +19219,7 @@ async function teamAccessCmd(positional, flags) {
 }
 
 /** `foldrun team remove <email|id> [--yes]` — DELETE
- *  /api/team/members/<id>. Asks first; with no terminal it needs --yes.
+ *  /v1/team/members/<id>. Asks first; with no terminal it needs --yes.
  *  Their keys and the invites they made stop with them. */
 async function teamRemoveCmd(positional, flags) {
   const url = platformFor(flags, "team remove");
@@ -19294,7 +19228,7 @@ async function teamRemoveCmd(positional, flags) {
     console.log(`\n  ${c.dim("nobody removed")}\n`);
     return 0;
   }
-  const r = await remoteCall(url, flags, `/api/team/members/${enc(m.id)}`, { method: "DELETE" });
+  const r = await remoteCall(url, flags, `/v1/team/members/${enc(m.id)}`, { method: "DELETE" });
   if (flags.json === true) {
     console.log(JSON.stringify(r, null, 2));
     return 0;
@@ -19304,11 +19238,11 @@ async function teamRemoveCmd(positional, flags) {
 }
 
 /**
- * `foldrun me` — the person this machine is signed in as (GET /api/me's
+ * `foldrun me` — the person this machine is signed in as (GET /v1/me's
  * `person`): address, name, timezone. `foldrun me name <first> [last]`
- * (`--clear`) sets the name (POST /api/auth/name), `foldrun me timezone
+ * (`--clear`) sets the name (POST /v1/auth/name), `foldrun me timezone
  * <zone|auto>` the zone timestamps and crons are read in (POST
- * /api/auth/timezone). Only a `foldrun login` key is a person; a key made by
+ * /v1/auth/timezone). Only a `foldrun login` key is a person; a key made by
  * hand is refused. Password, email, two-step sign-in and sessions stay in
  * Profile.
  */
@@ -19320,19 +19254,19 @@ async function meCmd(positional, flags) {
     if (flags.clear !== true && !rest.length) throw new Error("`foldrun me name <first> [last]`, or `foldrun me name --clear`");
     const body = flags.clear === true ? { firstName: null, lastName: null } : { firstName: rest[0], lastName: rest.slice(1).join(" ") || null };
     // A person's own routes stay on the dashboard's address (appFor).
-    await remoteCall(appFor(url, flags), flags, "/api/auth/name", { method: "POST", body: JSON.stringify(body) });
+    await remoteCall(appFor(url, flags), flags, "/v1/auth/name", { method: "POST", body: JSON.stringify(body) });
     console.log(`\n  ${c.green("saved")} ${flags.clear === true ? "no name — you are shown by your address" : `name ${c.bold([body.firstName, body.lastName].filter(Boolean).join(" "))}`}\n`);
     return 0;
   }
   if (sub === "timezone") {
     const zone = rest[0];
     if (!zone) throw new Error("`foldrun me timezone <zone>` (e.g. Australia/Sydney), or `foldrun me timezone auto` for the browser's");
-    const r = await remoteCall(appFor(url, flags), flags, "/api/auth/timezone", { method: "POST", body: JSON.stringify({ timezone: zone === "auto" ? null : zone }) });
+    const r = await remoteCall(appFor(url, flags), flags, "/v1/auth/timezone", { method: "POST", body: JSON.stringify({ timezone: zone === "auto" ? null : zone }) });
     console.log(`\n  ${c.green("saved")} timezone ${c.bold(r.timezone ?? "automatic (the browser's)")}\n`);
     return 0;
   }
   if (sub) throw new Error(`\`foldrun me\` shows you; \`foldrun me name\` and \`foldrun me timezone\` change you — not "${sub}"`);
-  const me = await remoteCall(url, flags, "/api/me");
+  const me = await remoteCall(url, flags, "/v1/me");
   if (flags.json === true) {
     console.log(JSON.stringify(me.person ?? null, null, 2));
     return 0;
@@ -19353,9 +19287,9 @@ async function meCmd(positional, flags) {
 
 /**
  * `foldrun team invites [--all] [--json]` — the account's invites (GET
- * /api/team/invites): pending ones, or every one with --all. Never a link:
+ * /v1/team/invites): pending ones, or every one with --all. Never a link:
  * that is shown once, to the person who made it. `foldrun team invites
- * revoke <id>` takes one back (DELETE /api/team/invites/<id>) — its link
+ * revoke <id>` takes one back (DELETE /v1/team/invites/<id>) — its link
  * stops working at once. Settings → Team does the same.
  */
 async function teamInvitesCmd(positional, flags) {
@@ -19363,7 +19297,7 @@ async function teamInvitesCmd(positional, flags) {
   if (positional[0] === "revoke") {
     const id = positional[1];
     if (!id) throw new Error("which invite? `foldrun team invites revoke <id>` — `foldrun team invites` lists them");
-    const r = await remoteCall(url, flags, `/api/team/invites/${enc(id)}`, { method: "DELETE" });
+    const r = await remoteCall(url, flags, `/v1/team/invites/${enc(id)}`, { method: "DELETE" });
     if (flags.json === true) {
       console.log(JSON.stringify(r, null, 2));
       return 0;
@@ -19375,7 +19309,7 @@ async function teamInvitesCmd(positional, flags) {
     return 0;
   }
   if (positional[0]) throw new Error(`\`foldrun team invites\` lists the invites; \`foldrun team invites revoke <id>\` takes one back — not "${positional[0]}"`);
-  const { invites = [] } = await remoteCall(url, flags, `/api/team/invites${flags.all === true ? "?all=1" : ""}`);
+  const { invites = [] } = await remoteCall(url, flags, `/v1/team/invites${flags.all === true ? "?all=1" : ""}`);
   if (flags.json === true) {
     console.log(JSON.stringify(invites, null, 2));
     return 0;
@@ -19398,7 +19332,7 @@ async function teamInvitesCmd(positional, flags) {
 
 async function workspacesDemoCmd(flags) {
   const url = platformFor(flags, "workspaces demo");
-  const r = await remoteCall(url, flags, "/api/workspaces", { method: "POST", body: JSON.stringify({ demo: true }) });
+  const r = await remoteCall(url, flags, "/v1/workspaces", { method: "POST", body: JSON.stringify({ demo: true }) });
   console.log(`\n  ${c.green("✓")} ${c.bold(r.name)} ${c.dim(`on ${url} — ${r.agents} agents, ${r.flows} flow${r.flows === 1 ? "" : "s"}`)}`);
   console.log(`  ${c.dim(`foldrun flow show <flow> --to ${r.name} · foldrun flow run <flow> --to ${r.name} --test · foldrun pull ${r.name}`)}\n`);
   return 0;
@@ -19413,7 +19347,7 @@ async function reportLiveCmd(runId, flags, layout) {
   const url = platformFor(flags, "report live");
   if (!runId) throw new Error("`foldrun report <run-id> live [--agent <name>]`");
   const ws = await workspaceOfRun(url, flags, layout, runId);
-  const base = `/api/workspaces/${enc(ws)}/runs/${enc(runId)}/live`;
+  const base = `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}/live`;
   const { agents = {} } = await remoteCall(url, flags, base);
   const names = Object.keys(agents);
   let agent = typeof flags.agent === "string" ? flags.agent : names.length === 1 ? names[0] : null;
@@ -19461,7 +19395,7 @@ async function reportLiveCmd(runId, flags, layout) {
 async function vocabularyCmd(flags, layout) {
   const url = platformFor(flags, "workspace vocabulary");
   const ws = platformWorkspace(flags, layout, "workspace vocabulary");
-  const v = await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/vocabulary`);
+  const v = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/vocabulary`);
   if (flags.json === true) {
     console.log(JSON.stringify(v, null, 2));
     return 0;
@@ -19602,11 +19536,11 @@ async function a2aCmd(positional, flags, layout) {
   throw new Error(`a2a: unknown verb "${verb}" — ls, publish, unpublish, card, call, status, cancel`);
 }
 
-/** GET /api/workspaces/<ws>/a2a — what a workspace serves over A2A. */
+/** GET /v1/workspaces/<ws>/a2a — what a workspace serves over A2A. */
 async function a2aView(flags, layout, what) {
   const url = platformFor(flags, what);
   const ws = platformWorkspace(flags, layout, what);
-  return { url, ws, view: await remoteCall(url, flags, `/api/workspaces/${enc(ws)}/a2a`) };
+  return { url, ws, view: await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/a2a`) };
 }
 
 const a2aStateWord = (s) => printable(s).replace(/^TASK_STATE_/, "").toLowerCase().replace(/_/g, "-");
@@ -19820,7 +19754,7 @@ function a2aExplain(err, key) {
   // The remote's own words can be in the message: printed, so made safe.
   const msg = printable(err instanceof Error ? err.message : String(err));
   if (/refused the credential/.test(msg)) {
-    return new Error(key.token ? `${msg} — is $${key.name} an A2A key for this flow? (POST /api/keys { purpose: "a2a" } mints one; an API key never opens /a2a)` : `${msg.replace(/ — this remote has no secret: set one$/, "")} — no A2A key was sent: export it in $${key.name} (or name the variable with --key-env)`);
+    return new Error(key.token ? `${msg} — is $${key.name} an A2A key for this flow? (POST /v1/keys { purpose: "a2a" } mints one; an API key never opens /a2a)` : `${msg.replace(/ — this remote has no secret: set one$/, "")} — no A2A key was sent: export it in $${key.name} (or name the variable with --key-env)`);
   }
   return new Error(msg);
 }
@@ -19977,12 +19911,12 @@ async function a2aCardCmd(flow, flags, layout) {
 /**
  * `foldrun usage budget [--to <ws>]` — the Spend limits page: each cap, what
  * is spent in its window (today, this week, this month) and how far that is,
- * from GET /api/usage/budget. A key scoped to some workspaces sees those, and
+ * from GET /v1/account/usage/budget. A key scoped to some workspaces sees those, and
  * not the account's figure.
  */
 async function usageBudgetCmd(flags) {
   const url = platformFor(flags, "usage budget");
-  const d = await remoteCall(url, flags, "/api/usage/budget");
+  const d = await remoteCall(url, flags, "/v1/account/usage/budget");
   const ws = typeof flags.to === "string" ? flags.to : null;
   const rows = (Array.isArray(d.workspaces) ? d.workspaces : []).filter((w) => !ws || w.workspace === ws);
   if (ws && !rows.length) throw new Error(`no project "${ws}" among the ones this credential may open`);
@@ -20020,7 +19954,7 @@ async function usageBudgetCmd(flags) {
 /**
  * `foldrun billing invoices` — the Invoices tab: the plan's tax invoices from
  * Stripe with their links, and every credit purchase with its receipt, from
- * GET /api/billing/invoices. An install without billing has no such route.
+ * GET /v1/billing/invoices. An install without billing has no such route.
  */
 /**
  * Every `foldrun billing …` verb: a platform without billing (self-hosted,
@@ -20049,7 +19983,7 @@ async function billingInvoicesCmd(flags) {
   const url = platformFor(flags, "billing invoices");
   let d;
   try {
-    d = await remoteCall(url, flags, "/api/billing/invoices");
+    d = await remoteCall(url, flags, "/v1/billing/invoices");
   } catch (err) {
     if (err instanceof HttpError && err.status === 404) throw new Error(`${new URL(url).host} has no billing — invoices are the hosted platform's (or it runs a platform from before 5 Nov 2026)`);
     if (err instanceof HttpError && err.status === 403) throw new Error(`invoices need a member or key with every project — ${err.message}`);
@@ -20142,7 +20076,7 @@ export async function run(command, positional, flags, workspace, layout) {
         throw new Error("`foldrun check --to <workspace> --online` — the online checks (OSV, remote MCP tool text) run on the platform, against the deployed copy");
       }
       if (flags.online === true && (flags.json === true || (typeof flags.format === "string" && flags.format !== "text"))) {
-        throw new Error("--online prints text; for JSON ask the API: GET /api/workspaces/<ws>/check?online=1");
+        throw new Error("--online prints text; for JSON ask the API: GET /v1/workspaces/<ws>/check?online=1");
       }
       // --to names a workspace on a PLATFORM, so there is nothing local to
       // check and the folder this terminal stands in is beside the point.

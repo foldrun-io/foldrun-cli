@@ -13,7 +13,7 @@ const flags = [
 ];
 
 test("lists each flag on or off, and why — the rollout with its percentage", async () => {
-  const s = await serve({ "/api/account/flags": () => ({ flags }) });
+  const s = await serve({ "/v1/account/flags": () => ({ flags }) });
   const r = await at(s.url, "flags");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -25,7 +25,7 @@ test("lists each flag on or off, and why — the rollout with its percentage", a
 });
 
 test("--json is the API's answer as it came", async () => {
-  const s = await serve({ "/api/account/flags": () => ({ flags }) });
+  const s = await serve({ "/v1/account/flags": () => ({ flags }) });
   const r = await at(s.url, "flags", "--json");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -33,7 +33,7 @@ test("--json is the API's answer as it came", async () => {
 });
 
 test("there is no write verb: an argument is refused before any request", async () => {
-  const s = await serve({ "/api/account/flags": () => ({ flags }) });
+  const s = await serve({ "/v1/account/flags": () => ({ flags }) });
   const r = await at(s.url, "flags", "set", "example-flag", "on");
   s.close();
   assert.notEqual(r.code, 0);
@@ -43,7 +43,7 @@ test("there is no write verb: an argument is refused before any request", async 
 });
 
 test("a refusal from the platform is said, with a failing exit", async () => {
-  const s = await serve({ "/api/account/flags": () => failing(401, { error: "sign in first" }) });
+  const s = await serve({ "/v1/account/flags": () => failing(401, { error: "sign in first" }) });
   const r = await at(s.url, "flags");
   s.close();
   assert.notEqual(r.code, 0);

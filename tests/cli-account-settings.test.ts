@@ -23,8 +23,8 @@ function account(start = defaults) {
   let state: any = { ...start };
   return {
     routes: {
-      "GET /api/account": () => ({ defaults: state }),
-      "PATCH /api/account": (body: string) => {
+      "GET /v1/account": () => ({ defaults: state }),
+      "PATCH /v1/account": (body: string) => {
         state = { ...state, ...JSON.parse(body) };
         return { ok: true, defaults: state };
       },
@@ -129,8 +129,8 @@ test("network_enforce: on/off become true/false, anything else is refused before
 
 test("the platform's own complaint is what you read, not HTTP 400", async () => {
   const s = await serve({
-    "GET /api/account": () => ({ defaults }),
-    "PATCH /api/account": () => ({ __status: 400, body: { error: '"Mars/Olympus" is not an IANA time zone — Australia/Sydney, UTC, America/New_York' } }),
+    "GET /v1/account": () => ({ defaults }),
+    "PATCH /v1/account": () => ({ __status: 400, body: { error: '"Mars/Olympus" is not an IANA time zone — Australia/Sydney, UTC, America/New_York' } }),
   });
   const r = await at(s.url, "account", "set", "timezone", "Mars/Olympus");
   s.close();
@@ -149,11 +149,11 @@ test("a setting that is not one of the four says which four", async () => {
 test("account pause sends the reason; --stop asks, and with --yes sends stop: true; resume is a DELETE", async () => {
   const seen: { method: string; body: string }[] = [];
   const s = await serve({
-    "POST /api/account/pause": (body: string) => {
+    "POST /v1/account/pause": (body: string) => {
       seen.push({ method: "POST", body });
       return { ok: true, paused: { at: "2026-10-21T04:00:00Z", by: "ana@example.test", scope: "account" }, stopped: ["desk/run-1"], failed: [] };
     },
-    "DELETE /api/account/pause": () => {
+    "DELETE /v1/account/pause": () => {
       seen.push({ method: "DELETE", body: "" });
       return { ok: true, paused: null };
     },
@@ -180,7 +180,7 @@ test("account pause sends the reason; --stop asks, and with --yes sends stop: tr
 
 test("account with no verb shows the pause, and says nothing of it on a platform without the route", async () => {
   const a = account();
-  const s = await serve({ ...a.routes, "GET /api/account/pause": () => ({ paused: null, account: { at: "2026-10-21T04:00:00Z", by: "ops", reason: "incident" }, workspaces: { desk: { at: "2026-10-20T00:00:00Z", by: "x" } } }) });
+  const s = await serve({ ...a.routes, "GET /v1/account/pause": () => ({ paused: null, account: { at: "2026-10-21T04:00:00Z", by: "ops", reason: "incident" }, workspaces: { desk: { at: "2026-10-20T00:00:00Z", by: "x" } } }) });
   const r = await at(s.url, "account");
   s.close();
   assert.match(r.out, /paused\s+2026-10-21 04:00 UTC by ops — incident/);
@@ -194,7 +194,7 @@ test("account with no verb shows the pause, and says nothing of it on a platform
 
 test("pause --stop names a run it could not stop and exits 1", async () => {
   const s = await serve({
-    "POST /api/workspaces/desk/pause": () => ({ ok: true, paused: { at: "2026-10-21T04:00:00Z", by: "x", scope: "workspace" }, stopped: [], failed: [{ workspace: "desk", runId: "run-9", error: "queue file is busy" }] }),
+    "POST /v1/workspaces/desk/pause": () => ({ ok: true, paused: { at: "2026-10-21T04:00:00Z", by: "x", scope: "workspace" }, stopped: [], failed: [{ workspace: "desk", runId: "run-9", error: "queue file is busy" }] }),
   });
   const r = await at(s.url, "workspace", "pause", "--stop", "--yes", "--to", "desk");
   s.close();
@@ -205,9 +205,9 @@ test("pause --stop names a run it could not stop and exits 1", async () => {
 test("account telemetry: set sends otlp and the secret-named header; test reports what the collector said", async () => {
   const seen: string[] = [];
   const s = await serve({
-    "GET /api/account": () => ({ defaults: { telemetry: null } }),
-    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true, defaults: { telemetry: { endpoint: "https://otel.example.com/v1/traces", headers: {} } } }; },
-    "POST /api/account/telemetry/test": () => ({ ok: false, error: "the vault has no OTEL_TOKEN — foldrun secrets set OTEL_TOKEN", endpoint: "https://otel.example.com/v1/traces" }),
+    "GET /v1/account": () => ({ defaults: { telemetry: null } }),
+    "PATCH /v1/account": (body: string) => { seen.push(body); return { ok: true, defaults: { telemetry: { endpoint: "https://otel.example.com/v1/traces", headers: {} } } }; },
+    "POST /v1/account/telemetry/test": () => ({ ok: false, error: "the vault has no OTEL_TOKEN — foldrun secrets set OTEL_TOKEN", endpoint: "https://otel.example.com/v1/traces" }),
   });
   const set = await at(s.url, "account", "telemetry", "set", "https://otel.example.com/v1/traces", "--header", "authorization=${OTEL_TOKEN}");
   const t = await at(s.url, "account", "telemetry", "test");
@@ -224,8 +224,8 @@ test("account telemetry: set sends otlp and the secret-named header; test report
 test("account telemetry set keeps the headers already there: --header changes one, name= drops one (the dashboard card's merge)", async () => {
   const seen: string[] = [];
   const s = await serve({
-    "GET /api/account": () => ({ defaults: { telemetry: { endpoint: "https://old.example.com/v1/traces", headers: { authorization: "${OTEL_TOKEN}", "x-scope-orgid": "acme", "x-old": "1" } } } }),
-    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true, defaults: { telemetry: { endpoint: "https://otel.example.com/v1/traces", headers: {} } } }; },
+    "GET /v1/account": () => ({ defaults: { telemetry: { endpoint: "https://old.example.com/v1/traces", headers: { authorization: "${OTEL_TOKEN}", "x-scope-orgid": "acme", "x-old": "1" } } } }),
+    "PATCH /v1/account": (body: string) => { seen.push(body); return { ok: true, defaults: { telemetry: { endpoint: "https://otel.example.com/v1/traces", headers: {} } } }; },
   });
   const set = await at(s.url, "account", "telemetry", "set", "https://otel.example.com/v1/traces", "--header", "authorization=${NEW_TOKEN}", "--header", "x-old=");
   const bare = await at(s.url, "account", "telemetry", "set", "https://otel.example.com/v1/traces");
@@ -240,8 +240,8 @@ test("account telemetry set keeps the headers already there: --header changes on
 test("account telemetry set refuses when the telemetry is hidden from this key, and sends nothing", async () => {
   const seen: string[] = [];
   const s = await serve({
-    "GET /api/account": () => ({ defaults: { telemetry: { endpoint: "", headers: {}, hidden: true } } }),
-    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true }; },
+    "GET /v1/account": () => ({ defaults: { telemetry: { endpoint: "", headers: {}, hidden: true } } }),
+    "PATCH /v1/account": (body: string) => { seen.push(body); return { ok: true }; },
   });
   const r = await at(s.url, "account", "telemetry", "set", "https://otel.example.com/v1/traces");
   s.close();
@@ -260,7 +260,7 @@ const JOBS_VIEW = {
 };
 
 test("foldrun jobs prints the four jobs and what each has set", async () => {
-  const s = await serve({ "GET /api/account/jobs": () => JOBS_VIEW });
+  const s = await serve({ "GET /v1/account/jobs": () => JOBS_VIEW });
   const r = await at(s.url, "jobs");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -272,7 +272,7 @@ test("foldrun jobs prints the four jobs and what each has set", async () => {
 
 test("foldrun jobs --to: the workspace's value, the account's, and how they combine", async () => {
   const view = { jobs: JOBS_VIEW.jobs.map((j) => ({ ...j, fields: j.fields.map((f) => ({ ...f, workspace: f.key === "owner" ? "desk-lead" : null })) })) };
-  const s = await serve({ "GET /api/account/jobs": () => view });
+  const s = await serve({ "GET /v1/account/jobs": () => view });
   const r = await at(s.url, "jobs", "--to", "desk");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -283,8 +283,8 @@ test("foldrun jobs --to: the workspace's value, the account's, and how they comb
 test("account set <job>.<field>: checked against the map, sent as the field; a wrong job names the right one", async () => {
   const seen: string[] = [];
   const s = await serve({
-    "GET /api/account/jobs": () => JOBS_VIEW,
-    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true, defaults: {} }; },
+    "GET /v1/account/jobs": () => JOBS_VIEW,
+    "PATCH /v1/account": (body: string) => { seen.push(body); return { ok: true, defaults: {} }; },
   });
   const ok = await at(s.url, "account", "set", "governance.deploy_block", "secrets");
   const wrong = await at(s.url, "account", "set", "guardrail.owner", "x");
@@ -300,8 +300,8 @@ test("account set <job>.<field>: checked against the map, sent as the field; a w
 test("a field the server says this scope cannot write is refused before the PATCH, naming the file", async () => {
   const seen: string[] = [];
   const s = await serve({
-    "GET /api/account/jobs": () => JOBS_VIEW,
-    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true, defaults: {} }; },
+    "GET /v1/account/jobs": () => JOBS_VIEW,
+    "PATCH /v1/account": (body: string) => { seen.push(body); return { ok: true, defaults: {} }; },
   });
   const r = await at(s.url, "account", "set", "governance.priority", "high");
   s.close();
@@ -314,8 +314,8 @@ test("a workspace's own alerts stay its own: the last threshold off leaves {}, n
   const seen: string[] = [];
   const view = { jobs: JOBS_VIEW.jobs.map((j) => ({ ...j, fields: j.fields.map((f) => (f.key === "alerts" ? { ...f, workspace: { stale_days: 30 } } : { ...f, workspace: null })) })) };
   const s = await serve({
-    "GET /api/account/jobs": () => view,
-    "PATCH /api/workspaces/desk": (body: string) => { seen.push(body); return { ok: true }; },
+    "GET /v1/account/jobs": () => view,
+    "PATCH /v1/workspaces/desk": (body: string) => { seen.push(body); return { ok: true }; },
   });
   const off = await at(s.url, "workspace", "set", "alerts", "stale_days", "off", "--to", "desk");
   const host = await at(s.url, "workspace", "set", "alerts", "new_host", "off", "--to", "desk");
@@ -326,7 +326,7 @@ test("a workspace's own alerts stay its own: the last threshold off leaves {}, n
   // Editing another threshold keeps the opt-out.
   const seen2: string[] = [];
   const optedOut = { jobs: JOBS_VIEW.jobs.map((j) => ({ ...j, fields: j.fields.map((f) => (f.key === "alerts" ? { ...f, workspace: { new_host: false } } : { ...f, workspace: null })) })) };
-  const s2 = await serve({ "GET /api/account/jobs": () => optedOut, "PATCH /api/workspaces/desk": (body: string) => { seen2.push(body); return { ok: true }; } });
+  const s2 = await serve({ "GET /v1/account/jobs": () => optedOut, "PATCH /v1/workspaces/desk": (body: string) => { seen2.push(body); return { ok: true }; } });
   const more = await at(s2.url, "workspace", "set", "alerts", "stale_days", "14", "--to", "desk");
   s2.close();
   assert.equal(more.code, 0, more.out);
@@ -337,8 +337,8 @@ test("observability.telemetry: clear sends null; set names the telemetry verb", 
   const seen: string[] = [];
   const view = { jobs: JOBS_VIEW.jobs.map((j) => (j.name === "observability" ? { ...j, fields: [...j.fields, { key: "telemetry", account: { otlp: "https://o.example.com" }, combine: "workspace replaces", writable: true }] } : j)) };
   const s = await serve({
-    "GET /api/account/jobs": () => view,
-    "PATCH /api/account": (body: string) => { seen.push(body); return { ok: true, defaults: {} }; },
+    "GET /v1/account/jobs": () => view,
+    "PATCH /v1/account": (body: string) => { seen.push(body); return { ok: true, defaults: {} }; },
   });
   const clear = await at(s.url, "account", "clear", "observability.telemetry");
   const set = await at(s.url, "account", "set", "observability.telemetry", "https://x");
@@ -354,10 +354,10 @@ test("observability.telemetry: clear sends null; set names the telemetry verb", 
 // `hidden: true`, and the CLI says so rather than printing an empty URL.
 test("a scoped key sees the account's webhook, telemetry and API use as set, not where they go", async () => {
   const s = await serve({
-    "GET /api/account": () => ({ defaults: { ...defaults, notify: { email: "ops@acme.test", events: ["failed"], hidden: true }, telemetry: { endpoint: "", headers: {}, hidden: true } } }),
-    "GET /api/account/jobs": () => ({ jobs: JOBS_VIEW.jobs.map((j) => (j.name === "observability" ? { ...j, fields: [{ key: "telemetry", account: { hidden: true }, combine: "workspace replaces", writable: true }] } : j)) }),
-    "GET /api/account/pause": () => ({ account: null, workspaces: {} }),
-    "GET /api/account/api": () => ({ version: { current: "2026-10-26", pinned: null, effective: "2026-10-26", supported: ["2026-10-26"], supportMonths: 6 }, limits: {}, usage: null, usageHidden: true }),
+    "GET /v1/account": () => ({ defaults: { ...defaults, notify: { email: "ops@acme.test", events: ["failed"], hidden: true }, telemetry: { endpoint: "", headers: {}, hidden: true } } }),
+    "GET /v1/account/jobs": () => ({ jobs: JOBS_VIEW.jobs.map((j) => (j.name === "observability" ? { ...j, fields: [{ key: "telemetry", account: { hidden: true }, combine: "workspace replaces", writable: true }] } : j)) }),
+    "GET /v1/account/pause": () => ({ account: null, workspaces: {} }),
+    "GET /v1/account/api": () => ({ version: { current: "2026-10-26", pinned: null, effective: "2026-10-26", supported: ["2026-10-26"], supportMonths: 6 }, limits: {}, usage: null, usageHidden: true }),
   });
   const acct = await at(s.url, "account");
   const tel = await at(s.url, "account", "telemetry");

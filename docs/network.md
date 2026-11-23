@@ -104,7 +104,7 @@ foldrun agent network crm-sync inherit                # back to the workspace's 
 ```
 
 Both write the one `network:` line of `agent.md` and nothing else. Over the
-API it is `PATCH /api/workspaces/<ws>/agents/<agent>` with `{ "network": … }`
+API it is `PATCH /v1/workspaces/<ws>/agents/<agent>` with `{ "network": … }`
 (`null` inherits).
 
 ## How it is held

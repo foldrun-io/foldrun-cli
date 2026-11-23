@@ -20,7 +20,7 @@ const listing = {
 };
 
 test("share mints a link, prints it, and sends the storage/ path with the ttl asked for", async () => {
-  const s = await serve({ "POST /api/workspaces/rank-desk/shares": () => minted });
+  const s = await serve({ "POST /v1/workspaces/rank-desk/shares": () => minted });
   const r = await at(s.url, "storage", "share", "reports/rival-gap.md", "--ttl", "30", "--to", "rank-desk");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -31,7 +31,7 @@ test("share mints a link, prints it, and sends the storage/ path with the ttl as
 });
 
 test("--forever asks for no expiry, and --ttl with --forever is refused", async () => {
-  const s = await serve({ "POST /api/workspaces/rank-desk/shares": () => ({ ...minted, expiresAt: null }) });
+  const s = await serve({ "POST /v1/workspaces/rank-desk/shares": () => ({ ...minted, expiresAt: null }) });
   const r = await at(s.url, "storage", "share", "storage/cover.png", "--forever", "--to", "rank-desk");
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /never expires/);
@@ -43,7 +43,7 @@ test("--forever asks for no expiry, and --ttl with --forever is refused", async 
 });
 
 test("shares lists live links by default, and --all shows the expired and revoked ones", async () => {
-  const s = await serve({ "/api/workspaces/rank-desk/shares": () => listing });
+  const s = await serve({ "/v1/workspaces/rank-desk/shares": () => listing });
   const live = await at(s.url, "storage", "shares", "--to", "rank-desk");
   assert.equal(live.code, 0, live.out);
   assert.match(live.out, /tok_live/);
@@ -59,7 +59,7 @@ test("shares lists live links by default, and --all shows the expired and revoke
 });
 
 test("unshare revokes by token, and says so when there was nothing to revoke", async () => {
-  const s = await serve({ "DELETE /api/workspaces/rank-desk/shares": (_b, q) => ({ ok: true, revoked: q.get("token") === "tok_live" }) });
+  const s = await serve({ "DELETE /v1/workspaces/rank-desk/shares": (_b, q) => ({ ok: true, revoked: q.get("token") === "tok_live" }) });
   // A revoke asks first; with no terminal it needs --yes and sends nothing without it.
   const refused = await at(s.url, "storage", "unshare", "tok_live", "--to", "rank-desk");
   assert.notEqual(refused.code, 0);
@@ -76,8 +76,8 @@ test("unshare revokes by token, and says so when there was nothing to revoke", a
 test("a masked link (not yours, and you are not an admin) lists by id, and unshare <id> revokes by ?id= (30 Oct 2026)", async () => {
   const masked = { ok: true, shares: [{ token: "tok_…", masked: true, id: "sh_abcdefghijklmnopqrstuv", url: null, path: "storage/cover.png", contentType: "image/png", createdAt: "2026-09-20T00:00:00.000Z", createdBy: "ana@example.test", expiresAt: null, revokedAt: null }] };
   const s = await serve({
-    "/api/workspaces/rank-desk/shares": () => masked,
-    "DELETE /api/workspaces/rank-desk/shares": (_b, q) => ({ ok: true, revoked: q.get("id") === "sh_abcdefghijklmnopqrstuv" && !q.get("token") }),
+    "/v1/workspaces/rank-desk/shares": () => masked,
+    "DELETE /v1/workspaces/rank-desk/shares": (_b, q) => ({ ok: true, revoked: q.get("id") === "sh_abcdefghijklmnopqrstuv" && !q.get("token") }),
   });
   const list = await at(s.url, "storage", "shares", "--to", "rank-desk");
   assert.equal(list.code, 0, list.out);

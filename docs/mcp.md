@@ -15,18 +15,23 @@ There are three ways in, and they serve the same tools:
 |---|---|---|
 | OAuth | nothing: you approve the app in foldrun | claude.ai (web and phone), and any app that signs in by itself |
 | `foldrun mcp` | the CLI, signed in (`foldrun login`) | an app on the same machine — nothing to paste |
-| `POST /api/mcp` with a key | an API key | an app that takes a header, or a machine without the CLI |
+| `POST /v1/mcp` with a key | an API key | an app that takes a header, or a machine without the CLI |
 
 ## Connecting
 
 ### claude.ai, and apps that sign in
 
 In claude.ai: **Settings → Connectors → Add custom connector**, name it
-foldrun, and give it your platform's MCP address:
+foldrun, and give it the MCP address on your dashboard's address (where
+you sign in — `https://dash.foldrun.dev/v1/mcp` on dev):
 
 ```
-https://<your platform>/api/mcp
+https://<your dashboard>/v1/mcp
 ```
+
+An app that signs in must use the dashboard's address: the sign-in and the
+token are issued there. With an API key in a header, the API's address
+(`https://api.foldrun.dev/v1/mcp`) works too.
 
 Leave the OAuth client ID and secret empty — claude.ai registers itself. When
 you click **Connect**, it sends you to foldrun: sign in if you are not, and a
@@ -71,7 +76,7 @@ how to connect and exits: it is for an app to start.
 Over HTTP, with a key from Settings → API keys:
 
 ```sh
-claude mcp add --transport http foldrun https://<your platform>/api/mcp \
+claude mcp add --transport http foldrun https://<your platform>/v1/mcp \
   --header "Authorization: Bearer fr_api_..."
 ```
 
@@ -95,7 +100,7 @@ What a connection may do is decided at every call, not only when it was
 approved: it acts as the person who approved it, at the lower of the role
 they chose then and the role they hold now, in the projects both allow. A
 person who leaves the account, or is made a viewer, takes their apps with
-them. The access token lasts an hour and opens `/api/mcp` only — sent to any
+them. The access token lasts an hour and opens `/v1/mcp` only — sent to any
 other route it is refused. Refresh tokens rotate on every use, and one used
 twice disconnects the app: someone else has a copy. **Machine clients.** A program with no person to approve it, such as a
 nightly job, a CI step or another service, can sign in with client
@@ -116,7 +121,7 @@ secret (`private_key_jwt`). It registers its public keys (`jwks` or
 endpoint. A copied assertion is refused when it is used a second time.
 
 An app can also end its own connection by handing a token back to
-`/api/mcp/oauth/revoke` (RFC 7009, advertised as `revocation_endpoint`).
+`/v1/mcp/oauth/revoke` (RFC 7009, advertised as `revocation_endpoint`).
 A machine client that hands back an access token ends that token only: it
 stays registered and asks for the next one. Only an admin disconnects it.
 Approving, disconnecting
@@ -127,10 +132,10 @@ and that automatic disconnect are in the audit log (`mcp.connected`,
 
 | tool | does | route |
 |---|---|---|
-| `whoami` | the account, role and projects this key acts for | `GET /api/me` |
-| `list_workspaces` | the projects it may open | `GET /api/workspaces` |
-| `inbox` | what waits on you: approvals, questions, issues, proposed fixes, your failed runs (`bucket`, `kind`, `workspace`) | `GET /api/me/inbox` |
-| `list_approvals` | every gate waiting on a person, and every question an agent is asking | `GET /api/approvals` |
+| `whoami` | the account, role and projects this key acts for | `GET /v1/me` |
+| `list_workspaces` | the projects it may open | `GET /v1/workspaces` |
+| `inbox` | what waits on you: approvals, questions, issues, proposed fixes, your failed runs (`bucket`, `kind`, `workspace`) | `GET /v1/me/inbox` |
+| `list_approvals` | every gate waiting on a person, and every question an agent is asking | `GET /v1/approvals` |
 | `list_flows` | a project's flows | `GET …/flows` |
 | `list_agents` | a project's agents: what each is for and when it last ran | `GET …/agents` |
 | `list_runs` | recent runs, with outcome, summary and failure (`limit` up to 100, default 20; `flow` keeps that flow's among the newest 500) | `GET …/runs` |
@@ -143,7 +148,7 @@ and that automatic disconnect are in the audit log (`mcp.connected`,
 | `answer_question` | answer an agent's question mid-step | `POST …/runs/<id>/answer` |
 | `message_run` | say something to a running agent | `POST …/runs/<id>/message` |
 | `stop_run` | stop a run | `POST …/runs/<id>/stop` |
-| `create_workspace` | a new, blank project — an `AGENTS.md` and nothing else; refused when the name is taken | `POST /api/workspaces` |
+| `create_workspace` | a new, blank project — an `AGENTS.md` and nothing else; refused when the name is taken | `POST /v1/workspaces` |
 | `write_file` | create or replace one file — an agent, a flow, knowledge, a skill, `AGENTS.md` (`message` for the revision, `if_match` below) | `PUT …/source` |
 | `delete_file` | delete one file or folder | `DELETE …/source` |
 
@@ -194,7 +199,7 @@ that act are not offered, and a call to one is refused:
 
 ```sh
 claude mcp add foldrun -- foldrun mcp --read-only
-claude mcp add --transport http foldrun "https://<your platform>/api/mcp?readonly=1" --header "Authorization: Bearer fr_api_..."
+claude mcp add --transport http foldrun "https://<your platform>/v1/mcp?readonly=1" --header "Authorization: Bearer fr_api_..."
 ```
 
 A viewer's key is the stronger version of the same: read-only by role,
@@ -211,15 +216,15 @@ long run's whole record) is cut and says so.
 ## The protocol
 
 MCP's Streamable HTTP transport, stateless: one JSON-RPC 2.0 message per
-`POST /api/mcp`, answered with one JSON body. No SSE stream, no session id, no
+`POST /v1/mcp`, answered with one JSON body. No SSE stream, no session id, no
 batches; `GET` and `DELETE` answer `405`. Served: `initialize` (revisions
 `2025-11-25`, `2025-06-18` and `2025-03-26` — the app's when it is one of
 these, else the newest), `ping`, `tools/list`, `tools/call`; a notification is
-answered `202` with no body. It sits under `/api`, so the proxy holds the same
+answered `202` with no body. It sits under `/v1`, so the proxy holds the same
 raw-path check, body limit and rate limit as for every other route.
 
 Refused before a message is read, as a JSON-RPC error with a real status: no
-credential (`401`, with `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/api/mcp"`,
+credential (`401`, with `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/v1/mcp"`,
 which is where an app that signs in starts) — a session cookie never opens
 it —, a refused key or an expired or revoked token (`401`, `error="invalid_token"`),
 an `Origin` header that is not the platform's own (`403`; MCP clients send
@@ -232,11 +237,11 @@ authorization server; `/.well-known/oauth-authorization-server` (RFC 8414)
 lists the endpoints, PKCE `S256` only, and `mcp:read` / `mcp:write`; an app
 registers itself (RFC 7591) or names itself by an `https` URL to its own
 metadata document, which foldrun fetches through its SSRF guard; every token is
-bound to this `/api/mcp` (RFC 8707). Redirect URIs are `https`, or `http` to
+bound to this `/v1/mcp` (RFC 8707). Redirect URIs are `https`, or `http` to
 localhost for a desktop app — and for those the approval page warns that the
 app is on this computer.
 
 `foldrun mcp` reads one message per line on stdin and writes one per line on
 stdout, and nothing else there: every note goes to stderr. Calls run side by
 side, after `initialize` has answered. A platform from before 1 Nov 2026 has
-no `/api/mcp`; the CLI says so as a JSON-RPC error.
+no `/v1/mcp`; the CLI says so as a JSON-RPC error.

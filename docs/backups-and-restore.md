@@ -53,7 +53,7 @@ foldrun backups                          # the same, in the terminal
 ```
 
 ```http
-GET /api/account/backups
+GET /v1/account/backups
 ```
 
 An account sees only the archives it is in, and its own name as the only
@@ -103,7 +103,7 @@ before it can be restored this way.
   `workspace.restored`.
 
 ```http
-POST /api/workspaces/<ws>/restore
+POST /v1/workspaces/<ws>/restore
 { "to": "3d", "dryRun": true }
 { "to": "<to.id from the dry run>", "confirm": "<ws>", "expectRemoved": [ … ] }
 ```
@@ -133,7 +133,7 @@ foldrun backups request --what runs --at "2026-09-28 14:00" --to sales --note "a
 ```
 
 ```http
-POST /api/account/backups/requests
+POST /v1/account/backups/requests
 { "what": "runs", "workspace": "sales", "target": "2026-09-28 14:00", "note": "…" }
 ```
 

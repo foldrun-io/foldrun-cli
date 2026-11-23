@@ -17,7 +17,7 @@ const SECRETS = {
 };
 
 test("secrets ls shows each secret's health as Connections does, and --json prints the document", async () => {
-  const s = await serve({ "GET /api/secrets": () => SECRETS });
+  const s = await serve({ "GET /v1/secrets": () => SECRETS });
   const r = await at(s.url, "secrets", "ls", "--account");
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /refused by api\.crm\.test on 2026-11-03 \(401\) · 4 times running · last worked 2026-10-28/);
@@ -34,9 +34,9 @@ const CLIENTS = { clients: [{ name: "crm-token", client_id: "cid" }] };
 
 test("secrets rm names the saved OAuth client it leaves unused, and deletes nothing more than the secret", async () => {
   const s = await serve({
-    "DELETE /api/secrets": () => ({ ok: true }),
-    "GET /api/oauth/clients": () => CLIENTS,
-    "GET /api/oauth/connections": () => ({ connections: [] }),
+    "DELETE /v1/secrets": () => ({ ok: true }),
+    "GET /v1/oauth/clients": () => CLIENTS,
+    "GET /v1/oauth/connections": () => ({ connections: [] }),
   });
   const r = await at(s.url, "secrets", "rm", "CRM_TOKEN", "--account", "--yes");
   s.close();
@@ -48,37 +48,37 @@ test("secrets rm names the saved OAuth client it leaves unused, and deletes noth
 
 test("secrets rm --with-client also deletes the unused saved client; one still in use is never named", async () => {
   const s = await serve({
-    "DELETE /api/secrets": () => ({ ok: true }),
-    "GET /api/oauth/clients": () => CLIENTS,
-    "GET /api/oauth/connections": () => ({ connections: [] }),
-    "DELETE /api/oauth/clients": () => ({ ok: true }),
+    "DELETE /v1/secrets": () => ({ ok: true }),
+    "GET /v1/oauth/clients": () => CLIENTS,
+    "GET /v1/oauth/connections": () => ({ connections: [] }),
+    "DELETE /v1/oauth/clients": () => ({ ok: true }),
   });
   const r = await at(s.url, "secrets", "rm", "CRM_TOKEN", "--account", "--yes", "--with-client");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /saved OAuth client crm-token removed/);
-  const del = s.seen.find((x) => x.method === "DELETE" && x.url === "/api/oauth/clients");
+  const del = s.seen.find((x) => x.method === "DELETE" && x.url === "/v1/oauth/clients");
   assert.deepEqual(JSON.parse(del!.body), { client: "crm-token" });
 
   const used = await serve({
-    "DELETE /api/secrets": () => ({ ok: true }),
-    "GET /api/oauth/clients": () => CLIENTS,
-    "GET /api/oauth/connections": () => ({ connections: [{ name: "CRM_TOKEN", workspace: "sales", client: "crm-token", status: "ok" }] }),
-    "DELETE /api/oauth/clients": () => ({ ok: true }),
+    "DELETE /v1/secrets": () => ({ ok: true }),
+    "GET /v1/oauth/clients": () => CLIENTS,
+    "GET /v1/oauth/connections": () => ({ connections: [{ name: "CRM_TOKEN", workspace: "sales", client: "crm-token", status: "ok" }] }),
+    "DELETE /v1/oauth/clients": () => ({ ok: true }),
   });
   const kept = await at(used.url, "secrets", "rm", "CRM_TOKEN", "--account", "--yes", "--with-client");
   used.close();
   assert.equal(kept.code, 0, kept.out);
   assert.doesNotMatch(kept.out, /crm-token/);
-  assert.equal(used.seen.filter((x) => x.url === "/api/oauth/clients" && x.method === "DELETE").length, 0);
+  assert.equal(used.seen.filter((x) => x.url === "/v1/oauth/clients" && x.method === "DELETE").length, 0);
 });
 
 test("secrets rm of a workspace secret leaves the account's saved clients alone, as the dashboard does", async () => {
-  const s = await serve({ "DELETE /api/secrets": () => ({ ok: true }), "GET /api/oauth/clients": () => CLIENTS, "GET /api/oauth/connections": () => ({ connections: [] }) });
+  const s = await serve({ "DELETE /v1/secrets": () => ({ ok: true }), "GET /v1/oauth/clients": () => CLIENTS, "GET /v1/oauth/connections": () => ({ connections: [] }) });
   const r = await at(s.url, "secrets", "rm", "CRM_TOKEN", "--to", "sales", "--yes");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.equal(s.seen.filter((x) => x.url.startsWith("/api/oauth")).length, 0);
+  assert.equal(s.seen.filter((x) => x.url.startsWith("/v1/oauth")).length, 0);
 });
 
 const TRIGGERS = {
@@ -96,7 +96,7 @@ const TRIGGERS = {
 };
 
 test("triggers prints the newest decisions and the deliveries; --limit cuts both; --json is the document", async () => {
-  const s = await serve({ "/api/workspaces/sales/triggers": () => TRIGGERS });
+  const s = await serve({ "/v1/workspaces/sales/triggers": () => TRIGGERS });
   const r = await at(s.url, "triggers", "--to", "sales");
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /every decision, newest first/);
@@ -115,7 +115,7 @@ test("triggers prints the newest decisions and the deliveries; --limit cuts both
 });
 
 test("triggers with no flow fired still shows a refused delivery — it never becomes a trigger event", async () => {
-  const s = await serve({ "/api/workspaces/sales/triggers": () => ({ days: 7, flows: [], events: [], deliveries: [TRIGGERS.deliveries[0]] }) });
+  const s = await serve({ "/v1/workspaces/sales/triggers": () => ({ days: 7, flows: [], events: [], deliveries: [TRIGGERS.deliveries[0]] }) });
   const r = await at(s.url, "triggers", "--to", "sales");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -125,10 +125,10 @@ test("triggers with no flow fired still shows a refused delivery — it never be
 
 test("storage ls --all lists every workspace's files, busiest first, and names the empty ones", async () => {
   const s = await serve({
-    "GET /api/workspaces": () => ({ workspaces: [{ name: "empty-desk" }, { name: "small-desk" }, { name: "big-desk" }] }),
-    "GET /api/workspaces/empty-desk/storage": () => ({ files: [], used: 0 }),
-    "GET /api/workspaces/small-desk/storage": () => ({ files: [{ path: "notes.md", size: 10, updatedAt: "2026-11-04T01:00:00Z", by: "user:a@b.test" }], used: 10 }),
-    "GET /api/workspaces/big-desk/storage": () => ({ files: [{ path: "report.pdf", size: 5000, updatedAt: "2026-11-03T01:00:00Z", by: "run:r1" }, { path: "draft/a.md", size: 50, updatedAt: "2026-11-04T01:00:00Z", by: "run:r2" }], used: 5050, quotaMb: 5120 }),
+    "GET /v1/workspaces": () => ({ workspaces: [{ name: "empty-desk" }, { name: "small-desk" }, { name: "big-desk" }] }),
+    "GET /v1/workspaces/empty-desk/storage": () => ({ files: [], used: 0 }),
+    "GET /v1/workspaces/small-desk/storage": () => ({ files: [{ path: "notes.md", size: 10, updatedAt: "2026-11-04T01:00:00Z", by: "user:a@b.test" }], used: 10 }),
+    "GET /v1/workspaces/big-desk/storage": () => ({ files: [{ path: "report.pdf", size: 5000, updatedAt: "2026-11-03T01:00:00Z", by: "run:r1" }, { path: "draft/a.md", size: 50, updatedAt: "2026-11-04T01:00:00Z", by: "run:r2" }], used: 5050, quotaMb: 5120 }),
   });
   const r = await at(s.url, "storage", "ls", "--all");
   assert.equal(r.code, 0, r.out);
@@ -149,7 +149,7 @@ test("storage ls --all lists every workspace's files, busiest first, and names t
 });
 
 test("account model set --use sends source own with the key, in the one request", async () => {
-  const s = await serve({ "PUT /api/account/model": (body) => ({ ...JSON.parse(body), runsOn: "account", set: true, keyHint: "…9876" }) });
+  const s = await serve({ "PUT /v1/account/model": (body) => ({ ...JSON.parse(body), runsOn: "account", set: true, keyHint: "…9876" }) });
   const r = await at(s.url, "account", "model", "set", "openrouter", "--key", "fake-9876", "--use");
   assert.equal(r.code, 0, r.out);
   assert.equal(s.seen.length, 1);
@@ -161,7 +161,7 @@ test("account model set --use sends source own with the key, in the one request"
 
 test("keys ls tags a key foldrun login minted as a CLI sign-in", async () => {
   const s = await serve({
-    "GET /api/keys": () => ({
+    "GET /v1/keys": () => ({
       keys: [
         { id: "k1", prefix: "fr_ab", label: "laptop", role: "admin", workspaces: null, createdAt: "2026-11-01", origin: "cli-login" },
         { id: "k2", prefix: "fr_cd", label: "ci", role: "editor", workspaces: null, createdAt: "2026-11-01" },

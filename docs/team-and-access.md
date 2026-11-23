@@ -41,7 +41,7 @@ it counts as a change too. A dry run (deploy, import, restore) is not
 refused.
 
 The account's own `AGENTS.md` is written only through the account's settings
-(`PATCH /api/account`), which needs an admin with access to every project.
+(`PATCH /v1/account`), which needs an admin with access to every project.
 
 ## Scoped members
 
@@ -68,10 +68,10 @@ invite with no address is a link for one person, whoever opens it first.
 - **Pending invites are listed.** Settings → Team shows the links still out —
   the address or "anyone with the link", role, projects, who made it, when
   it expires — with **Revoke** on each. The same list is
-  `GET /api/team/invites` (`?all=1` adds accepted, revoked and expired ones)
+  `GET /v1/team/invites` (`?all=1` adds accepted, revoked and expired ones)
   and `foldrun team invites`. The link itself is never listed: it is shown
   once, to the person who made it.
-- **Revoke one** with that button, `DELETE /api/team/invites/<id>` or
+- **Revoke one** with that button, `DELETE /v1/team/invites/<id>` or
   `foldrun team invites revoke <id>`; its link stops working at once. An
   admin invite is the owner's to revoke, and a member scoped to some
   projects sees and revokes only the invites inside its scope.
@@ -133,7 +133,7 @@ switches between them; the CLI stores each as a named profile. See
 An **A2A key** is a key of its own kind, for an outside agent calling your
 published flows over [A2A](a2a): one project, the flows it names, and how
 many tasks it may have open (`foldrun keys create partner --a2a --to leads
---flows lead-finder`, or Settings → API keys). It opens only `/a2a/…` — every `/api`
+--flows lead-finder`, or Settings → API keys). It opens only `/a2a/…` — every `/v1`
 route refuses it — so it can never read runs, change files, approve a step or
 answer a question. It expires, is revoked and rotated like any key, and a
 rotated one keeps the tasks its predecessor made.
@@ -155,13 +155,13 @@ does not turn every request into a write.
 deploy scope — and, if the old one had an end, the same lifetime from today —
 and ends the old key: at once, or after a grace of an hour or a day so a CI
 job can be moved across first. In the dashboard it is the Rotate button on
-the key; `foldrun keys rotate <id> --grace 1h`; `POST /api/keys/<id>/rotate`.
+the key; `foldrun keys rotate <id> --grace 1h`; `POST /v1/keys/<id>/rotate`.
 
 **Revoke** ends a key: anything using it stops at once, and it stays in the
 list marked revoked. **Delete** removes a key from the list: a live one is
 revoked in the same moment, a revoked or expired one just goes. The audit log
 keeps the record (`apikey.deleted`). In the dashboard it is the Delete button
-on the key; `foldrun keys delete <id>`; `DELETE /api/keys/<id>`.
+on the key; `foldrun keys delete <id>`; `DELETE /v1/keys/<id>`.
 
 A key is rotated **once**. While the old key runs out its grace it shows
 **rotated → <new key>** (in `foldrun keys ls` too), and rotating it again is
@@ -186,7 +186,7 @@ The owner and admins who can open every project read it — people, or an
 the whole account's. It is the caller's own account, always; another
 account's entries are never in it. Entries are kept 365 days on the hosted platform (an install sets its own) — security
 evidence, [how long we keep what](security#what-we-keep-and-for-how-long) —
-and go sooner when the account is deleted. Also `GET /api/audit` and `foldrun audit --since 7d --csv`.
+and go sooner when the account is deleted. Also `GET /v1/audit` and `foldrun audit --since 7d --csv`.
 
 What agents did is a different record: every run's trail, under Runs.
 
@@ -223,6 +223,6 @@ The dashboard comes in light and dark. **Profile → Appearance** picks one:
 browser you sign in on, and the page is drawn in it from the first paint.
 The sign-in pages, before anyone is signed in, follow the computer.
 
-The API is `GET` / `PATCH /api/me/preferences` with `{ theme }`. There is no
+The API is `GET` / `PATCH /v1/me/preferences` with `{ theme }`. There is no
 CLI verb: a theme is how a browser draws the dashboard, and a terminal
 already draws in its own colours.

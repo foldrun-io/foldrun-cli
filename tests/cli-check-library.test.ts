@@ -3,7 +3,7 @@
 //
 // It reported `tools: [site_repo]` missing for a tool that ran fine on every
 // deploy, so the first check on a working desk was red. Pinned here with a
-// fake platform serving /api/library/tools, offline, through the real binary.
+// fake platform serving /v1/library/tools, offline, through the real binary.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -51,9 +51,9 @@ function fakePlatform(): Promise<{ url: string; close: () => void; seen: string[
     const server = http.createServer((req, res) => {
       seen.push(`${req.headers.authorization ?? "-"} ${req.url}`);
       res.setHeader("content-type", "application/json");
-      if (req.url === "/api/library/tools") {
+      if (req.url === "/v1/library/tools") {
         res.end(JSON.stringify({ kind: "tools", entries: [{ name: "site_repo", path: "site-repo.md" }] }));
-      } else if (req.url === "/api/library/skills") {
+      } else if (req.url === "/v1/library/skills") {
         res.end(JSON.stringify({ kind: "skills", entries: [] }));
       } else {
         res.statusCode = 404;
@@ -74,7 +74,7 @@ test("a tool that lives only in the platform's library passes check when the pla
     const r = await foldrunAsync("check", ws, "--url", platform.url, "--token", "k");
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /site_repo.*from the library on/);
-    assert.ok(platform.seen.some((l) => l.startsWith("Bearer k /api/library/tools")), "asked the platform, with the token");
+    assert.ok(platform.seen.some((l) => l.startsWith("Bearer k /v1/library/tools")), "asked the platform, with the token");
   } finally {
     platform.close();
     fs.rmSync(path.dirname(ws), { recursive: true, force: true });

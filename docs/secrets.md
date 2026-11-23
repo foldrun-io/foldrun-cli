@@ -19,7 +19,7 @@ foldrun secrets ls
 Or in the dashboard under Settings → Secrets, or over the API:
 
 ```sh
-PUT /api/secrets   { "name": "STRIPE_KEY", "value": "sk_live_…" }
+PUT /v1/secrets   { "name": "STRIPE_KEY", "value": "sk_live_…" }
 ```
 
 `PUT` takes a name plus exactly one shape:
@@ -93,7 +93,7 @@ refused (409) when another admin changed it since — what Settings sends as
 
 In the dashboard it is **Workspaces: all / selected** on the secret's row in
 Settings → Secrets, and on the form that adds one; over the API,
-`PATCH /api/secrets { name, workspaces }` (`null` for every project, `[]`
+`PATCH /v1/secrets { name, workspaces }` (`null` for every project, `[]`
 for none), or `workspaces` on the `PUT` that stores the value. Given with the
 value, the two are saved in one write: the secret is never open to every
 project in between. "All" includes projects made later. Every other project finds the
@@ -215,8 +215,8 @@ foldrun secrets sites DATAFORSEO_PASSWORD --clear     # unbind it
 Or **Bind to sites** under the secret in Settings → Secrets, or over the API:
 
 ```sh
-PATCH /api/secrets   { "name": "DATAFORSEO_PASSWORD", "sites": ["api.dataforseo.com"] }
-PUT   /api/secrets   { "name": "…", "value": "…", "sites": ["api.dataforseo.com"] }   # set and bind at once
+PATCH /v1/secrets   { "name": "DATAFORSEO_PASSWORD", "sites": ["api.dataforseo.com"] }
+PUT   /v1/secrets   { "name": "…", "value": "…", "sites": ["api.dataforseo.com"] }   # set and bind at once
 ```
 
 A **remote MCP server**'s `headers:` and `url:` work the same way: bind the

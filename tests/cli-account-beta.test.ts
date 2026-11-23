@@ -9,7 +9,7 @@ import { serve, at, failing } from "./fake-platform.ts";
 const flags = [{ name: "example-beta", description: "The registered example of a beta flag.", on: true, source: "beta" }];
 
 test("bare: where the beta stands and the beta flags, one GET", async () => {
-  const s = await serve({ "/api/account/beta": () => ({ beta: true, flags }) });
+  const s = await serve({ "/v1/account/beta": () => ({ beta: true, flags }) });
   const r = await at(s.url, "account", "beta");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -21,7 +21,7 @@ test("bare: where the beta stands and the beta flags, one GET", async () => {
 
 test("on and off are a PUT of { beta }; unchanged is said", async () => {
   for (const [word, want] of [["on", true], ["off", false]] as const) {
-    const s = await serve({ "/api/account/beta": () => ({ beta: want, flags: [], changed: false }) });
+    const s = await serve({ "/v1/account/beta": () => ({ beta: want, flags: [], changed: false }) });
     const r = await at(s.url, "account", "beta", word);
     s.close();
     assert.equal(r.code, 0, r.out);
@@ -41,7 +41,7 @@ test("anything but on or off is refused before any request", async () => {
 });
 
 test("a refusal from the platform (not an admin of every workspace) is said, with a failing exit", async () => {
-  const s = await serve({ "/api/account/beta": () => failing(403, { error: "joining the beta changes the whole account — it needs access to every workspace" }) });
+  const s = await serve({ "/v1/account/beta": () => failing(403, { error: "joining the beta changes the whole account — it needs access to every workspace" }) });
   const r = await at(s.url, "account", "beta", "on");
   s.close();
   assert.notEqual(r.code, 0);

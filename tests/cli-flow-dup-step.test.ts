@@ -84,9 +84,9 @@ test("--to sends the canvas's PATCH { edit: { op: duplicate } }", async () => {
     "agents/watchdog/agent.md": agent("watchdog"),
   };
   const s = await serve({
-    "/api/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
-    "/api/workspaces/blog-desk": () => ({ name: "blog-desk" }),
-    "PATCH /api/workspaces/blog-desk/flows/morning": () => ({ ok: true }),
+    "/v1/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
+    "/v1/workspaces/blog-desk": () => ({ name: "blog-desk" }),
+    "PATCH /v1/workspaces/blog-desk/flows/morning": () => ({ ok: true }),
   });
   const r = await at(s.url, "flow", "dup-step", "morning", "--to", "blog-desk", "--step", "watchdog");
   s.close();

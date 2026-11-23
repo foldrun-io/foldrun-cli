@@ -37,7 +37,7 @@ test("--version prints the package version and contacts nothing", async () => {
 });
 
 test("version: cli, core and the platform's release, api and components; no warning when current", async () => {
-  const s = await serve({ "/api/version": () => versionBody(OURS) });
+  const s = await serve({ "/v1/version": () => versionBody(OURS) });
   const r = await cli(["version", "--url", s.url]);
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -49,24 +49,24 @@ test("version: cli, core and the platform's release, api and components; no warn
   assert.match(r.out, /infra\s+eeeeeee/);
   assert.match(r.out, /browsers\s+chromium, chrome 154\.0\.8037\.58, firefox, webkit, lightpanda 0\.4\.1, obscura/, "what the runner image was built with, versions where known");
   assert.doesNotMatch(r.out, /npm i -g/);
-  assert.deepEqual(s.seen.map((x) => x.url), ["/api/version"]);
+  assert.deepEqual(s.seen.map((x) => x.url), ["/v1/version"]);
 });
 
 test("version: warns when the platform was released with a newer CLI, not when older", async () => {
-  const s = await serve({ "/api/version": () => versionBody(NEWER) });
+  const s = await serve({ "/v1/version": () => versionBody(NEWER) });
   const r = await cli(["version", "--url", s.url]);
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, new RegExp(`released with ${NEWER.replace(/\./g, "\\.")}.*npm i -g foldrun@latest`));
 
-  const o = await serve({ "/api/version": () => versionBody("0.0.1") });
+  const o = await serve({ "/v1/version": () => versionBody("0.0.1") });
   const r2 = await cli(["version", "--url", o.url]);
   o.close();
   assert.doesNotMatch(r2.out, /npm i -g/);
 });
 
 test("version --json: {cli, core, platform}", async () => {
-  const s = await serve({ "/api/version": () => versionBody(OURS) });
+  const s = await serve({ "/v1/version": () => versionBody(OURS) });
   const r = await cli(["version", "--json", "--url", s.url]);
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -93,7 +93,7 @@ test("version with no platform at all says so and exits 0", async () => {
 
 test("update notice: once on a platform command when the server's CLI is newer, cached for a day, never without a terminal", async () => {
   const me = { actor: { kind: "user", email: "a@acme.test" }, account: "acme", role: "owner", workspaces: null };
-  const s = await serve({ "/api/me": () => me }, { headers: { "x-foldrun-version": "v2026.10.01.2", "x-foldrun-cli": NEWER } });
+  const s = await serve({ "/v1/me": () => me }, { headers: { "x-foldrun-version": "v2026.10.01.2", "x-foldrun-cli": NEWER } });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-version-home-"));
   const notice = new RegExp(`foldrun ${NEWER.replace(/\./g, "\\.")} is out \\(this is ${OURS.replace(/\./g, "\\.")}\\), released with platform v2026\\.10\\.01\\.2 — npm i -g foldrun@latest`);
   try {
@@ -129,7 +129,7 @@ test("update notice: once on a platform command when the server's CLI is newer, 
 });
 
 test("update notice: an older or equal server CLI says nothing", async () => {
-  const s = await serve({ "/api/me": () => ({ actor: { kind: "user", email: "a@b" }, account: "a", role: "owner", workspaces: null }) }, { headers: { "x-foldrun-cli": OURS } });
+  const s = await serve({ "/v1/me": () => ({ actor: { kind: "user", email: "a@b" }, account: "a", role: "owner", workspaces: null }) }, { headers: { "x-foldrun-cli": OURS } });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-version-home-"));
   const r = await at(s.url, "whoami");
   const t = await cli(["whoami", "--url", s.url, "--token", "k"], { env: { FOLDRUN_HOME: home, FOLDRUN_FORCE_TTY: "1" } });

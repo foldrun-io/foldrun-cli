@@ -71,8 +71,8 @@ function platformDesk() {
   return {
     files,
     routes: {
-      "/api/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
-      "PATCH /api/workspaces/blog-desk/flows/publish": () => ({ ok: true }),
+      "/v1/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
+      "PATCH /v1/workspaces/blog-desk/flows/publish": () => ({ ok: true }),
     } as Record<string, (b: string, q: URLSearchParams) => unknown>,
   };
 }
@@ -207,8 +207,8 @@ test("flow set --to sends the editor's PATCHes, each with the text it expects", 
   assert.equal(r.code, 0, r.out);
   const afterInstruction = updateFlowStepInstruction(FLOW, 1, "draft it twice");
   assert.deepEqual(writes(s), [
-    { method: "PATCH", url: "/api/workspaces/blog-desk/flows/publish", body: { step: 1, instruction: "draft it twice", expect: sha(FLOW) } },
-    { method: "PATCH", url: "/api/workspaces/blog-desk/flows/publish", body: { step: 1, options: { effort: "high" }, expect: sha(afterInstruction) } },
+    { method: "PATCH", url: "/v1/workspaces/blog-desk/flows/publish", body: { step: 1, instruction: "draft it twice", expect: sha(FLOW) } },
+    { method: "PATCH", url: "/v1/workspaces/blog-desk/flows/publish", body: { step: 1, options: { effort: "high" }, expect: sha(afterInstruction) } },
   ]);
 });
 
@@ -233,7 +233,7 @@ test("flow trigger, move-step and paste --to send the dashboard's bodies", async
 
 function draftPlatform() {
   return serve({
-    "POST /api/workspaces/blog-desk/flows/draft": () => ({
+    "POST /v1/workspaces/blog-desk/flows/draft": () => ({
       ok: true,
       files: [
         { path: "flows/weekly.md", content: "---\nname: weekly\n---\n\n1. [[writer]] — write it\n", before: null, sha256: null },
@@ -244,7 +244,7 @@ function draftPlatform() {
       notes: "A weekly flow.",
       supply: "mock",
     }),
-    "PUT /api/workspaces/blog-desk/source": () => ({ ok: true }),
+    "PUT /v1/workspaces/blog-desk/source": () => ({ ok: true }),
   });
 }
 
@@ -273,9 +273,9 @@ test("history restore puts one file back as a revision left it, with ifMatch, on
   const now = "1. [[writer]] — now\n";
   const then = "1. [[writer]] — then\n";
   const s = await serve({
-    "/api/workspaces/blog-desk/history": (_b, q) => ({ id: q.get("id"), at: "2026-10-01T00:00:00Z", by: "matt", commit: "abcdef1234567890", files: [{ path: q.get("path"), before: "x", after: then, diff: [] }] }),
-    "/api/workspaces/blog-desk/source": (_b, q) => ({ path: q.get("path"), content: now, sha256: sha(now) }),
-    "PUT /api/workspaces/blog-desk/source": () => ({ ok: true, issues: [{ level: "error", rule: "flow/config", where: "flows/publish.md", message: "no agent named writer" }] }),
+    "/v1/workspaces/blog-desk/history": (_b, q) => ({ id: q.get("id"), at: "2026-10-01T00:00:00Z", by: "matt", commit: "abcdef1234567890", files: [{ path: q.get("path"), before: "x", after: then, diff: [] }] }),
+    "/v1/workspaces/blog-desk/source": (_b, q) => ({ path: q.get("path"), content: now, sha256: sha(now) }),
+    "PUT /v1/workspaces/blog-desk/source": () => ({ ok: true, issues: [{ level: "error", rule: "flow/config", where: "flows/publish.md", message: "no agent named writer" }] }),
   });
   const pipe = await at(s.url, "history", "restore", "flows/publish.md", "--id", "r1", "--to", "blog-desk");
   const yes = await at(s.url, "history", "restore", "flows/publish.md", "--id", "r1", "--to", "blog-desk", "--yes");
@@ -285,30 +285,30 @@ test("history restore puts one file back as a revision left it, with ifMatch, on
   assert.equal(yes.code, 0, yes.out);
   assert.match(yes.out, /- 1\. \[\[writer\]\] — now[\s\S]*\+ 1\. \[\[writer\]\] — then/);
   assert.match(yes.out, /does not pass today's checks: flows\/publish\.md — no agent named writer/, "a restore that fails today's checks says so (FOL-57)");
-  assert.deepEqual(writes(s), [{ method: "PUT", url: "/api/workspaces/blog-desk/source", body: { path: "flows/publish.md", content: then, message: "restored abcdef1 from history", ifMatch: sha(now) } }]);
+  assert.deepEqual(writes(s), [{ method: "PUT", url: "/v1/workspaces/blog-desk/source", body: { path: "flows/publish.md", content: then, message: "restored abcdef1 from history", ifMatch: sha(now) } }]);
   assert.equal(s.seen.find((x) => x.url.endsWith("/history"))!.query.get("path"), "flows/publish.md");
 });
 
 // ------------------------------------------------------------ settings and account
 
 test("schedule tick POSTs the tick and says what fired", async () => {
-  const s = await serve({ "POST /api/schedule": () => ({ ok: true, fired: ["blog-desk/publish"] }) });
+  const s = await serve({ "POST /v1/schedule": () => ({ ok: true, fired: ["blog-desk/publish"] }) });
   const r = await at(s.url, "schedule", "tick");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /fired blog-desk\/publish/);
-  assert.deepEqual(writes(s).map((w) => w.url), ["/api/schedule"]);
+  assert.deepEqual(writes(s).map((w) => w.url), ["/v1/schedule"]);
 });
 
-test("library ls / cat / put / rm go to /api/library/<kind>", async () => {
+test("library ls / cat / put / rm go to /v1/library/<kind>", async () => {
   const s = await serve({
-    "/api/library/skills": (_b, q) => (q.get("path") ? { path: q.get("path"), content: "# house style\n" } : { kind: "skills", entries: [{ name: "house-style", description: "How we write." }] }),
-    "/api/library/tools": () => ({ entries: [] }),
-    "/api/library/scripts": () => ({ entries: [] }),
-    "/api/library/knowledge": () => ({ entries: [] }),
-    "/api/library/memory": () => ({ entries: [] }),
-    "PUT /api/library/skills": () => ({ ok: true }),
-    "DELETE /api/library/skills": () => ({ ok: true }),
+    "/v1/library/skills": (_b, q) => (q.get("path") ? { path: q.get("path"), content: "# house style\n" } : { kind: "skills", entries: [{ name: "house-style", description: "How we write." }] }),
+    "/v1/library/tools": () => ({ entries: [] }),
+    "/v1/library/scripts": () => ({ entries: [] }),
+    "/v1/library/knowledge": () => ({ entries: [] }),
+    "/v1/library/memory": () => ({ entries: [] }),
+    "PUT /v1/library/skills": () => ({ ok: true }),
+    "DELETE /v1/library/skills": () => ({ ok: true }),
   });
   const ls = await at(s.url, "library");
   const cat = await at(s.url, "library", "cat", "skills/house-style/SKILL.md");
@@ -326,22 +326,22 @@ test("library ls / cat / put / rm go to /api/library/<kind>", async () => {
   assert.equal(rm.code, 0, rm.out);
   assert.equal(bad.code, 1);
   assert.deepEqual(writes(s), [
-    { method: "PUT", url: "/api/library/skills", body: { path: "house-style/SKILL.md", content: "# new\n" } },
-    { method: "DELETE", url: "/api/library/skills", body: { path: "house-style" } },
+    { method: "PUT", url: "/v1/library/skills", body: { path: "house-style/SKILL.md", content: "# new\n" } },
+    { method: "DELETE", url: "/v1/library/skills", body: { path: "house-style" } },
   ]);
 });
 
 test("secrets clients ls / add / rm, and connect --client runs the consent from a saved client", async () => {
   let connected: string | null = null;
   const s = await serve({
-    "/api/oauth/clients": () => ({ clients: [{ name: "gmail", authorize_url: "https://accounts.google.com/o/oauth2/v2/auth", client_id: "id-1", scopes: "mail" }] }),
-    "POST /api/oauth/clients": () => ({ ok: true, name: "gmail" }),
-    "DELETE /api/oauth/clients": () => ({ ok: true }),
-    "POST /api/oauth/start": () => {
+    "/v1/oauth/clients": () => ({ clients: [{ name: "gmail", authorize_url: "https://accounts.google.com/o/oauth2/v2/auth", client_id: "id-1", scopes: "mail" }] }),
+    "POST /v1/oauth/clients": () => ({ ok: true, name: "gmail" }),
+    "DELETE /v1/oauth/clients": () => ({ ok: true }),
+    "POST /v1/oauth/start": () => {
       connected = "2026-10-02T00:00:00Z";
       return { ok: true, url: "https://accounts.google.com/consent?x=1" };
     },
-    "/api/oauth/connections": () => ({ connections: connected ? [{ name: "GMAIL", workspace: null, connectedAt: connected }] : [] }),
+    "/v1/oauth/connections": () => ({ connections: connected ? [{ name: "GMAIL", workspace: null, connectedAt: connected }] : [] }),
   });
   const ls = await at(s.url, "secrets", "clients");
   const add = await at(s.url, "secrets", "clients", "add", "gmail", "--provider", "google", "--client-id", "id-1", "--client-secret", "shh", "--scopes", "mail");
@@ -357,13 +357,13 @@ test("secrets clients ls / add / rm, and connect --client runs the consent from 
   assert.equal(w[0].body.config.client_secret, "shh");
   assert.equal(w[0].body.config.token_url, "https://oauth2.googleapis.com/token");
   assert.deepEqual(w.slice(1), [
-    { method: "DELETE", url: "/api/oauth/clients", body: { client: "gmail" } },
-    { method: "POST", url: "/api/oauth/start", body: { client: "gmail", secret: "GMAIL" } },
+    { method: "DELETE", url: "/v1/oauth/clients", body: { client: "gmail" } },
+    { method: "POST", url: "/v1/oauth/start", body: { client: "gmail", secret: "GMAIL" } },
   ]);
 });
 
 test("secrets clients add: the provider's own URLs and --authorize-param, no preset needed; --provider says it is deprecated", async () => {
-  const s = await serve({ "POST /api/oauth/clients": () => ({ ok: true, name: "crm" }) });
+  const s = await serve({ "POST /v1/oauth/clients": () => ({ ok: true, name: "crm" }) });
   const add = await at(s.url, "secrets", "clients", "add", "crm", "--authorize-url", "https://auth.example.com/authorize", "--token-url", "https://auth.example.com/token",
     "--client-id", "id-2", "--client-secret", "shh", "--scopes", "read", "--authorize-param", "access_type=offline", "--authorize-param", "prompt=consent");
   const bad = await at(s.url, "secrets", "clients", "add", "crm2", "--authorize-url", "https://auth.example.com/authorize", "--token-url", "https://auth.example.com/token",
@@ -383,22 +383,22 @@ test("secrets clients add: the provider's own URLs and --authorize-param, no pre
 test("connect --client --scopes asks for this connection's own scopes from a saved client", async () => {
   let connected: string | null = null;
   const s = await serve({
-    "POST /api/oauth/start": () => {
+    "POST /v1/oauth/start": () => {
       connected = "2026-10-22T00:00:00Z";
       return { ok: true, url: "https://accounts.google.com/consent?x=2" };
     },
-    "/api/oauth/connections": () => ({ connections: connected ? [{ name: "GSC_OAUTH", workspace: "blog-desk", connectedAt: connected }] : [] }),
+    "/v1/oauth/connections": () => ({ connections: connected ? [{ name: "GSC_OAUTH", workspace: "blog-desk", connectedAt: connected }] : [] }),
   });
   const c = await cli(["connect", "GSC_OAUTH", "--client", "google", "--scopes", "https://www.googleapis.com/auth/webmasters.readonly", "--to", "blog-desk", "--url", s.url, "--token", "k"], { env: { FOLDRUN_CONNECT_POLL_MS: "10" } });
   s.close();
   assert.equal(c.code, 0, c.out);
   assert.deepEqual(writes(s), [
-    { method: "POST", url: "/api/oauth/start", body: { client: "google", secret: "GSC_OAUTH", workspace: "blog-desk", scopes: "https://www.googleapis.com/auth/webmasters.readonly" } },
+    { method: "POST", url: "/v1/oauth/start", body: { client: "google", secret: "GSC_OAUTH", workspace: "blog-desk", scopes: "https://www.googleapis.com/auth/webmasters.readonly" } },
   ]);
 });
 
 test("secrets set --kind stores each shape the Connections form stores", async () => {
-  const s = await serve({ "PUT /api/secrets": () => ({ ok: true }) });
+  const s = await serve({ "PUT /v1/secrets": () => ({ ok: true }) });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-kinds-"));
   fs.writeFileSync(path.join(dir, "cert.pem"), "PEM\n");
   fs.writeFileSync(path.join(dir, "id_ed25519"), "KEY\n");
@@ -425,7 +425,7 @@ test("secrets set --kind stores each shape the Connections form stores", async (
 });
 
 test("secrets set --kind: Basic from a username and password, and a service account acting as a user", async () => {
-  const s = await serve({ "PUT /api/secrets": () => ({ ok: true }) });
+  const s = await serve({ "PUT /v1/secrets": () => ({ ok: true }) });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-kinds2-"));
   fs.writeFileSync(path.join(dir, "sa.json"), JSON.stringify({ client_email: "bot@x.iam", private_key: "PK", token_uri: "https://oauth2.googleapis.com/token" }));
   fs.writeFileSync(path.join(dir, "c.pem"), "CERT\n");
@@ -446,15 +446,15 @@ test("secrets set --kind: Basic from a username and password, and a service acco
 
 test("billing plans / plan / cancel / resume / top-up / card", async () => {
   const s = await serve({
-    "/api/billing/plans": () => ({
+    "/v1/billing/plans": () => ({
       creditUsd: 0.01, trialCredits: 500, cards: true, balanceUsd: 12.5,
       plans: [{ id: "starter", monthlyUsd: 29, credits: 2900, concurrency: 1, workspaces: 3, pitch: "One desk." }, { id: "creator", monthlyUsd: 79, credits: 8800, concurrency: 2, workspaces: 10, pitch: "A few." }],
       current: { plan: "starter", status: "active", cycleCredits: 2900, cycleRemainingCredits: 1000, resetsAt: "2026-10-20T00:00:00Z" },
     }),
-    "POST /api/billing/subscribe": (b) => (JSON.parse(b).resume ? { ok: true, resumed: true, plan: "starter" } : { ok: true, changed: true, plan: JSON.parse(b).plan }),
-    "DELETE /api/billing/subscribe": () => ({ ok: true, endsAt: "2026-10-20T00:00:00Z" }),
-    "POST /api/billing/checkout": () => ({ ok: true, url: "https://checkout.stripe.com/c/1" }),
-    "POST /api/billing/card": () => failing(403, { error: "forbidden: billing:manage" }),
+    "POST /v1/billing/subscribe": (b) => (JSON.parse(b).resume ? { ok: true, resumed: true, plan: "starter" } : { ok: true, changed: true, plan: JSON.parse(b).plan }),
+    "DELETE /v1/billing/subscribe": () => ({ ok: true, endsAt: "2026-10-20T00:00:00Z" }),
+    "POST /v1/billing/checkout": () => ({ ok: true, url: "https://checkout.stripe.com/c/1" }),
+    "POST /v1/billing/card": () => failing(403, { error: "forbidden: billing:manage" }),
   });
   const plans = await at(s.url, "billing", "plans");
   const pipe = await at(s.url, "billing", "plan", "creator");
@@ -474,20 +474,20 @@ test("billing plans / plan / cancel / resume / top-up / card", async () => {
   assert.equal(card.code, 1);
   assert.match(card.out, /needs billing:manage/);
   assert.deepEqual(writes(s).map((w) => [w.method, w.url, w.body]), [
-    ["POST", "/api/billing/subscribe", { plan: "creator" }],
-    ["DELETE", "/api/billing/subscribe", null],
-    ["POST", "/api/billing/subscribe", { resume: true }],
-    ["POST", "/api/billing/checkout", { usd: 50 }],
-    ["POST", "/api/billing/card", {}],
+    ["POST", "/v1/billing/subscribe", { plan: "creator" }],
+    ["DELETE", "/v1/billing/subscribe", null],
+    ["POST", "/v1/billing/subscribe", { resume: true }],
+    ["POST", "/v1/billing/checkout", { usd: 50 }],
+    ["POST", "/v1/billing/card", {}],
   ]);
 });
 
-test("api version shows the pin and limits; pin and unpin PATCH /api/account/api", async () => {
+test("api version shows the pin and limits; pin and unpin PATCH /v1/account/api", async () => {
   const facts = (pinned: string | null) => ({
     version: { current: "2026-10-01", pinned, effective: pinned ?? "2026-10-01", supported: ["2026-09-25", "2026-10-01"], supportMonths: 12 },
     limits: { plan: "free", windowSeconds: 60, perCredential: { read: 300, write: 60 }, perAccount: { read: 900, write: 180 } },
   });
-  const s = await serve({ "GET /api/account/api": () => facts(null), "PATCH /api/account/api": (b) => facts(JSON.parse(b).version) });
+  const s = await serve({ "GET /v1/account/api": () => facts(null), "PATCH /v1/account/api": (b) => facts(JSON.parse(b).version) });
   const show = await at(s.url, "api", "version");
   const pin = await at(s.url, "api", "version", "pin", "2026-09-25");
   const unpin = await at(s.url, "api", "version", "unpin");
@@ -511,24 +511,24 @@ test("api version shows the last 30 days by version, and a deprecated route with
     versions: [{ version: "2026-10-01", requests: 412, lastSeen: "2026-10-13T09:00:00Z" }],
     deprecated: [{ route: "DELETE /api/old", requests: 7, lastSeen: "2026-10-12T22:00:00Z", deprecatedAt: "2026-09-01", sunsetAt: "2027-03-01T00:00:00Z", link: "https://docs.foldrun.io/api-usage", callers: [{ credential: 'key "ci" (fr_ab12cd34ef…)', requests: 7, lastSeen: "2026-10-12T22:00:00Z" }] }],
   };
-  const s = await serve({ "GET /api/account/api": () => ({ ...base, usage }) });
+  const s = await serve({ "GET /v1/account/api": () => ({ ...base, usage }) });
   const r = await at(s.url, "api", "version");
   s.close();
   assert.match(r.out, /your use\s+last 30 days: 2026-10-01 412 \(last 2026-10-13\)/);
   assert.match(r.out, /deprecated\s+DELETE \/api\/old — 7 requests, last 2026-10-12; stops answering 2027-03-01 · https:\/\/docs\.foldrun\.io\/api-usage/);
   assert.match(r.out, /key "ci" \(fr_ab12cd34ef…\): 7, last 2026-10-12/);
-  const quiet = await serve({ "GET /api/account/api": () => ({ ...base, usage: { days: 30, versions: [], deprecated: [] } }) });
+  const quiet = await serve({ "GET /v1/account/api": () => ({ ...base, usage: { days: 30, versions: [], deprecated: [] } }) });
   const q = await at(quiet.url, "api", "version");
   quiet.close();
   assert.match(q.out, /no API requests in the last 30 days/);
-  const old = await serve({ "GET /api/account/api": () => base });
+  const old = await serve({ "GET /v1/account/api": () => base });
   const o = await at(old.url, "api", "version");
   old.close();
   assert.doesNotMatch(o.out, /your use/, "an older platform sends no usage; nothing is said about it");
 });
 
 test("preferences shows and sets the theme", async () => {
-  const s = await serve({ "GET /api/me/preferences": () => ({ theme: "system" }), "PATCH /api/me/preferences": (b) => ({ theme: JSON.parse(b).theme }) });
+  const s = await serve({ "GET /v1/me/preferences": () => ({ theme: "system" }), "PATCH /v1/me/preferences": (b) => ({ theme: JSON.parse(b).theme }) });
   const show = await at(s.url, "preferences");
   const set = await at(s.url, "preferences", "set", "theme", "dark");
   const bad = await at(s.url, "preferences", "set", "theme", "blue");
@@ -541,15 +541,15 @@ test("preferences shows and sets the theme", async () => {
 
 test("changelog prints each release's notes; find prints ranked hits", async () => {
   const s = await serve({
-    "/api/changelog": (_b, q) => ({ version: "v2026.10.02.1", limit: q.get("limit"), releases: [{ version: "v2026.10.02.1", released_at: "2026-10-02T00:00:00Z", previous: null, components: {}, notes: { features: [{ subject: "canvas paste" }], fixes: ["a fix"], docs: [], other: [] } }] }),
-    "/api/search": (_b, q) => ({ hits: q.get("q") === "digest" ? [{ kind: "flow", title: "digest", subtitle: "schedule · 0 9 * * 1", workspace: "blog-desk", href: "/x" }, { kind: "run", title: "run-9", subtitle: "digest — good", workspace: "blog-desk", status: "completed", href: "/y" }] : [] }),
+    "/v1/changelog": (_b, q) => ({ version: "v2026.10.02.1", limit: q.get("limit"), releases: [{ version: "v2026.10.02.1", released_at: "2026-10-02T00:00:00Z", previous: null, components: {}, notes: { features: [{ subject: "canvas paste" }], fixes: ["a fix"], docs: [], other: [] } }] }),
+    "/v1/search": (_b, q) => ({ hits: q.get("q") === "digest" ? [{ kind: "flow", title: "digest", subtitle: "schedule · 0 9 * * 1", workspace: "blog-desk", href: "/x" }, { kind: "run", title: "run-9", subtitle: "digest — good", workspace: "blog-desk", status: "completed", href: "/y" }] : [] }),
   });
   const cl = await at(s.url, "changelog", "--limit", "3");
   const f = await at(s.url, "find", "digest");
   const none = await at(s.url, "find", "zzz");
   s.close();
   assert.match(cl.out, /v2026\.10\.02\.1\s+← running[\s\S]*features[\s\S]*canvas paste[\s\S]*fixes[\s\S]*a fix/);
-  assert.equal(s.seen.find((x) => x.url === "/api/changelog")!.query.get("limit"), "3");
+  assert.equal(s.seen.find((x) => x.url === "/v1/changelog")!.query.get("limit"), "3");
   assert.match(f.out, /flow\s+digest\s+blog-desk · schedule/);
   assert.match(f.out, /run\s+run-9 completed/);
   assert.match(none.out, /nothing matches "zzz"/);
@@ -562,19 +562,19 @@ test("changelog leads with the API: its version, breaking changes by version, de
     versions: [{ version: "2027-01-15", changes: ["runs: finishedAt is endedAt"] }, { version: "2026-10-01", changes: [] }],
     deprecations: [{ route: "DELETE /api/old", deprecatedAt: "2026-11-01", sunsetAt: "2027-05-01", link: "https://docs.foldrun.io/api-usage" }],
   };
-  const s = await serve({ "/api/changelog": () => ({ version: "v2026.10.02.1", api, releases: [] }) });
+  const s = await serve({ "/v1/changelog": () => ({ version: "v2026.10.02.1", api, releases: [] }) });
   const cl = await at(s.url, "changelog");
   s.close();
   assert.match(cl.out, /API 2027-01-15[\s\S]*12 months[\s\S]*breaking changes[\s\S]*2027-01-15\s+runs: finishedAt is endedAt/);
   assert.match(cl.out, /deprecated[\s\S]*DELETE \/api\/old — since 2026-11-01, stops answering 2027-05-01/);
-  const quiet = await serve({ "/api/changelog": () => ({ version: "v1", api: { current: "2026-10-01", supportMonths: 12, versions: [{ version: "2026-10-01", changes: [] }], deprecations: [] }, releases: [] }) });
+  const quiet = await serve({ "/v1/changelog": () => ({ version: "v1", api: { current: "2026-10-01", supportMonths: 12, versions: [{ version: "2026-10-01", changes: [] }], deprecations: [] }, releases: [] }) });
   const q = await at(quiet.url, "changelog");
   quiet.close();
   assert.match(q.out, /API 2026-10-01[\s\S]*nothing existing code would break on, and nothing deprecated/);
 });
 
 test("workspaces demo POSTs { demo: true }", async () => {
-  const s = await serve({ "POST /api/workspaces": () => ({ ok: true, name: "demo-pipeline", agents: 4, flows: 1 }) });
+  const s = await serve({ "POST /v1/workspaces": () => ({ ok: true, name: "demo-pipeline", agents: 4, flows: 1 }) });
   const r = await at(s.url, "workspaces", "demo");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -585,8 +585,8 @@ test("workspaces demo POSTs { demo: true }", async () => {
 test("report live lists the agents with frames and saves the newest one", async () => {
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
   const s = await serve({
-    "/api/workspaces/blog-desk/runs/run-1": () => ({ id: "run-1", status: "running", steps: [] }),
-    "/api/workspaces/blog-desk/runs/run-1/live": (_b, q) =>
+    "/v1/workspaces/blog-desk/runs/run-1": () => ({ id: "run-1", status: "running", steps: [] }),
+    "/v1/workspaces/blog-desk/runs/run-1/live": (_b, q) =>
       q.get("agent") ? raw(jpeg, "image/jpeg", { "x-live-url": encodeURIComponent("https://example.com/a b"), "x-live-at": "2026-10-02T00:00:00Z", "x-live-ended": "1", "x-live-engine": "chromium" }) : { agents: { scout: "2026-10-02T00:00:00Z", reader: "2026-10-02T00:00:01Z" } },
   });
   const list = await at(s.url, "report", "run-1", "live", "--to", "blog-desk");
@@ -600,7 +600,7 @@ test("report live lists the agents with frames and saves the newest one", async 
 });
 
 test("workspace vocabulary prints each list the editor completes", async () => {
-  const s = await serve({ "/api/workspaces/blog-desk/vocabulary": () => ({ agents: ["writer"], flows: ["publish"], skills: [], tools: ["web"], secrets: ["CRM"], scripts: [], types: [], docs: [] }) });
+  const s = await serve({ "/v1/workspaces/blog-desk/vocabulary": () => ({ agents: ["writer"], flows: ["publish"], skills: [], tools: ["web"], secrets: ["CRM"], scripts: [], types: [], docs: [] }) });
   const r = await at(s.url, "workspace", "vocabulary", "--to", "blog-desk");
   s.close();
   assert.equal(r.code, 0, r.out);
@@ -628,10 +628,10 @@ test("each verb's --help lists exactly its own options: restore gets --dry-run/-
 
 test("source ls / cat / put / mv / rm — the editor's file door, which had no test of its own", async () => {
   const s = await serve({
-    "GET /api/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { path: q.get("path"), content: "# hi" } : { files: ["AGENTS.md", "flows/publish.md"] }),
-    "PUT /api/workspaces/blog-desk/source": () => ({ ok: true }),
-    "PATCH /api/workspaces/blog-desk/source": () => ({ ok: true }),
-    "DELETE /api/workspaces/blog-desk/source": () => ({ ok: true }),
+    "GET /v1/workspaces/blog-desk/source": (_b, q) => (q.get("path") ? { path: q.get("path"), content: "# hi" } : { files: ["AGENTS.md", "flows/publish.md"] }),
+    "PUT /v1/workspaces/blog-desk/source": () => ({ ok: true }),
+    "PATCH /v1/workspaces/blog-desk/source": () => ({ ok: true }),
+    "DELETE /v1/workspaces/blog-desk/source": () => ({ ok: true }),
   });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-src-")), "x.md");
   fs.writeFileSync(file, "# new\n");
@@ -648,16 +648,16 @@ test("source ls / cat / put / mv / rm — the editor's file door, which had no t
   for (const r of [put, mv, rm]) assert.equal(r.code, 0, r.out);
   assert.equal(rmPipe.code, 1);
   assert.deepEqual(writes(s), [
-    { method: "PUT", url: "/api/workspaces/blog-desk/source", body: { path: "knowledge/x.md", content: "# new\n", message: "why" } },
-    { method: "PATCH", url: "/api/workspaces/blog-desk/source", body: { from: "knowledge/x.md", to: "knowledge/y.md" } },
-    { method: "DELETE", url: "/api/workspaces/blog-desk/source", body: { path: "knowledge/y.md" } },
+    { method: "PUT", url: "/v1/workspaces/blog-desk/source", body: { path: "knowledge/x.md", content: "# new\n", message: "why" } },
+    { method: "PATCH", url: "/v1/workspaces/blog-desk/source", body: { from: "knowledge/x.md", to: "knowledge/y.md" } },
+    { method: "DELETE", url: "/v1/workspaces/blog-desk/source", body: { path: "knowledge/y.md" } },
   ]);
 });
 
 test("identity: the issuer and subject to trust; secrets set --kind identity stores only the audience", async () => {
   const s = await serve({
-    "/api/identity": () => ({ enabled: true, issuer: "https://dev.example.test", subject: "account:acme:workspace:desk:agent:<agent>", tokenSeconds: 600 }),
-    "PUT /api/secrets": () => ({ ok: true }),
+    "/v1/identity": () => ({ enabled: true, issuer: "https://dev.example.test", subject: "account:acme:workspace:desk:agent:<agent>", tokenSeconds: 600 }),
+    "PUT /v1/secrets": () => ({ ok: true }),
   });
   const show = await at(s.url, "identity", "--to", "desk");
   const set = await at(s.url, "secrets", "set", "AWS_ID", "--kind", "identity", "--audience", "sts.amazonaws.com", "--to", "desk");
@@ -669,7 +669,7 @@ test("identity: the issuer and subject to trust; secrets set --kind identity sto
   assert.equal(set.code, 0, set.out);
   assert.equal(bad.code, 1);
   assert.match(bad.out, /needs --audience/);
-  assert.deepEqual(writes(s).filter((w) => w.url === "/api/secrets").map((w) => w.body), [{ name: "AWS_ID", identity: { audience: "sts.amazonaws.com" }, workspace: "desk" }]);
+  assert.deepEqual(writes(s).filter((w) => w.url === "/v1/secrets").map((w) => w.body), [{ name: "AWS_ID", identity: { audience: "sts.amazonaws.com" }, workspace: "desk" }]);
 });
 
 test("flow set writes max_output_tokens as the step editor does, and refuses what is not a number of tokens (3 Nov 2026)", () => {
@@ -687,7 +687,7 @@ test("flow set writes max_output_tokens as the step editor does, and refuses wha
 });
 
 test("secrets set --kind client-cert --site binds it as it is stored, as the Connections form does", async () => {
-  const s = await serve({ "PUT /api/secrets": () => ({ ok: true }) });
+  const s = await serve({ "PUT /v1/secrets": () => ({ ok: true }) });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-kind-sites-"));
   fs.writeFileSync(path.join(dir, "c.pem"), "CERT\n");
   fs.writeFileSync(path.join(dir, "k.pem"), "KEY\n");

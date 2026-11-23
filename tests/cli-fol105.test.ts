@@ -22,9 +22,9 @@ test("login and whoami name the credentials file FOLDRUN_HOME chose, not ~/.fold
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-105-"));
   try {
     const s = await serve({
-      "POST /api/cli/login": () => ({ id: "p1", code: "ABCD-EFGH", verifyUrl: "http://x.test/cli/authorize", interval: 1, expiresAt: new Date(Date.now() + 60_000).toISOString() }),
-      "/api/cli/login/p1": () => ({ status: "approved", token: "mda_fol105", email: "a@acme.test", account: "acme", role: "admin" }),
-      "/api/me": () => me,
+      "POST /v1/cli/login": () => ({ id: "p1", code: "ABCD-EFGH", verifyUrl: "http://x.test/cli/authorize", interval: 1, expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+      "/v1/cli/login/p1": () => ({ status: "approved", token: "mda_fol105", email: "a@acme.test", account: "acme", role: "admin" }),
+      "/v1/me": () => me,
     });
     const login = await cli(["login", "--url", s.url, "--no-browser"], { env: { FOLDRUN_HOME: home } });
     const who = await cli(["whoami"], { env: { FOLDRUN_HOME: home } });
@@ -47,10 +47,10 @@ test("login and whoami name the credentials file FOLDRUN_HOME chose, not ~/.fold
 function platform(accountOn: boolean, workspaceOn: boolean) {
   let wsOn = workspaceOn;
   return serve({
-    "/api/workspaces/blog-desk/source": () => ({ path: "AGENTS.md", content: wsOn ? "---\nnetwork_enforce: true\n---\n" : "---\nname: blog-desk\n---\n" }),
-    "/api/workspaces/blog-desk/pause": () => ({ paused: null }),
-    "/api/account": () => ({ defaults: { networkEnforce: accountOn } }),
-    "PATCH /api/workspaces/blog-desk": (b) => {
+    "/v1/workspaces/blog-desk/source": () => ({ path: "AGENTS.md", content: wsOn ? "---\nnetwork_enforce: true\n---\n" : "---\nname: blog-desk\n---\n" }),
+    "/v1/workspaces/blog-desk/pause": () => ({ paused: null }),
+    "/v1/account": () => ({ defaults: { networkEnforce: accountOn } }),
+    "PATCH /v1/workspaces/blog-desk": (b) => {
       wsOn = JSON.parse(b).network_enforce === true;
       return { ok: true, name: "blog-desk", renamed: false, defaults: { timezone: null, budget: null, notify: null, networkEnforce: wsOn }, brokeWebhooks: [] };
     },
@@ -82,9 +82,9 @@ test("off under an account that does not: no warning, and the view says it is th
 
 test("a key that may not read the account still shows the workspace (the account's value unknown)", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/source": () => ({ path: "AGENTS.md", content: "---\nname: blog-desk\n---\n" }),
-    "/api/workspaces/blog-desk/pause": () => ({ paused: null }),
-    "/api/account": () => ({ __status: 403, body: { error: "this key is scoped to workspaces" } }),
+    "/v1/workspaces/blog-desk/source": () => ({ path: "AGENTS.md", content: "---\nname: blog-desk\n---\n" }),
+    "/v1/workspaces/blog-desk/pause": () => ({ paused: null }),
+    "/v1/account": () => ({ __status: 403, body: { error: "this key is scoped to workspaces" } }),
   });
   const view = await at(s.url, "workspace", "--to", "blog-desk");
   s.close();

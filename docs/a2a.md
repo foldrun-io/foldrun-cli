@@ -56,7 +56,7 @@ editor's change that leaves `a2a:` as it was goes through.
 
 From the dashboard: **Flows**, the flow's card, **Publish over A2A…**
 (admins only; others see it read-only) — it edits the block through
-`PATCH /api/workspaces/<ws>/flows/<f>` `{ a2a: {…} }` (merged over what the
+`PATCH /v1/workspaces/<ws>/flows/<f>` `{ a2a: {…} }` (merged over what the
 flow says: a key sent replaces it, `null` removes it, `a2a: null` removes the
 block) and shows the card URL and a `curl` to try it. From the terminal:
 
@@ -68,7 +68,7 @@ foldrun a2a unpublish lead-finder --to sales
 ```
 
 The project's **Triggers** page, section **Outside agents (A2A)** (and
-`GET /api/workspaces/<ws>/a2a`), lists every
+`GET /v1/workspaces/<ws>/a2a`), lists every
 flow that says `a2a:`, its card and endpoint URLs, the project's A2A keys and
 the newest tasks with the key that asked.
 
@@ -151,7 +151,7 @@ through and is written to the audit log as `a2a.agent_widened`.
 
 What this does not cover: the **code** of a script, hook or folder tool, and
 an agent's prose, stay an editor's — they change how an agent uses what it
-has, not what it has. A change to the account library (`/api/library`) is
+has, not what it has. A change to the account library (`/v1/library`) is
 not checked here; the serve-time check above still refuses new tasks for a
 secret-and-code agent it creates.
 
@@ -169,7 +169,7 @@ flows it may call, and how many tasks it may have open at once. The key is
 shown once.
 
 - It opens `/a2a/<account>/<workspace>/…` for its flows and nothing else.
-  Every `/api` route refuses it (`403`): not runs, not source, not approvals,
+  Every `/v1` platform route refuses it (`403`): not runs, not source, not approvals,
   not storage, not secrets.
 - A flow must be both **named by the key** and **published**. A key is
   minted for published flows only (since 5 Nov 2026 — publish first, then
@@ -184,7 +184,7 @@ shown once.
   them.
 - It counts in its account's rate limit with its own bucket, like any key.
 
-The API: `POST /api/keys { purpose: "a2a", workspace, flows, maxTasks?, label?, expires? }`
+The API: `POST /v1/keys { purpose: "a2a", workspace, flows, maxTasks?, label?, expires? }`
 ([api](api#account)).
 
 ## Calling a published flow

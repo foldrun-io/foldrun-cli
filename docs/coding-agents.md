@@ -68,7 +68,7 @@ friends, which talk to the platform you signed in to (`foldrun login`, or
 too, with the same key:
 
 ```sh
-api() { p=$1; shift; curl -sS -H "authorization: Bearer $FOLDRUN_TOKEN" "$FOLDRUN_URL/api/$p" "$@"; }
+api() { p=$1; shift; curl -sS -H "authorization: Bearer $FOLDRUN_TOKEN" "$FOLDRUN_URL/v1/$p" "$@"; }
 
 api workspaces/$WS/runs                       # recent runs, newest first
 api workspaces/$WS/runs/<id>                  # the full trail of one
@@ -76,7 +76,7 @@ api workspaces/$WS/runs/<id>/stream           # follow a live one (SSE)
 api workspaces/$WS/flows/<flow>/run -X POST   # start one
 ```
 
-| Route (`/api/workspaces/<ws>` unless noted) | Methods | For |
+| Route (`/v1/workspaces/<ws>` unless noted) | Methods | For |
 |---|---|---|
 | `/` | GET DELETE PATCH | the project itself |
 | `/deploy` | POST | what `foldrun deploy` calls |
@@ -94,8 +94,8 @@ api workspaces/$WS/flows/<flow>/run -X POST   # start one
 | `/export` · `/import` | GET · POST | the project, a flow (`?kind=flow&name=`) or an agent as a .zip; take one in (`?dryRun=1` first, `?overwrite=1` to replace) |
 | `/restore` | POST | the project's source back to a point in its history — `dryRun` first, then `confirm` |
 | `/notify/deliveries` · `/notify/deliveries/<id>/redeliver` | GET · POST | every notify: webhook sent and each attempt; send one again |
-| `/api/secrets` · `/api/schedule` · `/api/account` · `/api/keys` | account-level | the vault, the clock, defaults, API keys |
-| `/api/me/notifications` | GET PATCH | what mail you get, per category; a key acts for whoever minted it |
+| `/v1/secrets` · `/v1/schedule` · `/v1/account` · `/v1/keys` | account-level | the vault, the clock, defaults, API keys |
+| `/v1/me/notifications` | GET PATCH | what mail you get, per category; a key acts for whoever minted it |
 
 A key carries a role (viewer, editor, admin) and a project scope no wider
 than the person who minted it. Team, profile and MFA routes are a person's

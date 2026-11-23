@@ -15,7 +15,7 @@ import {
   friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, homeTilde,
 } from "../src/code-session.mjs";
 
-const WS = "/api/workspaces/desk";
+const WS = "/v1/workspaces/desk";
 const ID = "c".repeat(64);
 const RUN = "run-sess-1";
 const PATCH = "diff --git a/a.txt b/a.txt\nindex 7898192..422c2b7 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1,2 @@\n a\n+b\n";
@@ -581,7 +581,7 @@ test("every new session asks where (last answer ticked, Enter keeps it); the pro
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const s = await serve({
-    "GET /api/workspaces": () => ({ workspaces: [{ name: "desk" }, { name: "other" }] }),
+    "GET /v1/workspaces": () => ({ workspaces: [{ name: "desk" }, { name: "other" }] }),
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
   });
@@ -664,9 +664,9 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme" }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
-    "POST /api/keys": (b) => {
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
       keysMade++;
       const body = JSON.parse(String(b));
       assert.equal(body.purpose, "gateway");
@@ -764,8 +764,8 @@ test("--local, cloud_agents: sending the folder is asked (no sends nothing); aft
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme" }),
-    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
     [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
     [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID }),
     [`GET ${WS}/runs/${RUN}`]: () => ({
@@ -842,8 +842,8 @@ test("--local: a reply cut off at the output limit says so, is shown, and the ne
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme" }),
-    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
     "POST /v1/messages": (b) => {
       asked.push(JSON.parse(String(b)));
       return turns[asked.length - 1]!();
@@ -885,8 +885,8 @@ test("--local, cloud_agents: Ctrl-C while they work stops every run on the platf
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme" }),
-    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
     [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
     [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: `run-c-${++n}`, snapshot: ID }),
     [`GET ${WS}/runs/run-c-1`]: () => ({ timedOut: true }),
@@ -930,7 +930,7 @@ test("--local with no bought credits: says so in one line before any key is made
   const s = await serve({
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 3, boughtUsd: 0 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 3, boughtUsd: 0 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
   });
   try {
     const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
@@ -944,8 +944,8 @@ test("--local with no bought credits: says so in one line before any key is made
     } finally {
       t.child.kill();
     }
-    assert.equal(s.seen.filter((x: any) => x.url === "/api/keys" || x.url === "/v1/messages").length, 0, "no key made, no model asked");
-    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/api\/keys|\/v1\/messages/);
+    assert.equal(s.seen.filter((x: any) => x.url === "/v1/keys" || x.url === "/v1/messages").length, 0, "no key made, no model asked");
+    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/v1\/keys|\/v1\/messages/);
   } finally {
     s.close();
   }
@@ -959,10 +959,10 @@ test("--local on a foldrun Pro plan with room: no bought credit needed, and the 
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: FAST\n---\nYou code.\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme" }),
+    "GET /v1/me": () => ({ account: "acme" }),
     // The wallet cannot be read: the plan is asked all the same (Codex review).
-    "GET /api/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: true, freeAt: null } }),
-    "POST /api/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "GET /v1/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: true, freeAt: null } }),
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
     "POST /v1/messages": (b) => {
       asked.push(JSON.parse(String(b)));
       return sse([{ type: "text", text: "Hello." }]);
@@ -995,8 +995,8 @@ test("--local on a foldrun Pro plan whose tier the plan does not pay for: the wa
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: max\n---\nYou code.\n", sha256: "x" }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 0, boughtUsd: 0 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
-    "GET /api/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: true, freeAt: null }, codeTiers: { fast: { covered: true }, default: { covered: true }, max: { covered: false } } }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 0, boughtUsd: 0 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: true, freeAt: null }, codeTiers: { fast: { covered: true }, default: { covered: true }, max: { covered: false } } }),
   });
   try {
     const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
@@ -1010,7 +1010,7 @@ test("--local on a foldrun Pro plan whose tier the plan does not pay for: the wa
     } finally {
       t.child.kill();
     }
-    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/api\/keys|\/v1\/messages/, "no key made, no model asked");
+    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/v1\/keys|\/v1\/messages/, "no key made, no model asked");
   } finally {
     s.close();
   }
@@ -1022,8 +1022,8 @@ test("--local on a foldrun Pro plan past its allowance, extra usage off: the lim
   const s = await serve({
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 0, boughtUsd: 9 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
-    "GET /api/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: false, freeAt: "2026-11-27T00:00:00Z" } }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 0, boughtUsd: 9 }, plan: { id: "free", name: "Free", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/billing/coding-plan": () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: false, freeAt: "2026-11-27T00:00:00Z" } }),
   });
   try {
     const t = onTerminal(["code", d, "--local", "--to", "desk", "--url", s.url, "--token", "k"], home);
@@ -1037,7 +1037,7 @@ test("--local on a foldrun Pro plan past its allowance, extra usage off: the lim
     } finally {
       t.child.kill();
     }
-    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/api\/keys|\/v1\/messages/, "no key made, no model asked");
+    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/v1\/keys|\/v1\/messages/, "no key made, no model asked");
   } finally {
     s.close();
   }
@@ -1102,10 +1102,10 @@ for (const answer of ["y", "n"]) {
       [`GET ${WS}`]: () => ({ name: "desk" }),
       [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
       [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-      "GET /api/me": () => ({ account: "acme" }),
-      "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
-      "POST /api/keys": (b: string) => ({ id: "new-1", key: "fr_gw_new", gatewayUrl: s.url, credential: JSON.parse(b).credential, walletUsd: JSON.parse(b).walletUsd, dailyUsd: JSON.parse(b).dailyUsd, capUsd: null }),
-      "DELETE /api/keys": () => ({ ok: true }),
+      "GET /v1/me": () => ({ account: "acme" }),
+      "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+      "POST /v1/keys": (b: string) => ({ id: "new-1", key: "fr_gw_new", gatewayUrl: s.url, credential: JSON.parse(b).credential, walletUsd: JSON.parse(b).walletUsd, dailyUsd: JSON.parse(b).dailyUsd, capUsd: null }),
+      "DELETE /v1/keys": () => ({ ok: true }),
       "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
     });
     const file = path.join(home, "code-local-keys.json");
@@ -1130,8 +1130,8 @@ for (const answer of ["y", "n"]) {
         t.child.kill();
       }
       const kept = JSON.parse(fs.readFileSync(file, "utf8"))[`${s.url}#acme`];
-      const deletes = s.seen.filter((x: any) => x.method === "DELETE" && x.url === "/api/keys");
-      const posts = s.seen.filter((x: any) => x.method === "POST" && x.url === "/api/keys");
+      const deletes = s.seen.filter((x: any) => x.method === "DELETE" && x.url === "/v1/keys");
+      const posts = s.seen.filter((x: any) => x.method === "POST" && x.url === "/v1/keys");
       if (answer === "y") {
         assert.equal(kept.key, "fr_gw_new");
         assert.equal(kept.kind, "account");
@@ -1156,10 +1156,10 @@ test("--local swap on a platform that makes the older kind of key: the new one i
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme" }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
-    "POST /api/keys": () => ({ id: "new-1", key: "fr_gw_new", gatewayUrl: s.url, capUsd: null, dailyUsd: 100 }),
-    "DELETE /api/keys": () => ({ ok: true }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": () => ({ id: "new-1", key: "fr_gw_new", gatewayUrl: s.url, capUsd: null, dailyUsd: 100 }),
+    "DELETE /v1/keys": () => ({ ok: true }),
   });
   const file = path.join(home, "code-local-keys.json");
   fs.writeFileSync(file, JSON.stringify({ [`${s.url}#acme`]: { id: "old-1", key: "fr_gw_old", gatewayUrl: s.url } }), { mode: 0o600 });
@@ -1177,7 +1177,7 @@ test("--local swap on a platform that makes the older kind of key: the new one i
     } finally {
       t.child.kill();
     }
-    const deletes = s.seen.filter((x: any) => x.method === "DELETE" && x.url === "/api/keys").map((x: any) => JSON.parse(x.body).id);
+    const deletes = s.seen.filter((x: any) => x.method === "DELETE" && x.url === "/v1/keys").map((x: any) => JSON.parse(x.body).id);
     assert.deepEqual(deletes, ["new-1"], "only the key just made is revoked");
     const kept = JSON.parse(fs.readFileSync(file, "utf8"))[`${s.url}#acme`];
     assert.equal(kept.key, "fr_gw_old");
@@ -1194,9 +1194,9 @@ test("--local on a platform from before plan-first keys: the older kind is offer
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme" }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
-    "POST /api/keys": (b: string) =>
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b: string) =>
       JSON.parse(b).credential === "account"
         ? { __status: 400, body: { error: 'credential must be "login" (the operator\'s Claude login) or left out' } }
         : { id: "old-kind", key: "fr_gw_older", gatewayUrl: s.url, capUsd: 20, dailyUsd: null },
@@ -1219,7 +1219,7 @@ test("--local on a platform from before plan-first keys: the older kind is offer
     } finally {
       t.child.kill();
     }
-    const posts = s.seen.filter((x: any) => x.method === "POST" && x.url === "/api/keys").map((x: any) => JSON.parse(x.body));
+    const posts = s.seen.filter((x: any) => x.method === "POST" && x.url === "/v1/keys").map((x: any) => JSON.parse(x.body));
     assert.equal(posts[0].credential, "account");
     assert.deepEqual({ capUsd: posts[1].capUsd, credential: posts[1].credential }, { capUsd: 20, credential: undefined });
     const kept = JSON.parse(fs.readFileSync(file, "utf8"))[`${s.url}#acme`];
@@ -1320,9 +1320,9 @@ test("--local with a sign-in that has model access: a fresh machine gets a reply
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", origin: "cli-login", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 20 } }, modelsUrl: s.url }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
-    "POST /api/keys": () => {
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", origin: "cli-login", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 20 } }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": () => {
       throw new Error("no key may be minted");
     },
     "POST /v1/messages": (b) => {
@@ -1347,7 +1347,7 @@ test("--local with a sign-in that has model access: a fresh machine gets a reply
     } finally {
       t.child.kill();
     }
-    assert.equal(s.seen.filter((x: any) => x.url === "/api/keys").length, 0, "zero key-mint requests");
+    assert.equal(s.seen.filter((x: any) => x.url === "/v1/keys").length, 0, "zero key-mint requests");
     const models = s.seen.filter((x: any) => x.url === "/v1/messages");
     assert.equal(models.length, 2);
     for (const m of models) assert.equal(m.headers.authorization, "Bearer fr_api_signed", "the sign-in itself");
@@ -1366,8 +1366,8 @@ test("--local on an older install: a sign-in without model access keeps using th
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: null }, modelsUrl: s.url }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: null }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
   });
   const file = path.join(home, "code-local-keys.json");
@@ -1385,7 +1385,7 @@ test("--local on an older install: a sign-in without model access keeps using th
     } finally {
       t.child.kill();
     }
-    assert.equal(s.seen.filter((x: any) => x.url === "/api/keys").length, 0);
+    assert.equal(s.seen.filter((x: any) => x.url === "/v1/keys").length, 0);
     assert.equal(s.seen.find((x: any) => x.url === "/v1/messages")!.headers.authorization, "Bearer fr_gw_cached");
   } finally {
     s.close();
@@ -1401,8 +1401,8 @@ test("--local: a key kept from a retired models address goes to the one the plat
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: null }, modelsUrl: s.url }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: null }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
   });
   const file = path.join(home, "code-local-keys.json");
@@ -1432,8 +1432,8 @@ test("--local with a sign-in refused for models: the kept machine keys are left 
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/messages": () => ({ __status: 401, body: { type: "error", error: { type: "authentication_error", message: "API key revoked" } } }),
   });
   const file = path.join(home, "code-local-keys.json");
@@ -1464,8 +1464,8 @@ test("--local, sign-in: another terminal switches the token between turns — th
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
   });
   const creds = (token: string) => fs.writeFileSync(path.join(home, "credentials.json"), JSON.stringify({ current: "acme", profiles: { acme: { url: s.url, token, account: "acme" } } }), { mode: 0o600 });
@@ -1488,9 +1488,9 @@ test("--local, sign-in: another terminal switches the token between turns — th
     }
     const models = s.seen.filter((x: any) => x.url === "/v1/messages").map((x: any) => x.headers.authorization);
     assert.deepEqual(models, ["Bearer fr_api_first", "Bearer fr_api_second"]);
-    const me = s.seen.filter((x: any) => x.url === "/api/me").map((x: any) => x.headers.authorization);
+    const me = s.seen.filter((x: any) => x.url === "/v1/me").map((x: any) => x.headers.authorization);
     assert.ok(me.includes("Bearer fr_api_second"), "the new token was asked about before it was sent");
-    const askedAt = s.seen.findIndex((x: any) => x.url === "/api/me" && x.headers.authorization === "Bearer fr_api_second");
+    const askedAt = s.seen.findIndex((x: any) => x.url === "/v1/me" && x.headers.authorization === "Bearer fr_api_second");
     const sentAt = s.seen.findIndex((x: any) => x.url === "/v1/messages" && x.headers.authorization === "Bearer fr_api_second");
     assert.ok(askedAt >= 0 && askedAt < sentAt, "asked about before it was sent");
   } finally {
@@ -1505,8 +1505,8 @@ test("--local, sign-in refused with 403 by the gateway: the next message goes on
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/messages": () => (s.seen.filter((x: any) => x.url === "/v1/messages").length === 1 ? { __status: 403, body: { type: "error", error: { type: "permission_error", message: "this is not a gateway key" } } } : sse([{ type: "text", text: "Done." }])),
   });
   fs.writeFileSync(path.join(home, "code-local-keys.json"), JSON.stringify({ [`${s.url}#acme`]: { id: "old-1", key: "fr_gw_cached", gatewayUrl: s.url, kind: "account" } }), { mode: 0o600 });
@@ -1527,7 +1527,7 @@ test("--local, sign-in refused with 403 by the gateway: the next message goes on
     }
     const models = s.seen.filter((x: any) => x.url === "/v1/messages").map((x: any) => x.headers.authorization);
     assert.deepEqual(models, ["Bearer fr_api_k", "Bearer fr_gw_cached"]);
-    assert.equal(s.seen.filter((x: any) => x.url === "/api/keys").length, 0);
+    assert.equal(s.seen.filter((x: any) => x.url === "/v1/keys").length, 0);
   } finally {
     s.close();
   }
@@ -1540,8 +1540,8 @@ test("--local: `foldrun use` in another terminal mid-session does not move this 
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
-    "GET /api/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
-    "GET /api/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/messages": () => sse([{ type: "text", text: "Done." }]),
   });
   const creds = (current: string) =>

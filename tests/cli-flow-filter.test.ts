@@ -8,11 +8,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { serve, at, WORKSPACES } from "./fake-platform.ts";
 
-const route = "/api/workspaces/blog-desk/flows/pr-review/filter";
+const route = "/v1/workspaces/blog-desk/flows/pr-review/filter";
 
 test("--to sends the payload to the deployed flow and prints its answer", async () => {
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [route]: (body) => {
       const { payload } = JSON.parse(body);
       const match = payload?.action === "opened";
@@ -39,7 +39,7 @@ test("--to sends the payload to the deployed flow and prints its answer", async 
 });
 
 test("a payload is required", async () => {
-  const fake = await serve({ "/api/workspaces": () => WORKSPACES });
+  const fake = await serve({ "/v1/workspaces": () => WORKSPACES });
   try {
     const r = await at(fake.url, "flow", "filter", "pr-review", "--to", "blog-desk");
     assert.notEqual(r.code, 0);

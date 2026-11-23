@@ -14,7 +14,7 @@ const items = [
 
 test("inbox prints yours by default, asks for a bucket when told, and exits 1 on unread", async () => {
   const fake = await serve({
-    "GET /api/me/inbox": (_b, q) => ({ person: "ana@acme.test", items: q.get("bucket") === "team" ? [] : items, counts: { mine: 1, started: 1, team: 3, unread: 1 } }),
+    "GET /v1/me/inbox": (_b, q) => ({ person: "ana@acme.test", items: q.get("bucket") === "team" ? [] : items, counts: { mine: 1, started: 1, team: 3, unread: 1 } }),
   });
   try {
     const r = await at(fake.url, "inbox");
@@ -35,7 +35,7 @@ test("inbox prints yours by default, asks for a bucket when told, and exits 1 on
 });
 
 test("inbox read / dismiss / restore send the ids and the action", async () => {
-  const fake = await serve({ "POST /api/me/inbox": () => ({ ok: true, read: 1, dismissed: 1 }) });
+  const fake = await serve({ "POST /v1/me/inbox": () => ({ ok: true, read: 1, dismissed: 1 }) });
   try {
     const r = await at(fake.url, "inbox", "dismiss", "gate:desk/run-1/2", "run:desk/run-2");
     assert.equal(r.code, 0, r.out);

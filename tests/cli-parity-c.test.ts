@@ -57,7 +57,7 @@ function desk(): { root: string; ws: string } {
 
 // ---- 11: agent run with no task
 
-const RUN = "/api/workspaces/rank-desk/agents/tracker/run";
+const RUN = "/v1/workspaces/rank-desk/agents/tracker/run";
 
 test("agent run --no-task starts it with an empty body, as the dashboard's Run does", async () => {
   const s = await serve({ [`POST ${RUN}`]: () => ({ ok: true, runId: "run-adhoc-1", test: false }) });
@@ -97,7 +97,7 @@ task: the Monday brief
 
 test("flow inputs --to lists the sets: the inputs file first, then eval cases, a name once", async () => {
   const s = await serve({
-    "/api/workspaces/blog-desk/evals": () => ({
+    "/v1/workspaces/blog-desk/evals": () => ({
       evals: [
         { name: "morning-quality", file: "morning-quality.md", flow: "morning", inputs: false, cases: [{ name: "monday", task: "an eval's monday" }, { name: "launch", task: "launch day" }] },
         { name: "morning-inputs", file: "morning-inputs.md", flow: "morning", inputs: true, cases: [{ name: "monday", task: "the Monday brief" }] },
@@ -119,8 +119,8 @@ test("flow inputs --to lists the sets: the inputs file first, then eval cases, a
 
 test("flow inputs save --to: reads the file, upserts the set, PUTs with ifMatch", async () => {
   const s = await serve({
-    "GET /api/workspaces/blog-desk/source": () => ({ path: "evals/morning-inputs.md", content: INPUTS, sha256: sha(INPUTS) }),
-    "PUT /api/workspaces/blog-desk/source": () => ({ ok: true }),
+    "GET /v1/workspaces/blog-desk/source": () => ({ path: "evals/morning-inputs.md", content: INPUTS, sha256: sha(INPUTS) }),
+    "PUT /v1/workspaces/blog-desk/source": () => ({ ok: true }),
   });
   const r = await at(s.url, "flow", "inputs", "save", "morning", "monday", "--task", "a new Monday", "--to", "blog-desk");
   s.close();
@@ -136,8 +136,8 @@ test("flow inputs save --to: reads the file, upserts the set, PUTs with ifMatch"
 
 test("flow inputs save --to with no file yet: a new inputs file, ifMatch null; a 409 says so", async () => {
   const s = await serve({
-    "GET /api/workspaces/blog-desk/source": () => failing(404, { error: "not found: evals/morning-inputs.md" }),
-    "PUT /api/workspaces/blog-desk/source": () => ({ ok: true }),
+    "GET /v1/workspaces/blog-desk/source": () => failing(404, { error: "not found: evals/morning-inputs.md" }),
+    "PUT /v1/workspaces/blog-desk/source": () => ({ ok: true }),
   });
   const r = await at(s.url, "flow", "inputs", "save", "morning", "launch", "--task", "line one\n- a bullet", "--to", "blog-desk");
   s.close();
@@ -148,8 +148,8 @@ test("flow inputs save --to with no file yet: a new inputs file, ifMatch null; a
   assert.match(put.content, /## launch\ntask: \|\n  line one\n  \* a bullet\n/);
 
   const busy = await serve({
-    "GET /api/workspaces/blog-desk/source": () => ({ content: INPUTS, sha256: sha(INPUTS) }),
-    "PUT /api/workspaces/blog-desk/source": () => failing(409, { error: "changed" }),
+    "GET /v1/workspaces/blog-desk/source": () => ({ content: INPUTS, sha256: sha(INPUTS) }),
+    "PUT /v1/workspaces/blog-desk/source": () => failing(409, { error: "changed" }),
   });
   const c = await at(busy.url, "flow", "inputs", "save", "morning", "monday", "--task", "x", "--to", "blog-desk");
   busy.close();
@@ -180,7 +180,7 @@ test("flow inputs in this folder: save writes evals/<flow>-inputs.md, the list r
 
 test("source put --check sends check: true; a 422 prints the issues and exits 1", async () => {
   const issues = [{ level: "error", rule: "config/unknown-field", where: "flows/x.md:2", message: "unknown field wibble" }];
-  const s = await serve({ "PUT /api/workspaces/blog-desk/source": () => failing(422, { error: "flows/x.md did not check out", issues }) });
+  const s = await serve({ "PUT /v1/workspaces/blog-desk/source": () => failing(422, { error: "flows/x.md did not check out", issues }) });
   const file = tmpFile("x.md", "---\nwibble: 1\n---\n");
   const r = await at(s.url, "source", "put", "flows/x.md", "--file", file, "--check", "--to", "blog-desk");
   s.close();
@@ -191,7 +191,7 @@ test("source put --check sends check: true; a 422 prints the issues and exits 1"
 });
 
 test("source put --check that passes prints its warnings; without --check nothing new is sent", async () => {
-  const s = await serve({ "PUT /api/workspaces/blog-desk/source": () => ({ ok: true, issues: [{ level: "warn", rule: "content/x", where: "knowledge/a.md", message: "a warning" }] }) });
+  const s = await serve({ "PUT /v1/workspaces/blog-desk/source": () => ({ ok: true, issues: [{ level: "warn", rule: "content/x", where: "knowledge/a.md", message: "a warning" }] }) });
   const file = tmpFile("a.md", "# a\n");
   const r = await at(s.url, "source", "put", "knowledge/a.md", "--file", file, "--check", "--to", "blog-desk");
   const plain = await at(s.url, "source", "put", "knowledge/a.md", "--file", file, "--to", "blog-desk");
@@ -204,7 +204,7 @@ test("source put --check that passes prints its warnings; without --check nothin
 });
 
 test("source put --empty writes an empty file; an empty input without it is still refused", async () => {
-  const s = await serve({ "PUT /api/workspaces/blog-desk/source": () => ({ ok: true }) });
+  const s = await serve({ "PUT /v1/workspaces/blog-desk/source": () => ({ ok: true }) });
   const empty = tmpFile("e.txt", "");
   const refused = await at(s.url, "source", "put", "tools/x/notes.txt", "--file", empty, "--to", "blog-desk");
   const r = await at(s.url, "source", "put", "tools/x/notes.txt", "--empty", "--to", "blog-desk");
@@ -233,9 +233,9 @@ test("flow rm-step --step 2,4 --to sends one PATCH { edits } highest first", asy
   const files: Record<string, string> = { "AGENTS.md": "---\nname: blog-desk\n---\n", "flows/morning.md": FLOW };
   for (const a of AGENTS) files[`agents/${a}/agent.md`] = agent(a);
   const s = await serve({
-    "/api/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
-    "/api/workspaces/blog-desk": () => ({ name: "blog-desk" }),
-    "PATCH /api/workspaces/blog-desk/flows/morning": () => ({ ok: true }),
+    "/v1/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
+    "/v1/workspaces/blog-desk": () => ({ name: "blog-desk" }),
+    "PATCH /v1/workspaces/blog-desk/flows/morning": () => ({ ok: true }),
   });
   const r = await at(s.url, "flow", "rm-step", "morning", "--to", "blog-desk", "--step", "2,4", "--yes");
   s.close();
@@ -248,10 +248,10 @@ test("flow rm-step --step 2,4 --to sends one PATCH { edits } highest first", asy
 // ---- 18: an agent per compare setting
 
 test("eval compare: an item's @agent is that setting's alone; --agent fills the rest", async () => {
-  const base = "/api/workspaces/blog-desk/evals/morning-quality/compare";
+  const base = "/v1/workspaces/blog-desk/evals/morning-quality/compare";
   const result = { eval: "morning-quality", target: { flow: "morning", agent: null }, judge: { model: "fast", effort: null }, repeat: 1, maxUsd: 5, spentUsd: 0, stopped: null, configs: [], cases: [] };
   const fake = await serve({
-    "/api/workspaces": () => WORKSPACES,
+    "/v1/workspaces": () => WORKSPACES,
     [`POST ${base}`]: () => ({ started: true, runId: "c".repeat(24), trials: 2, maxUsd: 5 }),
     [`GET ${base}`]: () => ({ state: "done", result }),
   });
@@ -274,7 +274,7 @@ test("eval compare: an item's @agent is that setting's alone; --agent fills the 
 test("source share asks the platform what would move, then moves it in one call", async () => {
   const bodies: any[] = [];
   const s = await serve({
-    "POST /api/workspaces/blog-desk/source/share": (b) => {
+    "POST /v1/workspaces/blog-desk/source/share": (b) => {
       const body = JSON.parse(b);
       bodies.push(body);
       return { ok: true, kind: "skills", unit: "skills/house-style", files: [{ from: "skills/house-style/SKILL.md", to: "house-style/SKILL.md", replaces: false }, { from: "skills/house-style/examples.md", to: "house-style/examples.md", replaces: false }], moved: !body.dryRun };
@@ -292,7 +292,7 @@ test("source share asks the platform what would move, then moves it in one call"
 test("source share: a library file already there is refused without --overwrite; --dry-run moves nothing", async () => {
   const bodies: any[] = [];
   const s = await serve({
-    "POST /api/workspaces/blog-desk/source/share": (b) => {
+    "POST /v1/workspaces/blog-desk/source/share": (b) => {
       const body = JSON.parse(b);
       bodies.push(body);
       return { ok: true, kind: "knowledge", unit: "knowledge/faq.md", files: [{ from: "knowledge/faq.md", to: "faq.md", replaces: true }], moved: !body.dryRun };
@@ -313,7 +313,7 @@ test("source share: a library file already there is refused without --overwrite;
 
 test("source share: no terminal needs --yes; the platform's refusal is said and nothing moves", async () => {
   const s = await serve({
-    "POST /api/workspaces/blog-desk/source/share": (b) =>
+    "POST /v1/workspaces/blog-desk/source/share": (b) =>
       JSON.parse(b).path.startsWith("skills/art")
         ? failing(409, { error: "skills/art holds files the shared library cannot hold (skills/art/logo.png) — only text files go there; nothing was moved" })
         : { ok: true, kind: "scripts", unit: "scripts/x.py", files: [{ from: "scripts/x.py", to: "x.py", replaces: false }], moved: false },
@@ -336,7 +336,7 @@ test("source share on a platform from before the route says so", async () => {
 });
 
 test("account model use --if-version sends ifVersion; a bad value is refused before anything is sent", async () => {
-  const s = await serve({ "PUT /api/account/model": () => ({ set: false, runsOn: "account", source: "own" }) });
+  const s = await serve({ "PUT /v1/account/model": () => ({ set: false, runsOn: "account", source: "own" }) });
   await at(s.url, "account", "model", "use", "own", "--if-version", "3");
   await at(s.url, "account", "model", "use", "foldrun", "--provider", "openai", "--if-version", "0");
   const bad = await at(s.url, "account", "model", "use", "own", "--if-version", "x");
@@ -351,11 +351,11 @@ test("account model use --if-version sends ifVersion; a bad value is refused bef
 });
 
 test("secrets workspaces --if-workspaces sends the list read (all: null, none: [])", async () => {
-  const s = await serve({ "PATCH /api/secrets": () => ({ ok: true, name: "CRM", scope: "account", workspaces: ["sales"] }) });
+  const s = await serve({ "PATCH /v1/secrets": () => ({ ok: true, name: "CRM", scope: "account", workspaces: ["sales"] }) });
   await at(s.url, "secrets", "workspaces", "CRM", "sales", "--if-workspaces", "sales,ops");
   await at(s.url, "secrets", "workspaces", "CRM", "sales", "--if-workspaces", "all");
   await at(s.url, "secrets", "workspaces", "CRM", "--all", "--if-workspaces", "none");
-  const conflict = await serve({ "PATCH /api/secrets": () => failing(409, { error: "the list was changed since you read it" }) });
+  const conflict = await serve({ "PATCH /v1/secrets": () => failing(409, { error: "the list was changed since you read it" }) });
   const r = await at(conflict.url, "secrets", "workspaces", "CRM", "sales", "--if-workspaces", "ops");
   s.close();
   conflict.close();
@@ -375,10 +375,10 @@ test("check --to prints when the daily rescan last ran; a platform without it co
   const files: Record<string, string> = { "AGENTS.md": "---\nname: blog-desk\n---\n", "flows/morning.md": FLOW };
   for (const a of AGENTS) files[`agents/${a}/agent.md`] = agent(a);
   const routes = {
-    "/api/workspaces": () => WORKSPACES,
-    "/api/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
+    "/v1/workspaces": () => WORKSPACES,
+    "/v1/workspaces/blog-desk/source": (_b: string, q: URLSearchParams) => (q.get("path") ? { path: q.get("path"), content: files[q.get("path")!] } : { files: Object.keys(files) }),
   };
-  const s = await serve({ ...routes, "/api/workspaces/blog-desk/check": () => ({ findings: [], rescan: { checkedAt: "2026-11-04T03:00:00.000Z", findings: 0, pending: 0, problems: [] } }) });
+  const s = await serve({ ...routes, "/v1/workspaces/blog-desk/check": () => ({ findings: [], rescan: { checkedAt: "2026-11-04T03:00:00.000Z", findings: 0, pending: 0, problems: [] } }) });
   const r = await at(s.url, "check", "--to", "blog-desk");
   s.close();
   assert.match(r.out, /the daily rescan last ran 2026-11-04T03:00:00\.000Z/);
@@ -391,7 +391,7 @@ test("check --to prints when the daily rescan last ran; a platform without it co
 
 test("source share --json prints only JSON: the plan on --dry-run, the answer once moved", async () => {
   const s = await serve({
-    "POST /api/workspaces/blog-desk/source/share": (b) => ({ ok: true, kind: "scripts", unit: "scripts/x.py", files: [{ from: "scripts/x.py", to: "x.py", replaces: false }], moved: !JSON.parse(b).dryRun }),
+    "POST /v1/workspaces/blog-desk/source/share": (b) => ({ ok: true, kind: "scripts", unit: "scripts/x.py", files: [{ from: "scripts/x.py", to: "x.py", replaces: false }], moved: !JSON.parse(b).dryRun }),
   });
   // stdout may open with the "acting with --token" line; the rest is one JSON value.
   const parse = (out: string) => JSON.parse(out.slice(out.search(/[[{]/)));
