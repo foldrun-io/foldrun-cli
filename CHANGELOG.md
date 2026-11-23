@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [29.0.0] — 2026-11-23
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 26.0.0, a new major. (05c3bf5)
+
+- feat(code): /model lists every model behind foldrun's proxy ([f53d562](https://github.com/foldrun-io/foldrun-cli/commit/f53d562))
+
+### deps
+
+- @foldrun/core ^26.0.0 ([05c3bf5](https://github.com/foldrun-io/foldrun-cli/commit/05c3bf5))
+
 ## [28.2.1] — 2026-11-23
 
 ### deps
