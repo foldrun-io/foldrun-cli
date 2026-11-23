@@ -69,24 +69,6 @@ billed in credits at **foldrun's price list**
   `foldrun account model prices`. Anthropic's tiers are the usual Claude
   models. A model id written out in full runs only if the price list names
   it; anything not listed is refused before the call is made.
-- **Any model behind foldrun's proxy, by name** (23 November 2026). An
-  agent's `model:` (or a flow's, or a step's) may name a model of another
-  provider of foldrun's models as `provider/model` —
-  `model: deepseek/deepseek-chat`, `model: kimi/kimi-k2` — or by a name
-  whose prefix says the provider (`deepseek-chat`, `gpt-…`, `gemini-…`,
-  `glm-…`, `qwen…`, `minimax-…`, `mimo-…`). That step runs on that
-  provider's key, whatever provider the account runs on otherwise, in the
-  cloud and with `foldrun code` on your computer alike, and counts against
-  the same [subscription](budgets-and-billing.md#the-foldrun-subscription).
-  A tier word and a bare Claude id stay on the account's provider. A named
-  provider the platform cannot serve now fails the step with why — it never
-  runs on another. The provider names are `anthropic` (or `claude`),
-  `openai`, `gemini` (`google`), `deepseek`, `moonshot` (`kimi`), `zai`
-  (`glm`, `zhipu`), `qwen` (`alibaba`), `minimax` and `mimo` (`xiaomi`).
-  Settings → Models lists every model behind the proxy, its price and
-  whether your plan pays for it; so do `foldrun account model prices` and
-  `/model` in `foldrun code`. An account on its own key (or a `provider:`
-  block) sends the name as written, to its own endpoint.
 - **Your `effort:` on each provider.** The agent runtime speaks Claude's
   API; each provider is sent what its own API documents, the rest left
   out. Anthropic gets the request as written. DeepSeek takes every level
