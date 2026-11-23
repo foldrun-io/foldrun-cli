@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.2.0] — 2026-11-23
+
+- feat(code): MCP servers, sub-agents here and in the cloud, a todo list, added folders ([6193bcf](https://github.com/foldrun-io/foldrun-cli/commit/6193bcf))
+- feat(code): /rewind takes back the agent's Write and Edit; /goal --check takes the person's command's word ([4703516](https://github.com/foldrun-io/foldrun-cli/commit/4703516))
+- feat(code): commands that only look run without a question; /resume, /doctor; a goal is checked a second time ([8b65597](https://github.com/foldrun-io/foldrun-cli/commit/8b65597))
+- fix(models): with own keys off, a no-plan account is told it needs a plan, not an API key ([5e44984](https://github.com/foldrun-io/foldrun-cli/commit/5e44984))
+- feat(code): /goal, /plan, /compact, /context, /usage; a turn's tokens say how much was cached ([313a3dd](https://github.com/foldrun-io/foldrun-cli/commit/313a3dd))
+
+### docs
+
+- sync api.md from foldrun-docs ab66ca9 ([28d7ee0](https://github.com/foldrun-io/foldrun-cli/commit/28d7ee0))
+
 ## [30.1.0] — 2026-11-23
 
 - feat(code): the agent knows the folder and foldrun; / shows the commands; one session moves between this computer and the cloud; sessions message each other ([e21d298](https://github.com/foldrun-io/foldrun-cli/commit/e21d298))
