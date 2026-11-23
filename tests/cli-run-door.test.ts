@@ -13,6 +13,41 @@ import { serve, cli } from "./fake-platform.ts";
 
 const me = (modelAccess: boolean) => ({ account: "acme", modelsUrl: "https://models.example.test/", actor: { id: "u1", modelAccess } });
 const folder = () => fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-run-door-"));
+
+/** A local fake of the Messages API that records the auth each call carried
+ *  (its own copy: importing another test file runs that file's tests too). */
+async function fakeMessagesApi() {
+  const http = await import("node:http");
+  const seen: { apiKey: string | null; bearer: string | null }[] = [];
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      if (!req.url?.startsWith("/v1/messages")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end("{}");
+      }
+      if (req.url.includes("count_tokens")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ input_tokens: 1 }));
+      }
+      const auth = String(req.headers.authorization ?? "");
+      seen.push({ apiKey: (req.headers["x-api-key"] as string) ?? null, bearer: auth.startsWith("Bearer ") ? auth.slice(7) : null });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const ev = (type: string, data: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+      ev("message_start", { message: { id: "m", type: "message", role: "assistant", model: "claude-haiku-4-5", content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } } });
+      ev("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
+      ev("content_block_delta", { index: 0, delta: { type: "text_delta", text: "done" } });
+      ev("content_block_stop", { index: 0 });
+      ev("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } });
+      ev("message_stop", {});
+      res.end();
+    });
+  });
+  return new Promise<{ url: string; seen: typeof seen; close: () => void }>((ok) =>
+    server.listen(0, "127.0.0.1", () => ok({ url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, seen, close: () => server.close() })),
+  );
+}
+
 const run = (url: string, extra: string[] = [], env: Record<string, string> = {}) =>
   cli(["run", "ghost", "--url", url, "--token", "k", ...extra], { cwd: folder(), env: { ANTHROPIC_API_KEY: "sk-shell", ...env } });
 
@@ -50,7 +85,6 @@ test("no key in the shell is fine when the door answers: the sign-in is the mode
 });
 
 test("end to end: the model API sees the sign-in as a bearer; the run itself holds only a loopback key", { timeout: 180_000 }, async () => {
-  const { fakeMessagesApi } = await import("./model-credential.test.ts");
   const api = await fakeMessagesApi();
   const s = await serve({ "/v1/me": () => ({ account: "acme", modelsUrl: api.url, actor: { id: "u1", modelAccess: true } }) });
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-run-door-ws-"));

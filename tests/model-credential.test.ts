@@ -20,7 +20,7 @@ const skip = typeof (core as { resolveModelCredential?: unknown } | null)?.resol
   ? false
   : "the installed @foldrun/core predates model credentials — needs the core release after 0.5.0";
 
-export function fakeMessagesApi() {
+function fakeMessagesApi() {
   const seen: { apiKey: string | null; bearer: string | null }[] = [];
   const server = http.createServer((req, res) => {
     req.resume();
