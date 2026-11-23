@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [28.2.0] — 2026-11-23
+
+- feat(billing): a refused billing change opens the Billing page ([dc0de42](https://github.com/foldrun-io/foldrun-cli/commit/dc0de42))
+
 ## [28.1.0] — 2026-11-23
 
 ### New in the public API
