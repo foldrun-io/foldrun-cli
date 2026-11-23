@@ -3255,7 +3255,10 @@ export function sseFields(frame) {
 async function streamOnce(url, flags, ws, runId, seen, open = new Map(), print = {}) {
   const token = await renewedToken(url, flags);
   const idle = streamIdleSeconds();
-  const target = new URL(spelledPath(`/api/workspaces/${ws}/runs/${runId}/stream`, platformPaths(url, token)), url);
+  const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
+  // As this profile's platform spells it (/v1 or /api); the literal above
+  // stays for the API → CLI coverage scan (foldrun-web surface-coverage).
+  target.pathname = spelledPath(target.pathname, platformPaths(url, token));
   const ctrl = new AbortController();
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
