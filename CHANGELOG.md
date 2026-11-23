@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [29.0.1] — 2026-11-23
+
+### docs
+
+- bundle foldrun-docs main, not the held subscription branch ([f93e282](https://github.com/foldrun-io/foldrun-cli/commit/f93e282))
+
 ## [29.0.0] — 2026-11-23
 
 ### Breaking changes
