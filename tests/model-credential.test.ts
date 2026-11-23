@@ -20,7 +20,7 @@ const skip = typeof (core as { resolveModelCredential?: unknown } | null)?.resol
   ? false
   : "the installed @foldrun/core predates model credentials — needs the core release after 0.5.0";
 
-function fakeMessagesApi() {
+export function fakeMessagesApi() {
   const seen: { apiKey: string | null; bearer: string | null }[] = [];
   const server = http.createServer((req, res) => {
     req.resume();
@@ -63,7 +63,9 @@ function run(ws: string, env: Record<string, string>): Promise<{ status: number 
   const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL"].includes(k)));
   return new Promise((ok) => {
     const child = spawn(process.execPath, [CLI, "run", "a", "--workspace", ws], {
-      env: { ...base, FOLDRUN_DATA: fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cred-data-")), FOLDRUN_EXECUTOR: "sandbox", ...env },
+      // No sign-in of the machine's: signed in, a local run goes through the
+      // platform's model door instead of the key under test (cli-run-door.test.ts).
+      env: { ...base, FOLDRUN_HOME: "/nonexistent/foldrun-home", FOLDRUN_URL: "", FOLDRUN_TOKEN: "", FOLDRUN_DATA: fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-cred-data-")), FOLDRUN_EXECUTOR: "sandbox", ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";

@@ -4,6 +4,7 @@
 import { writeExact, writeControl, unguardedWhile, HUE, SWEEP_STEPS, rgbSgr, sweepShade } from "./terminal.mjs";
 import dns from "node:dns";
 import fs from "node:fs";
+import http from "node:http";
 import crypto from "node:crypto";
 import net from "node:net";
 import os from "node:os";
@@ -1683,6 +1684,154 @@ function bundleDirs(workspace, kind) {
 // the agent is read. Terms: Anthropic does not allow products built on its
 // Agent SDK to offer claude.ai login unless it has approved them.
 const MODEL_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"];
+
+/**
+ * One door (owner, 23 Nov 2026): a signed-in account's model calls go
+ * through its platform's model API wherever the agent runs — a local
+ * `run`, `eval` or `probe` included, the way `foldrun code` and cloud steps
+ * already do — never straight to the provider with a key found in the shell.
+ * The sign-in is the model key (`/v1/me` modelsUrl + actor.modelAccess, the
+ * same check `foldrun code` makes), and it never leaves this process: the
+ * run is given a loopback forwarder (core's translator, Anthropic
+ * passthrough) and a random key that opens only that forwarder, for this
+ * process's life — an agent's Bash that reads its environment finds no
+ * foldrun credential (Codex review). `--own-key` keeps the shell's
+ * credential. Not signed in: nothing changes. Signed in but the platform
+ * refuses or cannot be reached: refused, not quietly sent around the door.
+ * An agent's own `provider:` block is its own and is not touched.
+ * @returns {Promise<string | null>} the models URL used, or null
+ */
+async function useAccountDoor(flags = {}) {
+  if (flags["own-key"] === true) return null;
+  const quiet = { ...flags, quiet: true };
+  /** @type {string | undefined} */
+  let url;
+  /** @type {string} */
+  let token;
+  const explicit = typeof flags.token === "string" ? flags.token : env("FOLDRUN_TOKEN");
+  if (flags.token !== undefined && typeof flags.token !== "string") throw new Error("--token needs a value — pass the key, or --own-key to run on this shell's model key");
+  if (typeof flags.token === "string" || explicit) {
+    // --token / FOLDRUN_TOKEN: no stored profile is read for it, and an empty
+    // or address-less one is refused rather than quietly read as "not signed
+    // in" — a CI job must not charge another account or skip the door.
+    if (!explicit?.trim()) throw new Error("--token is empty — pass the key, or --own-key to run on this shell's model key");
+    url = remoteUrl(flags);
+    if (!url) throw new Error("a foldrun token is set but no platform address — set FOLDRUN_URL or --url, or --own-key to run on this shell's model key");
+    token = explicit;
+  } else {
+    // A stored sign-in (the current one, --profile, or the one kept for
+    // --url): its address and token from ONE read — another terminal's
+    // `foldrun use` or login between two reads would send one account's
+    // token to another platform (Codex review).
+    const p = chosenProfile(flags);
+    if (!p?.url || !p?.token) return null; // not signed in: the shell's credential, as before
+    url = String(p.url);
+    token = String(p.token);
+  }
+  // That exact token, for the question and for every model call after it:
+  // never re-read, so another terminal's `foldrun use` cannot pair this
+  // platform with another account's token (Codex review). An expired one is
+  // refused below, and `foldrun login` renews it.
+  /** @type {any} */
+  let me = null;
+  try {
+    me = await remoteCall(url, { ...quiet, token }, "/v1/me");
+  } catch (err) {
+    me = { error: err instanceof Error ? err.message : String(err) };
+  }
+  if (typeof me?.account !== "string" || !me.account) {
+    throw new Error(
+      `signed in to ${url}, but it did not say whose sign-in this is or where its models are${me?.error ? ` (${me.error})` : ""} — ` +
+        "a signed-in run sends its model calls through the platform; `--own-key` runs on this shell's key instead",
+    );
+  }
+  if (!me.actor?.modelAccess) return null; // a sign-in that opens the platform alone
+  const modelsUrl = typeof me.modelsUrl === "string" ? me.modelsUrl.replace(/\/+$/, "") : "";
+  if (!modelsUrl) throw new Error(`${url} says this sign-in may call foldrun's models but names no models address — \`--own-key\` runs on this shell's key instead`);
+  let origin;
+  try {
+    origin = new URL(modelsUrl);
+  } catch {
+    throw new Error(`${url} named a models address that is not a URL: ${modelsUrl}`);
+  }
+  const loopback = origin.hostname === "127.0.0.1" || origin.hostname === "localhost";
+  if (origin.protocol !== "https:" && !(origin.protocol === "http:" && loopback)) throw new Error(`${url} named a models address that is not https: ${modelsUrl}`);
+  const forwarder = await startModelForwarder(modelsUrl, token);
+  for (const k of ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]) delete process.env[k];
+  Object.assign(process.env, { ANTHROPIC_BASE_URL: forwarder.baseUrl, ANTHROPIC_API_KEY: forwarder.key });
+  console.log(`  ${c.dim(`models: through ${modelsUrl} as ${me.account} (--own-key uses this shell's key instead)`)}`);
+  return modelsUrl;
+}
+
+/** The only requests the loopback forwarder passes on: model calls. The
+ *  models address may be the platform's whole API (api.foldrun.dev), so a
+ *  wider forwarder would hand an agent's shell the user's sign-in for
+ *  everything else it can do (Codex review). */
+const MODEL_ROUTES = new Set(["POST /v1/messages", "POST /v1/messages/count_tokens", "GET /v1/models"]);
+
+/**
+ * A loopback forwarder for one process: it takes a random key, which is all
+ * the run is given, and sends model calls on to `upstream` with the sign-in
+ * as a bearer. Nothing but MODEL_ROUTES; no redirects followed. Unref'd, so
+ * it never keeps the CLI alive.
+ * @returns {Promise<{ baseUrl: string, key: string }>}
+ */
+export function startModelForwarder(/** @type {string} */ upstream, /** @type {string} */ token) {
+  const key = `fr-local-${crypto.randomBytes(16).toString("hex")}`;
+  const server = http.createServer(async (req, res) => {
+    const fail = (/** @type {number} */ status, /** @type {string} */ message) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "error", error: { type: status === 401 ? "authentication_error" : "permission_error", message } }));
+    };
+    try {
+      const presented = String(req.headers["x-api-key"] ?? String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
+      if (presented.length !== key.length || !crypto.timingSafeEqual(Buffer.from(presented), Buffer.from(key))) return fail(401, "wrong key for this run's model forwarder");
+      const target = new URL(req.url ?? "/", "http://local");
+      if (!MODEL_ROUTES.has(`${req.method} ${target.pathname}`)) return fail(403, `this run's model forwarder passes model calls only, not ${req.method} ${target.pathname}`);
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      /** @type {Record<string, string>} */
+      const headers = { authorization: `Bearer ${token}`, "user-agent": USER_AGENT };
+      for (const h of ["content-type", "anthropic-version", "anthropic-beta", "accept"]) {
+        const v = req.headers[h];
+        if (typeof v === "string") headers[h] = v;
+      }
+      // The run gave up on the call (cancelled, timed out): so does upstream,
+      // or it would go on spending (Codex review).
+      const abort = new AbortController();
+      res.on("close", () => {
+        if (!res.writableEnded) abort.abort();
+      });
+      const up = await fetch(`${upstream}${target.pathname}${target.search}`, {
+        method: req.method,
+        headers,
+        body: req.method === "POST" ? Buffer.concat(chunks) : undefined,
+        redirect: "error",
+        signal: abort.signal,
+      });
+      /** @type {Record<string, string>} */
+      const out = {};
+      up.headers.forEach((v, k) => {
+        if (!["content-encoding", "content-length", "transfer-encoding", "connection"].includes(k)) out[k] = v;
+      });
+      res.writeHead(up.status, out);
+      if (up.body) for await (const chunk of up.body) res.write(chunk);
+      res.end();
+    } catch (err) {
+      if (!res.headersSent) fail(502, `models unreachable: ${err instanceof Error ? err.message : String(err)}`);
+      else res.end();
+    }
+  });
+  server.unref();
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const a = server.address();
+      resolve({ baseUrl: `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}`, key });
+    });
+  });
+}
+
 function assertCredentials() {
   if (MODEL_CREDENTIALS.some((v) => (process.env[v] ?? "").trim())) return;
   throw new Error(
@@ -1694,6 +1843,7 @@ function assertCredentials() {
 
 async function runTarget(target, flags) {
   if (!target) throw new Error("what should I run? try `foldrun run <agent>` or `foldrun run <flow>`");
+  await useAccountDoor(flags);
   assertCredentials();
   await useGallery(flags);
   const { startFlowRun, loadFlow, listAgents, readRun } = await core();
@@ -1858,10 +2008,22 @@ const STOP_REASONS = {
  * tier remap. The check the run-start gate makes from a catalogue, made
  * from the ground truth instead.
  */
-async function probeCmd(modelArg) {
+async function probeCmd(modelArg, flags = {}) {
   if (!modelArg) throw new Error("which model? try `foldrun probe openai/gpt-oss-120b` (or a tier: fast, default, max)");
-  assertCredentials();
   const { probeModel, resolveModel, parseProvider, providerEnvFor, resolveEffort, translatorSpecFor, startTranslator, providerPreset, readFrontmatter } = await core();
+  // The door only for the probe's default path: a folder whose AGENTS.md
+  // names its own provider is probed on that provider, with no foldrun
+  // credential anywhere near it (Codex review).
+  let ownProvider = false;
+  try {
+    const f = path.join(process.cwd(), "AGENTS.md");
+    const block = fs.existsSync(f) ? readFrontmatter(f).provider : undefined;
+    ownProvider = Boolean(block && parseProvider(block)?.baseUrl);
+  } catch {
+    /* said below, where the block is read */
+  }
+  if (!ownProvider) await useAccountDoor(flags);
+  assertCredentials();
 
   // The workspace's provider block, resolved the way a run resolves it —
   // ${SECRET} values come from the process env here: the CLI's vault is the
@@ -1945,6 +2107,7 @@ async function probeCmd(modelArg) {
 // ---------------------------------------------------------------- eval
 
 async function runEvals(name, flags = {}) {
+  await useAccountDoor(flags);
   assertCredentials();
   await useGallery(flags);
   const { listEvals, runEval, workspaceDir } = await core();
@@ -20560,7 +20723,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "onboarding":
       return onboardingCmd(flags);
     case "probe":
-      return probeCmd(positional[0]);
+      return probeCmd(positional[0], flags);
     case "connect":
       if (typeof flags.client === "string") {
         if (!/^[A-Z][A-Z0-9_]*$/.test(positional[0] ?? "")) throw new Error("`foldrun connect NAME --client <saved client>` — NAME in UPPER_SNAKE_CASE, the secret the grant becomes");
