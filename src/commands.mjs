@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
-import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches } from "./code-context.mjs";
+import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl } from "./code-context.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -14022,11 +14022,14 @@ async function codeTurn(s, task, include = []) {
       console.log(`  ${c.dim(`not applied — you pressed Ctrl-C. It stays on the run: foldrun report ${runId} patch --to ${ws}`)}\n`);
       return run.status;
     }
-    if (p.status === "unchanged") console.log(`  ${c.dim("no change to the folder")}\n`);
-    else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${plainText(p.reason ?? p.status)}\n`);
+    if (p.status === "unchanged") {
+      s.patchHandled = true;
+      console.log(`  ${c.dim("no change to the folder")}\n`);
+    } else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${plainText(p.reason ?? p.status)}\n`);
     else {
       console.log();
       if (await applyPatch(dir, p.patch, flags, runId, cancel)) {
+        s.patchHandled = !cancel.asked;
         (s.applied ??= []).push({ patch: String(p.patch), runId });
         if (codeInteractive) console.log(`  ${c.dim("/diff shows it · /undo takes it back")}`);
       }
@@ -14058,13 +14061,14 @@ async function codeTurn(s, task, include = []) {
  * private file, beside the conversation id.
  */
 function sessionCarry(/** @type {any} */ s) {
-  if ((!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size) return {};
+  if ((!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size && typeof s.goal !== "string") return {};
   const owner = typeof s.owner === "string" ? { owner: s.owner } : {};
   const KEEP = 8;
   const cut = Math.max(0, s.transcript.length - KEEP);
   const clip = (/** @type {string} */ x) => (x.length > 2_000 ? `${x.slice(0, 2_000)} […]` : x);
   return {
     ...owner,
+    ...(typeof s.goal === "string" ? { goal: s.goal } : {}),
     ...(s.cloudBriefed === s.context ? { briefed: true } : {}),
     transcript: s.transcript.slice(cut).map((/** @type {any} */ e) => ({ where: e.where, you: clip(e.you), agent: clip(e.agent), ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}) })),
     told: { local: Math.max(0, (s.told?.local ?? 0) - cut), cloud: Math.max(0, (s.told?.cloud ?? 0) - cut) },
@@ -14105,6 +14109,77 @@ function folderChanged(/** @type {string} */ dir) {
 }
 
 /** /status: the session in full — what the footer leaves out included. */
+/**
+ * /usage: the plan and the balance, each named as what it is, and only what
+ * the platform answered.
+ */
+export function usageBlock(/** @type {any} */ u) {
+  const row = (/** @type {string} */ k, /** @type {string} */ v) => `  ${c.dim(k.padEnd(15))}${v}`;
+  const usd = (/** @type {unknown} */ n) => (typeof n === "number" && Number.isFinite(n) ? `$${n.toFixed(2)}` : null);
+  const cr = u?.credits && typeof u.credits === "object" ? u.credits : {};
+  const lines = [];
+  const plan = typeof cr.plan?.name === "string" && cr.plan.name.trim() ? plainText(oneLine(cr.plan.name).trim().slice(0, 60)) : null;
+  lines.push(row("plan", plan ? `${plan}${cr.plan?.paysForTokens === false ? " — model calls are paid from the balance" : ""}` : "not told by the platform"));
+  const resets = typeof cr.plan?.resetsAt === "string" && Number.isFinite(Date.parse(cr.plan.resetsAt)) ? ` — resets ${cr.plan.resetsAt.slice(0, 10)}` : "";
+  const ofPlan = usd(cr.pots?.planUsd);
+  if (ofPlan) lines.push(row("plan credit", `${ofPlan} left${resets}`));
+  const bought = usd(cr.pots?.boughtUsd);
+  if (bought) lines.push(row("bought credit", `${bought} left`));
+  lines.push(row("", "foldrun usage has the tables: by project, by model, by day"));
+  return `${lines.join("\n")}\n`;
+}
+
+/** A goal is one line. */
+const GOAL_CHARS = 500;
+/** Turns in a row the session sends by itself toward a goal. */
+const GOAL_ROUNDS = 8;
+
+/** What every turn is told while a goal is set. */
+function goalNote(/** @type {unknown} */ goal) {
+  if (typeof goal !== "string" || !goal) return "";
+  return `[The person set a goal for this session: ${goal}\nWork toward it. Call it met only when you have checked it — by reading the result or running what proves it — not because the work looks done. End your reply with one last line, exactly "GOAL MET" or "GOAL NOT MET: <what is left>".]`;
+}
+
+/** What a reply's last line says about the goal. */
+export function goalVerdict(/** @type {string} */ reply) {
+  const last = reply.trim().split("\n").at(-1)?.replace(/[*_`]/g, "").trim() ?? "";
+  if (/^GOAL MET\.?$/.test(last)) return "met";
+  if (/^GOAL NOT MET\b/.test(last)) return "not-met";
+  return "unsaid";
+}
+
+/** The prompt /compact sends. */
+const COMPACT_PROMPT = "Write a summary of this conversation for yourself, to continue from with nothing else kept. Use no tools. Say: what the person asked for and decided; what was changed, file by file, and what was only proposed; commands run and what they showed; what is still open, and the next step. Be exact about names, paths and numbers; leave out pleasantries. Leave out any instruction about ending replies with a GOAL line: a goal that is still set is told to you again each turn. It replaces the conversation.";
+
+/** /context: what the agent reads before the person's words, and what the last turn read. */
+function contextBlock(/** @type {any} */ s) {
+  const row = (/** @type {string} */ k, /** @type {string} */ v) => `  ${c.dim(k.padEnd(15))}${v}`;
+  const chars = (/** @type {number} */ n) => `${formatTokens(Math.round(n / 4))} tokens, about`;
+  const lines = [];
+  if (s.mode === "local") {
+    const about = localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" }));
+    const own = folderInstructions(s.dir);
+    const skills = folderSkills(s.dir, { relativeTo: s.dir });
+    const history = Array.isArray(s.localHistory) ? s.localHistory : null;
+    lines.push(row("foldrun's own", chars(about.length)));
+    lines.push(row("instructions", own.files.length ? `${chars(own.text.length)} — ${own.files.map((f) => plainText(f.path)).join(", ")}` : "none in this folder (/init writes AGENTS.md)"));
+    lines.push(row("skills", skills.length ? `${chars(skillsNote(skills).length)} — ${skills.length} listed by name; a skill's text is read when used` : "none"));
+    lines.push(row("conversation", history === null ? "not opened yet — it is read with your first turn here" : history.length ? `${chars(JSON.stringify(history).length)} — ${history.length} messages (/compact shortens it, /clear drops it)` : "empty"));
+  } else {
+    lines.push(row("in the cloud", `the agent reads ${plainText(s.ws)}'s own context there: the account's and project's AGENTS.md, knowledge and skills — the run's report lists each part and its size`));
+    if (s.lastRun) lines.push(row("", `foldrun report ${plainText(String(s.lastRun))} --to ${plainText(s.ws)} --json  (promptLayers)`));
+  }
+  if (s.contextTokens !== undefined) lines.push(row("last turn", `${readTokens(s)} — every model call of a turn reads the whole context again; what is cached is billed at the model's cached rate`));
+  return `${lines.join("\n")}\n`;
+}
+
+/** "read 126k tokens (118k cached) in 5 model calls": what a turn's number is made of. */
+function readTokens(/** @type {any} */ s) {
+  const cached = Number(s.cachedTokens) > 0 ? ` (${formatTokens(Number(s.cachedTokens))} cached)` : "";
+  const calls = Number(s.modelCalls) > 1 ? ` in ${s.modelCalls} model calls` : "";
+  return `read ${formatTokens(Number(s.contextTokens))} tokens${cached}${calls}`;
+}
+
 function statusBlock(s, url) {
   const row = (k, v) => `  ${c.dim(k.padEnd(13))}${v}`;
   return [
@@ -14112,8 +14187,9 @@ function statusBlock(s, url) {
     row("turns", String(s.turns ?? 0)),
     row("spent", `${formatCost(s.costUsd ?? 0)} this session`),
     s.model ? row("model", shortModel(plainText(s.model))) : null,
-    s.contextTokens !== undefined ? row("last turn", `read ${formatTokens(s.contextTokens)} tokens${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
+    s.contextTokens !== undefined ? row("last turn", `${readTokens(s)}${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
     row("works", s.mode === "local" ? "on this computer" : "in the cloud"),
+    typeof s.goal === "string" ? row("goal", `${plainText(s.goal)} (/goal clear drops it)`) : null,
     row("agent", `${s.agent} in project ${s.ws}`),
     row("platform", url),
     row("folder", homeTilde(s.dir)),
@@ -14141,7 +14217,7 @@ function turnLine(s, run, cost, stopped) {
     c.amber(formatCost(cost)),
     (s.turns ?? 0) > 1 ? `${c.amber(formatCost(s.costUsd ?? 0))} ${c.grey("this session")}` : null,
     s.model ? c.violet(shortModel(plainText(s.model))) : null,
-    s.contextTokens !== undefined ? c.grey(`read ${formatTokens(s.contextTokens)} tokens`) : null,
+    s.contextTokens !== undefined ? c.grey(readTokens(s)) : null,
   ].filter(Boolean);
   return `  ${how} ${c.grey("·")} ${parts.join(` ${c.grey("·")} `)}`;
 }
@@ -15868,6 +15944,10 @@ async function codeLocalTurn(s, text) {
       // foldrun's own docs pages: text this CLI shipped with, nothing of the
       // person's read and nothing run — never asked.
       if (name === FOLDRUN_DOCS_TOOL) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      // /plan: the turn reads and proposes. Whatever would change the
+      // folder, run a command or leave this computer is refused unasked —
+      // an earlier "always" does not reach into a plan.
+      if (s.planOnly) return { behavior: /** @type {const} */ ("deny"), message: "This is a plan-only turn: nothing is changed, run or sent. Read what you need with Read, Glob and Grep, then give the plan — the files you would change and how, the commands you would run, and what could go wrong. The person runs it by answering." };
       const file = input.file_path ?? input.notebook_path ?? input.path;
       const inside = file !== undefined && bothInside(s.dir, file);
       const command = name === "Bash" ? String(input.command ?? "") : null;
@@ -16117,7 +16197,9 @@ async function codeLocalTurn(s, text) {
             canUseTool,
             abortController: abort,
             // Messages sent with Enter while it works (FOL-213).
-            steer: takeSent,
+            // Not while /compact writes its summary: a message taken then
+            // would be answered, and that answer kept as the summary (Codex).
+            ...(s.noSteer ? {} : { steer: takeSent }),
           },
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
@@ -16256,7 +16338,12 @@ async function codeLocalTurn(s, text) {
   const secs = (Date.now() - started) / 1000;
   s.turns = (s.turns ?? 0) + 1;
   s.secs = secs;
-  if (result?.usage) s.contextTokens = Number(result.usage.input_tokens ?? 0) + Number(result.usage.cache_read_input_tokens ?? 0) + Number(result.usage.cache_creation_input_tokens ?? 0);
+  if (result?.usage) {
+    s.contextTokens = Number(result.usage.input_tokens ?? 0) + Number(result.usage.cache_read_input_tokens ?? 0) + Number(result.usage.cache_creation_input_tokens ?? 0);
+    s.cachedTokens = Number(result.usage.cache_read_input_tokens ?? 0) > 0 ? Number(result.usage.cache_read_input_tokens) : undefined;
+    delete s.modelCalls;
+  }
+  s.turnOk = ok && !cancel.asked;
   const how = cancel.asked ? c.bold(c.amber("■ stopped")) : ok ? c.bold(c.green("✓ done")) : c.bold(c.red("✗ not finished"));
   const parts = [c.white(formatSecs(secs)), s.model ? c.violet(shortModel(plainText(s.model))) : null, s.planLabel ? c.grey(`on ${s.planLabel}`) : null].filter(Boolean);
   console.log(`\n  ${how} ${c.grey("·")} ${parts.join(` ${c.grey("·")} `)}`);
@@ -16378,6 +16465,7 @@ async function codeCmd(positional, flags, layout) {
   s.owner = owner;
   const carried = resumed && resumed.owner === owner ? resumed : null;
   if (carried && Array.isArray(carried.shown)) s.shownMessages = new Set(carried.shown.filter((/** @type {unknown} */ x) => typeof x === "string"));
+  if (carried && typeof carried.goal === "string" && carried.goal.trim() && !hasControl(carried.goal) && !/[\n\r\t]/.test(carried.goal)) s.goal = carried.goal.slice(0, GOAL_CHARS);
   if (carried && Array.isArray(carried.transcript)) {
     s.transcript = carried.transcript.filter((/** @type {any} */ e) => e && (e.where === "local" || e.where === "cloud") && typeof e.you === "string" && typeof e.agent === "string").map((/** @type {any} */ e) => ({ where: e.where, you: e.you, agent: e.agent, ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}) }));
     const n = s.transcript.length;
@@ -16466,8 +16554,10 @@ async function codeCmd(positional, flags, layout) {
       s.cloudBriefDue = where === "cloud" && s.cloudBriefed !== s.context;
       if (where !== "cloud") delete s.cloudExtra;
       const sent = where === "local" ? await localMessagesBlock(s) : "";
-      const message = [carry, sent, withNotes(notes, said)].filter(Boolean).join("\n\n");
+      const message = [carry, sent, goalNote(s.goal), withNotes(notes, said)].filter(Boolean).join("\n\n");
       const before = s.turns ?? 0;
+      delete s.turnOk;
+      delete s.patchHandled;
       const patches = s.applied?.length ?? 0;
       delete s.turnReply;
       s.turnSteer = [];
@@ -16475,7 +16565,13 @@ async function codeCmd(positional, flags, layout) {
       if (where === "local") {
         s.engine = "foldrun";
         await codeLocalTurn(s, message);
-      } else await codeTurn(s, message, await messagesForTurn(s, true));
+      } else {
+        // Whether a goal may go on is known only after the patch is handled:
+        // a Ctrl-C there, a patch that could not be had, or one the person
+        // did not apply all hand back (Codex).
+        const status = await codeTurn(s, message, await messagesForTurn(s, true));
+        s.turnOk = status === "completed" && s.patchHandled === true;
+      }
       if ((s.turns ?? 0) > before) {
         if (where === "cloud") s.cloudBriefed = s.context;
         // A cloud turn's changes are in the folder only when its patch was applied (Codex).
@@ -16488,6 +16584,7 @@ async function codeCmd(positional, flags, layout) {
         s.told[where] = s.transcript.length;
       }
     } catch (err) {
+      s.turnOk = false;
       console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
     } finally {
       s.mode = home;
@@ -16506,7 +16603,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     // Nothing of the old conversation stays in the count (Codex).
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "secs"]) delete s[k];
+    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "lastRun"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };
@@ -16515,6 +16612,34 @@ async function codeCmd(positional, flags, layout) {
     remember();
   };
   const say = (/** @type {string} */ text) => console.log(`  ${c.dim(text)}\n`);
+  /**
+   * A turn, and — with a goal set — the turns after it: the agent ends each
+   * reply saying whether the goal is met, and while it is not the session
+   * sends it on, a bounded number of times. A stopped or failed turn, or a
+   * reply that does not say, hands back to the person.
+   */
+  const towardGoal = async (/** @type {string} */ said, /** @type {string} */ typed = said) => {
+    await runTurn(s.mode, said, typed);
+    for (let round = 1; typeof s.goal === "string"; round++) {
+      if (s.turnOk !== true) return;
+      const verdict = goalVerdict(typeof s.turnReply === "string" ? s.turnReply : "");
+      if (verdict === "met") {
+        console.log(`  ${c.green("✓")} ${c.dim(`the agent says the goal is met: ${plainText(s.goal)} — check it yourself; the goal is dropped`)}\n`);
+        delete s.goal;
+        // Seen on dev: with the goal gone the agent kept ending replies "GOAL MET".
+        s.notes.push("[The session's goal is met and no longer set: do not end replies with a GOAL line any more.]");
+        remember();
+        return;
+      }
+      if (verdict !== "not-met") return;
+      if (round >= GOAL_ROUNDS) {
+        say(`${GOAL_ROUNDS} turns in a row toward the goal and not there yet — say "go on" to continue, or /goal clear`);
+        return;
+      }
+      console.log(`  ${c.dim(`↻ goal not met yet — going on (${round + 1} of ${GOAL_ROUNDS}) · Ctrl-C stops`)}`);
+      await runTurn(s.mode, "Go on toward the goal.", "(went on toward the goal)");
+    }
+  };
   for (;;) {
     const line = await readCodeMessage(prompt, completer, s);
     if (isLeave(line)) {
@@ -16596,6 +16721,100 @@ async function codeCmd(positional, flags, layout) {
     }
     if (name === "/status") {
       console.log(statusBlock(s, url));
+      continue;
+    }
+    if (name === "/usage") {
+      // The plan and the balance now. `foldrun usage` has the tables.
+      try {
+        console.log(usageBlock(await remoteCall(url, flags, "/v1/account/usage")));
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      }
+      continue;
+    }
+    if (name === "/context") {
+      console.log(contextBlock(s));
+      continue;
+    }
+    if (name === "/goal") {
+      if (!rest) say(typeof s.goal === "string" ? `goal: ${plainText(s.goal)} — /goal clear drops it` : "no goal set — /goal <what must be true when the work is done>: the agent then keeps working, turn after turn, until it is");
+      else if (/^(clear|off|none|stop)$/i.test(rest)) {
+        if (typeof s.goal === "string") s.notes.push("[The person dropped the session's goal: do not end replies with a GOAL line any more.]");
+        delete s.goal;
+        remember();
+        say("no goal any more");
+      } else if (rest.length > GOAL_CHARS || hasControl(rest) || /[\n\r\t]/.test(rest)) say(`a goal is one plain line, ${GOAL_CHARS} characters at most`);
+      else {
+        s.goal = rest;
+        remember();
+        console.log(`  ${c.green("✓")} ${c.dim(`goal set — the agent works toward it and goes on by itself, up to ${GOAL_ROUNDS} turns in a row, until it says the goal is met; Ctrl-C stops it${s.mode === "local" ? `, and it asks before each change and command${s.localAllow?.kinds?.size || s.localAllow?.commands?.size ? " — except what you already allowed with \"always\" (/permissions)" : ""}` : ", and each turn's patch is yours to apply"}`)}\n`);
+        await towardGoal("Start on the goal.", line);
+      }
+      continue;
+    }
+    if (name === "/plan") {
+      if (!rest) {
+        say("/plan <task> — the agent reads the folder and says how it would do it; nothing is changed or run. Answer \"go\" to have it done");
+        continue;
+      }
+      if (s.mode !== "local") {
+        say("/plan works on this computer, where a turn can be held to reading — /local, then /plan");
+        continue;
+      }
+      s.planOnly = true;
+      try {
+        await runTurn("local", `Plan only — change nothing, run nothing. Read what you need, then say how you would do this: the files you would change and how, the commands you would run, and what could go wrong.\n\n${rest}`, line);
+      } finally {
+        delete s.planOnly;
+      }
+      continue;
+    }
+    if (name === "/compact") {
+      if (s.mode !== "local") {
+        say("the cloud keeps the conversation itself; /clear starts a fresh one. /compact shortens the conversation kept on this computer");
+        continue;
+      }
+      // The kept conversation is filed under the account, known from the
+      // first turn on this computer: before one, it is not looked for (Codex).
+      if (!Array.isArray(s.localHistory)) {
+        say("nothing to shorten yet — after --continue, send a message first: the kept conversation is opened with your first turn here");
+        continue;
+      }
+      const had = s.localHistory;
+      if (!had.length) {
+        say("nothing to shorten yet");
+        continue;
+      }
+      // One turn with nothing allowed: the agent writes what a later turn
+      // needs, and that summary takes the conversation's place.
+      const before = s.turns ?? 0;
+      s.planOnly = true;
+      s.noSteer = true;
+      delete s.turnReply;
+      delete s.turnOk;
+      try {
+        await codeLocalTurn(s, `${COMPACT_PROMPT}${rest ? `\n\nKeep in particular: ${rest}` : ""}`);
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      } finally {
+        delete s.planOnly;
+        delete s.noSteer;
+      }
+      const summary = typeof s.turnReply === "string" ? s.turnReply.trim() : "";
+      if ((s.turns ?? 0) > before && s.turnOk && summary) {
+        s.localHistory = [
+          { role: "user", content: [{ type: "text", text: "(The earlier conversation was shortened at the person's request. What follows is your own summary of it; the folder itself is the truth about the files.)" }] },
+          { role: "assistant", content: [{ type: "text", text: summary }] },
+        ];
+        saveEngineConversation(s, s.localHistory);
+        remember();
+        console.log(`  ${c.green("✓")} ${c.dim(`conversation shortened: ${had.length} messages are now this summary — the next turn starts from it`)}\n`);
+      } else {
+        // Not finished: the conversation is as it was before the try.
+        s.localHistory = had;
+        saveEngineConversation(s, had);
+        say("not shortened — the conversation is as it was");
+      }
       continue;
     }
     if (name === "/sessions") {
@@ -16765,7 +16984,7 @@ async function codeCmd(positional, flags, layout) {
       continue;
     }
     // \/etc/hosts … : a message that starts with a slash.
-    await runTurn(s.mode, line.startsWith("\\/") ? line.slice(1) : line);
+    await towardGoal(line.startsWith("\\/") ? line.slice(1) : line);
   }
 }
 
@@ -17312,7 +17531,7 @@ async function undoLastPatch(s) {
  * line (owner, 19 Nov 2026): turns, spend, the model, how much the agent
  * read last turn (its context), how long it took. `/new` starts the count
  * again; `/status` prints it.
- * @param {{ turns?: number, costUsd?: number, model?: string, contextTokens?: number, secs?: number }} s
+ * @param {{ turns?: number, costUsd?: number, model?: string, contextTokens?: number, cachedTokens?: number, modelCalls?: number, secs?: number }} s
  * @param {any} run
  * @param {number} cost
  */
@@ -17325,6 +17544,11 @@ export function noteSessionTurn(s, run, cost) {
   if (model) s.model = model;
   const t = step?.tokens;
   s.contextTokens = t ? Number(t.input ?? 0) : undefined;
+  // Every model call of a turn re-reads the agent's instructions; all but
+  // the first take them from the cache at a tenth of the price. Shown, so a
+  // big number is not read as a big bill (owner, 24 Nov 2026).
+  s.cachedTokens = t && Number(t.cacheRead ?? 0) > 0 ? Number(t.cacheRead) : undefined;
+  s.modelCalls = Array.isArray(step?.calls) && step.calls.length ? step.calls.length : undefined;
   const a = Date.parse(run.startedAt ?? "");
   const b = Date.parse(run.finishedAt ?? "");
   s.secs = Number.isFinite(a) && Number.isFinite(b) ? (b - a) / 1000 : undefined;

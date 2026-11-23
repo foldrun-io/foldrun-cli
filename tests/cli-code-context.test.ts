@@ -15,7 +15,7 @@ import {
   folderInstructions, folderSkills, folderCommands, frontmatterLines, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, readBody,
 } from "../src/code-context.mjs";
 import { CODE_COMMANDS, helpText, codeCompleter, friendlyTool, localCallSummary, localPrompt } from "../src/code-session.mjs";
-import { foldrunDocsCall, sessionMessageOf } from "../src/commands.mjs";
+import { foldrunDocsCall, sessionMessageOf, goalVerdict, usageBlock } from "../src/commands.mjs";
 
 const hasPty = spawnSync("python3", ["-c", "import pty"]).status === 0 && process.platform !== "win32";
 
@@ -196,13 +196,13 @@ test("one session, two places: each side is told once what the other did; the ne
 test("suggestions: what starts with the typed part first, then what holds it; nothing once the line is more than the command", () => {
   const all = [...CODE_COMMANDS.map(([n, d]) => ({ name: String(n).split(" ")[0]!, desc: String(d) })), { name: "/fix-tests", desc: "Run the tests", kind: "command" }];
   assert.equal(slashMatches("/", all).length, all.length);
-  assert.deepEqual(slashMatches("/co", all).map((x) => x.name), ["/cost", "/copy"]);
+  assert.deepEqual(slashMatches("/co", all).map((x) => x.name), ["/cost", "/context", "/compact", "/copy"]);
   assert.deepEqual(slashMatches("/st", all).map((x) => x.name), ["/status", "/cost", "/fix-tests"]);
   assert.deepEqual(slashMatches("/model max", all), []);
   assert.deepEqual(slashMatches("hello", all), []);
   assert.deepEqual(slashMatches("/zzz", all), []);
   const names = CODE_COMMANDS.map(([n]) => String(n).split(" ")[0]);
-  for (const n of ["/init", "/review", "/cost", "/local", "/cloud", "/skills", "/memory", "/permissions", "/copy", "/export", "/clear", "/sessions"]) assert.ok(names.includes(n), n);
+  for (const n of ["/usage", "/context", "/compact", "/plan", "/goal", "/init", "/review", "/cost", "/local", "/cloud", "/skills", "/memory", "/permissions", "/copy", "/export", "/clear", "/sessions"]) assert.ok(names.includes(n), n);
   assert.equal(new Set(names).size, names.length, "no command listed twice");
   const help = helpText({ extra: [{ name: "/fix-tests", hint: "[which]", desc: "Run the tests" }] });
   assert.match(help, /this folder's own:\n\/fix-tests \[which\]\s+Run the tests/);
@@ -405,6 +405,92 @@ test("on a terminal: /cloud and /local move one session; the other side is told 
   assert.match(kept.owner, /^[0-9a-f]{24}$/, "bound to the sign-in it was said under");
   assert.deepEqual(kept.told, { local: 0, cloud: 1 });
   assert.equal(fs.statSync(path.join(home, "code-sessions.json")).mode & 0o077, 0, "private to the person");
+});
+
+test("a goal: the reply's last line says whether it is met; anything else hands back to the person", () => {
+  assert.equal(goalVerdict("Fixed it.\n\nGOAL MET"), "met");
+  assert.equal(goalVerdict("Fixed it.\n**GOAL MET.**"), "met");
+  assert.equal(goalVerdict("Half way.\nGOAL NOT MET: the tests still fail"), "not-met");
+  assert.equal(goalVerdict("GOAL MET\nbut then more text"), "unsaid");
+  assert.equal(goalVerdict("The goal met its end."), "unsaid");
+  assert.equal(goalVerdict(""), "unsaid");
+});
+
+test("/usage: the plan and what is left, only what the platform answered", () => {
+  const plain = (x: string) => x.replace(/\x1b\[[0-9;]*m/g, "");
+  const full = plain(usageBlock({ credits: { pots: { planUsd: 872.941, boughtUsd: 50 }, plan: { name: "Scale", paysForTokens: false, resetsAt: "2026-12-13T15:33:54.587Z" } } }));
+  assert.match(full, /plan\s+Scale — model calls are paid from the balance/);
+  assert.match(full, /plan credit\s+\$872\.94 left — resets 2026-12-13/);
+  assert.match(full, /bought credit\s+\$50\.00 left/);
+  const none = plain(usageBlock({}));
+  assert.match(none, /plan\s+not told by the platform/);
+  assert.doesNotMatch(none, /\$/, "no number is made up");
+});
+
+test("on a terminal: /goal keeps the agent going until it says the goal is met; /usage, /context, /plan and /compact answer", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo({ "a.txt": "a\n" });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const tasks: string[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: (b: any) => {
+      tasks.push(String(b.task ?? b.input ?? JSON.stringify(b)));
+      return { ok: true, runId: RUN, snapshot: ID, context: "code-me" };
+    },
+    [`GET ${WS}/runs/${RUN}`]: () => {
+      const said = tasks.length < 3 ? `Step ${tasks.length}.\nGOAL NOT MET: more to do` : "All done and checked.\nGOAL MET";
+      return {
+        id: RUN, flow: "adhoc:coder", status: "completed", snapshot: { id: ID }, startedAt: "2026-11-24T01:00:00.000Z", finishedAt: "2026-11-24T01:00:05.000Z",
+        steps: [{ agent: "coder", group: 1, status: "completed", attempts: 1, costUsd: 0.02, tokens: { input: 48000, output: 100, cacheRead: 24000, cacheWrite: 24000 }, calls: [{ n: 1 }, { n: 2 }], events: [{ t: "2026-11-24T01:00:01.000Z", type: "text", text: said }], result: said }],
+      };
+    },
+    [`GET ${WS}/runs/${RUN}/archive`]: () => raw(JSON.stringify({ status: "unchanged" }), "application/json"),
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "dumb" });
+  try {
+    let at = await t.until(/desk ❯ /);
+    await t.type("/goal\r");
+    at = await t.until(/no goal set/, at);
+    await t.type("/goal the tests pass\r");
+    at = await t.until(/goal set/, at);
+    at = await t.until(/send it\? \[y\]es/, at);
+    await t.type("y\r");
+    // What a turn read, and how much of it was cached.
+    at = await t.until(/read 48k tokens \(24k cached\) in 2 model calls/, at);
+    at = await t.until(/goal not met yet — going on \(2 of 8\)/, at);
+    at = await t.until(/goal not met yet — going on \(3 of 8\)/, at);
+    at = await t.until(/the agent says the goal is met: the tests pass/, at);
+    at = await t.until(/desk ❯ /, at);
+    await t.type("/goal\r");
+    at = await t.until(/no goal set/, at);
+    await t.type("/context\r");
+    at = await t.until(/in the cloud\s+the agent reads desk's own context there/, at);
+    at = await t.until(/billed at the model.s cached rate/, at);
+    await t.type("/plan how would you add c\r");
+    at = await t.until(/\/plan works on this computer/, at);
+    await t.type("/compact\r");
+    at = await t.until(/the cloud keeps the conversation itself/, at);
+    await t.type("/local\r");
+    at = await t.until(/working on this computer from here on/, at);
+    await t.type("/context\r");
+    at = await t.until(/instructions\s+none in this folder/, at);
+    at = await t.until(/conversation\s+not opened yet/, at);
+    await t.type("/compact\r");
+    at = await t.until(/nothing to shorten yet/, at);
+    await t.type("/goal ship it\r");
+    at = await t.until(/goal set/, at);
+    await t.type("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(tasks.length, 3, "three turns: the first, and two the session sent by itself");
+  for (const task of tasks) assert.match(task, /The person set a goal for this session: the tests pass/);
+  assert.match(tasks[1]!, /Go on toward the goal\./);
 });
 
 test("a session message is sent exactly as it was shown: an id, plain text, 4,000 characters at most — a hidden character or a long id is refused, never cleaned for the screen only", () => {
