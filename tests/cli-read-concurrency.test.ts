@@ -3,7 +3,7 @@
 // The API has no "every file with its text" read, so `pull`, `status` and
 // `check --to` fetch a project one file per request. Those used to be asked
 // one after another: a 60-file project was 60 round trips in a row (about
-// 12 s against dev.foldrun.io, where one round trip is ~200 ms). `account`
+// 12 s against dev, where one round trip is ~200 ms). `account`
 // likewise waited for its defaults before asking for the pause mark.
 //
 // The fake platform here answers slowly and counts how many requests are in

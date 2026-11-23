@@ -50,7 +50,6 @@ The versions so far:
 
 | Version | What changed |
 |---|---|
-| `2026-11-23` | One URL format: every route is `/v1/<route>` and `/api` is gone. `GET /v1/version` drops `paths`, which said how an install spelled its routes; a caller pinned earlier gets it back saying `/v1`. |
 | `2026-11-22` | One API, as Anthropic's: every refusal is Anthropic's error body, `{ "type": "error", "error": { "type", "message" } }`, with a `code` and figures inside `error` — the body `/v1` answers with. The key may be sent as `x-api-key` as well as `Authorization: Bearer` (that part breaks nothing). A caller pinned earlier, and a browser, keep `{ "error": "..." }`. |
 | `2026-10-26` | `GET /v1/account/usage`: `ledger.providerCostUsd` and `ledger.marginUsd` are withdrawn. They were the platform's own accounting of your lines, not part of your account. A caller pinned to `2026-10-01` still gets both keys, as `null`: the values are withheld, not reproduced. |
 | `2026-10-01` | The first dated version. Every CLI released so far sends it. |

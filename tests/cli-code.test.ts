@@ -977,5 +977,5 @@ test("droppedConnection: socket failures yes; an abort, an HTTP answer or anythi
   assert.ok(!droppedConnection(Object.assign(new Error("aborted"), { name: "AbortError" })));
   assert.ok(!droppedConnection(Object.assign(new Error("could not reach x"), { status: 500 })));
   assert.ok(!droppedConnection(new Error("workspace not found")));
-  assert.ok(droppedConnection(new Error("dev.foldrun.io did not answer GET /v1/workspaces/x/runs/y within 30s — FOLDRUN_TIMEOUT=<seconds> allows longer")), "the CLI's own timeout (Codex)");
+  assert.ok(droppedConnection(new Error("api.foldrun.dev did not answer GET /v1/workspaces/x/runs/y within 30s — FOLDRUN_TIMEOUT=<seconds> allows longer")), "the CLI's own timeout (Codex)");
 });

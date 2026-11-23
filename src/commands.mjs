@@ -2158,7 +2158,7 @@ const env = (name) => process.env[name] || undefined;
  * current profile.
  *
  * It was "the newest login on that URL", which meant `foldrun whoami --url
- * https://dev.foldrun.io` acted as a different account from the bare
+ * https://dash.foldrun.dev` acted as a different account from the bare
  * `foldrun whoami` on a machine with two customers on one platform — the
  * same command, two accounts, and nothing on screen to say so.
  */
@@ -2181,7 +2181,7 @@ function chosenProfile(flags) {
     return null;
   }
   // A profile kept at the API answers for its dashboard's address too
-  // (`app`, 21 Nov 2026): --url https://dev.foldrun.io still finds it.
+  // (`app`, 21 Nov 2026): --url https://dash.foldrun.dev still finds it.
   const at = (p) => normaliseUrl(p.url) === key || (typeof p.app === "string" && normaliseUrl(p.app) === key);
   if (current && at(current)) return current;
   const here = listProfiles().filter(at);
