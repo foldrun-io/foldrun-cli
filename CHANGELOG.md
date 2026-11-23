@@ -12,6 +12,24 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.0.0] — 2026-11-23
+
+### Breaking changes
+
+- a signed-in machine's local runs, evals and probes now (daa7c22)
+- the CLI now runs on @foldrun/core 27.0.0, a new major. (64ef8ea)
+
+### New in the public API
+
+- the `--own-key` flag
+
+- test(run-door): its own fake Messages API, not another test file's ([61f5467](https://github.com/foldrun-io/foldrun-cli/commit/61f5467))
+- feat(run)!: a signed-in account's local runs go through its platform's model door ([daa7c22](https://github.com/foldrun-io/foldrun-cli/commit/daa7c22))
+
+### deps
+
+- @foldrun/core ^27.0.0 ([64ef8ea](https://github.com/foldrun-io/foldrun-cli/commit/64ef8ea))
+
 ## [29.1.0] — 2026-11-23
 
 - feat(billing): the subscription view, billing extra-usage, and what to do about each refusal code (FOL-235) ([6dfce58](https://github.com/foldrun-io/foldrun-cli/commit/6dfce58))
