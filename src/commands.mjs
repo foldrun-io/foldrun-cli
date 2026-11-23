@@ -18,6 +18,8 @@ import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { mcpManager, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX } from "./code-mcp.mjs";
+import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
 
@@ -14065,7 +14067,7 @@ async function codeTurn(s, task, include = []) {
  * private file, beside the conversation id.
  */
 function sessionCarry(/** @type {any} */ s) {
-  if ((!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size && typeof s.goal !== "string" && !(Array.isArray(s.past) && s.past.length) && typeof s.label !== "string") return {};
+  if ((!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size && typeof s.goal !== "string" && !(Array.isArray(s.todos) && s.todos.length) && !(Array.isArray(s.past) && s.past.length) && typeof s.label !== "string") return {};
   const owner = typeof s.owner === "string" ? { owner: s.owner } : {};
   const KEEP = 8;
   const cut = Math.max(0, s.transcript.length - KEEP);
@@ -14075,9 +14077,12 @@ function sessionCarry(/** @type {any} */ s) {
     ...(Array.isArray(s.past) && s.past.length ? { past: s.past.slice(0, PAST_KEPT) } : {}),
     ...(typeof s.label === "string" && s.label ? { label: s.label } : {}),
     ...(s.lastWhere === "local" || s.lastWhere === "cloud" ? { lastWhere: s.lastWhere } : {}),
+    // The conversation kept on this computer still holds what was read: later answers stay marked (Codex).
+    ...(s.privateSeen === true ? { privateSeen: true } : {}),
     ...(typeof s.goal === "string" ? { goal: s.goal } : {}),
+    ...(Array.isArray(s.todos) && s.todos.length ? { todos: s.todos, ...(s.todosWithheld === true ? { todosWithheld: true } : {}) } : {}),
     ...(s.cloudBriefed === s.context ? { briefed: true } : {}),
-    transcript: s.transcript.slice(cut).map((/** @type {any} */ e) => ({ where: e.where, you: clip(e.you), agent: clip(e.agent), ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}) })),
+    transcript: s.transcript.slice(cut).map((/** @type {any} */ e) => ({ where: e.where, you: clip(e.you), agent: clip(e.agent), ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}), ...(e.private === true ? { private: true } : {}), ...(typeof e.share === "boolean" ? { share: e.share } : {}) })),
     told: { local: Math.max(0, (s.told?.local ?? 0) - cut), cloud: Math.max(0, (s.told?.cloud ?? 0) - cut) },
     ...(s.shownMessages?.size ? { shown: [...s.shownMessages].slice(-200) } : {}),
   };
@@ -14138,6 +14143,148 @@ export function usageBlock(/** @type {any} */ u) {
 
 /** What the agent is told about commands that run without a question. */
 const LOOKS_NOTE = `Commands that only look run at once, without the person being asked: ${READ_ONLY_SAID}. Only as one plain command per call — no ";", "&&", pipe, redirect, quote or variable, and paths inside this folder. To look around, send these one at a time (several calls in one reply is fine) rather than chained: a chained command is asked like any other.`;
+
+/** Whether the agent may read this path unasked: inside the session's folder, or a folder the person added. */
+function readableBy(/** @type {any} */ s, /** @type {unknown} */ p) {
+  if (typeof p !== "string" || !p) return false;
+  if (bothInside(s.dir, p)) return true;
+  const abs = path.resolve(s.dir, p);
+  return (Array.isArray(s.extraDirs) ? s.extraDirs : []).some((/** @type {string} */ r) => insideFolder(r, abs));
+}
+
+/**
+ * The session's MCP servers (code-mcp.mjs), or null when this install's
+ * @foldrun/core cannot connect any. Made once; ended with the process.
+ */
+async function mcpOf(/** @type {any} */ s) {
+  if (s.mcp !== undefined) return s.mcp;
+  /** @type {any} */
+  let mod = null;
+  try {
+    mod = await import("@foldrun/core/engine-mcp");
+  } catch {
+    /* an older core */
+  }
+  // Only an engine that ends a server's whole tree, stops an endless tool list and refuses a redirect (Codex).
+  const fit = mod?.ENGINE_MCP_FEATURES;
+  s.mcp = typeof mod?.connectMcp === "function" && fit?.killOnClose === true && fit?.maxTools === true && fit?.redirectError === true && fit?.kill === true ? mcpManager({ dir: s.dir, env: () => localEnv(), connect: mod.connectMcp }) : null;
+  if (s.mcp) process.on("exit", () => s.mcp.killAll());
+  return s.mcp;
+}
+
+/** The todo list as the person sees it. */
+function todoLines(/** @type {any[]} */ todos) {
+  return todos.map((x) => `    ${x.status === "completed" ? c.green("✔") : x.status === "in_progress" ? c.cyan("▸") : c.grey("○")} ${x.status === "completed" ? c.grey(plainText(x.content)) : x.status === "in_progress" ? c.bold(c.white(plainText(x.content))) : c.white(plainText(x.content))}`);
+}
+
+/**
+ * The agents the project already has, for a sub-agent run in the cloud:
+ * asked once a session. Empty when the project is not there yet or cannot
+ * be read — a job is never run as an agent that would first have to be
+ * made (a yes to a run is not a yes to making one; Codex).
+ */
+async function cloudAgentNames(/** @type {any} */ s) {
+  if (Array.isArray(s.cloudAgents)) return s.cloudAgents;
+  /** @type {string[]} */
+  let names = [];
+  try {
+    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/agents`);
+    names = (Array.isArray(got?.agents) ? got.agents : []).map((/** @type {any} */ a) => String(a?.name ?? "")).filter((/** @type {string} */ n) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(n));
+  } catch {
+    return [];
+  }
+  // The session's own agent first, when the project has it.
+  s.cloudAgents = [...new Set([...(names.includes(String(s.agent)) ? [String(s.agent)] : []), ...names])].slice(0, 40);
+  return s.cloudAgents;
+}
+
+/**
+ * One job run in the project's cloud sandbox, as one of its agents, with
+ * nothing sent but the prompt: the cloud as compute for the agent on this
+ * computer. Its answer comes back; whatever it did in its sandbox stays there.
+ * @param {any} s
+ * @param {{ agent: string, prompt: string, description: string }} job
+ * @param {AbortSignal} signal
+ * @param {{ pause: () => void, resume: () => void }} h
+ */
+async function runCloudSub(s, job, signal, h) {
+  const { url, flags, ws } = s;
+  const base = `/v1/workspaces/${enc(ws)}`;
+  /** @type {string | null} */
+  let id = null;
+  let unsure = false;
+  let tick = () => {};
+  const stop = async () => {
+    if (!id) return unsure ? ` A cloud run may have started without its id reaching here (foldrun runs --to ${ws}).` : " Nothing was started.";
+    try {
+      await remoteCall(url, flags, `${base}/runs/${enc(id)}/stop`, { method: "POST", body: "{}" });
+      return ` The cloud run ${id} was told to stop.`;
+    } catch {
+      console.log(`  ${c.amber("!")} ${c.grey(`the platform did not take the stop for ${id} — foldrun stop ${id} --to ${plainText(ws)}`)}`);
+      return ` The platform did not confirm the stop of ${id}.`;
+    }
+  };
+  if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+  h.pause();
+  try {
+    let started;
+    try {
+      started = await remoteCall(url, flags, `${base}/agents/${enc(job.agent)}/run`, /** @type {RequestInit} */ ({
+        method: "POST",
+        body: JSON.stringify({ task: job.prompt, ...(flags.test === true ? { test: true } : {}) }),
+        stopBefore: signal,
+      }));
+    } catch (err) {
+      const before = /^stopped before /.test(String(/** @type {any} */ (err)?.message));
+      if (!before && !(err instanceof HttpError && err.status >= 400 && err.status < 500)) unsure = true;
+      throw err;
+    }
+    id = started?.runId;
+    if (typeof id !== "string" || !RUN_ID_SHAPE.test(id)) {
+      id = null;
+      unsure = true;
+      throw new Error(`${url} started no run it could name`);
+    }
+    console.log(`  ${c.violet("☁")} ${c.white(`cloud sub-agent ${plainText(job.agent)}`)} ${c.grey(`· ${id} ·`)} ${c.grey(clipLine(plainText(job.description)))}`);
+    const t0 = Date.now();
+    tick = startTicker(t0);
+    let faults = 0;
+    while (!signal.aborted) {
+      try {
+        const body = await remoteCall(url, flags, `${base}/runs/${enc(id)}?wait=true&timeout=25`);
+        if (body?.timedOut === true) continue;
+      } catch (err) {
+        if (!(/** @type {any} */ (err)?.body?.runId)) {
+          if (++faults > 5) throw err;
+          await new Promise((res) => setTimeout(res, 2000 * faults));
+          continue;
+        }
+      }
+      break;
+    }
+    tick();
+    tick = () => {};
+    if (signal.aborted) return { text: `Stopped by the person.${await stop()}`, isError: true };
+    const run = await remoteCall(url, flags, `${base}/runs/${enc(id)}`);
+    const own = (run.steps ?? []).filter((/** @type {any} */ x) => !x.subagentOf);
+    const reply = plainText(String(own.at(-1)?.result ?? "")).trim();
+    const cost = (run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
+    s.costUsd = (s.costUsd ?? 0) + (Number.isFinite(cost) ? cost : 0);
+    const ok = run.status === "completed";
+    console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.white(`cloud sub-agent ${plainText(job.agent)}`)} ${c.grey(`· ${plainText(String(run.status))} · ${formatSecs((Date.now() - t0) / 1000)} · ${formatCost(cost)}`)}`);
+    if (!ok) return { text: `The cloud sub-agent did not finish (run ${id}: ${plainText(String(run.status))}).${reply ? ` What it said:\n\n${reply.slice(0, AGENT_ANSWER_MAX)}` : ""}`, isError: true };
+    return { text: `${(reply || "(it gave no answer)").slice(0, AGENT_ANSWER_MAX)}${reply.length > AGENT_ANSWER_MAX ? "\n[cut: the answer was longer]" : ""}\n\n[cloud run ${id} · it ran in the project's sandbox and saw none of this folder; anything it made there stayed there]`, isError: false };
+  } catch (err) {
+    tick();
+    if (signal.aborted) return { text: `Stopped by the person.${await stop()}`, isError: true };
+    // It was started and then lost sight of: stopped, so the job is not paid for twice.
+    if (id) return { text: `The cloud sub-agent's run ${id} was started, but its result could not be had (${plainText(explain(err))}).${await stop()} Tell the person; \`foldrun runs ${id} --to ${ws}\` shows what it did. Do not start it again unless they ask.`, isError: true };
+    return { text: `The cloud sub-agent could not be run: ${plainText(explain(err))}.${unsure ? ` A run may have started without its id reaching here (foldrun runs --to ${ws}).` : ""} Do the job here, or say what you wanted it for.`, isError: true };
+  } finally {
+    tick();
+    h.resume();
+  }
+}
 
 /** The /rewind journal of the session's conversation, opened once per conversation. */
 function rewindOf(/** @type {any} */ s) {
@@ -16072,16 +16219,31 @@ async function codeLocalTurn(s, text) {
     s.engineKeyKind = engineKey.kind;
     await foldrunPlanLabel(s);
     typeAhead = startTypeAhead(onInt, onSend);
-    /** @type {{ kinds: Set<string>, commands: Set<string> }} */
+    /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
     stopTicker = startTicker(started);
-    /** @param {string} name @param {Record<string, unknown>} input @param {AbortSignal} [signal] */
-    const decide = async (name, input, signal) => {
+    /** This turn's MCP tools by name, its sub-agents, and the project's agents a job may be run as in the cloud. */
+    /** @type {Map<string, any>} */
+    let turnMcp = new Map();
+    /** @type {import("./code-agents.mjs").AgentDef[]} */
+    let turnAgents = [];
+    /** @type {{ agents: string[], own: string, project: string } | null} */
+    let turnCloud = null;
+    /** @param {string} name @param {Record<string, unknown>} input @param {AbortSignal} [signal] @param {string} [child] a sub-agent's name, when it is the one asking */
+    const decide = async (name, input, signal, child) => {
       if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
       // foldrun's own docs pages: text this CLI shipped with, nothing of the
       // person's read and nothing run — never asked.
       if (name === FOLDRUN_DOCS_TOOL) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      // The todo list is the session's own note: nothing in the folder changes.
+      if (name === TODO_WRITE || name === TODO_READ) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      // A sub-agent that only reads, on this computer, reads what the agent
+      // itself may read unasked; a call that does not read as one is
+      // answered by the tool (its own message), not asked about.
+      const job = name === AGENT_TOOL ? agentJob(input, turnAgents, turnCloud) : null;
+      if (job && ("problem" in job || (job.where === "here" && !agentActs(job.def)))) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      const mcpTool = turnMcp.get(name) ?? null;
       // /plan: the turn reads and proposes. Whatever would change the
       // folder, run a command or leave this computer is refused unasked —
       // an earlier "always" does not reach into a plan.
@@ -16092,7 +16254,7 @@ async function codeLocalTurn(s, text) {
       // A command that only looks (pwd, ls, git status…) runs without a
       // question, in the shape readOnlyCommand hands back: in this folder,
       // git held to itself. /permissions strict asks for these too.
-      if (command !== null && s.strict !== true && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout")) {
+      if (command !== null && !child && s.strict !== true && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout")) {
         const looks = readOnlyCommand(command, s.dir);
         if (looks) return { behavior: /** @type {const} */ ("allow"), updatedInput: { ...input, command: looks } };
       }
@@ -16105,9 +16267,12 @@ async function codeLocalTurn(s, text) {
       // asked every time.
       // A cloud agent's patch has its own "always": a yes to the agent's own
       // edits is not a yes to what comes back from the cloud (Codex).
-      const scope = isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : command !== null ? "command" : null;
+      const scope = mcpTool ? "mcp" : job && !("problem" in job) && job.where === "cloud" ? "cloud-sub" : isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : command !== null ? "command" : null;
       const allowed = scope === "changes" || scope === "cloud" || scope === "cloud-changes" ? allow.kinds.has(scope) : scope === "command" ? allow.commands.has(/** @type {string} */ (command)) : false;
-      if (allowed) {
+      // An "always" was given to the session's own agent: it does not reach
+      // into a sub-agent, whose every change and command is asked (Codex).
+      const allowedNow = !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub")));
+      if (allowedNow) {
         if (cloud) grantTicket(input, signal);
         if (scope === "changes") changed.add(localCallSummary("Write", { file_path: file }, s.dir));
         return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
@@ -16115,6 +16280,7 @@ async function codeLocalTurn(s, text) {
       stopTicker();
       await keyboardBack();
       try {
+        if (child) console.log(`    ${c.grey(`the sub-agent ${plainText(child)} asks:`)}`);
         if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
         const width = Math.max(20, (process.stdout.columns || 80) - 10);
         if (cloud) {
@@ -16154,6 +16320,32 @@ async function codeLocalTurn(s, text) {
             return { behavior: /** @type {const} */ ("deny"), message: "The command was too long for the person to read. Write it to a script file in the folder first (that is asked separately), then run the script." };
           }
           for (const l of lines) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.white(`${i === 0 ? "$" : " "} ${l.slice(i, i + width)}`)}`);
+        } else if (mcpTool) {
+          // What goes to the server, whole: nothing clipped. A server's own
+          // word that a tool only reads is not taken.
+          const body = JSON.stringify(input, null, 2).split("\n");
+          if (body.length > 200 || body.join("\n").length > 20_000) {
+            console.log(`      ${c.amber("a call too long to show — not made")}`);
+            return { behavior: /** @type {const} */ ("deny"), message: "The call's input was too long for the person to read. Send less in one call." };
+          }
+          console.log(`      ${c.grey(`the MCP server ${plainText(mcpTool.server)} · its tool ${plainText(mcpTool.short)} — what it does with this is the server's own doing:`)}`);
+          for (const l of body) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.white(l.slice(i, i + width))}`);
+        } else if (job && !("problem" in job)) {
+          const lines = job.prompt.split("\n");
+          // What leaves this computer is shown whole, wrapped, as it will be sent — or it is not sent (Codex).
+          if (job.where === "cloud" && (lines.length > 200 || job.prompt.length > 20_000)) {
+            console.log(`      ${c.amber("a prompt too long to show whole — not sent")}`);
+            return { behavior: /** @type {const} */ ("deny"), message: "The prompt was too long for the person to read before it leaves this computer. Send less: say what is needed in fewer words." };
+          }
+          if (job.where === "cloud") console.log(`      ${c.grey(`runs in ${plainText(s.ws)} on ${plainText(s.url.replace(/^https?:\/\//, ""))} as its agent ${plainText(job.cloudAgent)}, with that agent's own tools — costs foldrun credits. Only this text is sent; no file of this folder:`)}`);
+          else console.log(`      ${c.grey(`the sub-agent ${plainText(job.def.name)} (${job.def.source}${job.def.file ? ` · ${plainText(homeTilde(job.def.file))}` : ""}) · tools ${job.def.tools.join(", ")} — each change and command it wants is asked again:`)}`);
+          if (job.where === "cloud") {
+            for (const l of lines) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.white(l.slice(i, i + width))}`);
+          } else {
+            // Stays on this computer: the start of it is enough to know the job.
+            lines.slice(0, 30).forEach((l) => console.log(`      ${c.white(clipCells(plainText(l), width))}`));
+            if (lines.length > 30) console.log(`      ${c.grey(`… ${lines.length - 30} more line${lines.length - 30 === 1 ? "" : "s"}`)}`);
+          }
         } else if (name === SESSION_SEND_TOOL) {
           // The whole message, as it will be sent: it leaves this session.
           // Exactly what will be sent, to exactly where: checked by the same
@@ -16170,7 +16362,8 @@ async function codeLocalTurn(s, text) {
           const shown = plainText(JSON.stringify(input)).slice(0, 400);
           console.log(`      ${c.grey(clipCells(shown, width))}`);
         }
-        const always = scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud agents this session · [" : scope === "cloud-changes" ? "]lways for cloud agents' changes this session · [" : null;
+        const alwaysFor = scope === "mcp" ? "]lways for this tool, this session · [" : scope === "cloud-sub" ? "]lways for cloud sub-agents this session · [" : scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud agents this session · [" : scope === "cloud-changes" ? "]lways for cloud agents' changes this session · [" : null;
+        const always = child ? "" : alwaysFor;
         const ask = `    ${c.bold("allow?")} ${c.grey("[")}${c.green("y")}${c.grey("]es · [")}${always ? `${c.cyan("a")}${c.grey(always)}` : ""}${c.red("n")}${c.grey("]o")}${isApply ? c.grey(" · [d]iff") : ""} `;
         // The SDK taking the request back closes the question too (Codex).
         const settle = () => {
@@ -16199,8 +16392,9 @@ async function codeLocalTurn(s, text) {
         if (answer === "y" || answer === "yes" || (always && (answer === "a" || answer === "always"))) {
           if (cloud) grantTicket(input, signal);
           if (answer.startsWith("a")) {
-            if (scope === "changes" || scope === "cloud" || scope === "cloud-changes") allow.kinds.add(scope);
+            if (scope === "changes" || scope === "cloud" || scope === "cloud-changes" || scope === "cloud-sub") allow.kinds.add(scope);
             else if (scope === "command") allow.commands.add(/** @type {string} */ (command));
+            else if (scope === "mcp") (allow.mcp ??= new Map()).set(/** @type {any} */ (mcpTool).key, `${/** @type {any} */ (mcpTool).server} · ${/** @type {any} */ (mcpTool).short}`);
           }
           if (FILE_CHANGES.has(name) && file !== undefined) changed.add(localCallSummary("Write", { file_path: file }, s.dir));
           return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
@@ -16219,17 +16413,17 @@ async function codeLocalTurn(s, text) {
     const rewindJournal = rewindOf(s);
     let rewindTurn = 0;
     const rewindLabel = plainText(typeof s.turnTyped === "string" ? s.turnTyped : text).replace(/\s+/g, " ").trim().slice(0, 80) || "(a message)";
-    /** @type {(name: string, input: Record<string, any>, opts?: { signal?: AbortSignal }) => Promise<{ behavior: "allow", updatedInput: Record<string, unknown> } | { behavior: "deny", message: string, interrupt?: boolean }>} */
-    const canUseTool = (name, input, opts) => {
+    /** @type {(name: string, input: Record<string, any>, opts?: { signal?: AbortSignal }, child?: string, readsOnly?: boolean) => Promise<{ behavior: "allow", updatedInput: Record<string, unknown> } | { behavior: "deny", message: string, interrupt?: boolean }>} */
+    const canUseTool = (name, input, opts, child, readsOnly) => {
       // The foldrun engine asks about every call: what only looks inside
       // the folder runs, as Claude Code would let it.
       // Each tool's own field, read as core reads it (Codex).
       if (name === "Read" || name === "Glob" || name === "Grep") {
         let ok;
-        if (name === "Read") ok = typeof input.file_path === "string" && bothInside(s.dir, input.file_path);
+        if (name === "Read") ok = typeof input.file_path === "string" && readableBy(s, input.file_path);
         else {
           const base = input.path === undefined ? s.dir : input.path;
-          ok = typeof base === "string" && bothInside(s.dir, base);
+          ok = typeof base === "string" && readableBy(s, base);
           if (ok && name === "Glob") {
             // The folders a pattern names before its first wildcard are
             // where core starts the walk, links followed.
@@ -16242,13 +16436,18 @@ async function codeLocalTurn(s, text) {
               if (/[*?{]/.test(g)) break;
               lead.push(g);
             }
-            ok = !/[[\]{}\\]/.test(pattern) && !path.isAbsolute(pattern) && !segs.includes("..") && bothInside(s.dir, path.join(path.resolve(s.dir, /** @type {string} */ (base)), ...lead));
+            ok = !/[[\]{}\\]/.test(pattern) && !path.isAbsolute(pattern) && !segs.includes("..") && readableBy(s, path.join(path.resolve(s.dir, /** @type {string} */ (base)), ...lead));
           }
         }
-        if (ok) return Promise.resolve({ behavior: /** @type {const} */ ("allow"), updatedInput: input });
+        if (ok) {
+          if (!bothInside(s.dir, name === "Read" ? input.file_path : (input.path ?? s.dir))) s.privateSeen = true;
+          return Promise.resolve({ behavior: /** @type {const} */ ("allow"), updatedInput: input });
+        }
       }
+      // A sub-agent that only reads never asks: what is not plainly inside is refused (Codex).
+      if (readsOnly) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "That is outside the folders you may read, or a pattern that could reach outside them. Stay inside the person's folder, with a plain pattern." });
       // One question at a time, in the order they came (Codex).
-      const next = gate.then(() => decide(name, input, opts?.signal)).then((r) => {
+      const next = gate.then(() => decide(name, input, opts?.signal, child)).then((r) => {
         // An allowed Write or Edit: the file as it is now is kept first
         // (/rewind). The engine decides each call just before it runs.
         if (r.behavior === "allow" && FILE_CHANGES.has(name) && typeof (/** @type {any} */ (opts))?.toolUseID === "string") {
@@ -16331,7 +16530,125 @@ async function codeLocalTurn(s, text) {
     // the person never saw in the allow? question. Not for the agent (Codex).
     delete own.BASH_ENV;
     delete own.ENV;
-    const q = (await import("@foldrun/core/engine-loop")).foldrunQuery({
+    const engine = await import("@foldrun/core/engine-loop");
+    // Right after each tool ran and before the next call: what the Write or
+    // Edit left on disk settles its /rewind record. A sub-agent's too.
+    const afterTool = async (/** @type {any} */ payload, /** @type {string} */ id) => {
+      // Only a call a copy was kept for: a read never touches the journal.
+      if (FILE_CHANGES.has(String(payload?.tool_name))) rewindSettle(rewindJournal, id);
+      // For a goal's check: every file Write or Edit was used on, taken back or not.
+      const used = payload?.tool_input?.file_path;
+      if (typeof s.goal === "string" && FILE_CHANGES.has(String(payload?.tool_name)) && typeof used === "string") (s.goalFiles ??= new Set()).add(path.relative(s.dir, path.resolve(s.dir, used)) || used);
+      return {};
+    };
+    const said = (/** @type {() => void} */ print) => {
+      stopTicker();
+      print();
+      if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
+    };
+    // MCP servers: those with the person's yes are started (once a
+    // session) and their tools offered. A /plan turn starts and offers none.
+    /** @type {any[]} */
+    let mcpTools = [];
+    if (!s.planOnly) {
+      const mcp = await mcpOf(s);
+      if (mcp) {
+        const startedNow = await mcp.startReady(abort.signal);
+        for (const r of startedNow) said(() => console.log(`  ${r.why ? c.red("✗") : c.green("✓")} ${c.grey(`MCP server ${plainText(r.name)}${r.why ? ` did not start: ${plainText(r.why)} — /mcp` : " started"}`)}`));
+        if (cancel.asked) return;
+        mcpTools = mcp.tools();
+      }
+    }
+    turnMcp = new Map(mcpTools.map((x) => [x.name, x]));
+    turnAgents = readAgents(s.dir).agents;
+    {
+      const names = await cloudAgentNames(s);
+      turnCloud = names.length ? { agents: names, own: names[0], project: String(s.ws) } : null;
+    }
+    if (cancel.asked) return;
+    const sub = agentTool(turnAgents, turnCloud);
+    let agentCalls = 0;
+    let agentTurns = 0;
+    /** One `agent` call: a second conversation, here or in the cloud; its last answer is the result. */
+    const agentCall = async (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ sig) => {
+      const signal = sig ? AbortSignal.any([abort.signal, sig]) : abort.signal;
+      const job = agentJob(input, turnAgents, turnCloud);
+      if ("problem" in job) return { text: job.problem, isError: true };
+      if (++agentCalls > AGENT_CALLS_A_TURN) return { text: `No more sub-agents for this message from the person (${AGENT_CALLS_A_TURN} were run). Do the rest yourself, or tell the person what is left.`, isError: true };
+      if (job.where === "cloud") {
+        return runCloudSub(s, { agent: job.cloudAgent, prompt: job.prompt, description: job.description }, signal, {
+          pause: () => stopTicker(),
+          resume: () => {
+            stopTicker();
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
+          },
+        });
+      }
+      const left = AGENT_TURNS_A_TURN - agentTurns;
+      if (left <= 0) return { text: "The sub-agents of this message have used all their model turns. Do the rest yourself, or tell the person what is left.", isError: true };
+      const def = job.def;
+      const acts = agentActs(def);
+      const childAbort = new AbortController();
+      const onStop = () => childAbort.abort();
+      signal.addEventListener("abort", onStop, { once: true });
+      if (signal.aborted) childAbort.abort();
+      /** What this agent may do: its own tools only; one that only reads is refused, never asked, outside what may be read. */
+      const childCan = (/** @type {string} */ name, /** @type {Record<string, any>} */ inp, /** @type {{ signal?: AbortSignal, toolUseID?: string } | undefined} */ opts) => {
+        if (!def.tools.includes(name)) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: `${name} is not one of your tools (${def.tools.join(", ")}).` });
+        if (!acts) {
+          const target = name === "Read" ? inp.file_path : (inp.path ?? s.dir);
+          if (!readableBy(s, target)) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "That is outside the folders you may read. Stay inside the person's folder." });
+        }
+        return canUseTool(name, inp, opts, def.name, !acts);
+      };
+      said(() => console.log(`  ${c.violet("◆")} ${c.white(`sub-agent ${plainText(def.name)}`)} ${c.grey(`· ${clipLine(plainText(job.description))}`)}`));
+      /** @type {any} */
+      let res = null;
+      try {
+        const child = engine.foldrunQuery({
+          prompt: job.prompt,
+          options: {
+            cwd: s.dir,
+            env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
+            shellEnv: own,
+            userAgent: USER_AGENT,
+            model: localModelOf(model),
+            // The definition's prose is the person's or the project's own text; the folder's instructions go with it as they do for the session's agent.
+            systemPrompt: [def.prompt, `You work in the person's folder: ${s.dir}`, Array.isArray(s.extraDirs) && s.extraDirs.length ? `They also added these folders, for reading: ${s.extraDirs.join(", ")}` : "", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
+            tools: def.tools,
+            hooks: { PostToolUse: [{ hooks: [afterTool] }] },
+            engineHostShell: true,
+            sandbox: { enabled: false },
+            maxTurns: Math.min(AGENT_TURNS_EACH, left),
+            canUseTool: childCan,
+            abortController: childAbort,
+          },
+        });
+        for await (const m of /** @type {AsyncIterable<any>} */ (child)) {
+          if (m.type === "assistant") {
+            for (const b of Array.isArray(m.message?.content) ? m.message.content : []) {
+              if (b.type !== "tool_use") continue;
+              const label = friendlyTool(String(b.name));
+              const what = localCallSummary(String(b.name), /** @type {Record<string, unknown>} */ (b.input ?? {}), s.dir);
+              said(() => console.log(`    ${c.grey("↳")} ${toolHue(label)(clipLine(label))}${what ? ` ${c.grey(clipLine(what))}` : ""}`));
+            }
+          }
+          if (m.type === "result") res = m;
+        }
+      } catch (err) {
+        return { text: `The sub-agent failed: ${plainText(explain(err))}`, isError: true };
+      } finally {
+        signal.removeEventListener("abort", onStop);
+      }
+      agentTurns += Number(res?.num_turns ?? 0) || 1;
+      if (signal.aborted) return { text: "Stopped by the person.", isError: true };
+      const ok = res?.subtype === "success" && !res?.is_error;
+      const answer = plainText(String(res?.result ?? "")).trim();
+      said(() => console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.grey(`sub-agent ${plainText(def.name)} ${ok ? "answered" : "did not finish"} · ${Number(res?.num_turns ?? 0)} model call${Number(res?.num_turns ?? 0) === 1 ? "" : "s"}`)}`));
+      if (!ok) return { text: `The sub-agent did not finish${Array.isArray(res?.errors) && res.errors[0] ? ` (${plainText(String(res.errors[0]))})` : ""}.${answer ? ` What it had said:\n\n${answer.slice(0, AGENT_ANSWER_MAX)}` : ""}`, isError: true };
+      return { text: `${(answer || "(it gave no answer)").slice(0, AGENT_ANSWER_MAX)}${answer.length > AGENT_ANSWER_MAX ? "\n[cut: the answer was longer]" : ""}`, isError: false };
+    };
+    const q = engine.foldrunQuery({
           prompt: text,
           options: {
             cwd: s.dir,
@@ -16341,7 +16658,7 @@ async function codeLocalTurn(s, text) {
             shellEnv: own,
             userAgent: USER_AGENT,
             model: localModelOf(model),
-            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" })), folderInstructions(s.dir).text, skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE].filter(Boolean).join("\n\n"),
+            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" })), folderInstructions(s.dir).text, skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
             tools: ENGINE_TOOLS_LOCAL,
             extraTools: [
               { name: CLOUD_AGENTS_TOOL, description: CLOUD_AGENTS_DESCRIPTION, input_schema: CLOUD_AGENTS_SCHEMA, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => cloudCall(input, ctx.signal) },
@@ -16351,25 +16668,31 @@ async function codeLocalTurn(s, text) {
               // A message to another session of the project: asked every time
               // (the engine asks before any tool not allowed ahead), the text shown.
               { name: SESSION_SEND_TOOL, description: SESSION_SEND_DESCRIPTION, input_schema: SESSION_SEND_SCHEMA, run: async (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => sessionSendCall(s, input, ctx.signal) },
-            ],
-            // Right after each tool ran and before the next call: what the
-            // Write or Edit left on disk settles its /rewind record.
-            hooks: {
-              PostToolUse: [
-                {
-                  hooks: [
-                    async (/** @type {any} */ payload, /** @type {string} */ id) => {
-                      // Only a call a copy was kept for: a read never touches the journal.
-                      if (FILE_CHANGES.has(String(payload?.tool_name))) rewindSettle(rewindJournal, id);
-                      // For a goal's check: every file Write or Edit was used on, taken back or not.
-                      const used = payload?.tool_input?.file_path;
-                      if (typeof s.goal === "string" && FILE_CHANGES.has(String(payload?.tool_name)) && typeof used === "string") (s.goalFiles ??= new Set()).add(path.relative(s.dir, path.resolve(s.dir, used)) || used);
-                      return {};
-                    },
-                  ],
+              // A job handed to a second conversation: on this computer, or run in the project's cloud sandbox.
+              { name: AGENT_TOOL, description: sub.description, input_schema: sub.schema, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => agentCall(input, ctx.signal) },
+              // The session's todo list: its own note, shown to the person.
+              {
+                name: TODO_WRITE, description: TODO_WRITE_DESCRIPTION, input_schema: TODO_WRITE_SCHEMA,
+                run: async (/** @type {unknown} */ input) => {
+                  const clean = cleanTodos(input);
+                  if ("problem" in clean) return { text: clean.problem, isError: true };
+                  s.todos = clean.todos;
+                  said(() => console.log(todoLines(clean.todos).join("\n") || `    ${c.grey("(the todo list is empty)")}`));
+                  return { text: todosText(clean.todos), isError: false };
                 },
-              ],
-            },
+              },
+              { name: TODO_READ, description: TODO_READ_DESCRIPTION, input_schema: { type: "object", properties: {}, additionalProperties: false }, readOnly: true, run: async () => ({ text: todosText(Array.isArray(s.todos) ? s.todos : []), isError: false }) },
+              // The approved MCP servers' tools. What one answers may hold anything: it is marked, so the
+              // person is asked before the agent's later words about it go to the cloud.
+              ...mcpTools.map((x) => ({
+                name: x.name, description: x.description, input_schema: x.input_schema, readOnly: false,
+                run: async (/** @type {any} */ input, /** @type {any} */ ctx) => {
+                  s.privateSeen = true;
+                  return x.run(input, ctx);
+                },
+              })),
+            ],
+            hooks: { PostToolUse: [{ hooks: [afterTool] }] },
             engineHostShell: true,
             sandbox: { enabled: false },
             maxTurns: 80,
@@ -16647,6 +16970,15 @@ async function codeCmd(positional, flags, layout) {
   if (carried && Array.isArray(carried.shown)) s.shownMessages = new Set(carried.shown.filter((/** @type {unknown} */ x) => typeof x === "string"));
   if (carried && typeof carried.goal === "string" && carried.goal.trim() && !hasControl(carried.goal) && !/[\n\r\t]/.test(carried.goal)) s.goal = carried.goal.slice(0, GOAL_CHARS);
   {
+    // The todo list of the conversation being continued: read as strictly as when it was written.
+    if (carried?.privateSeen === true) s.privateSeen = true;
+    const kept = carried && Array.isArray(carried.todos) ? cleanTodos({ todos: carried.todos }) : null;
+    if (kept && "todos" in kept && kept.todos.length) {
+      s.todos = kept.todos;
+      if (carried.todosWithheld === true) s.todosWithheld = true;
+    }
+  }
+  {
     // Whatever this start does, the folder's earlier conversations stay
     // listed: a plain start files the last one with them (Codex). Same
     // sign-in, platform, project and agent only.
@@ -16663,7 +16995,7 @@ async function codeCmd(positional, flags, layout) {
     }
   }
   if (carried && Array.isArray(carried.transcript)) {
-    s.transcript = carried.transcript.filter((/** @type {any} */ e) => e && (e.where === "local" || e.where === "cloud") && typeof e.you === "string" && typeof e.agent === "string").map((/** @type {any} */ e) => ({ where: e.where, you: e.you, agent: e.agent, ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}) }));
+    s.transcript = carried.transcript.filter((/** @type {any} */ e) => e && (e.where === "local" || e.where === "cloud") && typeof e.you === "string" && typeof e.agent === "string").map((/** @type {any} */ e) => ({ where: e.where, you: e.you, agent: e.agent, ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}), ...(e.private === true ? { private: true } : {}), ...(typeof e.share === "boolean" ? { share: e.share } : {}) }));
     const n = s.transcript.length;
     const at = (/** @type {unknown} */ v) => (Number.isInteger(v) && /** @type {number} */ (v) >= 0 && /** @type {number} */ (v) <= n ? /** @type {number} */ (v) : n);
     s.told = { local: at(carried.told?.local), cloud: at(carried.told?.cloud) };
@@ -16686,7 +17018,9 @@ async function codeCmd(positional, flags, layout) {
     s.cloudBriefDue = s.cloudBriefed !== s.context;
     const patches = s.applied?.length ?? 0;
     const before = s.turns ?? 0;
-    const carry = carryNote(s.transcript, "cloud", s.told.cloud);
+    // No one to ask here: a turn on this computer that used an MCP server or
+    // an added folder goes along only if the person already said yes to it (Codex).
+    const carry = carryNote(s.transcript.filter((/** @type {any} */ e, /** @type {number} */ i) => i < s.told.cloud || !(e.private === true && e.share !== true)), "cloud", s.told.cloud);
     const status = await codeTurn(s, [carry, flags.task.trim()].filter(Boolean).join("\n\n"), await messagesForTurn(s, false));
     if ((s.turns ?? 0) > before) s.cloudBriefed = s.context;
     if ((s.turns ?? 0) > before) {
@@ -16746,11 +17080,25 @@ async function codeCmd(positional, flags, layout) {
     try {
       const notes = s.notes;
       s.notes = [];
-      const carry = carryNote(s.transcript, where, s.told[where]);
+      // A turn on this computer that used an MCP server or read an added
+      // folder is marked; whether its words may go to the cloud is the
+      // person's call, asked once and kept with the exchange (Codex) — a
+      // failed send, a retry or --continue does not ask again or forget a no.
+      const waiting = where === "cloud" ? s.transcript.slice(s.told.cloud).filter((/** @type {any} */ e) => e.where === "local" && e.private === true && typeof e.share !== "boolean") : [];
+      if (waiting.length) {
+        console.log(`  ${c.amber("!")} ${c.grey(`the cloud agent is told what was said in the turns on this computer. ${waiting.length === 1 ? "One of them" : `${waiting.length} of them`} used an MCP server or a folder you added, so the agent's answers there — and the todo list — may quote what it read.`)}`);
+        const yes = /^y(es)?$/i.test((await promptVisible("    send those answers and the todo list along? [y/N] (no: the cloud agent gets your message without them) ")).trim());
+        for (const e of waiting) e.share = yes;
+        if (!yes && Array.isArray(s.todos) && s.todos.length) s.todosWithheld = true;
+        remember();
+      }
+      let carry = carryNote(s.transcript.filter((/** @type {any} */ e, /** @type {number} */ i) => i < s.told[where] || !(where === "cloud" && e.private === true && e.share !== true)), where, s.told[where]);
+      const todoNote = where === "cloud" && s.todosWithheld !== true ? todosForCloud(Array.isArray(s.todos) ? s.todos : []) : "";
+      // With nothing private read here, a list that is empty may be started by the cloud agent.
       s.cloudBriefDue = where === "cloud" && s.cloudBriefed !== s.context;
       if (where !== "cloud") delete s.cloudExtra;
       const sent = where === "local" ? await localMessagesBlock(s) : "";
-      const message = [carry, sent, goalNote(s.goal), withNotes(notes, said)].filter(Boolean).join("\n\n");
+      const message = [carry, sent, goalNote(s.goal), todoNote, withNotes(notes, said)].filter(Boolean).join("\n\n");
       const before = s.turns ?? 0;
       delete s.turnOk;
       delete s.patchHandled;
@@ -16771,11 +17119,19 @@ async function codeCmd(positional, flags, layout) {
       }
       if ((s.turns ?? 0) > before) {
         if (where === "cloud") s.cloudBriefed = s.context;
+        // The cloud agent was handed the todo list and asked to end with it: the session's list is that one now.
+        if (where === "cloud" && s.todosWithheld !== true && typeof s.turnReply === "string") {
+          const now = todosFromReply(s.turnReply);
+          if (now) {
+            s.todos = now;
+            console.log(`  ${c.dim("the todo list, as the cloud agent left it:")}\n${todoLines(now).join("\n")}\n`);
+          }
+        }
         // A cloud turn's changes are in the folder only when its patch was applied (Codex).
         // What was typed, never what a command file expands to: that text was
         // checked for this side only, and the record crosses to the other (Codex).
         const steered = Array.isArray(s.turnSteer) && s.turnSteer.length ? `\n(sent while the agent worked: ${s.turnSteer.join(" · ")})` : "";
-        s.transcript.push({ where, you: `${typed}${steered}`, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(where === "cloud" ? { applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) } : {}) });
+        s.transcript.push({ where, you: `${typed}${steered}`, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(where === "cloud" ? { applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) } : {}), ...(where === "local" && s.privateSeen === true ? { private: true } : {}) });
         s.here[where]++;
         // Where this conversation was last worked on: /resume goes back there.
         s.lastWhere = where;
@@ -16813,7 +17169,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     // Nothing of the old conversation stays in the count (Codex).
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun"]) delete s[k];
+    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };
@@ -16841,10 +17197,8 @@ async function codeCmd(positional, flags, layout) {
       const verdict = goalVerdict(typeof s.turnReply === "string" ? s.turnReply : "");
       if (verdict === "met" && typeof s.goalCheck === "string") {
         // The person's check decides, not the agent's word.
-        if (s.mode !== "local") {
-          say("the goal's check runs on this computer — /local, then say \"go on\"");
-          return;
-        }
+        // After a cloud turn the check runs on this folder as it is now: the
+        // cloud agent's changes are in it only if its patch was applied.
         console.log(`  ${c.dim(`↻ the agent says the goal is met — running your check: ${plainText(s.goalCheck)}`)}`);
         const r = await runGoalCheck(s.goalCheck, dir);
         if (r.kind === "passed") {
@@ -16897,15 +17251,28 @@ async function codeCmd(positional, flags, layout) {
       }
     }
   };
+  {
+    // Said once at the start, never asked there: which MCP servers wait for a yes.
+    const m = await mcpOf(s);
+    if (m) {
+      const { rows } = await m.look();
+      const waiting = rows.filter((/** @type {any} */ r) => r.state === "waiting").map((/** @type {any} */ r) => r.name);
+      const ready = rows.filter((/** @type {any} */ r) => r.state === "ready").length;
+      if (waiting.length || ready) say(`MCP servers: ${[ready ? `${ready} start with your first message on this computer` : "", waiting.length ? `${waiting.map((/** @type {string} */ n) => plainText(n)).join(", ")} wait${waiting.length === 1 ? "s" : ""} for your yes — /mcp on <name>` : ""].filter(Boolean).join("; ")}`);
+    }
+  }
   for (;;) {
     const line = await readCodeMessage(prompt, completer, s);
     if (isLeave(line)) {
+      await s.mcp?.closeAll?.().catch(() => undefined);
       console.log(`\n  ${c.dim(s.turns ? `to go on later: foldrun code --continue${dir === process.cwd() ? "" : ` ${plainText(dir)}`}` : "bye")}\n`);
       return 0;
     }
     if (!line) continue;
-    appendHistory(historyFile, line);
-    prompt.history = [line.replace(/\s*\n\s*/g, " "), ...prompt.history.filter((h) => h !== line)].slice(0, 500);
+    // `/mcp add` is where a token gets pasted by mistake: refused there, and never kept (Codex).
+    const keepLine = !/^\/mcp\s+add\b/.test(line);
+    if (keepLine) appendHistory(historyFile, line);
+    if (keepLine) prompt.history = [line.replace(/\s*\n\s*/g, " "), ...prompt.history.filter((h) => h !== line)].slice(0, 500);
     if (line.startsWith("!")) {
       const command = line.slice(1).trim();
       if (!command) {
@@ -17004,7 +17371,6 @@ async function codeCmd(positional, flags, layout) {
         say("no goal any more");
       } else if (rest.length > GOAL_CHARS || hasControl(rest) || /[\n\r\t]/.test(rest)) say(`a goal is one plain line, ${GOAL_CHARS} characters at most`);
       else if (rest.startsWith("--check") && !goalWithCheck(rest)) say('the form is /goal --check "<command>" <what must be true> — the command in quotes, then the goal');
-      else if (goalWithCheck(rest) && s.mode !== "local") say("a goal's check is a command run on this computer — /local, then set it");
       else {
         const withCheck = goalWithCheck(rest);
         if (withCheck) {
@@ -17150,7 +17516,7 @@ async function codeCmd(positional, flags, layout) {
       delete s.lastReply;
       delete s.cloudBriefed;
       if (to.briefed === true) s.cloudBriefed = s.context;
-      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun"]) delete s[k];
+      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld"]) delete s[k];
       s.notes = [];
       s.transcript = [];
       s.told = { local: 0, cloud: 0 };
@@ -17192,6 +17558,231 @@ async function codeCmd(positional, flags, layout) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
       }
       prompt.files = folderFiles(dir);
+      continue;
+    }
+    if (name === "/todos") {
+      const list = Array.isArray(s.todos) ? s.todos : [];
+      const [verb, ...more] = rest.split(/\s+/).filter(Boolean);
+      const arg = more.join(" ");
+      if (!verb) {
+        if (!list.length) say("no todo list — the agent starts one when a job has several steps (here or in the cloud); /todos add <step> starts one yourself");
+        else console.log(`${todoLines(list).map((l, i) => l.replace("    ", `  ${c.dim(String(i + 1).padStart(2))} `)).join("\n")}\n  ${c.dim("/todos add <step> · done <n> · rm <n> · clear")}\n`);
+        continue;
+      }
+      const n = Number(more[0]);
+      /** @type {any[] | null} */
+      let next = null;
+      if (verb === "clear") {
+        next = [];
+        delete s.todosWithheld;
+      }
+      else if (verb === "add" && arg) next = [...list, { content: arg, status: "pending" }];
+      else if ((verb === "done" || verb === "rm") && Number.isInteger(n) && n >= 1 && n <= list.length) next = verb === "rm" ? list.filter((_x, i) => i !== n - 1) : list.map((x, i) => (i === n - 1 ? { ...x, status: "completed" } : x));
+      const clean = next ? cleanTodos({ todos: next }) : { problem: `/todos add <step> · done <n> · rm <n> · clear${list.length ? ` — n is 1 to ${list.length}` : ""}` };
+      if ("problem" in clean) {
+        say(clean.problem.startsWith("at most") ? `a todo list holds ${TODOS_MAX} steps at most` : clean.problem);
+        continue;
+      }
+      s.todos = clean.todos;
+      // Not the list itself: a note goes to whichever side works next, and a list withheld from the cloud must not ride in one (Codex).
+      s.notes.push("[The person changed the session's todo list themselves — read it as it stands (todo_read, where you have it) before you go on.]");
+      remember();
+      console.log(`${todoLines(clean.todos).join("\n") || `    ${c.grey("(the todo list is empty)")}`}\n`);
+      continue;
+    }
+    if (name === "/add-dir") {
+      const dirs = (s.extraDirs ??= []);
+      const drop = /^--rm\s+(.+)$/.exec(rest);
+      if (!rest) {
+        if (!dirs.length) say("no added folders — /add-dir <path> lets the agent read another folder without asking (for this session; a change there is still asked each time)");
+        else {
+          for (const d of dirs) console.log(`  ${c.white(plainText(homeTilde(d)))}`);
+          say("the agent reads these without asking; changes there are asked each time, and /rewind does not cover them · /add-dir --rm <path> takes one away");
+        }
+        continue;
+      }
+      if (drop) {
+        const abs = path.resolve(dir, drop[1].trim().replace(/^~(?=\/|$)/, os.homedir()));
+        const at = dirs.findIndex((/** @type {string} */ d) => d === abs || d === (fs.existsSync(abs) ? fs.realpathSync(abs) : abs));
+        if (at < 0) say("that folder was not added — /add-dir lists them");
+        else {
+          const [gone] = dirs.splice(at, 1);
+          s.notes.push(`[The person took the added folder ${gone} away: you may no longer read it without asking.]`);
+          say(`no longer added: ${plainText(homeTilde(gone))}`);
+        }
+        continue;
+      }
+      const got = addableFolder(dir, rest);
+      if ("problem" in got) {
+        say(plainText(got.problem));
+        continue;
+      }
+      if (dirs.includes(got.dir)) {
+        say("already added");
+        continue;
+      }
+      if (dirs.length >= 8) {
+        say("eight added folders at most — /add-dir --rm <path> takes one away");
+        continue;
+      }
+      dirs.push(got.dir);
+      console.log(`  ${c.green("✓")} ${c.dim(`added for this session: ${plainText(homeTilde(got.dir))} — the agent on this computer and its sub-agents read there without asking. A change there is still asked every time, /rewind does not cover it, and it is not sent to the cloud (a cloud turn sees only this folder).`)}\n`);
+      continue;
+    }
+    if (name === "/agents") {
+      const { agents, problems } = readAgents(dir);
+      console.log(`  ${c.bold(c.white("on this computer"))} ${c.dim("— the agent hands one a job; only its answer comes back")}`);
+      for (const a of agents) console.log(`  ${c.cyan(plainText(a.name).padEnd(14))} ${c.white(clipLine(plainText(a.description)))}\n  ${" ".repeat(14)} ${c.dim(`${a.source}${a.file ? ` · ${plainText(homeTilde(a.file))}` : ""} · ${a.tools.join(", ")}${agentActs(a) ? " · asked at every call, and for each change and command" : " · reads only, never asked"}`)}`);
+      for (const x of problems) console.log(`  ${c.amber("!")} ${c.dim(`${plainText(homeTilde(x.file))}: ${plainText(x.why)}`)}`);
+      const names = await cloudAgentNames(s);
+      console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim(`— run in ${plainText(ws)}'s sandbox with the agent's own tools; only the prompt is sent, none of this folder; costs credits, asked first`)}`);
+      console.log(`  ${names.length ? names.map((/** @type {string} */ n) => c.cyan(plainText(n))).join(c.dim(", ")) : c.dim(`none yet — the project ${plainText(ws)} has no agents (a first /cloud turn makes it and its ${plainText(agent)})`)}`);
+      say(`define your own: ~/.foldrun/agents/<name>.md, or .claude/agents/<name>.md in this folder (frontmatter name, description, tools; then its instructions). A project's cloud agents are its agents/<name>/agent.md (foldrun docs agents). To have cloud agents change a copy of this folder, the agent uses cloud_agents; a whole turn there is /cloud.`);
+      continue;
+    }
+    if (name === "/mcp") {
+      const m = await mcpOf(s);
+      if (!m) {
+        say("this foldrun's engine cannot connect MCP servers — update foldrun (npm i -g foldrun@latest)");
+        continue;
+      }
+      const [verb, target, ...more] = rest.split(/\s+/).filter(Boolean);
+      // A start may take a minute; the clock runs from the start, not from the question before it.
+      const soon = () => AbortSignal.timeout(90_000);
+      /** What a yes would start, shown whole: the program as found, its arguments, the names of what it is handed. */
+      const show = (/** @type {any} */ row) => {
+        const r = row.resolved.shown;
+        console.log(`      ${c.grey(`${row.source === "project" ? "from this folder's" : "from your own"} ${plainText(homeTilde(row.file))}`)}`);
+        if (r.kind === "program") {
+          console.log(`      ${c.white(`$ ${plainText(r.line)}`)}`);
+          console.log(`      ${c.grey(`the program: ${plainText(r.program)}`)}`);
+          if (r.scripts.length) console.log(`      ${c.grey(`from this folder, as they are now (a change asks again): ${r.scripts.map((/** @type {string} */ x) => plainText(x)).join(", ")}`)}`);
+          console.log(`      ${c.grey(`it gets: ${r.gets.join("; ")}${r.env.length ? `; and ${r.env.map((/** @type {any} */ e) => `${e.name}${e.from ? ` (from your ${e.from})` : ""}`).join(", ")}` : ""}`)}`);
+          console.log(`      ${c.amber("it runs on this computer as you, with no sandbox, for as long as the session lasts — it can read your files and use the network")}`);
+        } else {
+          console.log(`      ${c.white(plainText(r.line))}`);
+          if (r.headers.length) console.log(`      ${c.grey(`it is sent the header${r.headers.length === 1 ? "" : "s"}: ${r.headers.map((/** @type {any} */ h) => `${h.name}${h.from.length ? ` (from your ${h.from.join(", ")})` : ""}`).join(", ")}`)}`);
+          console.log(`      ${c.grey("what the agent passes to its tools goes to that address; a redirect to another address is refused")}`);
+        }
+      };
+      const { rows, problems } = await m.look();
+      const row = target ? rows.find((/** @type {any} */ r) => r.name === target && r.state !== "hidden") : null;
+      const started = (/** @type {string | null} */ why, /** @type {string} */ n) => {
+        if (why) console.log(`  ${c.red("✗")} ${c.dim(`${plainText(n)} did not start: ${plainText(why)}`)}\n`);
+        else {
+          const now = m.tools().filter((/** @type {any} */ x) => x.server === n);
+          console.log(`  ${c.green("✓")} ${c.dim(`${plainText(n)} is running · ${now.length} tool${now.length === 1 ? "" : "s"} — offered to the agent from your next message on this computer; each call is asked (/mcp tools ${plainText(n)})`)}\n`);
+        }
+      };
+      if (!verb) {
+        if (!rows.length && !problems.length) say('no MCP servers — /mcp add <name> -- <program> [args…] or /mcp add <name> <https address> names one (in ~/.foldrun/mcp.json; --project writes this folder\'s .mcp.json)');
+        for (const r of rows) {
+          const state = r.state === "on" ? c.green(`running · ${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}`) : r.state === "waiting" ? c.amber(`waits for your yes — /mcp on ${plainText(r.name)}`) : r.state === "ready" ? c.cyan("starts with your next message on this computer") : r.state === "off" ? c.grey(`off for this session — /mcp on ${plainText(r.name)}`) : r.state === "failed" ? c.red(`did not start: ${plainText(String(r.why))} — /mcp restart ${plainText(r.name)}`) : r.state === "hidden" ? c.grey(`not used: ${plainText(String(r.why))}`) : c.red(`cannot be started: ${plainText(String(r.why))}`);
+          console.log(`  ${c.white(plainText(r.name).padEnd(16))} ${c.dim(r.source === "project" ? "project" : "yours  ")} ${state}`);
+        }
+        for (const x of problems) console.log(`  ${c.amber("!")} ${c.dim(`${plainText(homeTilde(x.file))}: ${plainText(x.why)}`)}`);
+        if (rows.length) say("/mcp on|off|restart|tools|forget <name> · never|allow <name> <tool> · add · rm — these run on this computer; in the cloud the agent has the MCP servers its own definition names (mcpServers: in its agent.md), and the agent here can hand it a job (the agent tool, where: cloud)");
+        else console.log();
+        continue;
+      }
+      if (verb === "add") {
+        const add = parseMcpAdd(rest.replace(/^add\s*/, ""));
+        if ("problem" in add) {
+          say(add.problem);
+          continue;
+        }
+        const file = /** @type {any} */ (mcpFiles(dir).find((f) => f.source === (add.project ? "project" : "yours"))).file;
+        try {
+          editMcpFile(file, add.name, add.entry);
+        } catch (err) {
+          say(plainText(explain(err)));
+          continue;
+        }
+        console.log(`  ${c.green("✓")} ${c.dim(`written to ${plainText(homeTilde(file))} — not started yet: /mcp on ${plainText(add.name)} shows what would run and asks`)}\n`);
+        continue;
+      }
+      if (verb === "rm") {
+        if (!target) {
+          say("/mcp rm <name> [--project]");
+          continue;
+        }
+        const project = more.includes("--project");
+        const file = /** @type {any} */ (mcpFiles(dir).find((f) => f.source === (project ? "project" : "yours"))).file;
+        try {
+          if (row && row.resolved && ((row.source === "project") === project)) await m.forget(row);
+          say(editMcpFile(file, target, null) ? `removed from ${plainText(homeTilde(file))}` : `${plainText(homeTilde(file))} names no server ${plainText(target)}${project ? "" : " — --project for this folder's .mcp.json"}`);
+        } catch (err) {
+          say(plainText(explain(err)));
+        }
+        continue;
+      }
+      if (!row) {
+        say(target ? `no MCP server ${plainText(target)} — /mcp lists them` : "/mcp on|off|restart|tools|forget <name> · never|allow <name> <tool> · add · rm");
+        continue;
+      }
+      if (row.state === "problem") {
+        say(`${plainText(row.name)} cannot be started: ${plainText(String(row.why))}`);
+        continue;
+      }
+      if (verb === "on") {
+        if (row.state === "on") say("already running");
+        else if (row.state === "waiting") {
+          show(row);
+          const yes = /^y(es)?$/i.test((await promptVisible(`    start ${plainText(row.name)} now, and in later sessions of this folder while none of the above changes? [y/N] `)).trim());
+          if (!yes) say("not started");
+          else started(await m.approve(row, soon()), row.name);
+        } else {
+          m.turnOn(row.name);
+          started(await m.restart(row, soon()), row.name);
+        }
+        continue;
+      }
+      if (verb === "off") {
+        await m.turnOff(row.name);
+        if (s.localAllow?.mcp) s.localAllow.mcp.clear();
+        say(`${plainText(row.name)} is off for this session — its tools are no longer offered, and what you allowed with "always" for MCP tools is asked again`);
+        continue;
+      }
+      if (verb === "restart") {
+        if (row.state === "waiting") say(`it has not had your yes — /mcp on ${plainText(row.name)}`);
+        else {
+          if (s.localAllow?.mcp) s.localAllow.mcp.clear();
+          m.turnOn(row.name);
+          started(await m.restart(row, soon()), row.name);
+        }
+        continue;
+      }
+      if (verb === "forget") {
+        await m.forget(row);
+        if (s.localAllow?.mcp) s.localAllow.mcp.clear();
+        say(`your yes to ${plainText(row.name)} is taken back: it is stopped, and asked about again before it next starts`);
+        continue;
+      }
+      if (verb === "never" || verb === "allow") {
+        const tool = more[0];
+        if (row.state === "waiting" || !tool) say(row.state === "waiting" ? `it has not had your yes — /mcp on ${plainText(row.name)}` : `/mcp ${verb} ${plainText(row.name)} <tool> — /mcp tools ${plainText(row.name)} lists them`);
+        else {
+          m.setNever(row, tool, verb === "never");
+          // An "always" given before does not come back with the tool.
+          if (s.localAllow?.mcp) s.localAllow.mcp.clear();
+          say(verb === "never" ? `${plainText(tool)} of ${plainText(row.name)} is not offered to the agent any more (kept for later sessions; /mcp allow ${plainText(row.name)} ${plainText(tool)} brings it back)` : `${plainText(tool)} of ${plainText(row.name)} is offered again — each call is asked`);
+        }
+        continue;
+      }
+      if (verb === "tools") {
+        if (row.state !== "on") {
+          show(row);
+          say(row.state === "waiting" ? `not started — /mcp on ${plainText(row.name)}` : `not running (${row.state}) — /mcp on ${plainText(row.name)}`);
+          continue;
+        }
+        const never = new Set(row.never ?? []);
+        for (const x of row.tools) console.log(`  ${never.has(x.short) ? c.grey(plainText(x.short).padEnd(28)) : c.cyan(plainText(x.short).padEnd(28))} ${c.dim(never.has(x.short) ? "never offered (/mcp allow)" : clipLine(plainText(String(x.description).split("\n")[0] ?? "")))}`);
+        for (const x of row.cut ?? []) console.log(`  ${c.amber("!")} ${c.dim(plainText(x))}`);
+        if (row.said) console.log(`\n  ${c.dim(`what the server says about itself (shown to you only — it is not given to the agent as instructions):`)}\n${plainText(row.said).split("\n").slice(0, 20).map((l) => `    ${c.grey(clipLine(l))}`).join("\n")}`);
+        say(`${row.tools.length} tool${row.tools.length === 1 ? "" : "s"} (${MCP_TOOLS_MAX} at most from one server) · each call is shown and asked · /mcp never ${plainText(row.name)} <tool> stops one being offered`);
+        continue;
+      }
+      say("/mcp on|off|restart|tools|forget <name> · never|allow <name> <tool> · add · rm");
       continue;
     }
     if (name === "/doctor") {
@@ -17253,6 +17844,7 @@ async function codeCmd(positional, flags, layout) {
       const rows = [];
       for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "sending this folder to cloud agents" : k === "cloud-changes" ? "putting a cloud agent's changes into this folder" : String(k));
       for (const cmd of s.localAllow?.commands ?? []) rows.push(`the command  ${clipLine(plainText(String(cmd)))}`);
+      for (const tool of s.localAllow?.mcp?.values() ?? []) rows.push(`the MCP tool  ${plainText(String(tool))}`);
       if (s.uploadAgreed?.get(dir)) rows.push("sending this folder's files to the cloud (the ones you were shown)");
       if (!rows.length) say(`nothing ${s.strict !== true ? "else " : ""}allowed ahead — the agent asks before every change and every ${s.strict !== true ? "other " : ""}command (a = always, at a question)`);
       else {

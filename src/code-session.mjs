@@ -17,6 +17,10 @@ export const CODE_COMMANDS = [
   ["/review", "have the agent review what is changed in the folder and not committed — it reports, it changes nothing"],
   ["/diff", "what is changed in the folder now (git diff)"],
   ["/undo", "take back the last patch this session applied"],
+  ["/mcp [on|off|tools|add|rm …]", "MCP servers: the ones this folder and you name, started only with your yes to each; every tool call is asked"],
+  ["/agents", "the sub-agents the agent can hand a job to — on this computer, or run in your project's cloud sandbox"],
+  ["/todos [add|done|rm|clear]", "the todo list of this session — the agent keeps it, here and in the cloud"],
+  ["/add-dir [path]", "another folder the agent may read without asking (changes there are still asked each time)"],
   ["/rewind [turn]", "take back what the agent's Write and Edit changed on this computer, from a turn onward — every file or none"],
   ["/status", "this session: turns, cost, model, conversation"],
   ["/cost", "what this session has spent"],
@@ -298,6 +302,7 @@ const VERBS = /** @type {Record<string, string>} */ ({
   Bash: "Run", bash: "Run", Read: "Read", Edit: "Edit", MultiEdit: "Edit", Write: "Write", NotebookEdit: "Edit",
   Grep: "Search", Glob: "Find", LS: "List", WebFetch: "Fetch", WebSearch: "Search the web", web: "Web",
   Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you", cloud_agents: "Cloud agents", foldrun_docs: "Read foldrun docs", session_send: "Message a session",
+  agent: "Sub-agent", todo_write: "Todos", todo_read: "Todos",
 });
 
 /** A tool's name as a verb a person reads; unknown ones as they are. */
@@ -743,6 +748,8 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "WebFetch") return String(input.url ?? "");
   if (name === "WebSearch") return String(input.query ?? "");
   if (name === "Task" || name === "Agent") return String(input.description ?? "");
+  if (name === "agent") return `${input.where === "cloud" ? `cloud · ${String(input.cloud_agent ?? "")}` : String(input.agent ?? "explore")} · ${String(input.description ?? "")}`.replace(/ ·  · /, " · ");
+  if (name === "todo_write" || name === "todo_read") return "";
   if (name === "NotebookEdit") return rel(input.notebook_path);
   if (name === "foldrun_docs") return `${String(input.page ?? "the list of pages")}${input.find ? ` · ${String(input.find)}` : ""}`;
   if (name === "session_send") return String(input.to ?? "");

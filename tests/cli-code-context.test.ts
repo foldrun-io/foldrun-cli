@@ -406,11 +406,30 @@ test("on a terminal: /cloud and /local move one session; the other side is told 
   assert.equal(fs.statSync(path.join(home, "code-sessions.json")).mode & 0o077, 0, "private to the person");
 });
 
-test("commands that only look run without a question — in the folder, git held to itself; anything the shell could turn into more is asked", () => {
+test("commands that only look run without a question — in the folder, git held to itself; anything the shell could turn into more is asked", (t) => {
+  // The machine's own git config is not part of this test: a CI runner has
+  // Git LFS in /etc/gitconfig, and with any filter configured status and
+  // diff are asked — which is the rule, tested further down (CI, 23 Nov 2026).
+  const emptyConfig = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-gitcfg-")), "config");
+  fs.writeFileSync(emptyConfig, "");
+  const kept = { system: process.env.GIT_CONFIG_NOSYSTEM, global: process.env.GIT_CONFIG_GLOBAL };
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  process.env.GIT_CONFIG_GLOBAL = emptyConfig;
+  t.after(() => {
+    for (const [k, v] of [["GIT_CONFIG_NOSYSTEM", kept.system], ["GIT_CONFIG_GLOBAL", kept.global]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
   const d = fs.realpathSync(repo({ "src/a.ts": "a\n", "it's.txt": "x\n" }));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-out-"));
   fs.symlinkSync(outside, path.join(d, "link"));
   const at = `(cd '${d}' && `;
+  // A filter program in the person's own config (Git LFS): what reads the working files is asked.
+  fs.writeFileSync(emptyConfig, "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n");
+  assert.equal(readOnlyCommand("git status --short", d), null);
+  assert.notEqual(readOnlyCommand("git log -3", d), null);
+  fs.writeFileSync(emptyConfig, "");
   const git = "git --no-pager --no-optional-locks -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false ";
   assert.equal(readOnlyCommand("pwd", d), `${at}pwd)`);
   assert.equal(readOnlyCommand("  date -u ", d), `${at}date -u)`);
@@ -639,4 +658,52 @@ test("--continue keeps what the session carried even when it is left at once; /c
     other.child.kill();
     s2.close();
   }
+});
+
+test("on a terminal, in the cloud: the session's todo list goes with the turn and comes back as the cloud agent left it; a goal's check runs here on the folder the applied patch left", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo({ "a.txt": "a\n" });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const said = "Added b to a.txt.\n\nTODOS:\n- [x] write b\n- [ ] tell the team\nGOAL MET";
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID, context: "code-td" }),
+    [`GET ${WS}/runs/${RUN}`]: () => ({
+      id: RUN, flow: "adhoc:coder", status: "completed", snapshot: { id: ID }, startedAt: "2026-11-24T01:00:00.000Z", finishedAt: "2026-11-24T01:00:05.000Z",
+      steps: [{ agent: "coder", group: 1, status: "completed", attempts: 1, costUsd: 0.02, events: [{ t: "2026-11-24T01:00:01.000Z", type: "text", text: said }], result: said }],
+    }),
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "changed" }), "application/json") : raw(PATCH, "text/x-diff")),
+    [`GET ${WS}/sessions/code-td/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-td", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/desk ❯ /);
+    await t.type("/todos\r");
+    at = await t.until(/no todo list/, at);
+    await t.type("/todos add write b\r");
+    at = await t.until(/○ write b/, at);
+    await t.type('/goal --check "grep -q b a.txt" a.txt holds b\r');
+    at = await t.until(/\$ grep -q b a\.txt[\s\S]*only when it exits 0\? \[y\/N\]/, at);
+    await t.type("y\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    await t.type("y\r");
+    at = await t.until(/apply it to/, at);
+    await t.type("y\r");
+    at = await t.until(/the todo list, as the cloud agent left it:[\s\S]*✔ write b[\s\S]*○ tell the team/, at);
+    at = await t.until(/running your check: grep -q b a\.txt/, at);
+    at = await t.until(/check passed \(exit 0\)/, at);
+    at = await t.until(/desk ❯ /, at);
+    await t.type("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  const sent = JSON.parse(s.seen.find((x) => x.method === "POST" && x.url === `${WS}/agents/coder/run`)!.body).task;
+  assert.match(sent, /This session keeps a todo list\. As it stands:\n- \[ \] write b\n/);
+  assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
+  // Kept for --continue, as the cloud agent left it.
+  const kept = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"))[d];
+  assert.deepEqual(kept.todos, [{ content: "write b", status: "completed" }, { content: "tell the team", status: "pending" }]);
 });

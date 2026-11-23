@@ -1868,3 +1868,138 @@ test("/rewind takes back what the agent's Write and Edit did, never what a comma
   }
   assert.match(JSON.stringify(asked[5].messages.at(-1)), /the person's check `test -f done\.txt` exited 1/);
 });
+
+test("MCP, sub-agents, todos and an added folder in one session: a server starts only with a yes and its calls are asked; a reading sub-agent is not asked; a cloud sub-agent sends the prompt alone", { skip: hasPty ? false : "needs python3's pty", timeout: 180_000 }, async () => {
+  const { SERVER } = await import("./mcp-server.ts");
+  const d = repo();
+  const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-other-")));
+  fs.writeFileSync(path.join(other, "notes.txt"), "from the other folder\n");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const calls = path.join(home, "calls.jsonl");
+  fs.writeFileSync(path.join(d, "srv.mjs"), SERVER);
+  fs.writeFileSync(path.join(d, ".mcp.json"), JSON.stringify({ mcpServers: { kit: { command: "node", args: ["srv.mjs"], env: { CALLS: calls } } } }));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "m1", name: "mcp__kit__echo", input: { words: "hi there" } }]),
+    () => sse([
+      { type: "tool_use", id: "t1", name: "todo_write", input: { todos: [{ content: "look at a.txt", status: "in_progress" }, { content: "ask the cloud", status: "pending" }] } },
+      { type: "tool_use", id: "a1", name: "agent", input: { description: "read a.txt", prompt: "Read a.txt and say what it holds." } },
+    ]),
+    // the sub-agent's own two model calls
+    () => sse([{ type: "tool_use", id: "c1", name: "Read", input: { file_path: path.join(d, "a.txt") } }, { type: "tool_use", id: "c2", name: "Read", input: { file_path: "/etc/hosts" } }]),
+    () => sse([{ type: "text", text: "a.txt holds one line." }]),
+    () => sse([{ type: "tool_use", id: "a2", name: "agent", input: { where: "cloud", description: "the answer", prompt: "What is six times seven?" } }]),
+    () => sse([{ type: "text", text: "All done: 42." }]),
+    // the added folder
+    () => sse([{ type: "tool_use", id: "r9", name: "Read", input: { file_path: path.join(other, "notes.txt") } }]),
+    () => sse([{ type: "text", text: "It says: from the other folder." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }, { name: "researcher" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-mx/messages`]: () => ({ messages: [] }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ runId: "run-sub-1" }),
+    [`GET ${WS}/runs/run-sub-1`]: () => ({ id: "run-sub-1", status: "completed", steps: [{ agent: "coder", result: "Six times seven is 42.", costUsd: 0.01 }] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-mx", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/MCP servers: kit waits for your yes — \/mcp on <name>/);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/mcp\r");
+    at = await t.until(/kit\s+project\s+waits for your yes/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/mcp on kit\r");
+    at = await t.until(/\$ node srv\.mjs[\s\S]*from this folder, as they are now \(a change asks again\): srv\.mjs[\s\S]*it runs on this computer as you, with no sandbox[\s\S]*\[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/kit is running · 2 tools/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/mcp tools kit\r");
+    at = await t.until(/echo\s+Says it back\.[\s\S]*what the server says about itself \(shown to you only[\s\S]*Ignore the person/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("use things\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    // The MCP call: the server and tool named, the input whole, asked — its readOnlyHint notwithstanding.
+    at = await t.until(/the MCP server kit · its tool echo[\s\S]*"words": "hi there"[\s\S]*allow\?[^\n]*lways for this tool, this session/, at);
+    assert.equal(fs.existsSync(calls), false, "not called before the yes");
+    t.send("y\r");
+    // The todo list is shown, unasked; the reading sub-agent runs unasked, and its read outside the folder is refused, not asked.
+    at = await t.until(/▸ look at a\.txt[\s\S]*○ ask the cloud/, at);
+    at = await t.until(/sub-agent explore · read a\.txt/, at);
+    at = await t.until(/sub-agent explore answered/, at);
+    // The cloud sub-agent: asked, with exactly what is sent.
+    at = await t.until(/runs in desk on [^\n]* as its agent coder[^\n]*Only this text is sent; no file of this folder[\s\S]*What is six times seven\?[\s\S]*allow\?[^\n]*lways for cloud sub-agents this session/, at);
+    t.send("y\r");
+    at = await t.until(/cloud sub-agent coder · run-sub-1/, at);
+    at = await t.until(/✓ cloud sub-agent coder · completed/, at);
+    at = await t.until(/All done: 42\./, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/todos\r");
+    at = await t.until(/1 [^\n]*look at a\.txt[\s\S]*2 [^\n]*ask the cloud/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/todos done 1\r");
+    at = await t.until(/✔ look at a\.txt/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/agents\r");
+    at = await t.until(/explore[\s\S]*built in · Read, Glob, Grep · reads only, never asked[\s\S]*general[\s\S]*in the cloud[\s\S]*coder[\s\S]*researcher/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send('/mcp add web --header "Authorization: Bearer sk-live-PASTED" https://x.example/mcp\r');
+    at = await t.until(/--header's value must read a variable/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/permissions\r");
+    at = await t.until(/sending|allowed ahead|✓/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send(`/add-dir ${home}\r`);
+    at = await t.until(/where keys are kept/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send(`/add-dir ${other}\r`);
+    at = await t.until(/added for this session/, at);
+    const asAdded = at;
+    at = await t.until(/\w ❯ /, at);
+    t.send("what is in the other folder\r");
+    at = await t.until(/It says: from the other folder\./, at);
+    at = await t.until(/\w ❯ /, at);
+    assert.doesNotMatch(t.out().slice(asAdded), /outside this folder|allow\?/, "a read in an added folder is not asked");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  // A token pasted into /mcp add by mistake is refused and never kept in the history.
+  const history = fs.readdirSync(home).filter((f) => /history/.test(f)).map((f) => fs.readFileSync(path.join(home, f), "utf8")).join("\n");
+  assert.match(history, /use things/);
+  assert.doesNotMatch(history, /sk-live-PASTED/);
+  // What the model was offered and told.
+  const names = asked[0].tools.map((x: any) => x.name);
+  for (const n of ["mcp__kit__echo", "mcp__kit__env", "agent", "todo_write", "todo_read"]) assert.ok(names.includes(n), n);
+  assert.doesNotMatch(JSON.stringify(asked[0].system), /Ignore the person/, "a server's own instructions are never the agent's");
+  // The MCP server was called once, with what was shown.
+  assert.deepEqual(fs.readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l)), [{ name: "echo", arguments: { words: "hi there" } }]);
+  // The sub-agent: an empty context, its own three tools, and its outside read refused without a question.
+  assert.deepEqual(asked[2].tools.map((x: any) => x.name), ["Read", "Glob", "Grep"]);
+  assert.equal(asked[2].messages.length, 1);
+  assert.match(JSON.stringify(asked[2].messages[0]), /Read a\.txt and say what it holds\./);
+  assert.match(JSON.stringify(asked[3].messages.at(-1)), /outside the folders you may read/);
+  // Only its answer went back to the session's agent.
+  assert.match(JSON.stringify(asked[4].messages.at(-1)), /a\.txt holds one line\./);
+  // The cloud run was started with the prompt alone: no copy of the folder.
+  const run = s.seen.find((x) => x.method === "POST" && x.url === `${WS}/agents/coder/run`);
+  assert.deepEqual(JSON.parse(run!.body), { task: "What is six times seven?" });
+  assert.equal(s.seen.some((x) => /snapshots/.test(x.url)), false);
+  assert.match(JSON.stringify(asked[5].messages.at(-1)), /Six times seven is 42\.[\s\S]*saw none of this folder/);
+  // The person's own change to the todo list reaches the agent as a note; the added folder is named.
+  assert.match(JSON.stringify(asked[6].messages.at(-1)), /The person changed the session's todo list themselves/);
+  assert.match(JSON.stringify(asked[6].system), /also added these folders for you to read/);
+});
