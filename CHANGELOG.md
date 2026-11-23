@@ -12,6 +12,27 @@ edited by a person.
 
 <!-- releases -->
 
+## [28.0.0] — 2026-11-23
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 25.0.0, a new major. (7feafe3)
+- the CLI calls /v1/... only, so it needs a platform on the (e96e882)
+
+- feat(cli)!: every call is /v1/<route>; the per-profile path plan is gone ([e96e882](https://github.com/foldrun-io/foldrun-cli/commit/e96e882))
+
+### chore
+
+- old dev names out of comments and tests; docs synced ([af96c55](https://github.com/foldrun-io/foldrun-cli/commit/af96c55))
+
+### deps
+
+- @foldrun/core ^25.0.0 ([7feafe3](https://github.com/foldrun-io/foldrun-cli/commit/7feafe3))
+
+### docs
+
+- sync (Stripe's webhook on the API host) ([e13c4cb](https://github.com/foldrun-io/foldrun-cli/commit/e13c4cb))
+
 ## [27.10.1] — 2026-11-23
 
 - fix(cli): keep the run stream's literal URL for the coverage scan ([81d48c6](https://github.com/foldrun-io/foldrun-cli/commit/81d48c6))
