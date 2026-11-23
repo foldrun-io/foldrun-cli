@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [28.2.1] — 2026-11-23
+
+### deps
+
+- @foldrun/core ^25.1.0 ([4f3ea1b](https://github.com/foldrun-io/foldrun-cli/commit/4f3ea1b))
+
 ## [28.2.0] — 2026-11-23
 
 - feat(billing): a refused billing change opens the Billing page ([dc0de42](https://github.com/foldrun-io/foldrun-cli/commit/dc0de42))
