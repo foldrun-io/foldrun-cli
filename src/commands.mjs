@@ -2288,7 +2288,8 @@ async function platformUrls(url) {
     // never vouch for an address it was not asked at (Codex review).
     const res = await remoteFetch(url, "/api/version", { redirect: "manual" }, { seconds: 15 });
     if (res.status !== 200) return null;
-    const u = /** @type {any} */ (await res.json().catch(() => null))?.urls;
+    const body = /** @type {any} */ (await res.json().catch(() => null));
+    const u = body?.urls;
     const web = (v) => {
       if (typeof v !== "string") return null;
       try {
@@ -2298,7 +2299,8 @@ async function platformUrls(url) {
         return null;
       }
     };
-    return u && typeof u === "object" ? { api: web(u.api), app: web(u.app) } : null;
+    if (!u || typeof u !== "object") return null;
+    return { api: web(u.api), app: web(u.app), paths: pathPlanOf(body) };
   } catch {
     return null;
   }
@@ -2312,7 +2314,13 @@ async function platformUrls(url) {
  * the key does not work at changes nothing.
  */
 async function signedInAddresses(url, token, account) {
-  const urls = await platformUrls(url);
+  /** @type {Map<string, ReturnType<typeof platformUrls>>} */
+  const asked = new Map();
+  const urlsAt = (/** @type {string} */ at) => {
+    if (!asked.has(at)) asked.set(at, platformUrls(at));
+    return /** @type {ReturnType<typeof platformUrls>} */ (asked.get(at));
+  };
+  const urls = await urlsAt(url);
   const same = async (at) => {
     try {
       const res = await remoteFetch(at, "/api/me", { redirect: "manual" }, { token, seconds: 15 });
@@ -2329,7 +2337,7 @@ async function signedInAddresses(url, token, account) {
   const pair = urls && (urls.api || urls.app) ? `${urls.api} ${urls.app}` : null;
   const bound = async (other) => {
     if (!pair || !other || (other !== urls?.api && other !== urls?.app)) return false;
-    const theirs = await platformUrls(other);
+    const theirs = await urlsAt(other);
     return !!theirs && `${theirs.api} ${theirs.app}` === pair;
   };
   const checked = async (other) => (await bound(other)) && (await same(other));
@@ -2341,7 +2349,11 @@ async function signedInAddresses(url, token, account) {
     urls?.app && urls.app !== api && (urls.app === url || (await checked(urls.app))) ? urls.app
     : api !== url && !urls?.app ? url
     : null;
-  return { url: api, app };
+  // How the address the key is kept at spells its routes: its own answer,
+  // and only when it names itself as the API (23 Nov 2026, /v1).
+  const own = await urlsAt(api);
+  const paths = own && own.api === api ? own.paths : null;
+  return { url: api, app, paths };
 }
 
 const NOT_SIGNED_IN = "not signed in — run `foldrun login`, or set FOLDRUN_TOKEN / pass --token";
@@ -2447,6 +2459,64 @@ function retryAfterMs(res, seconds) {
 }
 
 /**
+ * How each platform spells its routes (23 Nov 2026, the platform under /v1
+ * like Stripe's and Anthropic's). Learned once, at `foldrun login`, from the
+ * open `/api/version` of the address the key is kept at, and stored in its
+ * profile as `paths`: an API host whose `paths.platform` is "/v1" gets
+ * `/v1/<route>`; anything else (an older platform, a self-hosted one, a
+ * profile from before, `FOLDRUN_URL` with no profile) keeps `/api/<route>`,
+ * which every platform still serves. No request per run. `renames` comes
+ * from the platform too, so the CLI holds no copy of the map: `/api/usage`
+ * is `/v1/account/usage` because `/v1/usage` is a key's own spend.
+ * FOLDRUN_API_PATHS=api keeps /api everywhere.
+ */
+/** @typedef {{ v1: boolean, renames: Record<string, string> }} PathPlan */
+/** @type {PathPlan} */
+const API_PATHS = { v1: false, renames: {} };
+
+/** The plan an /api/version answer gives, or null for /api. @param {any} body @returns {PathPlan | null} */
+export function pathPlanOf(body) {
+  if (body?.paths?.platform !== "/v1") return null;
+  const r = body.paths.renames && typeof body.paths.renames === "object" ? body.paths.renames : {};
+  return { v1: true, renames: Object.fromEntries(Object.entries(r).filter(([a, b]) => typeof a === "string" && a.startsWith("/api/") && typeof b === "string" && b.startsWith("/v1/"))) };
+}
+
+/** Signing in spells every route as /api, which every platform serves:
+ *  a plan saved before a platform went back to /api must never stop the
+ *  sign-in that would replace it (Codex review). */
+let SIGNING_IN = false;
+
+/**
+ * The plan of the profile whose key this request carries, at this address —
+ * never another account's at the same host (Codex review). A key that is no
+ * profile's (FOLDRUN_TOKEN alone), or no key: /api.
+ * @param {string} url @param {string | undefined} token @returns {PathPlan}
+ */
+export function platformPaths(url, token) {
+  if (SIGNING_IN || !token || process.env.FOLDRUN_API_PATHS === "api") return API_PATHS;
+  const at = normaliseUrl(url);
+  /** @type {any} */
+  const saved = listProfiles().find((p) => p.token === token && normaliseUrl(p.url) === at)?.paths;
+  return saved && saved.v1 === true ? { v1: true, renames: saved.renames && typeof saved.renames === "object" ? saved.renames : {} } : API_PATHS;
+}
+
+/**
+ * An `/api/<route>` path as this platform spells it: `/v1/<route>` (or its
+ * rename) under a /v1 plan, unchanged otherwise. Only `/api/…` moves.
+ * @param {string} apiPath @param {{ v1: boolean, renames: Record<string, string> }} plan
+ */
+export function spelledPath(apiPath, plan) {
+  if (!plan.v1 || !apiPath.startsWith("/api/")) return apiPath;
+  const q = apiPath.indexOf("?");
+  const path = q < 0 ? apiPath : apiPath.slice(0, q);
+  const query = q < 0 ? "" : apiPath.slice(q);
+  for (const [from, to] of Object.entries(plan.renames)) {
+    if (path === from || path.startsWith(`${from}/`)) return to + path.slice(from.length) + query;
+  }
+  return `/v1${path.slice("/api".length)}${query}`;
+}
+
+/**
  * One request to a platform: the auth header, a User-Agent, and a clock.
  *
  * Without the clock a box that accepts the TCP connection and never answers
@@ -2458,7 +2528,7 @@ function retryAfterMs(res, seconds) {
  * @param {{ token?: string, seconds?: number }} [opts]
  */
 async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = {}) {
-  const target = new URL(apiPath, url);
+  const target = new URL(spelledPath(apiPath, platformPaths(url, token)), url);
   const method = (init.method ?? "GET").toUpperCase();
   const headers = {
     "user-agent": USER_AGENT,
@@ -3185,7 +3255,7 @@ export function sseFields(frame) {
 async function streamOnce(url, flags, ws, runId, seen, open = new Map(), print = {}) {
   const token = await renewedToken(url, flags);
   const idle = streamIdleSeconds();
-  const target = new URL(`/api/workspaces/${ws}/runs/${runId}/stream`, url);
+  const target = new URL(spelledPath(`/api/workspaces/${ws}/runs/${runId}/stream`, platformPaths(url, token)), url);
   const ctrl = new AbortController();
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
@@ -4972,6 +5042,7 @@ async function sayModelAccess(url, token) {
 }
 
 async function login(flags) {
+  SIGNING_IN = true;
   const url = normaliseUrl(flags.url ?? env("FOLDRUN_URL") ?? defaultPlatform() ?? DEFAULT_PLATFORM);
 
   if (typeof flags.token === "string") {
@@ -4979,7 +5050,7 @@ async function login(flags) {
     // later command, each failing one step further from the cause.
     const me = await remoteCall(url, { token: flags.token, quiet: true }, "/api/me");
     const at = await signedInAddresses(url, flags.token, me.account);
-    const name = saveCredential(at.url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
+    const name = saveCredential(at.url, { token: flags.token, email: me.actor.email ?? null, account: me.account, role: me.role, ...(at.app ? { app: at.app } : {}), ...(at.paths ? { paths: at.paths } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
     console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${me.actor.email ?? me.actor.label ?? "an API key"} ${c.dim(`(${me.account}, ${me.role})`)}`);
     if (at.app) console.log(`  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}`);
     await sayModelAccess(at.url, flags.token);
@@ -5032,7 +5103,7 @@ async function login(flags) {
       // The one API (21 Nov 2026): a platform with an API address of its own
       // gets this machine's calls there; its dashboard stays for pages.
       const at = await signedInAddresses(url, poll.token, poll.account);
-      const name = saveCredential(at.url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true, ...(at.app ? { app: at.app } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
+      const name = saveCredential(at.url, { token: poll.token, email: poll.email, account: poll.account, role: poll.role, minted: true, ...(at.app ? { app: at.app } : {}), ...(at.paths ? { paths: at.paths } : {}) }, { name: typeof flags.profile === "string" ? flags.profile : undefined, alsoAt: [url, at.app] });
       console.log(`\n  ${c.green("✓")} signed in to ${c.bold(at.url)} as ${poll.email} ${c.dim(`(${poll.account}, ${poll.role})`)}`);
       if (at.app) console.log(`  ${c.dim(`the API is ${at.url}; pages open at ${at.app}`)}`);
       await sayModelAccess(at.url, poll.token);

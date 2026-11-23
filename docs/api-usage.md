@@ -204,10 +204,27 @@ body whatever version is sent.
 
 ## One address
 
-foldrun answers programs at one address: the platform routes (`/api/…`)
-and the model routes (`/v1/…`) together, for API keys, the CLI and Claude
-Code alike — with one key, sent as `x-api-key` or `Authorization: Bearer`
-on either half, and one error body. Settings → API keys → API shows it, and `GET /api/version`
+foldrun answers programs at one address, everything under `/v1`: the model
+routes (`/v1/messages`, `/v1/models`) and the platform routes
+(`/v1/workspaces`, `/v1/keys`, `/v1/account/…`) together, for API keys, the
+CLI and Claude Code alike — with one key, sent as `x-api-key` or
+`Authorization: Bearer` on either half, and one error body.
+
+```sh
+curl -H "x-api-key: $FOLDRUN_TOKEN" https://api.foldrun.dev/v1/workspaces
+curl -H "x-api-key: $FOLDRUN_TOKEN" https://api.foldrun.dev/v1/workspaces/my-desk/runs
+```
+
+The path carries the API's generation, `v1`; the `Foldrun-Version` header
+([Versions](#versions)) carries every dated change inside it, as Stripe's and
+Anthropic's do. Each platform route keeps its name from the
+[reference](api.md), with `/v1` in place of `/api`. One differs: the account's
+usage is `/v1/account/usage/…` (`/api/usage/…`), because `/v1/usage` is a
+key's own spend. The older `/api/…` spelling keeps working on the same
+address. `GET /api/version` says which one an install serves as
+`paths.platform`; a self-hosted install with no API address of its own
+serves `/api` only. Dev serves `/v1` today at `https://api.foldrun.dev`;
+production gets it with `https://api.foldrun.io`. Settings → API keys → API shows it, and `GET /api/version`
 names it as `urls.api` (with the dashboard's own address as `urls.app`).
 `foldrun login` moves a machine's calls there by itself. Signing in,
 invitations, approvals and the other pages a person opens stay on the
