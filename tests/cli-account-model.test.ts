@@ -17,6 +17,15 @@ test("with no key, it says runs are refused and exits non-zero", async () => {
   assert.match(r.out, /no key — runs on this account are refused/);
 });
 
+test("with no key and own keys off, it says the account needs a plan, not a key", async () => {
+  const s = await serve({ "GET /v1/account/model": () => ({ ...none, ownKeys: false }) });
+  const r = await at(s.url, "account", "model");
+  s.close();
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /no plan — runs on this account are refused until it has one \(Billing → Plans/);
+  assert.doesNotMatch(r.out, /no key|until one is set/);
+});
+
 test("set sends the provider and key once, with an idempotency key, and shows only the last four", async () => {
   const s = await serve({ "PUT /v1/account/model": () => mine });
   const r = await at(s.url, "account", "model", "set", "openrouter", "--key", "fake-9876");

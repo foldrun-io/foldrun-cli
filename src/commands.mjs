@@ -8181,7 +8181,10 @@ async function accountModelCmd(url, positional, flags) {
     } else if (r.runsOn === "platform") {
       runs = `${c.yellow("·")} the platform's credential ${c.dim("(this account is allowed it)")}`;
     } else {
-      runs = `${c.red("✗")} no key — runs on this account are refused until one is set`;
+      // Own keys off: there is no key to set. The account needs a plan.
+      runs = r.ownKeys === false
+        ? `${c.red("✗")} no plan — runs on this account are refused until it has one (Billing → Plans in the dashboard)`
+        : `${c.red("✗")} no key — runs on this account are refused until one is set`;
     }
     console.log(`\n  ${runs}`);
     if (r.runsOn === "foldrun" && f) {
