@@ -7962,7 +7962,7 @@ async function providersCmd(url, flags) {
  *   foldrun account model remove                            the key (the choice stays)
  *   foldrun account model use foldrun --provider <p>        run on foldrun's models
  *   foldrun account model use own                           back to the account's own key
- *   foldrun account model prices [--provider <p>]           foldrun's price list
+ *   foldrun account model prices [--provider <p>]           every model behind foldrun's proxy: price, in your plan or not, the tiers (--json)
  *
  * `--key -` reads the key from stdin, so it stays out of the shell's history;
  * in a terminal it (or no --key at all) asks for it, hidden.
@@ -8068,17 +8068,27 @@ async function accountModelCmd(url, positional, flags) {
     const f = fm(r);
     const only = typeof flags.provider === "string" ? flags.provider : null;
     const prices = (f?.prices ?? []).filter((p) => !only || p.provider === only);
+    const catalog = (f?.catalog ?? []).filter((m) => !only || m.provider === only);
     if (flags.json === true) {
-      console.log(JSON.stringify({ offered: f?.offered ?? false, providers: f?.providers ?? [], prices }, null, 2));
+      console.log(JSON.stringify({ offered: f?.offered ?? false, providers: f?.providers ?? [], prices, catalog, codeTiers: f?.codeTiers ?? {} }, null, 2));
       return 0;
     }
-    if (!f?.offered) {
+    // A subscriber served by Claude logins alone sees its catalogue though
+    // no provider key is set (offered is about choosing a provider).
+    if (!f?.offered && !catalog.some((m) => m.available)) {
       console.log(`\n  ${c.yellow("·")} foldrun's models are not offered here${f?.refused ? ` — ${f.refused}` : ""}\n`);
       return 1;
     }
+    // What foldrun code's tier words run on, and — per provider — whether
+    // the subscription pays for its models (23 Nov 2026: one subscription,
+    // every model behind foldrun's proxy).
+    const codeTiers = Object.entries(f.codeTiers ?? {});
+    if (codeTiers.length && !only) console.log(`\n  ${c.dim(`foldrun code on this computer: ${codeTiers.map(([t, m]) => `${t} → ${m?.id}`).join(" · ")}`)}`);
     for (const p of f.providers ?? []) {
       if (only && p.name !== only) continue;
-      console.log(`\n  ${c.bold(p.title)} ${p.available ? "" : c.dim(`— ${p.reason ?? "not available"}`)}`);
+      // A row the account can have (Claude on its logins) is not "unavailable".
+      const can = p.available || catalog.some((m) => m.provider === p.name && m.available);
+      console.log(`\n  ${c.bold(p.title)}${can ? "" : ` ${c.dim(`— ${p.reason ?? "not available"}`)}`}`);
       const tiers = Object.entries(p.tiers ?? {});
       if (tiers.length) console.log(`  ${c.dim(`model: ${tiers.map(([t, m]) => `${t} → ${m}`).join(" · ")}`)}`);
       const rows = prices.filter((x) => x.provider === p.name);
@@ -8087,13 +8097,19 @@ async function accountModelCmd(url, positional, flags) {
         continue;
       }
       const w = Math.max(...rows.map((x) => x.model.length), 5);
-      console.log(`  ${c.dim(`${"model".padEnd(w)}  ${"in".padStart(8)}  ${"out".padStart(8)}  ${"cached in".padStart(9)}  ${"cache write".padStart(11)}`)}`);
+      // Per model: a plan may pay for one model of a provider and not
+      // another (Fable on Pro) — the platform says, row by row.
+      const plan = (x) => {
+        const m = catalog.find((y) => y.provider === x.provider && y.model === x.model);
+        return m ? (m.covered ? c.green("in your plan") : c.dim("pay as you go")) : "";
+      };
+      console.log(`  ${c.dim(`${"model".padEnd(w)}  ${"in".padStart(8)}  ${"out".padStart(8)}  ${"cached in".padStart(9)}  ${"cache write".padStart(11)}${catalog.length ? "  plan" : ""}`)}`);
       for (const x of rows) {
         const opt = (n) => (n == null ? "—" : money(n));
-        console.log(`  ${x.model.padEnd(w)}  ${money(x.inputPerMTok).padStart(8)}  ${money(x.outputPerMTok).padStart(8)}  ${opt(x.cacheReadPerMTok).padStart(9)}  ${opt(x.cacheWritePerMTok).padStart(11)}`);
+        console.log(`  ${x.model.padEnd(w)}  ${money(x.inputPerMTok).padStart(8)}  ${money(x.outputPerMTok).padStart(8)}  ${opt(x.cacheReadPerMTok).padStart(9)}  ${opt(x.cacheWritePerMTok).padStart(11)}${catalog.length ? `  ${plan(x)}` : ""}`);
       }
     }
-    console.log(`\n  ${c.dim("USD per million tokens. A model not listed is refused.")}\n`);
+    console.log(`\n  ${c.dim(`USD per million tokens. A model not listed is refused.${catalog.length ? " Run one with model: <provider>/<model> in an agent, or /model in foldrun code." : ""}`)}\n`);
     return 0;
   }
   if (verb !== "set") throw new Error("`foldrun account model`, `set <provider> --key <api key>`, `remove`, `use foldrun --provider <p>`, `use own`, or `prices`");
@@ -14027,13 +14043,21 @@ const CODE_MODEL = /^[A-Za-z0-9][\w.:/-]{0,99}$/;
  */
 async function codeModel(url, flags, ws, agent, want, s) {
   const file = `agents/${agent}/agent.md`;
+  // Every model behind foldrun's proxy (23 Nov 2026): the platform's list,
+  // or null on one that has none, where the three tiers are the choice.
+  if (s?.mode === "local") await codingPlanOf(s).catch(() => null);
+  let cat = await proxyCatalog(url, flags, s?.mode, Boolean(s?.onPlan));
   if (!want && codeInteractive && process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
     // A list to choose from, as Claude Code's /model (19 Nov 2026).
     const cur = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=${enc(file)}`).catch(() => null);
     const now = frontmatterModel(String(cur?.content ?? "")) ?? "default";
-    const picked = await pickModel(now);
+    // An agent with a provider: block of its own — in its file, or inherited
+    // from its project's or the account's AGENTS.md — runs on it in the
+    // cloud: its names are its endpoint's, not the proxy's (Codex review).
+    if (s?.mode !== "local" && cat && (await ownProviderBlock(url, flags, ws, String(cur?.content ?? "")))) cat = null;
+    const picked = await pickModel(now, cat);
     if (!picked || picked === now) {
-      console.log(`  ${c.dim(picked ? `still ${modelLabel(now)}` : `kept ${modelLabel(now)}`)}\n`);
+      console.log(`  ${c.dim(picked ? `still ${modelLabel(now, cat)}` : `kept ${modelLabel(now, cat)}`)}\n`);
       return;
     }
     want = picked;
@@ -14042,7 +14066,7 @@ async function codeModel(url, flags, ws, agent, want, s) {
     // What a turn actually ran on — the file's model: may be a tier or an
     // alias the platform resolves, so the run record is the honest answer.
     console.log(`  ${c.dim("model")}  ${s?.model ? `${plainText(shortModel(s.model))} ${c.dim("(the last message)")}` : c.dim("set by the agent until you choose one")}`);
-    console.log(`  ${c.dim("/model fast · default · max changes it from your next message")}\n`);
+    console.log(`  ${c.dim(`/model fast · default · max${cat?.catalog.length ? " · or any model behind foldrun's proxy, as provider/model" : ""} changes it from your next message`)}\n`);
     return;
   }
   if (!CODE_MODEL.test(want)) throw new Error(`"${want}" is not a model — fast, default, max, or a model id`);
@@ -14056,8 +14080,15 @@ async function codeModel(url, flags, ws, agent, want, s) {
     throw err;
   }
   const raw = String(cur.content ?? "");
-  // Core finds the key as the platform reads it (quoted or not); the file
-  // coming out the same is the only "already" (Codex).
+  // Checked against the proxy's list — a tier word in any spelling the
+  // runner reads (`cheap`, `MAX`) passes as written — unless the agent runs
+  // on a provider: block of its own in the cloud (Codex review).
+  if (s?.mode !== "local" && cat && (await ownProviderBlock(url, flags, ws, raw))) cat = null;
+  resolveTierFn ??= (await core()).resolveTier;
+  // `foldrun/fast` is the gateway's spelling; the file keeps the tier word
+  // the runner reads everywhere (Codex review, round 2).
+  if (isTierWord(want)) want = /^foldrun\//i.test(want) ? /** @type {string} */ (tierOf(want)) : want;
+  else want = catalogModel(want, cat);
   const { setFrontmatterScalar } = await patterns();
   const next = setFrontmatterScalar(raw, "model", want);
   if (next === raw) {
@@ -14073,7 +14104,7 @@ async function codeModel(url, flags, ws, agent, want, s) {
     if (err instanceof HttpError && err.status === 409) throw new Error(`${file} changed while saving — nothing was written; /model again`);
     throw err;
   }
-  console.log(`  ${c.green("✓")} ${c.bold(modelLabel(want))} from your next message ${c.dim(`— kept for ${plainText(ws)}`)}\n`);
+  console.log(`  ${c.green("✓")} ${c.bold(modelLabel(want, cat))} from your next message ${c.dim(`— kept for ${plainText(ws)}`)}\n`);
 }
 
 /** The tiers foldrun code offers, and what each runs on foldrun's own models. */
@@ -14083,10 +14114,141 @@ const MODEL_CHOICES = [
   { v: "fast", name: "Fast", note: "Haiku · the quickest and cheapest" },
 ];
 
-/** "max" → "Max (Opus)"; a model id as it is. */
-function modelLabel(/** @type {string} */ v) {
+/** "max" → "Max (Opus)", or what the platform says the tier runs; a model
+ *  id as it is. */
+function modelLabel(/** @type {string} */ v, /** @type {ProxyCatalog | null} */ cat = null) {
   const t = MODEL_CHOICES.find((x) => x.v === v);
-  return t ? `${t.name} (${t.note.split(" · ")[0]})` : plainText(shortModel(v));
+  if (!t) return plainText(shortModel(v));
+  const runs = cat?.tiers?.[t.v]?.model;
+  return `${t.name} (${runs ? plainText(runs) : t.note.split(" · ")[0]})`;
+}
+
+/**
+ * @typedef {{ id: string, provider: string, providerTitle: string, model: string, inputPerMTok: number, outputPerMTok: number, available: boolean, covered: boolean, api?: { available: boolean, covered: boolean } }} CatalogModel
+ * @typedef {{ catalog: CatalogModel[], tiers: Record<string, { id: string, provider: string, model: string } | undefined> }} ProxyCatalog
+ */
+
+/**
+ * The models behind foldrun's proxy (GET /v1/account/model, 23 Nov 2026),
+ * and what each tier word runs on where the next turn runs — or null: an
+ * older platform without the list, a read that failed, or a cloud turn on
+ * the account's own key, where a name goes to its endpoint as written
+ * (Codex review). On this computer every turn goes through foldrun's
+ * gateway, whose map is models.code.tiers; in the cloud the account's
+ * provider's own tiers (none listed: Claude's, as the labels say).
+ */
+export async function proxyCatalog(/** @type {any} */ url, /** @type {any} */ flags, /** @type {string | undefined} */ mode = "cloud", onPlan = false) {
+  try {
+    const r = await remoteCall(url, flags, "/v1/account/model");
+    const fm = r?.foldrunModels;
+    if (!fm || !Array.isArray(fm.catalog)) return null;
+    if (mode !== "local" && r.runsOn !== "foldrun" && r.runsOn !== "subscription") return null;
+    /** @type {CatalogModel[]} */
+    let catalog = fm.catalog.filter((/** @type {any} */ m) => m && typeof m.id === "string" && CODE_MODEL.test(m.id));
+    // On this computer a turn goes through foldrun's API with the account's
+    // key: what that pays for and reaches, not the cloud steps' logins.
+    if (mode === "local") catalog = catalog.map((m) => (m.api && typeof m.api === "object" ? { ...m, available: m.api.available === true, covered: m.api.covered === true } : m));
+    /** @type {ProxyCatalog["tiers"]} */
+    const tiers = {};
+    // On this computer the gateway's tier map stands behind a turn only on a
+    // plan (the engine is given it then: PLAN_TIERS); else Claude's tiers.
+    if (mode === "local") Object.assign(tiers, onPlan && fm.codeTiers && typeof fm.codeTiers === "object" ? fm.codeTiers : {});
+    else if (r.runsOn === "foldrun" && typeof r.supply === "string") {
+      const p = (fm.providers ?? []).find((/** @type {any} */ x) => x?.name === r.supply);
+      for (const [t, m] of Object.entries(p?.tiers ?? {})) if (typeof m === "string") tiers[t] = { id: `${r.supply}/${m}`, provider: r.supply, model: m };
+    }
+    return { catalog, tiers };
+  } catch {
+    return null;
+  }
+}
+
+/** A provider name as `provider/model` may spell it — core's list
+ *  (model-supply.ts PROVIDER_ALIASES), which the runner and the gateway read. */
+const PROVIDER_ALIASES = { anthropic: "anthropic", claude: "anthropic", deepseek: "deepseek", moonshot: "moonshot", kimi: "moonshot", openai: "openai", gemini: "gemini", google: "gemini", zai: "zai", "z-ai": "zai", glm: "zai", zhipu: "zai", qwen: "qwen", alibaba: "qwen", minimax: "minimax", mimo: "mimo", xiaomi: "mimo" };
+
+/**
+ * The model `/model <name>` means, checked against the platform's list: a
+ * tier word as it is; a catalogue id as it is; a provider's own id
+ * (`deepseek-chat`) as its catalogue id when one provider has it. A name
+ * the list does not have is refused with the nearest it does — choosing
+ * what the proxy refuses would only fail the next message. No list (an
+ * older platform): as written, and the gateway decides.
+ */
+export function catalogModel(/** @type {string} */ want, /** @type {ProxyCatalog | null} */ cat) {
+  if (MODEL_CHOICES.some((x) => x.v === want.toLowerCase()) || !cat?.catalog.length) return want;
+  const lower = want.toLowerCase();
+  const slash = lower.indexOf("/");
+  // `kimi/kimi-k2` is `moonshot/kimi-k2`: the provider's other names.
+  const asked = slash > 0 ? `${/** @type {Record<string, string>} */ (PROVIDER_ALIASES)[lower.slice(0, slash)] ?? lower.slice(0, slash)}/${lower.slice(slash + 1)}` : lower;
+  const exact = cat.catalog.find((m) => m.id.toLowerCase() === asked);
+  if (exact) {
+    if (!exact.available) throw new Error(`${exact.id} is not available on this platform right now — pick another with /model`);
+    return exact.id;
+  }
+  // A provider's own id, with no provider: its catalogue id when one
+  // provider has it. Never past a provider written out — `openai/x` is not
+  // DeepSeek's `x` (Codex review).
+  if (slash < 0) {
+    const bare = cat.catalog.filter((m) => m.model.toLowerCase() === lower);
+    if (bare.length === 1 && bare[0].available) return bare[0].id;
+  }
+  const word = lower.split("/").pop() ?? lower;
+  const near = cat.catalog
+    .filter((m) => m.available)
+    .map((m) => ({ id: m.id, score: m.id.toLowerCase().includes(word) ? 2 : word.split(/[-_.]/).some((w) => w.length > 2 && m.id.toLowerCase().includes(w)) ? 1 : 0 }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((x) => x.id);
+  throw new Error(`${want} is not a model behind foldrun's proxy${near.length ? ` — did you mean ${near.join(", ")}?` : ""} (/model lists them)`);
+}
+
+/** Does this agent run on a provider: block of its own in the cloud — in
+ *  its file, else its project's AGENTS.md, else the account's (the
+ *  runner's order)? A read that fails counts as none. */
+async function ownProviderBlock(/** @type {any} */ url, /** @type {any} */ flags, /** @type {string} */ ws, /** @type {string} */ agentText) {
+  if (await frontmatterHas(agentText, "provider")) return true;
+  // Not there (404) is none; a read that is refused or fails (a key scoped
+  // to projects cannot read the account's file) is "cannot tell", and the
+  // name is then kept as written, as before the list (Codex review).
+  const read = async (/** @type {string} */ at) => {
+    try {
+      return String((await remoteCall(url, flags, at))?.content ?? "");
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return "";
+      return null;
+    }
+  };
+  for (const at of [`/v1/workspaces/${enc(ws)}/source?path=AGENTS.md`, "/v1/account/agents-md"]) {
+    const text = await read(at);
+    if (text === null || (await frontmatterHas(text, "provider"))) return true;
+  }
+  return false;
+}
+
+/** Whether a file's frontmatter sets this key at its top, read with the
+ *  YAML parser core reads it with (any indentation YAML allows). A block
+ *  that does not parse counts as setting it: cannot tell. */
+async function frontmatterHas(/** @type {string} */ text, /** @type {string} */ key) {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+  if (block === undefined) return false;
+  /** @type {any} */
+  let parse = null;
+  try {
+    parse = (await import("gray-matter")).default;
+  } catch {
+    // An install without the parser beside it: the top keys by hand — the
+    // first key's indentation is the top level's (Codex review, round 5).
+    const indent = /^([ \t]*)\S/m.exec(block)?.[1] ?? "";
+    return new RegExp(`^${indent}["']?${key}["']?[ \t]*:`, "m").test(block);
+  }
+  try {
+    const data = parse(text, {}).data;
+    return Boolean(data && typeof data === "object" && Object.hasOwn(data, key));
+  } catch {
+    return true;
+  }
 }
 
 /** The model: an agent file sets, as the platform reads it (quoted or not). */
@@ -14102,8 +14264,21 @@ export function frontmatterModel(/** @type {string} */ text) {
  * to nothing, and the caller says what happened.
  * @returns {Promise<string | null>}
  */
-function pickModel(/** @type {string} */ now) {
-  const choices = MODEL_CHOICES.some((x) => x.v === now) ? MODEL_CHOICES : [{ v: now, name: plainText(shortModel(now)), note: "this agent's own model" }, ...MODEL_CHOICES];
+function pickModel(/** @type {string} */ now, /** @type {ProxyCatalog | null} */ cat = null) {
+  const money = (/** @type {number} */ n) => `$${n >= 1 || n === 0 ? n.toFixed(2).replace(/\.00$/, "") : n.toFixed(2)}`;
+  // The tiers first, each with what it runs here; then every model behind
+  // foldrun's proxy that can be had now (23 Nov 2026).
+  const tiers = MODEL_CHOICES.map((t) => {
+    const runs = cat?.tiers?.[t.v]?.model;
+    return runs ? { ...t, note: `${plainText(runs)} · ${t.note.split(" · ").slice(1).join(" · ")}` } : t;
+  });
+  const models = (cat?.catalog ?? []).filter((m) => m.available).map((m) => ({
+    v: m.id,
+    name: plainText(m.id),
+    note: `${plainText(m.providerTitle)} · ${money(m.inputPerMTok)}/${money(m.outputPerMTok)} per M · ${m.covered ? "in plan" : "pay as you go"}`,
+  }));
+  const all = [...tiers, ...models];
+  const choices = all.some((x) => x.v === now) ? all : [{ v: now, name: plainText(shortModel(now)), note: "this agent's own model" }, ...all];
   return pickOne({ title: "Choose a model", subtitle: "from your next message on; kept for this project", choices, tick: now });
 }
 
@@ -14118,18 +14293,28 @@ function pickOne({ title, subtitle = "", choices, tick = null }) {
   let at = Math.max(0, choices.findIndex((x) => x.v === tick));
   const width = Math.max(...choices.map((x) => x.name.length));
   const fit = (/** @type {string} */ t) => clipCells(t, (process.stdout.columns || 80) - 3);
-  const rows = () => [
-    `  ${c.bold(fit(title))}`,
-    ...(subtitle ? [`  ${c.dim(fit(subtitle))}`] : []),
-    "",
-    ...choices.map((x, i) => {
-      // One screen row each, so redrawing goes up exactly as far (Codex).
-      const line = clipCells(`${i + 1}. ${x.name.padEnd(width)}   ${x.note}${x.v === tick ? "  ✔" : ""}`, (process.stdout.columns || 80) - 5);
-      return i === at ? `  ${c.cyan(`❯ ${line}`)}` : `    ${c.dim(line)}`;
-    }),
-    "",
-    `  ${c.dim(fit("↑↓ to move · Enter to choose · Esc to cancel"))}`,
-  ];
+  const rows = () => {
+    // A list taller than the terminal shows a window that follows the
+    // cursor (the whole catalogue of models is longer than a screen).
+    const room = Math.max(3, (process.stdout.rows || 24) - (subtitle ? 8 : 7));
+    const from = choices.length <= room ? 0 : Math.min(Math.max(0, at - Math.floor(room / 2)), choices.length - room);
+    const to = Math.min(choices.length, from + room);
+    return [
+      `  ${c.bold(fit(title))}`,
+      ...(subtitle ? [`  ${c.dim(fit(subtitle))}`] : []),
+      "",
+      ...(from > 0 ? [`    ${c.dim(`↑ ${from} more`)}`] : []),
+      ...choices.slice(from, to).map((x, j) => {
+        const i = from + j;
+        // One screen row each, so redrawing goes up exactly as far (Codex).
+        const line = clipCells(`${i + 1}. ${x.name.padEnd(width)}   ${x.note}${x.v === tick ? "  ✔" : ""}`, (process.stdout.columns || 80) - 5);
+        return i === at ? `  ${c.cyan(`❯ ${line}`)}` : `    ${c.dim(line)}`;
+      }),
+      ...(to < choices.length ? [`    ${c.dim(`↓ ${choices.length - to} more`)}`] : []),
+      "",
+      `  ${c.dim(fit("↑↓ to move · Enter to choose · Esc to cancel"))}`,
+    ];
+  };
   let drawn = 0;
   const draw = () => {
     if (drawn) writeControl(`\x1b[${drawn}A\r\x1b[J`);

@@ -215,7 +215,11 @@ Since 23 November 2026 foldrun is sold as **one subscription**: **Pro**
 ($20 for thirty days) or **Max** ($100, five times Pro's allowance). It pays
 for model calls on foldrun's models wherever they come from — `foldrun code`
 on your computer or in the cloud, agents and flows, and direct calls to the
-API with a foldrun key — inside its **allowance**. Without one, new work is
+API with a foldrun key — inside its **allowance**, whichever model serves
+the call: every model behind foldrun's proxy the platform offers (Claude,
+GPT, Gemini, DeepSeek, Kimi, GLM, Qwen, MiniMax, MiMo; `foldrun account
+model prices` lists them). A dearer model uses the allowance faster; the
+platform caps what it costs at its real price. Without one, new work is
 refused with `402 subscription_required`; your balance, billing and history
 stay as they are.
 

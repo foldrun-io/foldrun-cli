@@ -347,6 +347,179 @@ test("/model: shows the agent's model; /model max changes its file's model: line
   }
 });
 
+const CATALOG = {
+  runsOn: "foldrun",
+  supply: "deepseek",
+  foldrunModels: {
+    offered: true,
+    providers: [{ name: "deepseek", title: "DeepSeek", available: true, reason: null, tiers: { fast: "deepseek-chat" } }],
+    catalog: [
+      { id: "anthropic/claude-opus-5-5", provider: "anthropic", providerTitle: "Anthropic", model: "claude-opus-5-5", inputPerMTok: 15, outputPerMTok: 75, available: true, covered: true },
+      { id: "deepseek/deepseek-chat", provider: "deepseek", providerTitle: "DeepSeek", model: "deepseek-chat", inputPerMTok: 0.28, outputPerMTok: 0.42, available: true, covered: true },
+      { id: "openai/gpt-x", provider: "openai", providerTitle: "OpenAI", model: "gpt-x", inputPerMTok: 2, outputPerMTok: 8, available: false, covered: true },
+    ],
+    codeTiers: { fast: { id: "anthropic/claude-haiku-5-5", provider: "anthropic", model: "claude-haiku-5-5" } },
+  },
+};
+
+test("/model with the platform's list (23 Nov 2026): tiers say what they run, every model behind the proxy is offered, a provider's own id finds its catalogue id, an unknown one is refused with the nearest", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: default\n---\n\nYou code.\n";
+  const puts: Array<{ content: string }> = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: file, sha256: `sha-${puts.length}` }),
+    [`PUT ${WS}/source`]: (b) => {
+      const body = JSON.parse(String(b));
+      puts.push(body);
+      file = body.content;
+      return { ok: true };
+    },
+    ["GET /v1/account/model"]: () => CATALOG,
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/model\r");
+    at = await t.until(/3\. Fast\s+deepseek-chat[\s\S]*deepseek\/deepseek-chat\s+DeepSeek · \$0\.28\/\$0\.42 per M · in plan[\s\S]*Esc to cancel/, at);
+    assert.doesNotMatch(t.out().slice(-2000), /openai\/gpt-x/, "a model that cannot be had now is not offered");
+    t.send("\x1b");
+    at = await t.until(/kept Default/, at);
+    t.send("/model deepseek-chat\r");
+    at = await t.until(/deepseek\/deepseek-chat from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^model: deepseek\/deepseek-chat$/m);
+    t.send("/model openai/gpt-x\r");
+    at = await t.until(/not available on this platform right now/, at);
+    t.send("/model claude-opus-9\r");
+    at = await t.until(/not a model behind foldrun's proxy — did you mean anthropic\/claude-opus-5-5/, at);
+    assert.equal(puts.length, 1, "nothing written for a refused name");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("/model on the account's own key in the cloud: names go to its endpoint as written — no list, nothing refused", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: default\n---\n\nYou code.\n";
+  const puts: Array<{ content: string }> = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: file, sha256: `sha-${puts.length}` }),
+    [`PUT ${WS}/source`]: (b) => {
+      const body = JSON.parse(String(b));
+      puts.push(body);
+      file = body.content;
+      return { ok: true };
+    },
+    ["GET /v1/account/model"]: () => ({ ...CATALOG, runsOn: "account", supply: null }),
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/model my-private-deployment\r");
+    at = await t.until(/my-private-deployment from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^model: my-private-deployment$/m);
+    t.send("/model cheap\r");
+    at = await t.until(/from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^model: cheap$/m, "a tier synonym the runner reads passes as written");
+    t.send("/model foldrun/fast\r");
+    at = await t.until(/Fast \(Haiku\) from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^model: fast$/m, "the gateway's spelling is kept as the tier word");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("/model in the cloud under a provider: block the project's AGENTS.md sets: names go as written, as the runner sends them there", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: default\n---\n\nYou code.\n";
+  const puts: Array<{ content: string }> = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "AGENTS.md" ? { path: "AGENTS.md", content: "---\n  name: desk\n  provider:\n    name: openai\n    token: ${OPENAI}\n---\n" } : { path: "agents/coder/agent.md", content: file, sha256: `sha-${puts.length}` }),
+    [`PUT ${WS}/source`]: (b) => {
+      const body = JSON.parse(String(b));
+      puts.push(body);
+      file = body.content;
+      return { ok: true };
+    },
+    ["GET /v1/account/model"]: () => CATALOG,
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/model gpt-5-mini\r");
+    at = await t.until(/gpt-5-mini from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^model: gpt-5-mini$/m);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("/model in the cloud on a key that cannot read the account's AGENTS.md: cannot tell, so the name is kept as written", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: default\n---\n\nYou code.\n";
+  const puts: Array<{ content: string }> = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "AGENTS.md" ? { __status: 404, body: { error: "not found" } } : { path: "agents/coder/agent.md", content: file, sha256: `sha-${puts.length}` }),
+    [`PUT ${WS}/source`]: (b) => {
+      const body = JSON.parse(String(b));
+      puts.push(body);
+      file = body.content;
+      return { ok: true };
+    },
+    ["GET /v1/account/model"]: () => CATALOG,
+    ["GET /v1/account/agents-md"]: () => ({ __status: 403, body: { error: "this key is scoped to projects" } }),
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/model my-private-deployment\r");
+    at = await t.until(/my-private-deployment from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^model: my-private-deployment$/m);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("catalogModel: tier words pass, ids and a provider's own id resolve, no list leaves the name to the gateway", async () => {
+  const { catalogModel } = await import("../src/commands.mjs");
+  const cat = { catalog: CATALOG.foldrunModels.catalog, tiers: {} };
+  assert.equal(catalogModel("max", cat), "max");
+  assert.equal(catalogModel("DeepSeek/deepseek-chat", cat), "deepseek/deepseek-chat");
+  assert.equal(catalogModel("claude-opus-5-5", cat), "anthropic/claude-opus-5-5");
+  assert.throws(() => catalogModel("mistral/large", cat), /not a model behind foldrun's proxy/);
+  assert.throws(() => catalogModel("openai/deepseek-chat", cat), /did you mean deepseek\/deepseek-chat/, "a provider written out is never another's");
+  assert.equal(catalogModel("Claude/claude-opus-5-5", cat), "anthropic/claude-opus-5-5", "the provider's other names");
+  assert.equal(catalogModel("mistral/large", null), "mistral/large");
+  assert.equal(catalogModel("anything", { catalog: [], tiers: {} }), "anything");
+});
+
 test("Ctrl-R: search what was typed before, Ctrl-R again for older, Enter puts it on the line, Esc leaves the line as it was", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

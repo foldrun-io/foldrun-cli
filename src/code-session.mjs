@@ -16,7 +16,7 @@ export const CODE_COMMANDS = [
   ["/diff", "what is changed in the folder now (git diff)"],
   ["/undo", "take back the last patch this session applied"],
   ["/status", "this session: turns, cost, model, conversation"],
-  ["/model", "choose the model: Default, Max or Fast (/model max sets it straight away)"],
+  ["/model", "choose the model: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away)"],
   ["/new", "a fresh conversation — the agent forgets the earlier turns"],
   ["/send <conversation> <text>", "message another session"],
   ["/messages", "what other sessions sent this one"],

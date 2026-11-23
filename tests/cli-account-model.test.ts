@@ -126,6 +126,26 @@ test("prices lists each provider's models as the account pays; --provider narrow
   assert.doesNotMatch(one.out, /claude-sonnet/);
 });
 
+test("prices with the platform's catalogue (23 Nov 2026): the tiers, in your plan or pay as you go per provider, and --json carries the catalogue", async () => {
+  const catalog = [
+    { id: "openai/gpt-5", provider: "openai", providerTitle: "OpenAI", model: "gpt-5", inputPerMTok: 1.5, outputPerMTok: 12, available: true, covered: true },
+    { id: "anthropic/claude-sonnet-4-5", provider: "anthropic", providerTitle: "Anthropic", model: "claude-sonnet-4-5", inputPerMTok: 3, outputPerMTok: 15, available: true, covered: false },
+  ];
+  const codeTiers = { default: { id: "openai/gpt-5", provider: "openai", model: "gpt-5" } };
+  const s = await serve({ "GET /v1/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 0, foldrunModels: { ...offered, catalog, codeTiers } }) });
+  const r = await at(s.url, "account", "model", "prices");
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /foldrun code on this computer: default → openai\/gpt-5/);
+  assert.match(r.out, /gpt-5 .*in your plan/);
+  assert.match(r.out, /claude-sonnet-4-5 .*pay as you go/);
+  assert.match(r.out, /model: <provider>\/<model>/);
+  const j = await at(s.url, "account", "model", "prices", "--json");
+  s.close();
+  const got = JSON.parse(j.out.slice(j.out.indexOf("{")));
+  assert.deepEqual(got.catalog.map((m: { id: string }) => m.id), ["openai/gpt-5", "anthropic/claude-sonnet-4-5"]);
+  assert.deepEqual(got.codeTiers, codeTiers);
+});
+
 test("on your own key where foldrun's models are offered, the hint says how to choose them", async () => {
   const s = await serve({ "GET /v1/account/model": () => ({ ...mine, source: "own", supply: null, choiceVersion: 0, foldrunModels: offered }) });
   const r = await at(s.url, "account", "model");
