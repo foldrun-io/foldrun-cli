@@ -7958,8 +7958,8 @@ async function providersCmd(url, flags) {
  *
  * `--key -` reads the key from stdin, so it stays out of the shell's history;
  * in a terminal it (or no --key at all) asks for it, hidden.
- * The platform refuses a Claude login token for any account not allowed its
- * own credential: bring an API key.
+ * The key may be an API key or a Claude login token (the account's own
+ * claude.ai subscription).
  */
 async function accountModelCmd(url, positional, flags) {
   const verb = positional[0];
