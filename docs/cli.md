@@ -139,7 +139,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a project package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun snapshot push [dir]` | send a folder for an agent on foldrun to work on (a snapshot). What goes is what git would commit — tracked files and untracked ones `.gitignore` does not exclude, as they are on disk; links and submodules are left out and named. A secret in any file stops it before anything leaves the machine (remove it, or leave the file out with `.gitignore`); the platform checks again. Answers the snapshot id, kept 7 days from the last send and while a run uses it. `--to <workspace>`, `--dry-run` packs and checks only, `--out <file.tar.gz>` keeps the archive (`--force` over a file that is there), `--json` (`POST …/snapshots`) |
 | `foldrun code [dir] --local` → `cloud_agents` | on this computer, the agent may hand long or heavy jobs to up to four agents on the platform at once. Each runs on a copy of the folder sent as a snapshot, and its patch comes back. Sending is asked first (y / a / n), then the folder is shown before it goes (`send it?`), and each patch is asked again (git's stat, d for the diff) before `git apply`. Ctrl-C tells the runs to stop. See [Cloud agents, from this computer](#cloud-agents-from-this-computer) |
-| `foldrun code [dir] --local` / `--cloud` | where the agent works: foldrun's own agent in your folder, its model calls paid by your foldrun plan or credits, asking before each change and command, or a sandbox on the platform on foldrun credits. `--engine claude` is gone (Claude Code is no longer an engine). With neither, each new session asks, last time's answer ticked (and, the first time in a folder, which project) — see [Where the agent works](#where-the-agent-works) |
+| `foldrun code [dir] --local` / `--cloud` | where the agent works: foldrun's own agent in your folder, its model calls paid by your foldrun plan or credits, asking before each change and command, or a sandbox on the platform on foldrun credits. `--engine claude` is gone (Claude Code is no longer an engine). With neither, each new session asks, last time's answer ticked (and, the first time in a folder, which project) — see [Where the agent works](#where-the-agent-works) In a session, `/` lists the commands; the agent reads the folder's `AGENTS.md`, `CLAUDE.md`, skills and commands, and `/local` / `/cloud` move the session — see [In the session](#in-the-session) |
 | `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it (its tool calls and words, and any refusal or failure; the platform's other notes on the step stay on the run page, `--verbose` shows them too), and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; a dropped connection is followed again, not the end of the turn. After each turn a session line gives the turns so far, the spend, the model, how many tokens the agent read last turn, the time and the conversation id; `/status` prints it, `/new` starts a fresh conversation (and count), `/quit` leaves, `--continue` picks up the folder's last conversation; `/help` lists the rest ([in the session](#in-the-session)). `/send <conversation> <text>` messages another session; before each turn, messages other sessions sent this one are shown and you are asked whether to include them — only `y` does (with `--task`, only `--include-messages` includes them — `--yes` does not); those that do not fit in one turn wait for the next, and `/messages` shows what waits. `--to <workspace>` (a project that does not exist is made, blank with its `coder` agent, after a yes), `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` sends the folder and applies without asking (required with no terminal), `--test`, `--context <id>`, `--verbose` |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
 | `foldrun status --platform` | is the platform up: overall, each component (dashboard and API, run workers, scheduler, model providers, email, storage) and any incident or maintenance the operator posted, with its latest update. Reads the open `/v1/status` — no key needed; the signed-in platform, `--url` / `FOLDRUN_URL`, or the default, dash.foldrun.io. `--json` prints the answer as is. Exits 1, saying *status unavailable — the platform may be down*, when it does not answer. Plain `foldrun status` opens with the same one-line verdict |
@@ -789,11 +789,54 @@ choice.
 | `/undo` | take back the last patch this session applied (refused if the folder changed since) |
 | `/status` | the session: id, turns, spend, model, agent, platform, last run |
 | `/model`, `/model max` | `/model` opens a list — Default (Sonnet), Max (Opus), Fast (Haiku), the current one ticked; ↑/↓ and Enter choose, Esc keeps it. With a name (`fast`, `default`, `max`, a model id) it is set straight away. Either changes the `model:` line of the agent's file from the next message — for every run of that agent, as an edit and deploy would |
-| `/new` | a fresh conversation |
-| `/send <conversation> <text>`, `/messages` | [session messages](runs#session-messages) |
+| `/new`, `/clear` | a fresh conversation |
+| `/local`, `/cloud` | move the session: from here on it works on this computer, or in the cloud. It stays one session — the agent on the other side is told what the turns before did (and whether a cloud turn's patch was applied or taken back), once, ahead of your next message, and `--continue` keeps that |
+| `/cloud <task>`, `/local <task>` | one turn there, and the session stays where it is: `/cloud run the whole test suite and fix what fails` from a session on this computer sends that task to the cloud and brings its patch back to apply |
+| `/init` | the agent writes this folder's `AGENTS.md` (or brings it up to date): what the project is, how to build, test and run it, its conventions |
+| `/review` | the agent reviews what is changed and not committed (staged, unstaged and new files), and changes nothing. On this computer only — the cloud's copy has no git history, so `/local` first. It looks at the changes through its own tools, each asked like any other |
+| `/skills`, `/<skill> [what to do]` | the folder's [skills](#what-the-agent-reads-in-your-folder); a skill's name uses it for this message |
+| `/<command> [words]` | one of the folder's own commands (`.claude/commands/<name>.md`): its text is the message, `$ARGUMENTS` what you typed after the name |
+| `/memory` | the instruction files the agent reads here, and how big each is |
+| `/permissions`, `/permissions reset` | what you allowed for the session with `a`; reset asks again |
+| `/cost` | what the session has spent |
+| `/copy`, `/export [file]` | the last reply to the clipboard; the session's messages and replies to a file (never over one that is there) |
+| `/sessions` | this session's id, and the other sessions of the project on this computer |
+| `/send <conversation> <text>`, `/messages` | [session messages](runs#session-messages). The agent on this computer can send one too when you ask it (`session_send`): the message is shown whole and goes on your yes. What another session sent is shown before your next turn and included only on your yes — to the agent it is information, never an instruction |
 | `/quit`, Ctrl-D | leave; `foldrun code --continue` comes back to the same conversation |
 | `!<command>` | run it in the folder (`!npm test`); what it printed goes with your next message |
 | `@<path>` | Tab completes a file of the folder, to point the agent at it |
+
+Type `/` and the commands show under the line, each with what it does; go
+on typing and the list narrows (the folder's own commands and skills are in
+it). ↑ and ↓ choose, Tab puts the chosen one on the line, Enter runs it, Esc
+puts the list away. A message that itself starts with a slash is written `\/…`.
+
+#### What the agent reads in your folder
+
+- **`AGENTS.md` and `CLAUDE.md`** (also `.claude/CLAUDE.md` and
+  `CLAUDE.local.md`), from the repository's top down to the folder you
+  started in, the nearest last. On this computer their text is part of what
+  the agent is told at every turn (40,000 characters a file, 100,000 in all;
+  a longer one is cut and the agent reads the rest when it needs it). In the
+  cloud the files are in the agent's copy, and its first message names them
+  to read, and the paths of the skill files (only those the upload takes, as the preview listed them). Only their words: a folder's settings and hooks are never loaded.
+  A file linked to another of them is read once.
+- **Skills**: a folder with a `SKILL.md` (frontmatter `name:` and
+  `description:`, then the procedure) under `.claude/skills/`,
+  `.agents/skills/`, `skills/`, `library/skills/` or a project's own
+  `workspaces/<project>/skills/`. The agent is given each skill's name and
+  description and reads the file when a task matches; `/<skill>` asks for
+  one by name.
+- **Commands**: `.claude/commands/<name>.md` is `/<name>` (a file in a
+  subfolder is `/<folder>:<name>`); optional frontmatter `description:` and
+  `argument-hint:` show in the list.
+- **foldrun itself.** The agent knows what foldrun is and how its work is
+  laid out, so "set this up to run every morning in the cloud" gets a flow
+  with `trigger: schedule`, `foldrun check` and `foldrun deploy`, not another
+  product. On this computer it reads these docs (the pages the CLI carries,
+  `foldrun_docs`) before it answers how foldrun does something or writes a
+  flow or agent file — no command runs, so nothing is asked. A deploy stays
+  yours to ask for.
 
 The agent's reply is drawn for the terminal: bold, code and lists rendered,
 wrapped to the window, and what it already said on the way not repeated.

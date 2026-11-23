@@ -604,6 +604,19 @@ includes it in a turn.
   characters together) wait again and the answer names them in `left`. The step reads them after the earlier turns, as
   data from other sessions, never as instructions; its trail says how many
   it was given, and a re-run reads the same ones.
+- **The agent sends too:** in a `foldrun code` session on this computer the
+  agent can message another session when you ask it to (its `session_send`
+  tool) — to say what it changed, or to ask the session that owns another
+  part for something only it can see. The message is shown whole and goes
+  only on your yes, every time; one too long to read (over 4,000
+  characters) is not sent. It does not wait for an answer: a reply arrives
+  like any other message, before a later turn.
+- **On this computer:** a turn that runs on your computer has no run for
+  the platform to bind messages to, so they stay listed as waiting there;
+  the session remembers which ones it has shown you and offers each once
+  (`/messages` still lists them all). `/sessions` shows the session's own id
+  — what another session needs to reach it — and the other sessions of the
+  project on this computer.
 - **Not live:** a message is never put into a running step. To say
   something to a step while it runs, use `foldrun message <run>`
   (`POST …/runs/<id>/message`).

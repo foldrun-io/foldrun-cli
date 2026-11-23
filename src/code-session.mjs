@@ -13,15 +13,43 @@ import { spawnSync } from "node:child_process";
 /** Every slash command, with what it does — /help prints this list. */
 export const CODE_COMMANDS = [
   ["/help", "these commands"],
+  ["/init", "have the agent write (or bring up to date) this folder's AGENTS.md: what it is, how to build, test and run it"],
+  ["/review", "have the agent review what is changed in the folder and not committed — it reports, it changes nothing"],
   ["/diff", "what is changed in the folder now (git diff)"],
   ["/undo", "take back the last patch this session applied"],
   ["/status", "this session: turns, cost, model, conversation"],
+  ["/cost", "what this session has spent"],
   ["/model", "choose the model: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away)"],
-  ["/new", "a fresh conversation — the agent forgets the earlier turns"],
-  ["/send <conversation> <text>", "message another session"],
+  ["/local", "work on this computer from here on — the same session; the agent is told what was done in the cloud"],
+  ["/cloud [task]", "work in the cloud from here on; with a task, send just that one to the cloud and stay where you are"],
+  ["/skills", "the skills this folder holds — /<skill> [what to do] uses one"],
+  ["/memory", "the instruction files the agent reads here (AGENTS.md, CLAUDE.md)"],
+  ["/permissions", "what you allowed for this session — /permissions reset asks again"],
+  ["/copy", "copy the agent's last reply"],
+  ["/export [file]", "write this session's messages and replies to a file"],
+  ["/clear", "a fresh conversation — the agent forgets the earlier turns (/new too)"],
+  ["/sessions", "this session's id, and the other sessions of this project on this computer"],
+  ["/send <conversation> <text>", "message another session — the agent can too, when you ask it"],
   ["/messages", "what other sessions sent this one"],
   ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
 ];
+
+/** Names that work and are not listed on their own line. */
+export const CODE_ALIASES = ["/new", "/exit", "/?"];
+
+/** The prompt /init sends. */
+export const INIT_PROMPT = [
+  "Look through this folder — its files, README, package or build files, tests, and any AGENTS.md or CLAUDE.md already here — and write AGENTS.md at its top (bring it up to date if there is one; keep what is still true).",
+  "It is read by coding agents at the start of every session, so keep it short and exact, under about 60 lines: what the project is in two sentences; the commands to install, build, test, lint and run it, exactly as they are run here; how the code is laid out; the conventions the code already follows that an agent would otherwise get wrong; anything that must not be touched.",
+  "Only what you found in the folder — nothing guessed, no general advice. If a CLAUDE.md exists, do not copy it: say in AGENTS.md what it does not. End by saying what you wrote.",
+].join("\n");
+
+/** The prompt /review sends. */
+export const REVIEW_PROMPT = [
+  "Review what is changed in this folder and not committed: `git status --short`, `git diff HEAD`, and the new files git does not track yet.",
+  "Read enough of the code around each change to judge it. Report what you find, most serious first: bugs and wrong behaviour, then what breaks the folder's own rules (AGENTS.md, CLAUDE.md), then missing tests, then what could be simpler. For each: the file and line, what is wrong, and how you would fix it.",
+  "Change nothing — this is a review. If nothing is changed, say so.",
+].join("\n");
 
 /** Whether a message is a way out of the session: /quit, /exit, or the bare
  *  word exit or quit on its own, as Claude Code takes them (owner, 20 Nov
@@ -33,6 +61,7 @@ export function isLeave(/** @type {string | null} */ line) {
 
 /** The tips under the commands. */
 export const CODE_TIPS = [
+  "/           type it and the commands show under the line: ↑ ↓ choose, Tab completes, Enter runs",
   "!<command>  run it in the folder; its output goes with your next message",
   "@<path>     Tab completes a file of the folder, to point the agent at it",
   "\\ at the end of a line goes on to the next; a paste of many lines is one message",
@@ -41,11 +70,13 @@ export const CODE_TIPS = [
   "typing while a turn runs keeps it for your next message (never sent mid-turn)",
 ];
 
-/** @param {{ steers?: boolean }} [o] steers: Enter sends into a running turn (foldrun's own loop, FOL-213). */
-export function helpText({ steers = false } = {}) {
-  const w = Math.max(...CODE_COMMANDS.map(([c]) => c.length));
+/** @param {{ steers?: boolean, extra?: Array<{ name: string, hint?: string, desc: string }> }} [o] steers: Enter sends into a running turn (foldrun's own loop, FOL-213); extra: the folder's own commands and skills. */
+export function helpText({ steers = false, extra = [] } = {}) {
+  const own = extra.map((x) => [`${x.name}${x.hint ? ` ${x.hint}` : ""}`, x.desc]);
+  const w = Math.min(30, Math.max(...[...CODE_COMMANDS, ...own].map(([c]) => c.length)));
   const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now" : t)) : CODE_TIPS;
-  return [...CODE_COMMANDS.map(([c, d]) => `${c.padEnd(w)}  ${d}`), "", ...tips].join("\n");
+  const rows = (/** @type {string[][]} */ list) => list.map(([c, d]) => `${c.padEnd(w)}  ${d}`);
+  return [...rows(CODE_COMMANDS), ...(own.length ? ["", "this folder's own:", ...rows(own)] : []), "", ...tips].join("\n");
 }
 
 // ------------------------------------------------------------- history
@@ -114,11 +145,12 @@ export function folderFiles(dir) {
  * readline's completer: /commands at the start of the line, @paths
  * anywhere. Returns [candidates, the part being completed].
  * @param {() => string[]} files
+ * @param {() => string[]} [extra] the folder's own commands and skills, as /names
  */
-export function codeCompleter(files) {
+export function codeCompleter(files, extra = () => /** @type {string[]} */ ([])) {
   return (line) => {
     if (/^\/\S*$/.test(line)) {
-      const names = CODE_COMMANDS.map(([c]) => c.split(" ")[0]);
+      const names = [...CODE_COMMANDS.map(([c]) => c.split(" ")[0]), ...extra()];
       const hits = names.filter((n) => n.startsWith(line));
       return [hits.length ? hits : names, line];
     }
@@ -257,7 +289,7 @@ export function rememberSession(file, dir, entry) {
 const VERBS = /** @type {Record<string, string>} */ ({
   Bash: "Run", bash: "Run", Read: "Read", Edit: "Edit", MultiEdit: "Edit", Write: "Write", NotebookEdit: "Edit",
   Grep: "Search", Glob: "Find", LS: "List", WebFetch: "Fetch", WebSearch: "Search the web", web: "Web",
-  Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you", cloud_agents: "Cloud agents",
+  Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you", cloud_agents: "Cloud agents", foldrun_docs: "Read foldrun docs", session_send: "Message a session",
 });
 
 /** A tool's name as a verb a person reads; unknown ones as they are. */
@@ -675,7 +707,7 @@ export function localModelOf(/** @type {string | null} */ v) {
 }
 
 /** What the agent is told when it works in the person's own folder. */
-export function localPrompt(/** @type {string} */ dir) {
+export function localPrompt(/** @type {string} */ dir, /** @type {string} */ about = "") {
   return [
     "You are foldrun code, a coding agent working directly in the person's own folder on their computer:",
     dir,
@@ -685,6 +717,7 @@ export function localPrompt(/** @type {string} */ dir) {
     "Never read or print secrets (.env files, keys, tokens), and do not run commands that delete outside the folder, push, deploy or publish unless the person asked for exactly that.",
     "For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can hand it to agents in the cloud with the cloud_agents tool: each works on a copy of this folder, and its changes come back for the person to accept. Give each a complete task; it does not see this conversation.",
     "When you finish, say in a few plain sentences what you changed and how they can see it. Name files by their path inside the folder.",
+    ...(about ? ["", about] : []),
   ].join("\n");
 }
 
@@ -703,6 +736,8 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "WebSearch") return String(input.query ?? "");
   if (name === "Task" || name === "Agent") return String(input.description ?? "");
   if (name === "NotebookEdit") return rel(input.notebook_path);
+  if (name === "foldrun_docs") return `${String(input.page ?? "the list of pages")}${input.find ? ` · ${String(input.find)}` : ""}`;
+  if (name === "session_send") return String(input.to ?? "");
   if (name === "cloud_agents") {
     const n = Array.isArray(input.tasks) ? input.tasks.length : 0;
     return `${n} task${n === 1 ? "" : "s"} in the cloud`;
