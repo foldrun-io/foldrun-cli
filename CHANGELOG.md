@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [29.1.0] — 2026-11-23
+
+- feat(billing): the subscription view, billing extra-usage, and what to do about each refusal code (FOL-235) ([6dfce58](https://github.com/foldrun-io/foldrun-cli/commit/6dfce58))
+
 ## [29.0.1] — 2026-11-23
 
 ### docs
