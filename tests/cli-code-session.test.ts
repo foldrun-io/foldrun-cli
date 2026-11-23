@@ -1769,3 +1769,102 @@ test("--local: `foldrun use` in another terminal mid-session does not move this 
     s.close();
   }
 });
+
+test("/rewind takes back what the agent's Write and Edit did, never what a command did; /goal --check takes the person's command's word, not the agent's", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    // turn 1: read, edit a.txt, create b.txt
+    () => sse([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: path.join(d, "a.txt") } }]),
+    () => sse([{ type: "tool_use", id: "e1", name: "Write", input: { file_path: path.join(d, "a.txt"), content: "changed\n" } }, { type: "tool_use", id: "w1", name: "Write", input: { file_path: path.join(d, "b.txt"), content: "bee\n" } }]),
+    () => sse([{ type: "text", text: "Changed a.txt and made b.txt." }]),
+    // after the rewind
+    () => sse([{ type: "text", text: "Understood." }]),
+    // the goal: says met with nothing done; then makes the file; then says met
+    () => sse([{ type: "text", text: "Looks fine.\nGOAL MET" }]),
+    () => sse([{ type: "tool_use", id: "w2", name: "Write", input: { file_path: path.join(d, "done.txt"), content: "ok\n" } }]),
+    () => sse([{ type: "text", text: "Made done.txt.\nGOAL MET" }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-rw/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const before = fs.readFileSync(path.join(d, "a.txt"), "utf8");
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-rw", "--url", s.url, "--token", "k"], home, { TERM: "dumb" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/rewind\r");
+    at = await t.until(/nothing to take back/, at);
+    t.send("change things\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Write a\.txt[\s\S]*allow\?/, at);
+    t.send("y\r");
+    at = await t.until(/a new file[\s\S]*allow\?/, at);
+    t.send("y\r");
+    at = await t.until(/✓ done/, at);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "changed\n");
+    t.send("/rewind\r");
+    at = await t.until(/ 1  change things · a\.txt changed, b\.txt created/, at);
+    at = await t.until(/\w ❯ /, at);
+    // Something else changes a file the agent wrote: every file or none.
+    fs.writeFileSync(path.join(d, "b.txt"), "mine now\n");
+    t.send("/rewind 1\r");
+    at = await t.until(/✗ b\.txt — it was changed since the agent last wrote it/, at);
+    at = await t.until(/nothing was changed/, at);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "changed\n", "a.txt was not put back alone");
+    fs.writeFileSync(path.join(d, "b.txt"), "bee\n");
+    t.send("/rewind 1\r");
+    at = await t.until(/a\.txt — put back as it was before[\s\S]*b\.txt — removed \(the agent created it\)[\s\S]*\[y\/N\]/, at);
+    t.send("\r");
+    at = await t.until(/nothing changed/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/rewind 1\r");
+    at = await t.until(/\[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/taken back: 2 files/, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), before);
+    assert.equal(fs.existsSync(path.join(d, "b.txt")), false);
+    at = await t.until(/\w ❯ /, at);
+    t.send("ok?\r");
+    at = await t.until(/Understood\./, at);
+    at = await t.until(/\w ❯ /, at);
+    assert.match(JSON.stringify(asked[3].messages.at(-1)), /took back the agent's file changes[^"]*a\.txt, b\.txt/, "the agent is told what was put back");
+    // A goal with the person's own check.
+    t.send("/goal --check test -f done.txt make it\r");
+    at = await t.until(/the form is \/goal --check "<command>"/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send('/goal --check "test -f done.txt" done.txt exists\r');
+    at = await t.until(/\$ test -f done\.txt[\s\S]*only when it exits 0\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/goal set/, at);
+    at = await t.until(/the agent says the goal is met — running your check: test -f done\.txt/, at);
+    at = await t.until(/the check failed \(exit 1\) — going on \(2 of 8\)/, at);
+    at = await t.until(/Write done\.txt[\s\S]*allow\?/, at);
+    t.send("y\r");
+    at = await t.until(/check passed \(exit 0\): test -f done\.txt/, at);
+    at = await t.until(/files the agent used Write or Edit on since the goal was set: done\.txt/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.match(JSON.stringify(asked[5].messages.at(-1)), /the person's check `test -f done\.txt` exited 1/);
+});

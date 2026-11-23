@@ -18,6 +18,7 @@ import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
@@ -14138,6 +14139,91 @@ export function usageBlock(/** @type {any} */ u) {
 /** What the agent is told about commands that run without a question. */
 const LOOKS_NOTE = `Commands that only look run at once, without the person being asked: ${READ_ONLY_SAID}. Only as one plain command per call — no ";", "&&", pipe, redirect, quote or variable, and paths inside this folder. To look around, send these one at a time (several calls in one reply is fine) rather than chained: a chained command is asked like any other.`;
 
+/** The /rewind journal of the session's conversation, opened once per conversation. */
+function rewindOf(/** @type {any} */ s) {
+  if (!s.rewind || s.rewindKey !== s.context) {
+    // The same conversation only: its sign-in, platform, project and agent
+    // are part of which journal this is, as for the kept conversation (Codex).
+    s.rewind = openJournal(s.dir, JSON.stringify([s.owner ?? "", s.url, s.ws, s.agent, s.context]));
+    s.rewindKey = s.context;
+  }
+  return s.rewind;
+}
+
+/** A goal's check may run this long. */
+const CHECK_MS = 10 * 60 * 1000;
+
+/**
+ * Runs a goal's check: the person's own command, in the folder, with the
+ * person's environment less the model's and the platform's keys. The end of
+ * what it printed is kept for the agent's next turn.
+ * @returns {Promise<{ kind: "passed" | "failed" | "timeout" | "stopped" | "error", code?: number, tail: string }>}
+ */
+function runGoalCheck(/** @type {string} */ command, /** @type {string} */ dir) {
+  return new Promise((resolve) => {
+    /** @type {Record<string, string | undefined>} */
+    const own = { ...process.env };
+    // Every key the CLI itself reads: the model's, the gateway's, the platform's.
+    for (const k of Object.keys(own)) if (/^(ANTHROPIC_|CLAUDE_CODE_)/.test(k) || /^FOLDRUN_.*(KEY|TOKEN|SECRET)/.test(k)) delete own[k];
+    delete own.BASH_ENV;
+    delete own.ENV;
+    let out = "";
+    const keep = (/** @type {Buffer} */ b) => {
+      out = (out + b.toString("utf8")).slice(-4000);
+    };
+    let child;
+    try {
+      child = spawn("bash", ["-c", command], { cwd: dir, env: own, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    } catch (err) {
+      resolve({ kind: "error", tail: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    let late = false;
+    let stopped = false;
+    const end = () => {
+      try {
+        process.kill(-(/** @type {number} */ (child.pid)), "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+    const timer = setTimeout(() => {
+      late = true;
+      end();
+    }, CHECK_MS);
+    // Ctrl-C stops the check, and the CLI leaving never leaves it running:
+    // it is in a group of its own, which the terminal's Ctrl-C does not reach.
+    const onInt = () => {
+      stopped = true;
+      end();
+    };
+    process.on("SIGINT", onInt);
+    process.on("exit", end);
+    const done = () => {
+      clearTimeout(timer);
+      process.off("SIGINT", onInt);
+      process.off("exit", end);
+    };
+    child.stdout.on("data", keep);
+    child.stderr.on("data", keep);
+    child.on("error", (err) => {
+      done();
+      resolve({ kind: "error", tail: err.message });
+    });
+    child.on("close", (code) => {
+      done();
+      resolve(stopped ? { kind: "stopped", tail: out } : late ? { kind: "timeout", tail: out } : code === 0 ? { kind: "passed", code: 0, tail: out } : { kind: "failed", code: code ?? -1, tail: out });
+    });
+  });
+}
+
+/** `--check "<command>" <goal>` → the two parts, or null when it is not that form. */
+export function goalWithCheck(/** @type {string} */ rest) {
+  const m = /^--check\s+(?:"([^"]+)"|'([^']+)')\s+(\S[\s\S]*)$/.exec(rest);
+  if (!m) return null;
+  return { check: /** @type {string} */ (m[1] ?? m[2]).trim(), goal: /** @type {string} */ (m[3]).trim() };
+}
+
 /** Earlier conversations of a folder that /resume can go back to. */
 const PAST_KEPT = 10;
 
@@ -16129,6 +16215,10 @@ async function codeLocalTurn(s, text) {
         }
       }
     };
+    // This conversation's /rewind journal; a turn's number is one past the last recorded.
+    const rewindJournal = rewindOf(s);
+    let rewindTurn = 0;
+    const rewindLabel = plainText(typeof s.turnTyped === "string" ? s.turnTyped : text).replace(/\s+/g, " ").trim().slice(0, 80) || "(a message)";
     /** @type {(name: string, input: Record<string, any>, opts?: { signal?: AbortSignal }) => Promise<{ behavior: "allow", updatedInput: Record<string, unknown> } | { behavior: "deny", message: string, interrupt?: boolean }>} */
     const canUseTool = (name, input, opts) => {
       // The foldrun engine asks about every call: what only looks inside
@@ -16158,7 +16248,19 @@ async function codeLocalTurn(s, text) {
         if (ok) return Promise.resolve({ behavior: /** @type {const} */ ("allow"), updatedInput: input });
       }
       // One question at a time, in the order they came (Codex).
-      const next = gate.then(() => decide(name, input, opts?.signal));
+      const next = gate.then(() => decide(name, input, opts?.signal)).then((r) => {
+        // An allowed Write or Edit: the file as it is now is kept first
+        // (/rewind). The engine decides each call just before it runs.
+        if (r.behavior === "allow" && FILE_CHANGES.has(name) && typeof (/** @type {any} */ (opts))?.toolUseID === "string") {
+          const now = r.updatedInput ?? input;
+          rewindCapture(rewindJournal, { turn: rewindTurn, label: rewindLabel, id: /** @type {any} */ (opts).toolUseID, tool: name, file: now.file_path, input: now });
+          if (rewindJournal.off && !s.rewindOffSaid) {
+            s.rewindOffSaid = true;
+            console.log(`    ${c.amber("!")} ${c.dim(`this change cannot be taken back with /rewind: ${plainText(String(rewindJournal.off))}`)}`);
+          }
+        }
+        return r;
+      });
       gate = next.then(() => undefined, () => undefined);
       return next;
     };
@@ -16219,6 +16321,7 @@ async function codeLocalTurn(s, text) {
     const history = (s.localHistory ??= readEngineConversation(s));
     /** @type {Array<{ role: string, content: Array<Record<string, unknown>> }>} */
     const turn = [{ role: "user", content: [{ type: "text", text }] }];
+    rewindTurn = rewindNextTurn(rewindJournal);
     historyAtStart = history;
     turnSoFar = turn;
     /** @type {Record<string, string | undefined>} */
@@ -16249,6 +16352,24 @@ async function codeLocalTurn(s, text) {
               // (the engine asks before any tool not allowed ahead), the text shown.
               { name: SESSION_SEND_TOOL, description: SESSION_SEND_DESCRIPTION, input_schema: SESSION_SEND_SCHEMA, run: async (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => sessionSendCall(s, input, ctx.signal) },
             ],
+            // Right after each tool ran and before the next call: what the
+            // Write or Edit left on disk settles its /rewind record.
+            hooks: {
+              PostToolUse: [
+                {
+                  hooks: [
+                    async (/** @type {any} */ payload, /** @type {string} */ id) => {
+                      // Only a call a copy was kept for: a read never touches the journal.
+                      if (FILE_CHANGES.has(String(payload?.tool_name))) rewindSettle(rewindJournal, id);
+                      // For a goal's check: every file Write or Edit was used on, taken back or not.
+                      const used = payload?.tool_input?.file_path;
+                      if (typeof s.goal === "string" && FILE_CHANGES.has(String(payload?.tool_name)) && typeof used === "string") (s.goalFiles ??= new Set()).add(path.relative(s.dir, path.resolve(s.dir, used)) || used);
+                      return {};
+                    },
+                  ],
+                },
+              ],
+            },
             engineHostShell: true,
             sandbox: { enabled: false },
             maxTurns: 80,
@@ -16633,6 +16754,7 @@ async function codeCmd(positional, flags, layout) {
       const before = s.turns ?? 0;
       delete s.turnOk;
       delete s.patchHandled;
+      s.turnTyped = typed;
       const patches = s.applied?.length ?? 0;
       delete s.turnReply;
       s.turnSteer = [];
@@ -16691,7 +16813,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     // Nothing of the old conversation stays in the count (Codex).
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "lastRun"]) delete s[k];
+    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };
@@ -16717,6 +16839,40 @@ async function codeCmd(positional, flags, layout) {
     while (typeof s.goal === "string") {
       if (s.turnOk !== true) return;
       const verdict = goalVerdict(typeof s.turnReply === "string" ? s.turnReply : "");
+      if (verdict === "met" && typeof s.goalCheck === "string") {
+        // The person's check decides, not the agent's word.
+        if (s.mode !== "local") {
+          say("the goal's check runs on this computer — /local, then say \"go on\"");
+          return;
+        }
+        console.log(`  ${c.dim(`↻ the agent says the goal is met — running your check: ${plainText(s.goalCheck)}`)}`);
+        const r = await runGoalCheck(s.goalCheck, dir);
+        if (r.kind === "passed") {
+          const edited = [...(s.goalFiles ?? [])].sort();
+          console.log(`  ${c.green("✓")} ${c.white("check passed")} ${c.dim(`(exit 0): ${plainText(s.goalCheck)}`)}`);
+          console.log(`  ${c.dim(`files the agent used Write or Edit on since the goal was set: ${edited.length ? edited.map((f) => plainText(f)).join(", ") : "none"}`)}`);
+          say("the agent can change the tests a check runs, and commands and cloud patches are not in that list — look at the changes (/diff). The goal is dropped");
+          delete s.goal;
+          delete s.goalCheck;
+          delete s.goalFiles;
+          s.notes.push("[The session's goal is met and no longer set: do not end replies with a GOAL line any more.]");
+          remember();
+          return;
+        }
+        if (r.kind !== "failed") {
+          say(`${r.kind === "stopped" ? "the check was stopped" : r.kind === "timeout" ? "the check did not finish in 10 minutes and was stopped" : `the check could not be run: ${plainText(r.tail).slice(0, 200)}`} — the goal stays; say "go on", or /goal clear`);
+          return;
+        }
+        if (sent >= GOAL_ROUNDS - 1) {
+          say(`the check still fails (exit ${r.code}) after ${GOAL_ROUNDS} turns in a row — say "go on" to continue, or /goal clear`);
+          return;
+        }
+        sent++;
+        checking = false;
+        console.log(`  ${c.dim(`↻ the check failed (exit ${r.code}) — going on (${sent + 1} of ${GOAL_ROUNDS}) · Ctrl-C stops`)}`);
+        await runTurn(s.mode, `The goal is not met: the person's check \`${s.goalCheck}\` exited ${r.code}. The end of what it printed:\n\n${plainText(r.tail)}\n\nGo on toward the goal.`, "(the goal's check failed; went on)");
+        continue;
+      }
       if (verdict === "met" && checking) {
         console.log(`  ${c.green("✓")} ${c.dim(`goal met, and checked a second time: ${plainText(s.goal)} — the agent judged its own work, so look at the result; the goal is dropped`)}\n`);
         delete s.goal;
@@ -16842,11 +16998,30 @@ async function codeCmd(positional, flags, layout) {
       else if (/^(clear|off|none|stop)$/i.test(rest)) {
         if (typeof s.goal === "string") s.notes.push("[The person dropped the session's goal: do not end replies with a GOAL line any more.]");
         delete s.goal;
+        delete s.goalCheck;
+        delete s.goalFiles;
         remember();
         say("no goal any more");
       } else if (rest.length > GOAL_CHARS || hasControl(rest) || /[\n\r\t]/.test(rest)) say(`a goal is one plain line, ${GOAL_CHARS} characters at most`);
+      else if (rest.startsWith("--check") && !goalWithCheck(rest)) say('the form is /goal --check "<command>" <what must be true> — the command in quotes, then the goal');
+      else if (goalWithCheck(rest) && s.mode !== "local") say("a goal's check is a command run on this computer — /local, then set it");
       else {
-        s.goal = rest;
+        const withCheck = goalWithCheck(rest);
+        if (withCheck) {
+          // The person's command, shown whole and agreed to once for this goal:
+          // it is run again each time the agent says the goal is met.
+          console.log(`      ${c.white(`$ ${plainText(withCheck.check)}`)}`);
+          const yes = /^y(es)?$/i.test((await promptVisible(`    run this in ${plainText(homeTilde(dir))} each time the agent says the goal is met, and take the goal as met only when it exits 0? [y/N] `)).trim());
+          if (!yes) {
+            say(typeof s.goal === "string" ? "not changed — the goal you had stays as it was" : "no goal set");
+            continue;
+          }
+        }
+        // Together, and only now: a goal never keeps another goal's check or loses its own (Codex).
+        if (withCheck) s.goalCheck = withCheck.check;
+        else delete s.goalCheck;
+        s.goalFiles = new Set();
+        s.goal = withCheck ? withCheck.goal : rest;
         remember();
         console.log(`  ${c.green("✓")} ${c.dim(`goal set — the agent works toward it and goes on by itself, up to ${GOAL_ROUNDS} turns in a row, until it says the goal is met; Ctrl-C stops it${s.mode === "local" ? `, and it asks before each change and command${s.localAllow?.kinds?.size || s.localAllow?.commands?.size ? " — except what you already allowed with \"always\" (/permissions)" : ""}` : ", and each turn's patch is yours to apply"}`)}\n`);
         await towardGoal("Start on the goal.", line);
@@ -16975,13 +17150,48 @@ async function codeCmd(positional, flags, layout) {
       delete s.lastReply;
       delete s.cloudBriefed;
       if (to.briefed === true) s.cloudBriefed = s.context;
-      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "lastRun"]) delete s[k];
+      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun"]) delete s[k];
       s.notes = [];
       s.transcript = [];
       s.told = { local: 0, cloud: 0 };
       s.here = { local: 0, cloud: 0 };
       remember();
       console.log(`  ${c.green("✓")} ${c.dim(`back in: ${plainText(to.said)} — the agent ${s.mode === "local" ? "on this computer" : "in the cloud"} reads that conversation again from your next message; what the other side did in it is not retold`)}\n`);
+      continue;
+    }
+    if (name === "/rewind") {
+      const j = rewindOf(s);
+      const turns = rewindTurns(j);
+      if (!turns.length) {
+        say("nothing to take back — /rewind covers what the agent's Write and Edit changed on this computer in this conversation; a command's changes are not covered, and a cloud patch is /undo");
+        continue;
+      }
+      const n = Number(rest);
+      if (!rest || !Number.isInteger(n) || !turns.some((t) => t.turn === n)) {
+        for (const t of turns) console.log(`  ${c.cyan(String(t.turn).padStart(2))}  ${c.white(plainText(t.label))} ${c.dim(`· ${t.files.map((f) => `${plainText(f.path)} ${f.op}`).join(", ")}`)}`);
+        say("/rewind <number> takes back that turn and every turn after it — the files only; the conversation stays. Not covered: what commands changed, cloud patches (/undo)");
+        continue;
+      }
+      const p = rewindPlan(j, n);
+      if (p.conflicts.length) {
+        for (const x of p.conflicts) console.log(`  ${c.red("✗")} ${c.white(plainText(x.path))} ${c.dim(`— ${plainText(x.why)}`)}`);
+        say("nothing was changed: a rewind puts back every file of those turns or none, and never writes over a change it did not record. Take these back by hand (git), or choose a later turn");
+        continue;
+      }
+      for (const ch of p.changes) console.log(`  ${c.white(plainText(ch.path))} ${c.dim(ch.done ? "— already back" : ch.op === "remove" ? "— removed (the agent created it)" : "— put back as it was before")}`);
+      const yes = /^y(es)?$/i.test((await promptVisible(`  take back turn ${n}${turns.some((t) => t.turn > n) ? " and the turns after it" : ""}: ${p.changes.length} file${p.changes.length === 1 ? "" : "s"}? what commands changed stays as it is [y/N] `)).trim());
+      if (!yes) {
+        say("nothing changed");
+        continue;
+      }
+      try {
+        const put = rewindApply(j, p);
+        s.notes.push(`[The person took back the agent's file changes from an earlier turn onward with /rewind. These files are again as they were before those turns: ${p.changes.map((ch) => ch.path).join(", ")}. Read a file again before changing it.]`);
+        console.log(`  ${c.green("✓")} ${c.dim(`taken back: ${put.length} file${put.length === 1 ? "" : "s"} — the agent is told on your next message`)}\n`);
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      }
+      prompt.files = folderFiles(dir);
       continue;
     }
     if (name === "/doctor") {

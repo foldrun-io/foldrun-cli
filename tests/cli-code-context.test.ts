@@ -201,7 +201,7 @@ test("suggestions: what starts with the typed part first, then what holds it; no
   assert.deepEqual(slashMatches("hello", all), []);
   assert.deepEqual(slashMatches("/zzz", all), []);
   const names = CODE_COMMANDS.map(([n]) => String(n).split(" ")[0]);
-  for (const n of ["/resume", "/doctor", "/usage", "/context", "/compact", "/plan", "/goal", "/init", "/review", "/cost", "/local", "/cloud", "/skills", "/memory", "/permissions", "/copy", "/export", "/clear", "/sessions"]) assert.ok(names.includes(n), n);
+  for (const n of ["/rewind", "/resume", "/doctor", "/usage", "/context", "/compact", "/plan", "/goal", "/init", "/review", "/cost", "/local", "/cloud", "/skills", "/memory", "/permissions", "/copy", "/export", "/clear", "/sessions"]) assert.ok(names.includes(n), n);
   assert.equal(new Set(names).size, names.length, "no command listed twice");
   const help = helpText({ extra: [{ name: "/fix-tests", hint: "[which]", desc: "Run the tests" }] });
   assert.match(help, /this folder's own:\n\/fix-tests \[which\]\s+Run the tests/);
