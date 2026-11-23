@@ -11,7 +11,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@foldrun/core": "^25.1.0"
+    "@foldrun/core": "^26.0.0"
   },
   "files": [
     "bin",
