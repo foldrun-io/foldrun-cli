@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.1.0] — 2026-11-23
+
+- feat(code): the agent knows the folder and foldrun; / shows the commands; one session moves between this computer and the cloud; sessions message each other ([e21d298](https://github.com/foldrun-io/foldrun-cli/commit/e21d298))
+
 ## [30.0.0] — 2026-11-23
 
 ### Breaking changes
