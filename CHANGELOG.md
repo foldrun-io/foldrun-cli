@@ -12,6 +12,19 @@ edited by a person.
 
 <!-- releases -->
 
+## [27.10.0] — 2026-11-23
+
+- feat(cli): call the platform under /v1 where the API address serves it ([f62ab02](https://github.com/foldrun-io/foldrun-cli/commit/f62ab02))
+- fix(code): a kept model key goes to the platform's models address now, not the one it was made at ([e1ab0ad](https://github.com/foldrun-io/foldrun-cli/commit/e1ab0ad))
+
+### deps
+
+- @foldrun/core ^24.13.0 ([fa1c372](https://github.com/foldrun-io/foldrun-cli/commit/fa1c372))
+
+### docs
+
+- account model key may be a Claude subscription token ([fee7794](https://github.com/foldrun-io/foldrun-cli/commit/fee7794))
+
 ## [27.9.0] — 2026-11-22
 
 - feat(account): account model says when own model keys are off on the platform, and offers no own key ([d039869](https://github.com/foldrun-io/foldrun-cli/commit/d039869))
