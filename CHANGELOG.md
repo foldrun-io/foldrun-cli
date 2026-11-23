@@ -12,6 +12,19 @@ edited by a person.
 
 <!-- releases -->
 
+## [28.1.0] — 2026-11-23
+
+### New in the public API
+
+- `foldrun billing pay-as-you-go on`
+- the `--no-limit` flag
+
+- feat(billing): foldrun billing plan pro|max and pay-as-you-go ([24b4836](https://github.com/foldrun-io/foldrun-cli/commit/24b4836))
+
+### deps
+
+- @foldrun/core ^25.0.1 ([0bfca92](https://github.com/foldrun-io/foldrun-cli/commit/0bfca92))
+
 ## [28.0.0] — 2026-11-23
 
 ### Breaking changes
