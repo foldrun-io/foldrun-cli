@@ -101,7 +101,10 @@ test("billing names the subscription the account works under (23 Nov 2026): the 
   });
   const a = await at(pro.url, "billing");
   pro.close();
-  assert.match(a.out, /foldrun Pro\s+renews 2026-12-20 · used month 12% · week 40% · pay as you go on/);
+  assert.match(a.out, /foldrun Pro\s+renews 2026-12-20/);
+  assert.match(a.out, /this month 12% of the allowance used/);
+  assert.match(a.out, /this week 40% of the allowance used/);
+  assert.match(a.out, /extra usage on/);
   const legacy = await serve({
     "/v1/billing": () => ({ enabled: true, balanceUsd: 10, entries: [] }),
     "/v1/billing/coding-plan": () => sub({ plan: null, allowance: null, extraUsage: null, entitlement: { kind: "active", source: "legacy", plan: "scale", paidThrough: "2026-12-01T00:00:00Z" } }),
@@ -122,4 +125,56 @@ test("billing names the subscription the account works under (23 Nov 2026): the 
   off.close();
   assert.equal(o.code, 0, o.out);
   assert.doesNotMatch(o.out, /subscription|foldrun Pro/);
+});
+
+const plan = { plan: "pro", status: "active", periodStart: "2026-11-01T00:00:00Z", periodEnd: "2026-12-01T00:00:00Z", priceUsd: 20, renew: true };
+
+test("billing shows the plan, allowance, reset, extra usage, cap, spend and balance (FOL-235)", async () => {
+  const s = await serve({
+    "/v1/billing": () => ({ enabled: true, balanceUsd: 12.5, entries: [] }),
+    "/v1/billing/coding-plan": () => ({
+      plan,
+      entitlement: { kind: "active", plan: "pro", source: "subscription", paidThrough: "2026-12-01T00:00:00Z", renews: true },
+      allowance: { windows: [{ name: "week", usedPct: 40, resetsAt: "2026-11-27T00:00:00Z" }] },
+      extraUsage: { on: true, capUsd: 30, spentUsd: 4.25, heldUsd: 0 },
+    }),
+  });
+  const r = await at(s.url, "billing");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /balance \$12\.50/);
+  assert.match(r.out, /foldrun Pro\s+renews 2026-12-01/);
+  assert.match(r.out, /this week 40% of the allowance used.*resets 2026-11-27/);
+  assert.match(r.out, /extra usage on · cap \$30\.00 a period · \$4\.25 spent/);
+});
+
+test("billing extra-usage on --limit sends the switch and the cap", async () => {
+  const s = await serve({
+    "GET /v1/billing/coding-plan": () => ({ plan, entitlement: { kind: "active", plan: "pro", source: "subscription", renews: true }, extraUsage: { on: false, capUsd: null } }),
+    "PATCH /v1/billing/coding-plan": () => ({ plan: { ...plan, extraUsage: true, extraUsageCapUsd: 30 }, extraUsage: { on: true, capUsd: 30, spentUsd: 0, heldUsd: 0 } }),
+  });
+  const r = await at(s.url, "billing", "extra-usage", "on", "--limit", "30", "--yes");
+  const seen = s.seen.find((x) => x.method === "PATCH");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(seen!.body), { extraUsage: true, extraUsageCapUsd: 30 });
+  assert.match(r.out, /on, up to \$30\.00 a period/);
+});
+
+test("each billing refusal code says what to do next (FOL-235)", async () => {
+  const cases: Record<string, RegExp> = {
+    subscription_required: /foldrun billing plan pro/,
+    allowance_used: /foldrun billing extra-usage on --limit/,
+    extra_usage_cap: /--no-limit/,
+    extra_usage_unfunded: /foldrun billing top-up/,
+    model_not_in_plan: /extra-usage on/,
+    billing_unreadable: /nothing was charged/,
+  };
+  for (const [code, want] of Object.entries(cases)) {
+    const s = await serve({ "/v1/billing": () => failing(code === "billing_unreadable" ? 503 : 402, { error: `refused: ${code}`, code }) });
+    const r = await at(s.url, "billing");
+    s.close();
+    assert.notEqual(r.code, 0);
+    assert.match(r.out, want, code);
+  }
 });

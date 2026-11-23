@@ -209,6 +209,40 @@ The operator watches it on the metrics scrape:
 `foldrun_queue_account_oldest_pending_seconds`, each for the five busiest
 accounts by rank (`rank="1"` … `"5"`) and never by name.
 
+## The foldrun subscription
+
+Every hosted account works under one subscription, **Pro** or **Max**, paid from
+the balance for thirty days at a time and renewed from it (Billing → Plans,
+`foldrun billing plan pro|max`). Without one, new work is refused before
+anything is held or charged; the balance, the billing pages, buying a plan and
+the history keep working. Starter, Pro (the old one) and Scale are no longer
+sold; an account that has paid for one is honoured until its paid-through date.
+The platform's own accounts, accounts the operator fully waives and
+self-hosted installs are not charged.
+
+The plan has an **allowance**, shown as a share used for this month and this
+week with the time each resets. Work goes on the allowance first. Past it, or
+on a model the plan does not cover, work waits for the reset — unless the
+account turned **extra usage** on (`foldrun billing extra-usage on`). Then it
+is paid from the balance at the listed price, up to an optional **limit** for
+the plan period (`--limit <usd>`; `--no-limit` removes it). Extra usage is off
+by default. Calls and runs check what is spent and held against the limit
+together, so work started at once cannot pass it between them.
+
+When work is refused, the answer carries a code:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `subscription_required` | no plan | `foldrun billing plan pro` or `max` |
+| `allowance_used` | the plan's share is used, extra usage is off | wait for the reset, or turn extra usage on |
+| `extra_usage_cap` | this period's limit is reached | raise the limit, or wait for the period to renew |
+| `extra_usage_unfunded` | extra usage is on but the balance cannot cover it | top up |
+| `model_not_in_plan` | the model is outside the plan, extra usage is off | pick a covered model, or turn extra usage on |
+| `billing_unreadable` | billing could not be read; nothing was charged | try again |
+
+A scheduled run whose plan ended before it was dispatched is marked failed
+(`not started: …`), its hold released and nothing charged.
+
 ## Plans and credits
 
 Usage is sold in **credits: one credit is one cent** of what a step consumes

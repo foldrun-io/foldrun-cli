@@ -2825,10 +2825,30 @@ async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
     // reader hunting for an outage that never happened.
     // The account's waiting limit (FOL-100): the sentence says why; where
     // to see the figures is the CLI's to add.
-    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : res.status === 429 ? rateLimitHint(res, body) : body?.code === "waiting_cap" ? " — `foldrun usage compute` shows the runs waiting and the limit" : "";
+    const hint = res.status === 401 || res.status === 403 ? refusedHint(url, flags) : res.status === 429 ? rateLimitHint(res, body) : body?.code === "waiting_cap" ? " — `foldrun usage compute` shows the runs waiting and the limit" : billingRefusalHint(body);
     throw new HttpError(`${body.error ?? `${apiPath} → HTTP ${res.status}`}${hint}`, res.status, body);
   }
   return body;
+}
+
+/**
+ * What to do about a billing refusal (23 Nov 2026): the platform's sentence
+ * says why, its `code` says which; the command that fixes it is the CLI's
+ * to add. The code is at `code` (the plain shape) or `error.code` (Anthropic's).
+ * @param {any} body
+ */
+export function billingRefusalHint(body) {
+  const code = typeof body?.code === "string" ? body.code : typeof body?.error?.code === "string" ? body.error.code : "";
+  const hints = {
+    subscription_required: "start one: `foldrun billing plan pro` (or `plan max`); your balance and billing pages still work",
+    allowance_used: "wait for the reset (`foldrun billing plans` shows when), or `foldrun billing extra-usage on --limit <usd>` to carry on from your balance",
+    extra_usage_cap: "raise it with `foldrun billing extra-usage on --limit <usd>` (or `--no-limit`), or wait for the period to renew",
+    extra_usage_unfunded: "add credit with `foldrun billing top-up <usd>`; extra usage is paid from your balance",
+    model_not_in_plan: "choose a model the plan covers, or `foldrun billing extra-usage on --limit <usd>` to pay for this one from your balance",
+    billing_unreadable: "billing could not be read just now and nothing was charged — try again in a moment",
+  };
+  const h = /** @type {Record<string, string>} */ (hints)[code];
+  return h ? ` — ${h}` : "";
 }
 
 /**
@@ -8150,6 +8170,7 @@ async function billingCmd(flags) {
   const body = await remoteCall(url, flags, "/v1/billing");
   const balance = Number(body.balanceUsd ?? 0);
   const entries = body.entries ?? [];
+  const usd = (/** @type {unknown} */ n) => `$${Number(n ?? 0).toFixed(2)}`;
 
   console.log(`\n  ${balance > 0 ? c.green("✓") : c.red("✗")} balance ${c.bold(`$${balance.toFixed(2)}`)}  ${c.dim(body.enabled ? "billing on" : "billing off — nothing is charged on this install")}`);
   // The subscription the account works under (23 Nov 2026), where the
@@ -8160,8 +8181,13 @@ async function billingCmd(flags) {
     const p = sub?.plan && sub.plan.status === "active" ? sub.plan : null;
     const e = sub?.entitlement;
     if (p) {
-      const used = (sub.allowance?.windows ?? []).filter((/** @type {any} */ w) => w.usedPct != null).map((/** @type {any} */ w) => `${w.name} ${w.usedPct}%`).join(" · ");
-      console.log(`  ${c.green("●")} foldrun ${p.plan === "max" ? "Max" : "Pro"}  ${c.dim(`${p.renew ? "renews" : "ends"} ${String(p.periodEnd).slice(0, 10)}${used ? ` · used ${used}` : ""} · pay as you go ${sub.extraUsage?.on ? "on" : "off"}`)}`);
+      console.log(`  ${c.green("●")} foldrun ${p.plan === "max" ? "Max" : "Pro"}  ${c.dim(`${p.renew ? "renews" : "ends"} ${String(p.periodEnd).slice(0, 10)}`)}`);
+      for (const w of (sub.allowance?.windows ?? []).filter((/** @type {any} */ w) => w.usedPct != null)) {
+        console.log(`    ${w.name === "month" ? "this month" : "this week"} ${w.usedPct}% of the allowance used ${c.dim(`· resets ${String(w.resetsAt).slice(0, 10)}`)}`);
+      }
+      const x = sub.extraUsage;
+      const spent = x && typeof x.spentUsd === "number" ? ` · ${usd(x.spentUsd)} spent` : "";
+      console.log(`    extra usage ${x?.on ? `on${x.capUsd != null ? ` · cap ${usd(x.capUsd)} a period` : " · no cap beyond the balance"}${spent}` : c.dim("off — past the allowance new work waits for the reset")}`);
     } else if (e?.kind === "active" && e.source === "legacy") {
       console.log(`  ${c.dim("●")} ${e.plan} platform plan ${c.dim(`— honoured to ${String(e.paidThrough ?? "").slice(0, 10) || "its paid-through date"}, no longer sold`)}`);
     } else if (e?.kind === "none") {
@@ -18935,7 +18961,7 @@ async function secretOfKind(kind, flags) {
 }
 
 /**
- * `foldrun billing plans | plan pro|max|cancel|resume | pay-as-you-go on|off [--limit <usd>|--no-limit] | top-up <usd> | card` —
+ * `foldrun billing plans | plan pro|max|cancel|resume | extra-usage (alias pay-as-you-go) on|off [--limit <usd>|--no-limit] | top-up <usd> | card` —
  * the Plans and Payment pages. Anything that takes a card answers with
  * Stripe's own page to open; nothing here touches card data.
  */
@@ -19010,7 +19036,7 @@ async function billingPlansCmd(verb, arg, flags) {
     } else {
       console.log(`\n  ${c.amber("no active subscription")} ${c.dim("— new work needs one")}`);
     }
-    console.log(`\n  ${c.dim("foldrun billing plan pro|max · plan cancel · plan resume · pay-as-you-go on|off [--limit <usd>] · top-up <usd>")}\n`);
+    console.log(`\n  ${c.dim("foldrun billing plan pro|max · plan cancel · plan resume · extra-usage on|off [--limit <usd>] · top-up <usd>")}\n`);
     return 0;
   }
   if (verb === "plan") {
@@ -19083,8 +19109,8 @@ async function billingPlansCmd(verb, arg, flags) {
     console.log(`\n  ${c.green("✓")} ${p.nextPlan && p.nextPlan !== p.plan ? `${name(p.plan)} until ${String(p.periodEnd).slice(0, 10)}, then ${name(p.nextPlan)}` : `on ${name(p.plan)}${r.chargedUsd ? ` — ${usd(r.chargedUsd)} from your balance` : ""}; renews ${String(p.periodEnd).slice(0, 10)}`}\n`);
     return 0;
   }
-  if (verb === "pay-as-you-go") {
-    const usage = "`foldrun billing pay-as-you-go on|off` — past the allowance, carry on from your balance; `--limit <usd>` caps a period, `--no-limit` drops the cap";
+  if (verb === "pay-as-you-go" || verb === "extra-usage") {
+    const usage = "`foldrun billing extra-usage on|off` (or `pay-as-you-go`) — past the allowance, carry on from your balance; `--limit <usd>` caps a period, `--no-limit` drops the cap";
     // Nothing guessed where money is concerned (Codex, 23 Nov 2026): a word
     // that is not on/off, a bare --limit, or both limit flags is refused
     // before anything is sent.
@@ -20616,7 +20642,7 @@ export async function run(command, positional, flags, workspace, layout) {
     case "billing":
       return noBillingSaid(flags, () => {
         if (positional[0] === "invoices") return billingInvoicesCmd(flags);
-        if (["plans", "plan", "pay-as-you-go", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
+        if (["plans", "plan", "pay-as-you-go", "extra-usage", "top-up", "card"].includes(positional[0])) return billingPlansCmd(positional[0], positional[1], flags);
         return positional.length ? billingVerbCmd(positional, flags) : billingCmd(flags);
       });
     case "library":
