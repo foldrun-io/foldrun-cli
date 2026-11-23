@@ -10,7 +10,7 @@ on dev, beside the model routes (`/v1/messages`); the dashboard's own pages
 call the same paths on the dashboard's address. The account's usage is
 `/v1/account/usage/…`, because `/v1/usage` is a key's own spend. The routes a
 person opens in a browser (sign-in, OAuth, approve and unsubscribe links,
-Stripe's calls) answer on the dashboard's address only. There is no `/api`.
+the return from a card payment) answer on the dashboard's address only. There is no `/api`.
 Production moves to this with `api.foldrun.io`. See [One address](api-usage.md#one-address).
 
 The same routes as an OpenAPI 3.1 document: `GET /v1/openapi.json` (no key
