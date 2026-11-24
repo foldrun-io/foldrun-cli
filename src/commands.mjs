@@ -15031,6 +15031,7 @@ function statusBlock(s, url) {
     row("turns", String(s.turns ?? 0)),
     row("spent", `${formatCost(s.costUsd ?? 0)} this session`),
     s.model ? row("model", shortModel(plainText(s.model))) : null,
+    typeof s.effort === "string" ? row("effort", `${s.effort === "default" ? "the model's default" : s.effort} (/effort changes it)`) : null,
     s.contextTokens !== undefined ? row("last turn", `${readTokens(s)}${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
     row("works", s.mode === "local" ? (s.localOnly === true ? "on this computer only" : "on this computer, with cloud agents") : "in the cloud"),
     typeof s.goal === "string" ? row("goal", `${plainText(s.goal)} (/goal clear drops it)`) : null,
@@ -15498,6 +15499,134 @@ export function frontmatterModel(/** @type {string} */ text) {
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
   const m = fm && /^["']?model["']?[ \t]*:[ \t]*["']?([^"'\s#]+)["']?/m.exec(fm);
   return m ? m[1] : null;
+}
+
+/**
+ * The `effort:` of an agent's file as the cloud's runner reads it — the
+ * whole value, through core's resolveEffort (so `extra-high` is xhigh and
+ * `high priority` is nothing) — or null: the model's own default.
+ * @param {string} text @param {(v: string) => string | null} resolve
+ */
+export function frontmatterEffort(text, resolve) {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+  const m = fm && /^["']?effort["']?[ \t]*:[ \t]*(.*)$/m.exec(fm);
+  if (!m) return null;
+  let v = m[1].replace(/\s+#.*$/, "").trim();
+  if (/^(["']).*\1$/.test(v)) v = v.slice(1, -1);
+  const got = v ? resolve(v) : null;
+  return got && EFFORTS.includes(got) ? got : null;
+}
+
+/** The agent's effort as its file says now, or null when the file cannot be read. */
+async function agentEffort(/** @type {any} */ url, /** @type {any} */ flags, /** @type {string} */ ws, /** @type {string} */ agent) {
+  try {
+    const cur = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=${enc(`agents/${agent}/agent.md`)}`);
+    return frontmatterEffort(String(cur?.content ?? ""), (await core()).resolveEffort) ?? "default";
+  } catch {
+    return null;
+  }
+}
+
+/** foldrun's effort levels, low to high (core frontmatter-fields EFFORT_LEVELS). */
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/** What each level is for, in the picker. */
+const EFFORT_CHOICES = [
+  { v: "default", name: "Model's default", note: "no effort: line — the model decides" },
+  { v: "low", name: "Low", note: "quickest and cheapest; for simple, well-defined work" },
+  { v: "medium", name: "Medium", note: "a balance of speed, cost and depth" },
+  { v: "high", name: "High", note: "thinks it through; for most hard work" },
+  { v: "xhigh", name: "Extra high", note: "for long coding and agent work" },
+  { v: "max", name: "Max", note: "as hard as the model can; slowest, costs the most" },
+];
+
+/** A frontmatter's lines without one key (and the indented lines of a block under it); as it was when the key is not there. */
+export function dropFrontmatterKey(/** @type {string} */ raw, /** @type {string} */ key) {
+  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+  const lines = raw.split(eol);
+  if (lines[0]?.trim() !== "---") return raw;
+  const close = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+  if (close < 0) return raw;
+  const at = lines.findIndex((l, i) => i > 0 && i < close && new RegExp(`^["']?${key}["']?[ \t]*:`).test(l));
+  if (at < 0) return raw;
+  // Its value's whole span: indented lines, and blank lines between them (a block scalar may hold some).
+  let end = at + 1;
+  for (let i = at + 1; i < close; i++) {
+    if (/^[ \t]+\S/.test(lines[i])) end = i + 1;
+    else if (lines[i].trim() !== "") break;
+  }
+  return [...lines.slice(0, at), ...lines.slice(end)].join(eol);
+}
+
+/**
+ * `/effort` in a code session (FOL-256): how hard the agent's model thinks
+ * — the `effort:` line of its file, changed through the source route as
+ * `/model` changes `model:`, so a turn here and a turn in the cloud run the
+ * same field. "default" takes the line out: the model's own default.
+ * Read then written with ifMatch, so an edit made meanwhile is never lost.
+ */
+async function codeEffort(url, flags, ws, agent, want, s) {
+  const file = `agents/${agent}/agent.md`;
+  const at = `/v1/workspaces/${enc(ws)}/source`;
+  /** @type {{ content?: string, sha256?: string }} */
+  let cur;
+  try {
+    cur = await remoteCall(url, flags, `${at}?path=${enc(file)}`);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) throw new Error(`${agent} is not in ${file} — set effort: in its own file`);
+    throw err;
+  }
+  const raw = String(cur.content ?? "");
+  const now = frontmatterEffort(raw, (await core()).resolveEffort) ?? "default";
+  s.effort = now;
+  if (!want && codeInteractive && process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+    const picked = await pickOne({ title: "How hard the model thinks", subtitle: "from your next message on, here and in the cloud; kept in the agent's file (effort:)", choices: EFFORT_CHOICES, tick: now });
+    if (!picked || picked === now) {
+      console.log(`  ${c.dim(`${picked ? "still" : "kept"} ${effortLabel(now)}`)}
+`);
+      return;
+    }
+    want = picked;
+  }
+  if (!want) {
+    console.log(`  ${c.dim("effort")}  ${effortLabel(now)}`);
+    console.log(`  ${c.dim(`/effort ${EFFORTS.join(" · ")} · default changes it from your next message`)}
+`);
+    return;
+  }
+  const word = want.toLowerCase();
+  if (word !== "default" && !EFFORTS.includes(word)) throw new Error(`"${want}" is not an effort — ${EFFORTS.join(", ")}, or default (the model's own)`);
+  let next = raw;
+  if (word === "default") next = dropFrontmatterKey(raw, "effort");
+  else {
+    const { setFrontmatterScalar } = await patterns();
+    next = setFrontmatterScalar(raw, "effort", word);
+  }
+  if (next === raw) {
+    console.log(`  ${c.dim(`already ${effortLabel(word)}`)}
+`);
+    return;
+  }
+  try {
+    await remoteCall(url, flags, at, {
+      method: "PUT",
+      body: JSON.stringify({ path: file, content: next, message: `foldrun code: effort ${word}`, ifMatch: cur.sha256 ?? null }),
+    });
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 409) throw new Error(`${file} changed while saving — nothing was written; /effort again`);
+    throw err;
+  }
+  s.effort = word;
+  console.log(`  ${c.green("✓")} ${c.bold(effortLabel(word))} from your next message ${c.dim(`— kept for ${plainText(ws)}, here and in the cloud`)}`);
+  const engine = /** @type {any} */ (await import("@foldrun/core/engine-loop"));
+  if (word !== "default" && s.mode === "local" && engine.ENGINE_FEATURES?.effort !== true) console.log(`  ${c.dim("this foldrun's engine cannot send it yet: update foldrun (`foldrun update`); a turn in the cloud runs it already")}`);
+  // What a model without this level does with it is said when a turn runs on it: here by the session, in the cloud in the run's trail.
+  console.log();
+}
+
+/** "high" → "High", "default" → "the model's default". */
+function effortLabel(/** @type {string} */ v) {
+  return v === "default" ? "the model's default" : `effort ${(EFFORT_CHOICES.find((x) => x.v === v)?.name ?? v).toLowerCase()}`;
 }
 
 /**
@@ -16922,11 +17051,26 @@ async function codeLocalTurn(s, text) {
     // The agent's model first: a tier word is the plan's to pay for, a
     // model named outright is the wallet's (Codex review, 20 Nov 2026).
     let model = "default";
+    /** The agent's `effort:` (FOL-256), the same field a cloud turn runs with; null: the model's own default. */
+    let effort = /** @type {string | null} */ (null);
     try {
       const cur = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${enc(`agents/${s.agent}/agent.md`)}`);
       model = frontmatterModel(String(cur?.content ?? "")) ?? "default";
+      effort = frontmatterEffort(String(cur?.content ?? ""), (await core()).resolveEffort);
     } catch {
       /* the default tier */
+    }
+    s.effort = effort ?? "default";
+    // A model without this level: said once for that model and level, the file keeps what was asked for.
+    {
+      const sentModel = localModelOf(model);
+      const eng = /** @type {any} */ (await import("@foldrun/core/engine-loop"));
+      const runs = effort && typeof eng.effortFor === "function" ? eng.effortFor(sentModel, effort) : effort;
+      const said = `${sentModel}\n${effort}`;
+      if (effort && runs !== effort && s.effortSaid !== said) {
+        s.effortSaid = said;
+        console.log(`  ${c.dim(runs === null ? `${plainText(shortModel(sentModel))} takes no effort level: it runs at its own (the agent's file keeps effort: ${effort})` : `${plainText(shortModel(sentModel))} has no ${effort}: it runs at ${runs}`)}`);
+      }
     }
     if (cancel.asked) return;
     // One spelling of the tier for the plan check and for the model sent:
@@ -17550,6 +17694,8 @@ async function codeLocalTurn(s, text) {
             shellEnv: shellOwn,
             userAgent: USER_AGENT,
             model: localModelOf(model),
+            // The session's effort: a sub-agent thinks as hard as the agent that hands it the job.
+            ...(effort && /** @type {any} */ (engine).ENGINE_FEATURES?.effort === true ? { effort } : {}),
             // The definition's prose is the person's or the project's own text; the folder's instructions go with it as they do for the session's agent.
             systemPrompt: [def.prompt, `You work in the person's folder: ${s.dir}`, Array.isArray(s.extraDirs) && s.extraDirs.length ? `They also added these folders, for reading: ${s.extraDirs.join(", ")}` : "", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
             tools: def.tools,
@@ -17664,6 +17810,8 @@ async function codeLocalTurn(s, text) {
             ...(s.noSteer ? {} : { steer: takeSent }),
             // /thinking on: the model's own summary of its thinking, on the models that give one.
             ...(showThinking ? { thinkingDisplay: "summarized" } : {}),
+            // How hard it thinks: the agent's effort:, fitted to the model by the engine (FOL-256).
+            ...(effort && /** @type {any} */ (engine).ENGINE_FEATURES?.effort === true ? { effort } : {}),
           },
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
@@ -18583,6 +18731,10 @@ async function codeCmd(positional, flags, layout) {
       continue;
     }
     if (name === "/status") {
+      // The agent's effort as its file says now (an edit elsewhere included); left out when it cannot be read.
+      const now = await agentEffort(url, flags, ws, agent);
+      if (now) s.effort = now;
+      else delete s.effort;
       console.log(statusBlock(s, url));
       continue;
     }
@@ -18905,14 +19057,24 @@ async function codeCmd(positional, flags, layout) {
       console.log(`${todoLines(clean.todos).join("\n") || `    ${c.grey("(the todo list is empty)")}`}\n`);
       continue;
     }
+    if (name === "/effort" || (name === "/thinking" && (EFFORTS.includes(rest.toLowerCase()) || rest.toLowerCase() === "default"))) {
+      // One setting, two doors: /thinking high is /effort high, and says so.
+      if (name === "/thinking") say(`/thinking ${rest.toLowerCase()} sets how hard the model thinks — that is /effort; /thinking on|off shows or hides the summary of its thinking`);
+      try {
+        await codeEffort(url, flags, ws, agent, rest, s);
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      }
+      continue;
+    }
     if (name === "/thinking") {
       const prefs = readCodePrefs();
       if (rest === "on" || rest === "off") {
         if (!writeCodePrefs({ ...prefs, thinking: rest === "on" })) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
         else if (rest === "off") say("thinking is not shown");
         else if (/** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.thinking !== true) say("saved — but this foldrun's engine cannot ask for it yet: update foldrun (`foldrun update`) and it shows");
-        else say(`a summary of the model's thinking is shown above its reply, dimmed — for you, in every folder, from the next message. It costs nothing more: the model thinks the same either way${s.mode === "cloud" ? ". A turn in the cloud does not return it: it shows on this computer (/local)" : ""}`);
-      } else if (rest) say("/thinking · /thinking on · /thinking off");
+        else say(`a summary of the model's thinking is shown above its reply, dimmed — for you, in every folder, from the next message. It costs nothing more: the model thinks the same either way (how hard it thinks is /effort)${s.mode === "cloud" ? ". A turn in the cloud does not return it: it shows on this computer (/local)" : ""}`);
+      } else if (rest) say("/thinking · /thinking on · /thinking off — how hard it thinks is /effort (low to max)");
       else say(`thinking is ${prefs.thinking === true ? "shown: a summary, dimmed, above the reply (on this computer; a turn in the cloud does not return it)" : "not shown"} · /thinking ${prefs.thinking === true ? "off" : "on"}`);
       continue;
     }

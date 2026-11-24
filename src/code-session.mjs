@@ -31,6 +31,7 @@ export const CODE_COMMANDS = [
   ["/plan <task>", "the agent reads and says how it would do it — nothing is changed or run (this computer)"],
   ["/goal <what must be true>", "set a goal: the agent keeps going turn after turn until it is met — /goal --check \"<command>\" <goal> takes it as met only when your command exits 0; /goal clear drops it"],
   ["/model", "choose the model: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away)"],
+  ["/effort [level]", "how hard the model thinks: low, medium, high, xhigh, max, or default (the model's own) — the effort: line of the agent's file, here and in the cloud (/effort high sets it straight away)"],
   ["/local", "work on this computer from here on — the same session; the agent is told what was done in the cloud"],
   ["/cloud [task]", "work in the cloud from here on; with a task, send just that one to the cloud and stay where you are"],
   ["/skills", "the skills this folder holds — /<skill> [what to do] uses one"],
@@ -48,7 +49,7 @@ export const CODE_COMMANDS = [
   ["/messages", "what other sessions sent this one"],
   ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
   ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
-  ["/thinking [on|off]", "show a summary of the model's thinking above its reply, dimmed — off by default, remembered for you on this computer; /export --thinking writes it too"],
+  ["/thinking [on|off]", "show a summary of the model's thinking above its reply, dimmed — off by default, remembered for you on this computer; /export --thinking writes it too. How hard it thinks is /effort (/thinking high is /effort high)"],
   ["/cloud-agents [on|off]", "whether the agent on this computer may hand work to agents in the cloud (off: it sends no copy of this folder and cannot message other sessions; what you send yourself still goes)"],
   ["/sandbox", "the sandbox the agent's commands run in on this computer: what it lets through · allow <site> · deny <site> · off · on"],
 ];

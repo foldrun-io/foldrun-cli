@@ -347,6 +347,148 @@ test("/model: shows the agent's model; /model max changes its file's model: line
   }
 });
 
+test("/effort (FOL-256): the effort: line of the agent's file — a picker, a level straight away, default takes the line out; /thinking <level> is the same setting; /status names it", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: default\n---\n\nYou code.\n";
+  const puts: Array<{ content: string; ifMatch: unknown; message: string }> = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: file, sha256: `sha-${puts.length}` }),
+    [`PUT ${WS}/source`]: (b) => {
+      const body = JSON.parse(String(b));
+      puts.push(body);
+      file = body.content;
+      return { ok: true };
+    },
+    [`GET ${WS}/sessions/code-ef/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-ef", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    // The picker: the model's default ticked (no effort: line), Esc keeps it, nothing written.
+    t.send("/effort\r");
+    at = await t.until(/How hard the model thinks[\s\S]*1\. Model's default[^\n]*✔[\s\S]*6\. Max[\s\S]*Esc to cancel/, at);
+    t.send("\x1b");
+    at = await t.until(/kept the model's default/, at);
+    assert.equal(puts.length, 0);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/effort high\r");
+    at = await t.until(/effort high from your next message[^\n]*kept for desk, here and in the cloud/, at);
+    assert.equal(puts.length, 1);
+    assert.equal(puts[0]!.ifMatch, "sha-0", "written over exactly what was read");
+    assert.match(puts[0]!.content, /^effort: high$/m);
+    assert.match(puts[0]!.content, /^model: default$/m, "the rest of the file as it was");
+    assert.match(puts[0]!.message, /effort high/);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/effort HIGH\r");
+    at = await t.until(/already effort high/, at);
+    t.send("/status\r");
+    at = await t.until(/effort\s+high \(\/effort changes it\)/, at);
+    // /thinking with a level: the same setting, and it says so.
+    t.send("/thinking max\r");
+    at = await t.until(/\/thinking max sets how hard the model thinks — that is \/effort[\s\S]*effort max from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^effort: max$/m);
+    assert.equal((puts.at(-1)!.content.match(/effort/g) ?? []).length, 1, "replaced, not added beside");
+    // In the picker: ↑ from Max is Extra high.
+    t.send("/effort\r");
+    at = await t.until(/6\. Max[^\n]*✔[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b[A\r");
+    at = await t.until(/effort extra high from your next message/, at);
+    assert.match(puts.at(-1)!.content, /^effort: xhigh$/m);
+    // The cloud runner's reading: an alias is its level; /status reads the file as it is now.
+    file = "---\nname: coder\nmodel: default\neffort: extra-high # deep\n---\n\nYou code.\n";
+    t.send("/status\r");
+    at = await t.until(/effort\s+xhigh \(\/effort changes it\)/, at);
+    // A block scalar with a blank line in it goes whole.
+    file = "---\nname: coder\neffort: |-\n\n  high\nmodel: default\n---\n\nYou code.\n";
+    t.send("/effort default\r");
+    at = await t.until(/the model's default from your next message/, at);
+    assert.equal(puts.at(-1)!.content, "---\nname: coder\nmodel: default\n---\n\nYou code.\n");
+    file = "---\nname: coder\nmodel: default\neffort: xhigh\n---\n\nYou code.\n";
+    // default: the line goes, the model decides.
+    t.send("/effort default\r");
+    at = await t.until(/the model's default from your next message/, at);
+    assert.doesNotMatch(puts.at(-1)!.content, /effort/);
+    assert.equal(puts.at(-1)!.content, "---\nname: coder\nmodel: default\n---\n\nYou code.\n");
+    t.send("/effort extreme\r");
+    at = await t.until(/"extreme" is not an effort — low, medium, high, xhigh, max, or default/, at);
+    // /thinking on|off is still the summary, and points at /effort.
+    t.send("/thinking maybe\r");
+    at = await t.until(/how hard it thinks is \/effort \(low to max\)/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("/effort on this computer (FOL-256): the next turn's model call carries the agent's effort as output_config.effort; default sends none", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const engine: any = await import("@foldrun/core/engine-loop");
+  assert.equal(engine.ENGINE_FEATURES?.effort, true, "the core this CLI depends on sends an effort");
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: default\neffort: low\n---\nYou code.\n";
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "text", text: "First." }]),
+    () => sse([{ type: "text", text: "Second." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: file, sha256: "x" }),
+    [`PUT ${WS}/source`]: (b) => {
+      file = JSON.parse(String(b)).content;
+      return { ok: true };
+    },
+    [`GET ${WS}/sessions/code-el/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-el", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("say one\r");
+    at = await t.until(/\[y\/N\]|First\./, at);
+    if (!/First\./.test(t.out().slice(at - 400))) {
+      t.send("y\r");
+      at = await t.until(/First\./, at);
+    }
+    at = await t.until(/\w ❯ /, at);
+    assert.deepEqual(asked[0].output_config, { effort: "low" }, "the file's effort, as the cloud runs it");
+    t.send("/effort max\r");
+    at = await t.until(/effort max from your next message/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("say two\r");
+    at = await t.until(/Second\./, at);
+    assert.deepEqual(asked[1].output_config, { effort: "max" });
+    at = await t.until(/\w ❯ /, at);
+    t.send("/effort default\r");
+    at = await t.until(/the model's default from your next message/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("say three\r");
+    at = await t.until(/\(no more\)/, at);
+    assert.equal("output_config" in asked[2], false, "no effort: line, no effort sent — the model decides");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 const CATALOG = {
   runsOn: "foldrun",
   supply: "deepseek",
