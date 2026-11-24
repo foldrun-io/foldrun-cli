@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.3.0] — 2026-11-24
+
+### New in the public API
+
+- the `--local-only` flag
+- the `--no-sandbox` flag
+
+- feat(code): three places to work — this computer only, this computer with cloud agents, the cloud ([eeb0828](https://github.com/foldrun-io/foldrun-cli/commit/eeb0828))
+- feat(code): the agent's commands on this computer run in a sandbox, as Claude Code's do (FOL-214, part 2) ([c8b4774](https://github.com/foldrun-io/foldrun-cli/commit/c8b4774))
+
 ## [30.2.1] — 2026-11-24
 
 - fix(code): the agent answers in the language the person wrote in, here and in the cloud ([0d2ca29](https://github.com/foldrun-io/foldrun-cli/commit/0d2ca29))
