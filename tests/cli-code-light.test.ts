@@ -12,6 +12,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import { serve, raw } from "./fake-platform.ts";
 
 const WS = "/v1/workspaces/desk";
@@ -141,11 +142,11 @@ test("an idle session and one after a turn on this computer stay under their cei
 test("nothing a turn started is left running: a command that leaves a job in the background returns at once, and the job is gone by the next prompt and after /quit", { skip, timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
-  // A number no other process on the machine is likely to sleep for.
-  const secs = String(3000 + Math.floor(Math.random() * 900));
-  // Exactly this command line, nothing that merely contains it (Codex).
-  const running = () => spawnSync("pgrep", ["-f", `^sleep ${secs}$`], { encoding: "utf8" }).stdout.trim();
-  const s = await localPlatform((n) => (n === 1 ? sse([{ type: "tool_use", id: "b1", name: "Bash", input: { command: `sleep ${secs} & echo started` } }]) : sse([{ type: "text", text: "Started it." }])));
+  // A job whose command line carries an id no other process has: only this test's own is found, and ended (Codex).
+  const tag = `foldrun-light-${crypto.randomUUID()}`;
+  const job = `node -e "setTimeout(() => {}, 3e6)" ${tag}`;
+  const running = () => spawnSync("pgrep", ["-f", tag], { encoding: "utf8" }).stdout.trim();
+  const s = await localPlatform((n) => (n === 1 ? sse([{ type: "tool_use", id: "b1", name: "Bash", input: { command: `${job} & echo started` } }]) : sse([{ type: "text", text: "Started it." }])));
   seedKey(home, s.url);
   let t: ReturnType<typeof onTerminal> | undefined;
   try {
