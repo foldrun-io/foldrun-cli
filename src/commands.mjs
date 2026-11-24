@@ -18308,11 +18308,12 @@ async function folderState(/** @type {string} */ dir) {
     });
   const top = await git(["rev-parse", "--show-toplevel"]);
   // The repository's config is read at its top (gitOnlyItself holds to that folder; from a subfolder it says no — Codex).
-  if (typeof top !== "string" || !gitOnlyItself(top.trim(), "status")) return null;
+  // Only git's own line end comes off: a folder named "repo " is not "repo" (Codex).
+  const root = typeof top === "string" ? top.replace(/\r?\n$/, "") : null;
+  if (root === null || !gitOnlyItself(root, "status")) return null;
   // Paths come relative to the repository's top, not this folder; no renames, so each entry is one path.
   const out = typeof top === "string" ? await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=all", "--", "."]) : null;
-  if (typeof out !== "string" || typeof top !== "string") return null;
-  const root = top.trim();
+  if (typeof out !== "string") return null;
   // This process's own stdout and stderr, when a script sends them to a file in the folder, are not the agent's changes.
   const own = [1, 2].flatMap((fd) => {
     try {
