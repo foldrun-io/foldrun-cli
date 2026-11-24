@@ -36,6 +36,14 @@ export function koderOnPath(env = process.env, platform = process.platform, own 
         continue;
       }
       if (!st.isFile()) continue;
+      // The shell skips a file it cannot run and goes on looking (Codex).
+      if (platform !== "win32") {
+        try {
+          fs.accessSync(p, fs.constants.X_OK);
+        } catch {
+          continue;
+        }
+      }
       return { found: p, ours: isOurs(p, platform, own) };
     }
   }

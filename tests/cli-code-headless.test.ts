@@ -168,6 +168,86 @@ test("refusals: a bad format, stdin without stream-json, a bad stdin line — th
   assert.match(res.error, /stdin line 1 is not JSON/);
 });
 
+// Codex round 1 on FOL-223: what a script reading JSON must be able to count on.
+async function platformWith(reply: string, status = "completed") {
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`PUT ${WS}/source`]: () => ({ ok: true }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "2026-12-01T00:00:00.000Z", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: "run-x-1", test: false, snapshot: ID }),
+    [`GET ${WS}/runs/run-x-1`]: () => record("run-x-1", reply, status),
+    [`GET ${WS}/runs/run-x-1/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "unchanged", bytes: 0, modified: [], added: [], deleted: [] }), "application/json") : raw("", "application/octet-stream")),
+  });
+  return s;
+}
+
+test("a big result reaches a pipe whole before the process exits (Codex: cut at 64 KiB)", async () => {
+  const d = repo();
+  const big = "x".repeat(1024 * 1024);
+  const s = await platformWith(big);
+  const r = await run(s.url, ["code", d, "--to", "desk", "-p", "go", "--output-format", "json"]);
+  s.close();
+  assert.equal(r.code, 0, r.err);
+  const res = lines(r.out)[0];
+  assert.equal(res.result.length, big.length);
+});
+
+test("a run that ends failed is a result with is_error and an error, and exits 1 (Codex)", async () => {
+  const d = repo();
+  const s = await platformWith("could not", "failed");
+  const r = await run(s.url, ["code", d, "--to", "desk", "-p", "go", "--output-format", "json"]);
+  s.close();
+  assert.equal(r.code, 1);
+  const res = lines(r.out)[0];
+  assert.equal(res.is_error, true);
+  assert.match(res.error, /ended failed/);
+});
+
+test("a failure before any turn is JSON on stdout too, and stdout holds nothing else (Codex)", async () => {
+  const d = repo();
+  // The project cannot be read: setup fails before a turn.
+  const s = await serve({ [`GET ${WS}`]: () => raw(JSON.stringify({ error: "no such project" }), "application/json", {}, 404) });
+  const r = await run(s.url, ["code", d, "--to", "desk", "-p", "go", "--output-format", "json"]);
+  s.close();
+  assert.equal(r.code, 1, r.out + r.err);
+  const all = lines(r.out);
+  assert.equal(all.length, 1, r.out);
+  assert.equal(all[0].type, "result");
+  assert.equal(all[0].is_error, true);
+  assert.ok(all[0].error, "says why");
+});
+
+test("--input-format stream-json takes each message as it comes: a client may wait for a result before sending the next (Codex)", async () => {
+  const d = repo();
+  const { s, tasks } = await platform();
+  const child = spawn(process.execPath, [CLI, "code", d, "--to", "desk", "--input-format", "stream-json", "--output-format", "json", "--url", s.url, "--token", "k"], {
+    env: { ...process.env, FOLDRUN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-")), FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", FOLDRUN_NO_AUTO_UPDATE: "1" },
+  });
+  let out = "";
+  let err = "";
+  child.stderr.on("data", (x) => (err += x));
+  child.stdout.on("data", (x) => (out += x));
+  const got = async (n: number) => {
+    const until = Date.now() + 20_000;
+    while (out.trim().split("\n").filter(Boolean).length < n) {
+      if (Date.now() > until) throw new Error(`no result ${n} in 20 s: ${out} ${err}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+  child.stdin.write(`${JSON.stringify({ type: "user", text: "first" })}\n`);
+  await got(1);
+  assert.equal(lines(out)[0].result, "First reply.");
+  child.stdin.write(`${JSON.stringify({ type: "user", text: "second" })}\n`);
+  await got(2);
+  child.stdin.end();
+  const code = await new Promise<number>((resolve) => child.on("close", (c) => resolve(c ?? 1)));
+  s.close();
+  assert.equal(code, 0, err);
+  assert.deepEqual(lines(out).map((e) => e.result), ["First reply.", "Second reply."]);
+  assert.equal(tasks.length, 2);
+});
+
 test("streamEvent: one shape per event, nothing for a platform note", () => {
   assert.equal(streamEvent({ type: "info", text: "clock" }, { agent: "coder" }), null);
   assert.deepEqual(streamEvent({ type: "text", text: "hi" }, { agent: "coder" }), { type: "message", agent: "coder", text: "hi" });

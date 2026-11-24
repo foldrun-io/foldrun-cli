@@ -74,3 +74,17 @@ test("the check: none, ours, or another program first on PATH", (t) => {
   assert.ok(theirs.text.includes(path.join(other, "koder")));
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+test("a koder on PATH that cannot be run is skipped, as the shell skips it (Codex)", { skip: process.platform === "win32" }, () => {
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), "koder-a-"));
+  const b = fs.mkdtempSync(path.join(os.tmpdir(), "koder-b-"));
+  try {
+    fs.writeFileSync(path.join(a, "koder"), "not a program\n", { mode: 0o644 });
+    fs.writeFileSync(path.join(b, "koder"), "#!/bin/sh\n", { mode: 0o755 });
+    const got = koderOnPath({ PATH: [a, b].join(path.delimiter) }, process.platform, path.join(b, "koder"));
+    assert.deepEqual(got, { found: path.join(b, "koder"), ours: true });
+  } finally {
+    fs.rmSync(a, { recursive: true, force: true });
+    fs.rmSync(b, { recursive: true, force: true });
+  }
+});

@@ -18249,7 +18249,68 @@ async function codeLocalTurn(s, text) {
   console.log();
 }
 
-async function codeCmd(positional, flags, layout) {
+/** The messages of `--input-format stream-json`, one JSON object per line, as
+ *  they arrive (FOL-223). A line that is not a message stops the session with
+ *  its number; an empty stdin is said as such. */
+async function* stdinMessages() {
+  const { createInterface } = await import("node:readline");
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  let n = 0;
+  let any = false;
+  for await (const line of rl) {
+    n++;
+    if (!line.trim()) continue;
+    let m;
+    try {
+      m = JSON.parse(line);
+    } catch {
+      throw new Error(`stdin line ${n} is not JSON — one message per line: {"type":"user","text":"…"}`);
+    }
+    const said = typeof m?.text === "string" ? m.text : typeof m?.message === "string" ? m.message : typeof m?.message?.content === "string" ? m.message.content : null;
+    if (m?.type !== "user" || !said?.trim()) throw new Error(`stdin line ${n}: a message is {"type":"user","text":"…"}`);
+    any = true;
+    yield said.trim();
+  }
+  if (!any) throw new Error('no messages on stdin — one per line: {"type":"user","text":"…"}');
+}
+
+/** `foldrun code`. With --output-format json or stream-json (FOL-223) stdout
+ *  carries only JSON from the first moment: setup's own lines go to stderr, a
+ *  failure before any turn is a result object too, and the process waits for
+ *  every line to be written before it exits (Codex: a 1 MiB result was cut at
+ *  64 KiB on a pipe when the bin exited straight after the write). */
+async function codeCmd(/** @type {string[]} */ positional, /** @type {Record<string, any>} */ flags, /** @type {any} */ layout) {
+  const fmt = flags["output-format"];
+  if (fmt !== "json" && fmt !== "stream-json") return codeCmdInner(positional, flags, layout, null);
+  const realWrite = process.stdout.write.bind(process.stdout);
+  /** @type {Promise<void>} */
+  let pending = Promise.resolve();
+  let resulted = false;
+  const io = {
+    emit: (/** @type {any} */ o) => {
+      if (o?.type === "result") resulted = true;
+      const line = `${JSON.stringify(o)}\n`;
+      pending = pending.then(() => new Promise((done) => { realWrite(line, () => done()); }));
+      return pending;
+    },
+  };
+  const saved = { log: console.log, write: process.stdout.write };
+  console.log = (...a) => console.error(...a);
+  process.stdout.write = /** @type {any} */ ((/** @type {any} */ chunk, /** @type {any[]} */ ...rest) => process.stderr.write(chunk, ...rest));
+  try {
+    return await codeCmdInner(positional, flags, layout, io);
+  } catch (err) {
+    if (!resulted) io.emit({ type: "result", schema: 1, status: "failed", is_error: true, error: plainText(explain(err)) });
+    console.error(`  ${c.red("✗")} ${plainText(explain(err))}`);
+    return 1;
+  } finally {
+    console.log = saved.log;
+    process.stdout.write = saved.write;
+    await pending;
+  }
+}
+
+async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Record<string, any>} */ flags, /** @type {any} */ layout, /** @type {{ emit: (o: any) => Promise<void> } | null} */ io) {
   // One session, one sign-in: a session reads its token on every call, so
   // without a pin `foldrun use` in another terminal would carry this one's
   // later calls — platform reads and model calls alike — to another account,
@@ -18480,13 +18541,10 @@ async function codeCmd(positional, flags, layout) {
   if (typeof flags.task === "string") {
     // json / stream-json (FOL-223): stdout holds only JSON, one object per line;
     // what a person would read goes to stderr. Schema 1: fields are only added.
-    const toStdout = process.stdout.write.bind(process.stdout);
-    const emit = (/** @type {any} */ o) => toStdout(`${JSON.stringify(o)}\n`);
-    const machine = outFormat !== "text";
-    const saved = { log: console.log, write: process.stdout.write };
+    // codeCmd routed stdout to stderr already and owns the JSON writer.
+    const machine = outFormat !== "text" && io !== null;
+    const emit = (/** @type {any} */ o) => { void io?.emit(o); };
     if (machine) {
-      console.log = (...a) => console.error(...a);
-      process.stdout.write = /** @type {any} */ ((/** @type {any} */ chunk, /** @type {any[]} */ ...rest) => process.stderr.write(chunk, ...rest));
       if (outFormat === "stream-json") {
         emit({ type: "system", subtype: "init", schema: 1, session_id: s.context, project: ws, agent, folder: dir, where: "cloud", version: CLI_VERSION });
         runEventSink = (e, step) => {
@@ -18497,32 +18555,12 @@ async function codeCmd(positional, flags, layout) {
     }
     let code = 0;
     try {
-      /** @type {string[]} */
-      let tasks = [flags.task.trim()];
-      if (flags.task === "\u0000stdin") {
-        tasks = [];
-        const text = await new Promise((resolve) => {
-          let buf = "";
-          process.stdin.setEncoding("utf8");
-          process.stdin.on("data", (d) => (buf += d));
-          process.stdin.on("end", () => resolve(buf));
-        });
-        for (const [n, line] of String(text).split("\n").entries()) {
-          if (!line.trim()) continue;
-          let m;
-          try {
-            m = JSON.parse(line);
-          } catch {
-            throw new Error(`stdin line ${n + 1} is not JSON — one message per line: {"type":"user","text":"…"}`);
-          }
-          const said = typeof m?.text === "string" ? m.text : typeof m?.message === "string" ? m.message : typeof m?.message?.content === "string" ? m.message.content : null;
-          if (m?.type !== "user" || !said?.trim()) throw new Error(`stdin line ${n + 1}: a message is {"type":"user","text":"…"}`);
-          tasks.push(said.trim());
-        }
-        if (!tasks.length) throw new Error("no messages on stdin — one per line: {\"type\":\"user\",\"text\":\"…\"}");
-      }
+      // -p is one turn; stdin's messages are taken one at a time as they come,
+      // so a client may wait for a result before it sends the next (Codex).
+      const fromStdin = flags.task === "\u0000stdin";
+      const tasks = fromStdin ? stdinMessages() : (async function* () { yield String(flags.task).trim(); })();
       console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
-      for (const task of tasks) {
+      for await (const task of tasks) {
         // A script's turn is part of the session too: the cloud is told what the
         // folder holds, and a later /local hears what this turn did (Codex).
         s.cloudBriefDue = s.cloudBriefed !== s.context;
@@ -18553,6 +18591,8 @@ async function codeCmd(positional, flags, layout) {
             cost_usd: Math.max(0, (s.costUsd ?? 0) - costBefore),
             applied,
             where: "cloud",
+            // A turn that did not complete says why, as a thrown failure does (Codex).
+            ...(status !== "completed" ? { error: status === "cancelled" ? "the turn was stopped" : `the cloud run ended ${String(status ?? "failed")}${s.lastRun ? ` — foldrun runs show ${String(s.lastRun)}` : ""}` } : {}),
           });
         }
         code = status === "completed" ? 0 : status === "cancelled" ? 130 : 1;
@@ -18567,8 +18607,6 @@ async function codeCmd(positional, flags, layout) {
       } else throw err;
     } finally {
       runEventSink = null;
-      console.log = saved.log;
-      process.stdout.write = saved.write;
     }
     return code;
   }
