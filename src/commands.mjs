@@ -14546,7 +14546,7 @@ function statusBlock(s, url) {
     row("spent", `${formatCost(s.costUsd ?? 0)} this session`),
     s.model ? row("model", shortModel(plainText(s.model))) : null,
     s.contextTokens !== undefined ? row("last turn", `${readTokens(s)}${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
-    row("works", s.mode === "local" ? "on this computer" : "in the cloud"),
+    row("works", s.mode === "local" ? (s.localOnly === true ? "on this computer only" : "on this computer, with cloud agents") : "in the cloud"),
     typeof s.goal === "string" ? row("goal", `${plainText(s.goal)} (/goal clear drops it)`) : null,
     row("agent", `${s.agent} in project ${s.ws}`),
     row("platform", url),
@@ -16661,8 +16661,8 @@ async function codeLocalTurn(s, text) {
     turnMcp = new Map(mcpTools.map((x) => [x.name, x]));
     turnAgents = readAgents(s.dir).agents;
     {
-      const names = await cloudAgentNames(s);
-      turnCloud = names.length ? { agents: names, own: names[0], project: String(s.ws) } : null;
+      const names = s.localOnly === true ? [] : await cloudAgentNames(s);
+      turnCloud = names.length && s.localOnly !== true ? { agents: names, own: names[0], project: String(s.ws) } : null;
     }
     if (cancel.asked) return;
     const sub = agentTool(turnAgents, turnCloud);
@@ -16756,18 +16756,20 @@ async function codeLocalTurn(s, text) {
             shellEnv: shellOwn,
             userAgent: USER_AGENT,
             model: localModelOf(model),
-            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" })), folderInstructions(s.dir).text, walls ? SANDBOX_NOTE : "", skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
+            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" }), s.localOnly !== true), folderInstructions(s.dir).text, walls ? SANDBOX_NOTE : "", skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
             tools: ENGINE_TOOLS_LOCAL,
             extraTools: [
               // The one way out of the sandbox: a command as the person, asked every time.
               ...(walls ? [{ name: OUTSIDE_TOOL, description: OUTSIDE_DESCRIPTION, input_schema: OUTSIDE_SCHEMA, readOnly: false, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => runOutside(String(input?.command ?? ""), { dir: s.dir, env: own, signal: ctx.signal, timeout: input?.timeout }) }] : []),
-              { name: CLOUD_AGENTS_TOOL, description: CLOUD_AGENTS_DESCRIPTION, input_schema: CLOUD_AGENTS_SCHEMA, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => cloudCall(input, ctx.signal) },
+              // On this computer only: the agent has no way to send the folder, or a job, to the cloud.
+              ...(s.localOnly === true ? [] : [{ name: CLOUD_AGENTS_TOOL, description: CLOUD_AGENTS_DESCRIPTION, input_schema: CLOUD_AGENTS_SCHEMA, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => cloudCall(input, ctx.signal) }]),
               // foldrun's own docs, from the pages this CLI carries: text that
               // shipped with it, read with no command and so no question.
               { name: FOLDRUN_DOCS_TOOL, description: FOLDRUN_DOCS_DESCRIPTION, input_schema: FOLDRUN_DOCS_SCHEMA, run: async (/** @type {unknown} */ input) => foldrunDocsCall(input) },
               // A message to another session of the project: asked every time
               // (the engine asks before any tool not allowed ahead), the text shown.
-              { name: SESSION_SEND_TOOL, description: SESSION_SEND_DESCRIPTION, input_schema: SESSION_SEND_SCHEMA, run: async (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => sessionSendCall(s, input, ctx.signal) },
+              // This computer only: the agent cannot post to another session through the platform either (yours, /send, still can).
+              ...(s.localOnly === true ? [] : [{ name: SESSION_SEND_TOOL, description: SESSION_SEND_DESCRIPTION, input_schema: SESSION_SEND_SCHEMA, run: async (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => sessionSendCall(s, input, ctx.signal) }]),
               // A job handed to a second conversation: on this computer, or run in the project's cloud sandbox.
               { name: AGENT_TOOL, description: sub.description, input_schema: sub.schema, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => agentCall(input, ctx.signal) },
               // The session's todo list: its own note, shown to the person.
@@ -16978,14 +16980,16 @@ async function codeCmd(positional, flags, layout) {
   // Usage first: a call that cannot run must not add an agent on its way out (Codex).
   if (typeof flags.task === "string" && !flags.task.trim()) throw new Error('--task needs the instruction, e.g. --task "add a test for the parser"');
   if (typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
-  if (flags.local === true && flags.cloud === true) throw new Error("--local or --cloud, not both");
+  // --local-only: on this computer, and the agent gets no cloud agents (24 Nov 2026). --local keeps what it always meant.
+  const onlyHere = flags["local-only"] === true;
+  if ([flags.local === true, onlyHere, flags.cloud === true].filter(Boolean).length > 1) throw new Error("--local-only, --local or --cloud — one of them");
   // One engine (owner, 20 Nov 2026: "there is no claude code anymore"):
   // foldrun's own. --engine foldrun is still taken; claude is gone — said
   // before any question is asked (Codex).
   if (flags.engine === "claude") throw new Error("Claude Code is no longer an engine for foldrun code — on this computer foldrun's own agent works in your folder; leave out --engine");
   if (flags.engine !== undefined && flags.engine !== "foldrun") throw new Error(`--engine takes only foldrun — got ${JSON.stringify(flags.engine)}`);
-  if (flags.local === true && typeof flags.task === "string") throw new Error("on this computer the agent asks before each change, so it needs you at a terminal — a script's turn runs in the cloud (--cloud --task …)");
-  if (flags.local === true && !process.stdin.isTTY) throw new Error("on this computer the agent asks before each change, so it needs you at a terminal");
+  if ((flags.local === true || onlyHere) && typeof flags.task === "string") throw new Error("on this computer the agent asks before each change, so it needs you at a terminal — a script's turn runs in the cloud (--cloud --task …)");
+  if ((flags.local === true || onlyHere) && !process.stdin.isTTY) throw new Error("on this computer the agent asks before each change, so it needs you at a terminal");
   const sessionsFile = path.join(credentialsDir(), "code-sessions.json");
   // Where and with which project (owner, 19 Nov 2026: "keep it as simple as
   // possible"): flags first. A person at a terminal is asked where at every
@@ -16996,24 +17000,32 @@ async function codeCmd(positional, flags, layout) {
   const chosen = folderChoice(sessionsFile, dir);
   const asking = typeof flags.task !== "string" && Boolean(process.stdin.isTTY && process.stdout.isTTY);
   /** @type {"local" | "cloud" | null} */
-  let mode = flags.local === true ? "local" : flags.cloud === true ? "cloud" : chosen?.mode ?? null;
+  let mode = flags.local === true || onlyHere ? "local" : flags.cloud === true ? "cloud" : chosen?.mode ?? null;
+  // A flag answers; else what this folder had (asked again below, at a terminal).
+  let localOnly = onlyHere ? true : flags.local === true ? false : chosen?.localOnly === true;
   // A script's turn runs in the cloud: never for a folder that chose this
   // computer, unless --cloud says so (Codex: no silent upload).
   if (typeof flags.task === "string" && mode === "local") throw new Error("this folder works on this computer, which needs you at a terminal — --cloud --task sends it to the cloud for this one turn");
-  if (asking && flags.local !== true && flags.cloud !== true && !(flags.continue === true && mode)) {
+  if (asking && flags.local !== true && !onlyHere && flags.cloud !== true && !(flags.continue === true && mode)) {
     console.log(`\n  ${c.bold(c.sweep("◆ foldrun code"))}\n`);
     const before = mode;
-    mode = /** @type {"local" | "cloud" | null} */ (await pickOne({
+    const was = before === "local" ? (localOnly ? "local-only" : "local") : before;
+    const said = { "local-only": "this computer only", local: "this computer, with cloud agents", cloud: "the cloud" };
+    // In the order of how much leaves this computer (owner asked for three, 24 Nov 2026).
+    const answer = /** @type {"local-only" | "local" | "cloud" | null} */ (await pickOne({
       title: "Where should this session work?",
-      subtitle: before ? `Enter keeps ${before === "local" ? "this computer" : "the cloud"}, as last time — --local or --cloud answers ahead` : "--local or --cloud answers ahead",
+      subtitle: was ? `Enter keeps ${said[was]}, as last time — --local-only, --local or --cloud answers ahead` : "--local-only, --local or --cloud answers ahead",
       choices: [
-        { v: "local", name: "On this computer", note: "foldrun's agent in your folder, on your foldrun plan; asks before changes" },
+        { v: "local-only", name: "On this computer only", note: "the agent cannot send your folder anywhere: no cloud agents, no copies" },
+        { v: "local", name: "On this computer, with cloud agents", note: "works here; may send a copy to cloud agents after your yes (credits)" },
         { v: "cloud", name: "In the cloud", note: "works on a copy on foldrun credits; you apply what comes back" },
       ],
-      tick: before ?? "local",
+      tick: was ?? "local",
     }));
-    if (!mode) throw new Error("nothing started");
-    console.log(`  ${c.dim("works")}  ${mode === "local" ? c.green("on this computer") : c.cyan("in the cloud")}\n`);
+    if (!answer) throw new Error("nothing started");
+    mode = answer === "cloud" ? "cloud" : "local";
+    localOnly = answer === "local-only";
+    console.log(`  ${c.dim("works")}  ${answer === "cloud" ? c.cyan("in the cloud") : c.green(`on ${said[answer]}`)}\n`);
   }
   mode ??= "cloud";
   if (flags.engine !== undefined && mode !== "local") throw new Error("--engine is for work on this computer (--local); in the cloud the platform runs the agent");
@@ -17043,6 +17055,8 @@ async function codeCmd(positional, flags, layout) {
   const resumed = last && (last.url === undefined || last.url === url) && (last.agent === undefined || last.agent === agent) && (last.mode ?? "cloud") === mode && (mode !== "local" || last.engine === engine) ? last : null;
   if (flags.continue === true && !resumed && typeof flags.context !== "string") console.log(`  ${c.dim("no earlier conversation of this folder to continue — starting a fresh one")}`);
   const s = { url, flags, ws, agent, dir, mode, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]), engine: mode === "local" ? engine : undefined };
+  // For turns on this computer, whatever the session is doing now: a cloud session that moves to /local keeps it.
+  if (flags.continue === true && !onlyHere && flags.local !== true ? resumed?.localOnly === true || localOnly : localOnly) /** @type {any} */ (s).localOnly = true;
   // Off only by the person's own word: the flag, or their environment (never a file of the folder).
   if (flags["no-sandbox"] === true || flags.sandbox === false || process.env.FOLDRUN_CODE_SANDBOX === "off") /** @type {any} */ (s).sandboxOff = true;
   // One session, two places (24 Nov 2026): what was said on one side goes
@@ -17107,7 +17121,7 @@ async function codeCmd(positional, flags, layout) {
   // turn: the folder keeps its choice and its conversation (Codex).
   const oneTurn = typeof flags.task === "string" && chosen?.mode === "local";
   const remember = () => {
-    if (!oneTurn) rememberSession(sessionsFile, dir, { context: s.context, ws, agent, url, mode: s.mode, ...(s.engine ? { engine: s.engine } : {}), ...sessionCarry(s) });
+    if (!oneTurn) rememberSession(sessionsFile, dir, { context: s.context, ws, agent, url, mode: s.mode, .../** @type {any} */ (/** @type {any} */ (s).localOnly === true ? { localOnly: true } : {}), ...(s.engine ? { engine: s.engine } : {}), ...sessionCarry(s) });
   };
   // The answers are kept now, not after a first turn: asked once (owner).
   remember();
@@ -17144,10 +17158,11 @@ async function codeCmd(positional, flags, layout) {
     ["project", c.cyan(plainText(ws)), plainText(ws)],
     ["server", c.white(plainText(host)), plainText(host)],
     ["folder", c.white(plainText(homeTilde(dir))), plainText(homeTilde(dir))],
-    ["works", mode === "local" ? c.green("on this computer") : c.cyan("in the cloud"), mode === "local" ? "on this computer" : "in the cloud"],
+    ["works", mode === "local" ? c.green(/** @type {any} */ (s).localOnly === true ? "on this computer only" : "on this computer, with cloud agents") : c.cyan("in the cloud"), mode === "local" ? (/** @type {any} */ (s).localOnly === true ? "on this computer only" : "on this computer, with cloud agents") : "in the cloud"],
     ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
   ])}`);
-  console.log(`    ${c.grey(mode === "local" ? (/** @type {any} */ (s).sandboxOff === true ? "the agent works in this folder on your foldrun plan, with no sandbox (--no-sandbox); it asks before every change and command" : "the agent works in this folder on your foldrun plan; its commands run in a sandbox (/sandbox), and it asks before every change to a file") : "each message takes your folder to the agent; you apply what comes back")}`);
+  const cloudNote = /** @type {any} */ (s).localOnly === true ? " · this computer only: no cloud agents (/cloud-agents on)" : " · with cloud agents, each asked first (/cloud-agents off)";
+  console.log(`    ${c.grey(mode === "local" ? `${/** @type {any} */ (s).sandboxOff === true ? "the agent works in this folder on your foldrun plan, with no sandbox (--no-sandbox); it asks before every change and command" : "the agent works in this folder on your foldrun plan; its commands run in a sandbox (/sandbox), and it asks before every change to a file"}${cloudNote}` : "each message takes your folder to the agent; you apply what comes back")}`);
   console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
   // The folder's own commands and skills (24 Nov 2026): read at the start
@@ -17692,6 +17707,18 @@ async function codeCmd(positional, flags, layout) {
       console.log(`${todoLines(clean.todos).join("\n") || `    ${c.grey("(the todo list is empty)")}`}\n`);
       continue;
     }
+    if (name === "/cloud-agents") {
+      const verb = rest.toLowerCase();
+      if (verb === "on" || verb === "off") {
+        if (verb === "off") s.localOnly = true;
+        else delete s.localOnly;
+        remember();
+        const stillCloud = s.mode === "cloud" ? " — this session is working in the cloud now, where every message sends the folder: /local first, for this to matter" : "";
+        say(verb === "off" ? `off — on this computer the agent has no cloud agents and cannot message other sessions: it sends no copy of this folder. What you send yourself still goes (/cloud <task>, /send, an MCP server you said yes to)${stillCloud}` : `on — the agent on this computer may hand work to cloud agents; each time it is shown and asked first, and costs foldrun credits${stillCloud}`);
+      } else if (verb) say("/cloud-agents on · off");
+      else say(`${s.localOnly === true ? "off — this computer only: the agent has no cloud agents" : "on — the agent may hand work to cloud agents, asked first each time"}${s.mode === "cloud" ? " (the session is working in the cloud now; this is about turns on this computer)" : ""} · /cloud-agents ${s.localOnly === true ? "on" : "off"}`);
+      continue;
+    }
     if (name === "/sandbox") {
       const [verb = "", arg = ""] = rest.split(/\s+/);
       const sites = (s.sandboxSites ??= []);
@@ -17805,6 +17832,10 @@ async function codeCmd(positional, flags, layout) {
       console.log(`  ${c.bold(c.white("on this computer"))} ${c.dim("— the agent hands one a job; only its answer comes back")}`);
       for (const a of agents) console.log(`  ${c.cyan(plainText(a.name).padEnd(14))} ${c.white(clipLine(plainText(a.description)))}\n  ${" ".repeat(14)} ${c.dim(`${a.source}${a.file ? ` · ${plainText(homeTilde(a.file))}` : ""} · ${a.tools.join(", ")}${agentActs(a) ? " · asked at every call, and for each change and command" : " · reads only, never asked"}`)}`);
       for (const x of problems) console.log(`  ${c.amber("!")} ${c.dim(`${plainText(homeTilde(x.file))}: ${plainText(x.why)}`)}`);
+      if (s.localOnly === true) {
+        console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim("— off: this session works on this computer only, so the agent has no cloud agents (/cloud-agents on)")}\n`);
+        continue;
+      }
       const names = await cloudAgentNames(s);
       console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim(`— run in ${plainText(ws)}'s sandbox with the agent's own tools; only the prompt is sent, none of this folder; costs credits, asked first`)}`);
       console.log(`  ${names.length ? names.map((/** @type {string} */ n) => c.cyan(plainText(n))).join(c.dim(", ")) : c.dim(`none yet — the project ${plainText(ws)} has no agents (a first /cloud turn makes it and its ${plainText(agent)})`)}`);

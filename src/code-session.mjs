@@ -44,6 +44,7 @@ export const CODE_COMMANDS = [
   ["/send <conversation> <text>", "message another session — the agent can too, when you ask it"],
   ["/messages", "what other sessions sent this one"],
   ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
+  ["/cloud-agents [on|off]", "whether the agent on this computer may hand work to agents in the cloud (off: it sends no copy of this folder and cannot message other sessions; what you send yourself still goes)"],
   ["/sandbox", "the sandbox the agent's commands run in on this computer: what it lets through · allow <site> · deny <site> · off · on"],
 ];
 
@@ -595,6 +596,8 @@ export function folderChoice(/** @type {string} */ file, /** @type {string} */ d
   return {
     ws: typeof s.ws === "string" ? s.ws : null,
     mode: s.mode === "local" || s.mode === "cloud" ? s.mode : null,
+    // On this computer ONLY (24 Nov 2026): no cloud agents. A folder kept by an older CLI has none of this and reads as "with cloud agents", which is what it had.
+    localOnly: s.localOnly === true,
     // Claude Code was an engine until 20 Nov 2026: such a folder reads as none.
     engine: s.engine === "foldrun" ? "foldrun" : null,
   };
@@ -721,7 +724,7 @@ export function localModelOf(/** @type {string | null} */ v) {
 }
 
 /** What the agent is told when it works in the person's own folder. */
-export function localPrompt(/** @type {string} */ dir, /** @type {string} */ about = "") {
+export function localPrompt(/** @type {string} */ dir, /** @type {string} */ about = "", /** @type {boolean} */ cloudAgents = true) {
   return [
     "You are foldrun code, a coding agent working directly in the person's own folder on their computer:",
     dir,
@@ -729,7 +732,7 @@ export function localPrompt(/** @type {string} */ dir, /** @type {string} */ abo
     "Work in that folder. Read before you change; make the smallest change that does the job; run the project's own checks (tests, a build, a quick run) when there are any, and say what you ran and what it showed.",
     "Every change and command is shown to the person and may need their yes; if they say no, do not try the same thing another way — say what you wanted and why.",
     "Never read or print secrets (.env files, keys, tokens), and do not run commands that delete outside the folder, push, deploy or publish unless the person asked for exactly that.",
-    "For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can hand it to agents in the cloud with the cloud_agents tool: each works on a copy of this folder, and its changes come back for the person to accept. Give each a complete task; it does not see this conversation.",
+    ...(cloudAgents ? ["For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can hand it to agents in the cloud with the cloud_agents tool: each works on a copy of this folder, and its changes come back for the person to accept. Give each a complete task; it does not see this conversation."] : []),
     "When you finish, say in a few plain sentences what you changed and how they can see it. Name files by their path inside the folder.",
     "Answer in the language the person wrote their message in — English to an English message — whatever language the folder's own instructions and files are written in. Only a person asking for another language changes that.",
     ...(about ? ["", about] : []),
