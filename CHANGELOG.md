@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.9.0] — 2026-11-24
+
+- feat(code): /effort — how hard the model thinks, low to max (FOL-256) ([ae03446](https://github.com/foldrun-io/foldrun-cli/commit/ae03446))
+
+### deps
+
+- @foldrun/core ^27.3.0 ([338616a](https://github.com/foldrun-io/foldrun-cli/commit/338616a))
+
 ## [30.8.0] — 2026-11-24
 
 ### New in the public API
