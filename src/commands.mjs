@@ -14708,6 +14708,26 @@ async function codeTurn(s, task, include = []) {
 /** The file names of a patch taken in part, as kept with a conversation and read back: strings, plain, bounded. */
 const partNames = (/** @type {unknown[]} */ l) => l.filter((x) => typeof x === "string").map((x) => plainText(String(x)).slice(0, 300)).slice(0, 200);
 
+/** The folders right below `dir` (and one level further) that are git repositories: a folder of projects. */
+export function reposBelow(/** @type {string} */ dir) {
+  /** @type {string[]} */
+  const found = [];
+  const list = (/** @type {string} */ d) => {
+    try {
+      return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules");
+    } catch {
+      return [];
+    }
+  };
+  for (const e of list(dir)) {
+    const sub = path.join(dir, e.name);
+    if (fs.existsSync(path.join(sub, ".git"))) found.push(sub);
+    else for (const f of list(sub)) if (fs.existsSync(path.join(sub, f.name, ".git"))) found.push(path.join(sub, f.name));
+    if (found.length >= 10) break;
+  }
+  return found;
+}
+
 /** Whether a folder is inside a git repository: only the cloud needs one (FOL-274). */
 export function inGitRepo(/** @type {string} */ dir) {
   return spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).status === 0;
@@ -14718,6 +14738,18 @@ export function inGitRepo(/** @type {string} */ dir) {
  * @returns {Promise<boolean>} whether the folder is in a repository now
  */
 async function offerGit(/** @type {string} */ dir) {
+  // Never in the home folder, nor in a folder that holds repositories of its own: a folder of projects
+  // made one repository would take them all in (the report: a folder of foldrun's repos side by side).
+  const home = os.homedir();
+  if (path.resolve(dir) === path.resolve(home)) {
+    console.log(`  ${c.dim("this is your home folder: git is not set up here — start in a project's folder to use the cloud")}`);
+    return false;
+  }
+  const holds = reposBelow(dir);
+  if (holds.length) {
+    console.log(`  ${c.dim(`this folder holds git repositories of its own (${holds.slice(0, 3).map((x) => plainText(path.basename(x))).join(", ")}${holds.length > 3 ? ", …" : ""}): git is not set up around them — start in one of them to use the cloud`)}`);
+    return false;
+  }
   const yes = /^y(es)?$/i.test((await promptVisible(`  the cloud needs git to send a copy and bring changes back. Set it up here (git init)? [y/N] `)).trim());
   if (!yes) return false;
   const made = spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf8" });
@@ -18213,6 +18245,8 @@ async function codeLocalTurn(s, text) {
               // Cloud jobs: with the folder (a copy, a patch back) or without it (a project agent); off with /where local.
               ...(s.localOnly === true ? [] : [{ name: CLOUD_AGENTS_TOOL, description: cloudTool.description, input_schema: cloudTool.schema, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {
                 if (input?.folder !== undefined && typeof input.folder !== "boolean") return Promise.resolve({ text: "folder must be true or false", isError: true });
+                // The folder goes by git (a copy out, the changes back): none here, and the job is refused with how to go on (FOL-274).
+                if (input?.folder !== false && !inGitRepo(s.dir)) return Promise.resolve({ text: "This folder has no git, which an agent in the cloud needs to take a copy of it and bring the changes back. Send the job without the folder (folder: false), or tell the person: /where cloud offers to set git up.", isError: true });
                 if (input?.folder !== false) return cloudCall(input, ctx.signal);
                 const job = cloudJobWithoutFolder(input);
                 return "problem" in job ? Promise.resolve({ text: job.problem, isError: true }) : agentCall(job, ctx.signal);
@@ -18656,8 +18690,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   mode ??= "cloud";
   // Refused before git is offered: a yes would leave a .git behind for a start that cannot run (Codex).
   if (flags.engine !== undefined && mode !== "local") throw new Error("--engine is for work on this computer (--local); in the cloud the platform runs the agent");
-  // The cloud needs git (FOL-274): asked once, at a terminal; "no" stays on this computer.
-  if (!repo && (mode === "cloud" || (mode === "local" && !localOnly))) {
+  // The cloud needs git (FOL-274): asked once, at a terminal, when the session works in the cloud; "no"
+  // stays on this computer. Working here with agents in the cloud is not asked at the start: git is
+  // offered when a cloud job would take the folder (/where cloud), never before anything uses it (the report).
+  if (!repo && mode === "cloud") {
     repo = asking ? await offerGit(dir) : false;
     if (!repo) {
       // A script's one task cannot fall back; at a terminal, even after --cloud, "no" works on this computer (Codex).

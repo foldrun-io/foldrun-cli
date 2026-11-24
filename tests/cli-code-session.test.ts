@@ -3731,3 +3731,29 @@ test("/rename and /resume (FOL-264): a name kept on the platform too; /resume li
     s.close();
   }
 });
+
+test("working here with agents in the cloud asks nothing about git at the start, and git is never offered around a folder of repositories (the report, FOL-274)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-repos-"));
+  // A folder of projects: each one its own repository, the folder around them none.
+  for (const r of ["one", "two"]) assert.equal(spawnSync("git", ["init", "-q", path.join(d, r)]).status, 0);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-rp", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    assert.doesNotMatch(t.out().slice(0, at), /Set it up here \(git init\)/, "not asked at the start");
+    t.send("/where cloud\r");
+    at = await t.until(/holds git repositories of its own \(one, two|two, one/, at);
+    assert.equal(fs.existsSync(path.join(d, ".git")), false, "no repository made around them");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
