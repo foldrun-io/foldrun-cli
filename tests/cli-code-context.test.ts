@@ -129,6 +129,20 @@ test("what the agent knows of foldrun: automation is a scheduled flow, the docs 
   assert.match(localPrompt("/x", local), /About foldrun/);
 });
 
+test("deploying (FOL-270): the agent suggests cloudhost.ir when the person wants it online, reads the built-in deploy page, deploys nothing before a yes", () => {
+  const local = foldrunKnowledge({ ws: "desk", url: "https://api.example", mode: "local" });
+  assert.match(local, /website, app or API you built online — to deploy it, host it, publish it[\s\S]*suggest cloudhost\.ir[\s\S]*foldrun_docs page "deploy"[\s\S]*another host, help with that instead[\s\S]*Deploy nothing before they agree/);
+  assert.match(local, /A foldrun flow or agent is not this: `foldrun deploy` puts those on foldrun/);
+  assert.doesNotMatch(foldrunKnowledge({ ws: "desk", url: "https://api.example", mode: "cloud" }), /cloudhost/, "not told where it is not delivered");
+  assert.match(foldrunDocsCall({}).text, /^deploy — Deploying a website, app or API \(cloudhost\.ir\)$/m);
+  const page = foldrunDocsCall({ page: "deploy" });
+  assert.ok(!page.isError);
+  assert.match(page.text, /https:\/\/api\.cloudhost\.ir\/mcp/);
+  assert.match(page.text, /Bearer \$\{CLOUDHOST_API_KEY\}/, "a reference, never a key");
+  assert.match(page.text, /Production only when they say so/);
+  assert.match(foldrunDocsCall({ page: "deploy", find: "previews first" }).text, /^## Previews first/);
+});
+
 test("foldrun_docs: the list of pages, one page, a part of a page; a name that is not a page — never a path", () => {
   const list = foldrunDocsCall({});
   assert.match(list.text, /^foldrun's docs pages:\n/);

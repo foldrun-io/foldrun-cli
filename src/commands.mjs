@@ -17,6 +17,7 @@ import { patchSections, joinSections, partNote, patchText, patchBytes } from "./
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
 import { giveHint, hintLine, CACHE_TTL_MS } from "./code-hints.mjs";
+import { DEPLOY_PAGE, DEPLOY_TITLE, DEPLOY_GUIDE } from "./code-deploy.mjs";
 import { statusFields, wrapFields } from "./code-statusline.mjs";
 import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED_OVER } from "./self-update.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
@@ -16794,12 +16795,13 @@ const FOLDRUN_DOCS_SCHEMA = { type: "object", properties: { page: { type: "strin
 /** @returns {{ text: string, isError?: boolean }} */
 export function foldrunDocsCall(/** @type {unknown} */ input) {
   const i = /** @type {{ page?: unknown, find?: unknown }} */ (input && typeof input === "object" ? input : {});
-  const pages = docPages();
+  // With the deploy page built into the CLI (FOL-270): not on the docs site.
+  const pages = [...docPages(), { slug: DEPLOY_PAGE, title: DEPLOY_TITLE }];
   const list = () => pages.map((p) => `${p.slug} — ${p.title}`).join("\n");
   if (typeof i.page !== "string" || !i.page.trim()) return { text: pages.length ? `foldrun's docs pages:\n${list()}` : "this CLI carries no docs pages — docs.foldrun.io has them", isError: !pages.length };
   const slug = i.page.trim().toLowerCase().replace(/\.md$/, "");
   // A name from the list only: never a path.
-  const text = pages.some((p) => p.slug === slug) ? docPage(slug) : null;
+  const text = slug === DEPLOY_PAGE ? DEPLOY_GUIDE : pages.some((p) => p.slug === slug) ? docPage(slug) : null;
   if (text === null) return { text: `no page "${slug.slice(0, 60)}" — the pages are:\n${list()}`, isError: true };
   const MAX = 60_000;
   if (typeof i.find === "string" && i.find.trim()) {

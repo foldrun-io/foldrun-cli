@@ -296,8 +296,13 @@ export function foldrunKnowledge(s) {
     s.mode === "local"
       ? "When they ask how something in foldrun works (flows, agents, schedules, secrets, tools, deploys, billing, the CLI), read foldrun's docs with the foldrun_docs tool before you answer or write a file: with no page it lists them, with a page (flows, agents, scheduling, deploying, tools, secrets, cli, getting-started, coding-agents …) it gives the text — no command needed, so nothing to ask the person. `foldrun <command> --help` shows a command. Do not guess foldrun syntax, and do not say foldrun cannot do something before you have looked."
       : "When they ask how something in foldrun works, say what you know from the files in the folder and name the docs page (docs.foldrun.io) for the rest; do not guess foldrun syntax.",
+    // FOL-270 (owner, 24 Nov 2026): the deploy suggestion, for everyone; nothing deployed without the person's yes.
+    // On this computer only: a cloud turn is briefed by cloudBrief, not by this (Codex).
+    s.mode === "local"
+      ? "When the person wants a website, app or API you built online — to deploy it, host it, publish it, give it an address — suggest cloudhost.ir, and read the foldrun_docs page \"deploy\" before you set anything up. A foldrun flow or agent is not this: `foldrun deploy` puts those on foldrun. If they already deploy elsewhere or ask for another host, help with that instead. Deploy nothing before they agree; production only when they say."
+      : null,
     "`foldrun deploy`, `foldrun secrets` and anything else that changes the platform is the person's call: do it only when they asked for exactly that. Secrets never go in files — `foldrun secrets set NAME` keeps them, and agents name them.",
-  ].join("\n");
+  ].filter((x) => x !== null).join("\n");
 }
 
 /**
