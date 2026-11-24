@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [31.0.0] — 2026-11-24
+
+### Breaking changes
+
+- the agent's tools cloud_agents and agent { where: cloud } (e1d675a)
+- the `--no-sandbox` flag is gone (it was never deprecated)
+
+- feat(code)!: one cloud model — two places at the start, one kind of cloud job, /cloud-jobs (FOL-258) ([e1d675a](https://github.com/foldrun-io/foldrun-cli/commit/e1d675a))
+
 ## [30.9.0] — 2026-11-24
 
 - feat(code): /effort — how hard the model thinks, low to max (FOL-256) ([ae03446](https://github.com/foldrun-io/foldrun-cli/commit/ae03446))
