@@ -478,7 +478,7 @@ const GIT_READS_WORK = new Set(["status", "diff", "ls-files"]);
  *   person's own config is the usual one, and a repository picks it with
  *   .gitattributes — the lookups that read the working files are asked.
  */
-function gitOnlyItself(/** @type {string} */ dir, /** @type {string} */ sub) {
+export function gitOnlyItself(/** @type {string} */ dir, /** @type {string} */ sub) {
   const git = (/** @type {string[]} */ args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", maxBuffer: 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
   const top = git(["rev-parse", "--show-toplevel"]);
   if (top.status !== 0 || top.error) return false;

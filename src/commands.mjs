@@ -24,7 +24,7 @@ import { listConversation, listedConversations, searchWords, searchConversations
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
 import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
-import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID } from "./code-context.mjs";
+import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
 import { koderLine } from "./koder-path.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
@@ -17398,7 +17398,8 @@ async function codeLocalTurn(s, text) {
       const inFolder = (/** @type {string} */ f) => bothInside(s.dir, f);
       // Never for a command sent outside the sandbox: that one is asked every time.
       const byRule = !child && s.strict !== true && command !== null && scope === "command" && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout") && rulesAllow(command, folderRules(s.dir), s.dir, inFolder);
-      const allowedNow = byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub")));
+      // A script's turn takes no earlier yes: a folder rule ("always npm test") would run past --yes (Codex).
+      const allowedNow = !s.headless && (byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
       if (allowedNow) {
         if (cloud) grantTicket(input, signal);
         if (scope === "changes") changed.add(localCallSummary("Write", { file_path: file }, s.dir));
@@ -18296,10 +18297,19 @@ function fileDigest(/** @type {string} */ file) {
 
 /** What a git folder holds beyond its last commit, as one string — two that differ mean the folder changed (for -p's "applied", which commands can change too). Null outside git. */
 async function folderState(/** @type {string} */ dir) {
-  const out = await new Promise((resolve) => {
-    execFile("git", ["-C", dir, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : String(stdout)));
-  });
-  if (typeof out !== "string") return null;
+  // git runs here, outside the sandbox: only when the repository's own config
+  // names no program a lookup would run (a filter, an fsmonitor hook — Codex),
+  // and with the same switches the "only looks" commands get.
+  if (!gitOnlyItself(dir, "status")) return null;
+  const git = (/** @type {string[]} */ args) =>
+    new Promise((resolve) => {
+      execFile("git", ["-C", dir, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : String(stdout)));
+    });
+  const top = await git(["rev-parse", "--show-toplevel"]);
+  // Paths come relative to the repository's top, not this folder; no renames, so each entry is one path.
+  const out = typeof top === "string" ? await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=all", "--", "."]) : null;
+  if (typeof out !== "string" || typeof top !== "string") return null;
+  const root = top.trim();
   // This process's own stdout and stderr, when a script sends them to a file in the folder, are not the agent's changes.
   const own = [1, 2].flatMap((fd) => {
     try {
@@ -18320,8 +18330,8 @@ async function folderState(/** @type {string} */ dir) {
   return out
     .split("\0")
     .filter(Boolean)
-    .filter((e) => !ours(path.join(dir, e.slice(3))))
-    .map((e) => `${e}\t${fileDigest(path.join(dir, e.slice(3)))}`)
+    .filter((e) => !ours(path.join(root, e.slice(3))))
+    .map((e) => `${e}\t${fileDigest(path.join(root, e.slice(3)))}`)
     .join("\n");
 }
 
@@ -18657,8 +18667,16 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           delete s.turnOk;
           delete s.turnStopped;
           const was = await folderState(dir);
-          await codeLocalTurn(s, task);
-          status = s.turnStopped === true ? "cancelled" : s.turnOk === true ? "completed" : "failed";
+          // Ctrl-C at any point of the turn, even before the model is called (a credit or key check), is a stop (Codex).
+          let stopped = false;
+          const mark = () => (stopped = true);
+          process.on("SIGINT", mark);
+          try {
+            await codeLocalTurn(s, task);
+          } finally {
+            process.off("SIGINT", mark);
+          }
+          status = stopped || s.turnStopped === true ? "cancelled" : s.turnOk === true ? "completed" : "failed";
           // In git: what the folder holds against its last commit, before and after (commands change files too).
           // Outside git: the file tools' targets, and a command that ran with --yes counts as a change.
           const now = was === null ? null : await folderState(dir);
