@@ -763,7 +763,15 @@ asked in English answers in English whatever the agent was told; a browser
 reports `en-US` to every page; a fetch sends no `Accept-Language`.
 `language:` is what those read. It never decides how a person is answered:
 an agent answers someone in the language they wrote in, whatever is set
-here. Set it and three things happen: the prompt
+here. When a language is set, the step a person's message reaches (a turn
+of a conversation: `foldrun code`, the dashboard) gets one line ahead of
+the message, `Reply language: English (en)`, read from the message itself —
+by its letters (Persian, Arabic and Urdu by their own; a word all three
+share by the setting), then a few common words for languages written in
+Latin letters, English unless two signs say another. Code, paths and links
+do not count; an ask in so many words ("reply in Persian", "به انگلیسی
+جواب بده") wins; a message too short to tell gets no line. A later step,
+and an agent with no language set, get none. Set it and three things happen: the prompt
 gains a sentence naming the language for what the agent produces on its own, `web action=search` asks the engine in it
 (and for its region, when the tag has one), `web action=browse` reports it as the
 page's locale, and `web action=fetch` requests it. A `language=` argument on
