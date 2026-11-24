@@ -79,7 +79,7 @@ test("limits, shows and lifts an account secret's workspaces on the platform", a
     r = await run("secrets", "workspaces", "STRIPE_KEY", "--none", "--url", p.url, "--token", "k");
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(p.patches.at(-1), { name: "STRIPE_KEY", workspaces: [] });
-    assert.match(r.stdout, /may be used in no workspace/);
+    assert.match(r.stdout, /may be used in no project/);
 
     r = await run("secrets", "workspaces", "STRIPE_KEY", "sales", "--all", "--url", p.url, "--token", "k");
     assert.notEqual(r.status, 0);
