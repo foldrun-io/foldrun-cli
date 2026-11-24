@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [31.4.0] — 2026-11-24
+
+- feat(code): token hints before a turn that re-reads the conversation (FOL-262) ([febeffc](https://github.com/foldrun-io/foldrun-cli/commit/febeffc))
+- perf(code): load the MCP engine only when a server connects; model words from their own module (FOL-265) ([4d10fc7](https://github.com/foldrun-io/foldrun-cli/commit/4d10fc7))
+
 ## [31.3.1] — 2026-11-24
 
 ### deps
