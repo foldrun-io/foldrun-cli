@@ -720,6 +720,7 @@ cloud, on foldrun credits.
 3. **Each one's changes are asked about again** before they go into the
    folder. The question shows git's own stat of the exact patch, after
    `git apply --check`; **d** shows the whole diff, and **y** applies it.
+   **f** takes it file by file (see `/undo` below).
    **a** allows cloud agents' changes for the rest of the session. A yes
    to the agent's own edits does not cover them. A patch that no longer
    applies (an earlier agent's patch, or a change since, touched the same
@@ -803,7 +804,8 @@ choice.
 |---|---|
 | `/help` | the commands |
 | `/diff` | what is changed in the folder now |
-| `/undo` | take back the last patch this session applied (refused if the folder changed since) |
+| `/undo` | take back the last patch this session applied (refused if the folder changed since) — exactly what went in, so after a patch taken file by file, those files only |
+| *(at* `apply it?` *)* `f` | take a cloud turn's or a cloud agent's patch file by file, when it changes more than one. Each file is shown with git's stat and asked about: **y** takes it, **n** leaves it, **d** shows its diff first. The files taken are joined into one patch again, checked by git (a file that cannot stand without a refused one is said, and nothing is applied), shown as a stat, and applied on a last yes. The whole patch is kept in a file. The agent is told which files are in the folder and which you refused, so it does not build on a change that is not there. A file goes in whole or not at all: parts of one file are not offered |
 | `/status` | the session: id, turns, spend, model, agent, platform, last run |
 | `/model`, `/model max` | `/model` opens a list — Default (Sonnet), Max (Opus), Fast (Haiku), the current one ticked; ↑/↓ and Enter choose, Esc keeps it. With a name (`fast`, `default`, `max`, a model id) it is set straight away. Either changes the `model:` line of the agent's file from the next message — for every run of that agent, as an edit and deploy would |
 | `/new`, `/clear` | a fresh conversation |

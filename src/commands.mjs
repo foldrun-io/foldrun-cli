@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines } from "./code-session.mjs";
+import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
@@ -13538,15 +13539,107 @@ function patchPreview(/** @type {string} */ dir, /** @type {Buffer | string} */ 
   return { stat: String(git("--stat").stdout).trimEnd().split("\n").filter((l) => l.trim()).map((l) => `  ${statLine(plainText(l.trim()))}`) };
 }
 
+/** `git apply <args>` reading a patch, from the repository's top as applyPatch runs it; null when the folder is in no repository or git cannot read it. */
+function gitReadPatch(/** @type {string} */ dir, /** @type {Buffer | string} */ patch, /** @type {string[]} */ args, /** @type {{ root: string, prefix: string } | null} */ place = gitPlace(dir)) {
+  if (!place) return null;
+  const out = spawnSync("git", ["-C", place.root, "apply", ...(place.prefix ? [`--directory=${place.prefix}`] : []), ...args], { input: patch, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return out.status !== 0 || out.error ? null : { out: String(out.stdout), prefix: place.prefix };
+}
+
+/** Where a folder is in its repository: the top, and the folder's place under it. Asked once for many reads. */
+function gitPlace(/** @type {string} */ dir) {
+  const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  const pre = spawnSync("git", ["-C", dir, "rev-parse", "--show-prefix"], { encoding: "utf8" });
+  if (top.status !== 0 || pre.status !== 0) return null;
+  return { root: top.stdout.replace(/\r?\n$/, ""), prefix: pre.stdout.replace(/\r?\n$/, "").replace(/\/$/, "") };
+}
+
+/** The files a patch names, as git reads it and as the folder names them; none when git cannot read it. @returns {string[]} */
+function patchFileNames(/** @type {string} */ dir, /** @type {Buffer | string} */ patch, /** @type {{ root: string, prefix: string } | null} */ place = gitPlace(dir)) {
+  const r = gitReadPatch(dir, patch, ["--numstat", "-z"], place);
+  return r ? numstatPaths(r.out).map((f) => (r.prefix && f.startsWith(`${r.prefix}/`) ? f.slice(r.prefix.length + 1) : f)) : [];
+}
+
+/**
+ * A patch taken file by file (FOL-251): each file is shown with git's own
+ * stat and asked about — y takes it, n leaves it, d shows its diff first.
+ * The files taken are joined into one patch again and checked by git
+ * together, since a file may not stand without another (one that replaces
+ * a file by a folder, say) — so no file is ruled out on its own.
+ *
+ * The patch is cut and joined as bytes: a file that is not UTF-8 goes in as
+ * it came. It is offered only when every piece is exactly one path, no path
+ * comes twice, and the pieces are the whole patch — anything else (a diff
+ * without git's headers, a piece naming two files) is whole-patch only.
+ * @param {string} dir
+ * @param {Buffer | string} patch
+ * @param {(question: string) => Promise<string | null>} ask null: the keyboard closed or the turn was stopped
+ * @param {string} [pad] the indent of its lines
+ * @returns {Promise<{ patch: Buffer, taken: string[], refused: string[], stat: string[] } | { none: string }>} `none`: why nothing was chosen
+ */
+async function choosePatchFiles(dir, patch, ask, pad = "  ") {
+  // A patch that reached here as text and lost bytes on the way cannot be cut safely.
+  if (typeof patch === "string" && patch.includes("\uFFFD")) return { none: "it holds a file that is not UTF-8 text, which can only go in whole" };
+  const whole = patchText(patch);
+  const pieces = patchSections(whole);
+  if (pieces.length < 2) return { none: "it changes one file: yes or no is the whole choice" };
+  const place = gitPlace(dir);
+  // One read of each piece, the keyboard let through between them: a stop is heard before a long patch is all read.
+  /** @type {string[][]} */
+  const names = [];
+  for (const [i, piece] of pieces.entries()) {
+    names.push(patchFileNames(dir, patchBytes(piece), place));
+    if (i % 25 === 24) await new Promise((resolve) => setImmediate(resolve));
+  }
+  const flat = names.flat();
+  if (joinSections(pieces) !== (whole.endsWith("\n") ? whole : `${whole}\n`) || names.some((n) => n.length !== 1) || new Set(flat).size !== flat.length) return { none: "its files cannot be told apart one by one (it is not cut the way git cuts a patch): it goes in whole or not at all" };
+  /** @type {string[]} */
+  const keep = [];
+  /** @type {string[]} */
+  const taken = [];
+  /** @type {string[]} */
+  const refused = [];
+  for (const [i, piece] of pieces.entries()) {
+    const bytes = patchBytes(piece);
+    const name = plainText(names[i][0]);
+    // git's stat of the piece: read, not checked against the folder — whether the choice applies is decided for the files taken together.
+    const stat = gitReadPatch(dir, bytes, ["--stat"], place)?.out.split("\n").find((l) => l.includes("|"));
+    // The whole path, never git's shortened one: two files that end alike are told apart at the question.
+    const shown = stat ? statLine(plainText(`${name} |${stat.slice(stat.lastIndexOf("|") + 1)}`)) : name;
+    for (;;) {
+      const answer = await ask(`${pad}${c.grey(`${i + 1}/${pieces.length}`)} ${c.white(shown)} ${c.grey("— take it? [")}${c.green("y")}${c.grey("/")}${c.red("n")}${c.grey("] (")}${c.cyan("d")}${c.grey(" shows it) ")}`);
+      if (answer === null) return { none: "stopped" };
+      const a = answer.trim().toLowerCase();
+      if (a === "d" || a === "diff") {
+        console.log(`\n${colorPatch(plainText(bytes.toString("utf8")), c).split("\n").map((l) => `${pad}${l}`).join("\n")}\n`);
+        continue;
+      }
+      if (a === "y" || a === "yes") {
+        keep.push(piece);
+        taken.push(name);
+      } else refused.push(name);
+      break;
+    }
+  }
+  if (!keep.length) return { none: "no file was taken" };
+  if (!refused.length) return { none: "every file was taken: that is the whole patch" };
+  const joined = patchBytes(joinSections(keep));
+  const check = patchPreview(dir, joined);
+  if ("error" in check) return { none: `the files taken do not apply without the ones left out — git said: ${oneLine(check.error).slice(0, 300)}` };
+  return { patch: joined, taken, refused, stat: check.stat };
+}
+
 /**
  * Put a run's patch into a folder: `git apply --check` first, then git's own
  * stat, then a yes (or --yes), then `git apply`. Run from the repository's
  * top with --directory: a `git apply` started in a subfolder silently skips
  * every path the patch names, because patch paths read from the top.
- * Answers whether it was applied.
+ * Answers whether it was applied. At the question `f` takes it file by
+ * file: `part`, when given, is then told the patch that went in and which
+ * files were taken and refused.
  */
 /** @param {{ asked: boolean, onAsk?: Set<() => void>, beforeAsk?: () => Promise<void> } | null} [cancel] a turn's Ctrl-C state: pressed means "do not apply" */
-async function applyPatch(dir, patch, flags, label, cancel = null) {
+async function applyPatch(dir, patch, flags, label, cancel = null, /** @type {{ patch?: Buffer | string, taken?: string[], refused?: string[] } | null} */ part = null) {
   const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
   const pre = spawnSync("git", ["-C", dir, "rev-parse", "--show-prefix"], { encoding: "utf8" });
   if (top.status !== 0 || pre.status !== 0) throw new Error(`${dir} is not in a git repository — the patch is applied with git`);
@@ -13602,8 +13695,33 @@ async function applyPatch(dir, patch, flags, label, cancel = null) {
     // are the next message's, never its answer (Codex).
     if (cancel?.beforeAsk) await cancel.beforeAsk();
     let answer = "";
+    const several = patchSections(patchText(patch)).length > 1;
     for (;;) {
-      answer = ((await cancellablePrompt(`  ${c.bold(c.white("apply it"))} ${c.grey(`to ${plainText(homeTilde(dir))}?`)} ${c.grey("[")}${c.green("y")}${c.grey("/")}${c.red("N")}${c.grey("]")} ${c.grey("(")}${c.cyan("d")}${c.grey(" shows the diff)")} `, cancel)) ?? "").trim();
+      answer = ((await cancellablePrompt(`  ${c.bold(c.white("apply it"))} ${c.grey(`to ${plainText(homeTilde(dir))}?`)} ${c.grey("[")}${c.green("y")}${c.grey("/")}${c.red("N")}${c.grey("]")} ${c.grey("(")}${c.cyan("d")}${c.grey(" shows the diff)")} ${several ? c.grey("(f: file by file) ") : ""}`, cancel)) ?? "").trim();
+      if (several && /^f(iles?)?$/i.test(answer) && !cancel?.asked) {
+        const picked = await choosePatchFiles(dir, patch, (q) => cancellablePrompt(q, cancel));
+        if ("none" in picked) {
+          if (picked.none !== "stopped") console.log(`  ${c.dim(`${picked.none} — the whole patch is asked about again`)}`);
+          if (cancel?.asked || !process.stdin.readable || process.stdin.destroyed) {
+            answer = "";
+            break;
+          }
+          continue;
+        }
+        for (const line of picked.stat) console.log(line);
+        const sure = ((await cancellablePrompt(`  ${c.bold(c.white(`apply these ${picked.taken.length} of ${picked.taken.length + picked.refused.length} files`))}${c.grey("?")} ${c.grey("[")}${c.green("y")}${c.grey("/")}${c.red("N")}${c.grey("]")} `, cancel)) ?? "").trim();
+        if (!/^y(es)?$/i.test(sure)) {
+          answer = "";
+          break;
+        }
+        // From here the patch is the files taken: what git applies, what is kept, what /undo takes back.
+        const whole = patch;
+        patch = picked.patch;
+        if (part) Object.assign(part, { patch: picked.patch, taken: picked.taken, refused: picked.refused });
+        console.log(`  ${c.dim(`left out: ${picked.refused.map((f) => plainText(f)).join(", ")} — the whole patch is kept at ${keepPatch(whole, label)}`)}`);
+        answer = "y";
+        break;
+      }
       if (!/^d(iff)?$/i.test(answer)) break;
       console.log(`\n${colorPatch(plainText(String(patch)), c).split("\n").map((l) => `  ${l}`).join("\n")}\n`);
     }
@@ -14118,8 +14236,14 @@ async function codeTurn(s, task, include = []) {
         console.log(`  ${c.dim("not applied — you pressed Ctrl-C")}`);
       } else if (left?.status === "changed") {
         console.log(`  ${c.dim(stoppedByYou ? "it had changed some files before you stopped it:" : "it changed some files before it ended:")}`);
-        if (await applyPatch(dir, left.patch, { ...flags, yes: false }, runId, cancel)) {
-          (s.applied ??= []).push({ patch: String(left.patch), runId });
+        /** @type {{ patch?: Buffer | string, taken?: string[], refused?: string[] }} */
+        const part = {};
+        if (await applyPatch(dir, left.patch, { ...flags, yes: false }, runId, cancel, part)) {
+          (s.applied ??= []).push({ patch: part.patch ?? String(left.patch), runId });
+          if (part.refused?.length) {
+            (s.cloudOwed ??= []).push(partNote(part.taken ?? [], part.refused));
+            s.turnPart = { taken: part.taken ?? [], refused: part.refused };
+          }
           console.log(`  ${c.dim("/diff shows it · /undo takes it back")}`);
         }
       } else if (stoppedByYou) {
@@ -14141,9 +14265,20 @@ async function codeTurn(s, task, include = []) {
     } else if (p.status !== "changed") console.log(`  ${c.amber("!")} no patch: ${plainText(p.reason ?? p.status)}\n`);
     else {
       console.log();
-      if (await applyPatch(dir, p.patch, flags, runId, cancel)) {
+      /** @type {{ patch?: Buffer | string, taken?: string[], refused?: string[] }} */
+      const part = {};
+      if (await applyPatch(dir, p.patch, flags, runId, cancel, part)) {
         s.patchHandled = !cancel.asked;
-        (s.applied ??= []).push({ patch: String(p.patch), runId });
+        // Exactly what went in: /undo takes back that and no more.
+        (s.applied ??= []).push({ patch: part.patch ?? String(p.patch), runId });
+        // The cloud agent's own copy has every file: it is told which ones the folder does not.
+        if (part.refused?.length) {
+          // Owed to the cloud agent until a cloud turn carries it: a turn on this computer in between,
+          // or a restart, does not use it up (the agent here reads it from the exchange instead).
+          (s.cloudOwed ??= []).push(partNote(part.taken ?? [], part.refused));
+          // On the exchange too: it outlives the session, and the other side is told the same when it takes over.
+          s.turnPart = { taken: part.taken ?? [], refused: part.refused };
+        }
         if (codeInteractive) console.log(`  ${c.dim("/diff shows it · /undo takes it back")}`);
       }
       console.log();
@@ -14173,8 +14308,11 @@ async function codeTurn(s, task, include = []) {
  * exchanges, clipped, and how far each side has been told. In the CLI's own
  * private file, beside the conversation id.
  */
+/** The file names of a patch taken in part, as kept with a conversation and read back: strings, plain, bounded. */
+const partNames = (/** @type {unknown[]} */ l) => l.filter((x) => typeof x === "string").map((x) => plainText(String(x)).slice(0, 300)).slice(0, 200);
+
 function sessionCarry(/** @type {any} */ s) {
-  if ((!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size && typeof s.goal !== "string" && !(Array.isArray(s.todos) && s.todos.length) && !(Array.isArray(s.past) && s.past.length) && typeof s.label !== "string") return {};
+  if (!(Array.isArray(s.cloudOwed) && s.cloudOwed.length) && (!Array.isArray(s.transcript) || !s.transcript.length) && !s.shownMessages?.size && typeof s.goal !== "string" && !(Array.isArray(s.todos) && s.todos.length) && !(Array.isArray(s.past) && s.past.length) && typeof s.label !== "string") return {};
   const owner = typeof s.owner === "string" ? { owner: s.owner } : {};
   const KEEP = 8;
   const cut = Math.max(0, s.transcript.length - KEEP);
@@ -14187,9 +14325,10 @@ function sessionCarry(/** @type {any} */ s) {
     // The conversation kept on this computer still holds what was read: later answers stay marked (Codex).
     ...(s.privateSeen === true ? { privateSeen: true } : {}),
     ...(typeof s.goal === "string" ? { goal: s.goal } : {}),
+    ...(Array.isArray(s.cloudOwed) && s.cloudOwed.length ? { cloudOwed: s.cloudOwed.slice(-10) } : {}),
     ...(Array.isArray(s.todos) && s.todos.length ? { todos: s.todos, ...(s.todosWithheld === true ? { todosWithheld: true } : {}) } : {}),
     ...(s.cloudBriefed === s.context ? { briefed: true } : {}),
-    transcript: s.transcript.slice(cut).map((/** @type {any} */ e) => ({ where: e.where, you: clip(e.you), agent: clip(e.agent), ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}), ...(e.private === true ? { private: true } : {}), ...(typeof e.share === "boolean" ? { share: e.share } : {}) })),
+    transcript: s.transcript.slice(cut).map((/** @type {any} */ e) => ({ where: e.where, you: clip(e.you), agent: clip(e.agent), ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(e.part && Array.isArray(e.part.taken) && Array.isArray(e.part.refused) ? { part: { taken: partNames(e.part.taken), refused: partNames(e.part.refused) } } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}), ...(e.private === true ? { private: true } : {}), ...(typeof e.share === "boolean" ? { share: e.share } : {}) })),
     told: { local: Math.max(0, (s.told?.local ?? 0) - cut), cloud: Math.max(0, (s.told?.cloud ?? 0) - cut) },
     ...(s.shownMessages?.size ? { shown: [...s.shownMessages].slice(-200) } : {}),
   };
@@ -16099,7 +16238,7 @@ export function cloudTasks(/** @type {unknown} */ input) {
  * @param {any} s
  * @param {unknown} input
  * @param {AbortSignal} signal
- * @param {{ pause: () => void, resume: () => void, approveApply: (n: number, lines: string[], patch: string) => Promise<boolean>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
+ * @param {{ pause: () => void, resume: () => void, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
  * @returns {Promise<{ text: string, isError?: boolean }>}
  */
 async function runCloudAgents(s, input, signal, h) {
@@ -16271,18 +16410,22 @@ async function runCloudAgents(s, input, signal, h) {
         const files = [...(p.meta?.modified ?? []), ...(p.meta?.added ?? []), ...(p.meta?.deleted ?? [])].map((f) => plainText(typeof f === "string" ? f : String(f?.path ?? ""))).filter(Boolean);
         const named = files.length ? files.slice(0, 30).map(oneLine).join(", ") + (files.length > 30 ? ` and ${files.length - 30} more` : "") : "some files";
         const preview = patchPreview(dir, p.patch);
-        const yes = "stat" in preview && !signal.aborted && (await h.approveApply(r.n, preview.stat, String(p.patch)));
+        const yes = "stat" in preview && !signal.aborted && (await h.approveApply(r.n, preview.stat, p.patch));
         if ("error" in preview) changes = `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; an earlier agent's patch or another change may touch the same lines): ${preview.error}. The patch is kept at ${keepPatch(p.patch, r.id)} — read it and make the changes yourself if they are still wanted.`;
         else if (signal.aborted) changes = `It changed ${named}. Not put into the folder: the person stopped the turn. The patch is kept at ${keepPatch(p.patch, r.id)}.`;
         else if (!yes) changes = `It changed ${named}. Not put into the folder: the person said no. The patch is kept at ${keepPatch(p.patch, r.id)}.`;
         else {
           try {
             // The turn's stop reaches the last check before git writes (Codex).
-            const applied = await applyPatch(dir, p.patch, { ...flags, yes: true }, r.id, { get asked() { return signal.aborted; }, onAsk: new Set() });
+            // Taken file by file: only the files the person took are applied, kept for /undo, and said to be in the folder.
+            const picked = typeof yes === "object" ? yes : null;
+            // The whole patch is kept before git writes: a full disk then stops the apply, never follows it.
+            const wholeAt = picked ? keepPatch(p.patch, r.id) : "";
+            const applied = await applyPatch(dir, picked ? picked.patch : p.patch, { ...flags, yes: true }, r.id, { get asked() { return signal.aborted; }, onAsk: new Set() });
             if (applied) {
-              (s.applied ??= []).push({ patch: String(p.patch), runId: r.id });
-              h.changed(files.map(oneLine));
-              changes = `It changed ${named}. Put into the folder — read these files again before you edit them.`;
+              (s.applied ??= []).push({ patch: picked ? picked.patch : String(p.patch), runId: r.id });
+              h.changed((picked ? picked.taken : files).map(oneLine));
+              changes = picked ? `It changed ${named}. ${partNote(picked.taken.map(oneLine), picked.refused.map(oneLine))} Read the files that went in again before you edit them. The whole patch is kept at ${wholeAt}.` : `It changed ${named}. Put into the folder — read these files again before you edit them.`;
             } else changes = `It changed ${named}. Not put into the folder: the person stopped the turn.`;
           } catch (err) {
             changes = `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; an earlier agent's patch or another change may touch the same lines). ${plainText(explain(err))}`;
@@ -16640,7 +16783,7 @@ async function codeLocalTurn(s, text) {
         // "always in this folder": kept for every later session here. Only
         // for a command that rules can match at all, and not under strict.
         const forFolder = !child && s.strict !== true && command !== null && scope === "command" && !("never" in commandParts(command, s.dir, inFolder));
-        const ask = `    ${c.bold("allow?")} ${c.grey("[")}${c.green("y")}${c.grey("]es · [")}${always ? `${c.cyan("a")}${c.grey(always)}` : ""}${forFolder ? `${c.cyan("f")}${c.grey("] always in this folder · [")}` : ""}${c.red("n")}${c.grey("]o")}${isApply ? c.grey(" · [d]iff") : ""} `;
+        const ask = `    ${c.bold("allow?")} ${c.grey("[")}${c.green("y")}${c.grey("]es · [")}${always ? `${c.cyan("a")}${c.grey(always)}` : ""}${forFolder ? `${c.cyan("f")}${c.grey("] always in this folder · [")}` : ""}${c.red("n")}${c.grey("]o")}${isApply ? c.grey(` · [d]iff${patchSections(patchText(String(input.patch ?? ""))).length > 1 ? " · [f]ile by file" : ""}`) : ""} `;
         // The SDK taking the request back closes the question too (Codex).
         const settle = () => {
           for (const f of cancel.onAsk) f();
@@ -16684,6 +16827,30 @@ async function codeLocalTurn(s, text) {
                 break;
               }
               continue;
+            }
+            // f: a cloud agent's patch taken file by file; the files taken become the patch that is applied.
+            if (isApply && (answer === "f" || answer === "files") && !cancel.asked && !signal?.aborted) {
+              const picked = await choosePatchFiles(s.dir, /** @type {any} */ (input).patchBytes ?? String(input.patch ?? ""), (q) => cancellablePrompt(q, cancel), "      ");
+              if (cancel.asked || signal?.aborted) break;
+              if ("none" in picked) {
+                console.log(`      ${c.dim(`${picked.none} — the whole patch is asked about again`)}`);
+                if (!process.stdin.readable || process.stdin.destroyed) {
+                  answer = "";
+                  words = "";
+                  break;
+                }
+                continue;
+              }
+              for (const line of picked.stat) console.log(`    ${line}`);
+              const sure = ((await cancellablePrompt(`      ${c.grey(`apply these ${picked.taken.length} of ${picked.taken.length + picked.refused.length} files? [y/N] `)}`, cancel)) ?? "").trim().toLowerCase();
+              if (cancel.asked || signal?.aborted) break;
+              if (sure === "y" || sure === "yes") {
+                signal?.removeEventListener("abort", settle);
+                return { behavior: /** @type {const} */ ("allow"), updatedInput: { ...input, picked: { patch: picked.patch, taken: picked.taken, refused: picked.refused } } };
+              }
+              answer = "";
+              words = "";
+              break;
             }
             // d: the whole patch, as git will apply it, then the question again.
             if (!(isApply && (answer === "d" || answer === "diff") && !cancel.asked && !signal?.aborted)) break;
@@ -16799,11 +16966,15 @@ async function codeLocalTurn(s, text) {
           if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
         },
         approveApply: (n, lines, patch) => {
-          const next = gate.then(() => decide("cloud_apply", { n, lines, patch }, signal));
+          // The patch's own bytes go with it: taken file by file, it is cut and joined as bytes.
+          const next = gate.then(() => decide("cloud_apply", { n, lines, patch: String(patch), patchBytes: patch }, signal));
           gate = next.then(() => undefined, () => undefined);
           return next.then((d) => {
             stopTicker();
-            return d.behavior === "allow";
+            if (d.behavior !== "allow") return false;
+            // Taken file by file: the patch of the files taken, and which were refused.
+            const picked = /** @type {any} */ (d).updatedInput?.picked;
+            return picked && Buffer.isBuffer(picked.patch) ? picked : true;
           });
         },
         changed: (files) => {
@@ -17355,6 +17526,11 @@ async function codeCmd(positional, flags, layout) {
   {
     // The todo list of the conversation being continued: read as strictly as when it was written.
     if (carried?.privateSeen === true) s.privateSeen = true;
+    // What the cloud agent is still owed, as it was written here: plain text, bounded.
+    if (carried && Array.isArray(carried.cloudOwed)) {
+      const owed = carried.cloudOwed.filter((/** @type {unknown} */ x) => typeof x === "string" && x && !hasControl(x)).map((/** @type {string} */ x) => x.slice(0, 4_000)).slice(-10);
+      if (owed.length) s.cloudOwed = owed;
+    }
     // A conversation opened again by its id, on this computer, without its saved state (the command
     // `foldrun sessions search` prints, for one that is not the folder's last): the agent reads its kept
     // history whole, and whether that holds something from an added folder or an MCP server is not known
@@ -17395,7 +17571,7 @@ async function codeCmd(positional, flags, layout) {
     }
   }
   if (carried && Array.isArray(carried.transcript)) {
-    s.transcript = carried.transcript.filter((/** @type {any} */ e) => e && (e.where === "local" || e.where === "cloud") && typeof e.you === "string" && typeof e.agent === "string").map((/** @type {any} */ e) => ({ where: e.where, you: e.you, agent: e.agent, ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}), ...(e.private === true ? { private: true } : {}), ...(typeof e.share === "boolean" ? { share: e.share } : {}) }));
+    s.transcript = carried.transcript.filter((/** @type {any} */ e) => e && (e.where === "local" || e.where === "cloud") && typeof e.you === "string" && typeof e.agent === "string").map((/** @type {any} */ e) => ({ where: e.where, you: e.you, agent: e.agent, ...(typeof e.applied === "boolean" ? { applied: e.applied } : {}), ...(e.part && Array.isArray(e.part.taken) && Array.isArray(e.part.refused) ? { part: { taken: partNames(e.part.taken), refused: partNames(e.part.refused) } } : {}), ...(typeof e.run === "string" ? { run: e.run } : {}), ...(e.private === true ? { private: true } : {}), ...(typeof e.share === "boolean" ? { share: e.share } : {}) }));
     const n = s.transcript.length;
     const at = (/** @type {unknown} */ v) => (Number.isInteger(v) && /** @type {number} */ (v) >= 0 && /** @type {number} */ (v) <= n ? /** @type {number} */ (v) : n);
     s.told = { local: at(carried.told?.local), cloud: at(carried.told?.cloud) };
@@ -17424,7 +17600,7 @@ async function codeCmd(positional, flags, layout) {
     const status = await codeTurn(s, [carry, flags.task.trim()].filter(Boolean).join("\n\n"), await messagesForTurn(s, false));
     if ((s.turns ?? 0) > before) s.cloudBriefed = s.context;
     if ((s.turns ?? 0) > before) {
-      s.transcript.push({ where: "cloud", you: flags.task.trim(), agent: typeof s.turnReply === "string" ? s.turnReply : "", applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) });
+      s.transcript.push({ where: "cloud", you: flags.task.trim(), agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(s.turnPart ? { part: s.turnPart } : {}), applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) });
       s.told.cloud = s.transcript.length;
     }
     remember();
@@ -17499,12 +17675,16 @@ async function codeCmd(positional, flags, layout) {
       s.cloudBriefDue = where === "cloud" && s.cloudBriefed !== s.context;
       if (where !== "cloud") delete s.cloudExtra;
       const sent = where === "local" ? await localMessagesBlock(s) : "";
-      const message = [carry, sent, goalNote(s.goal), todoNote, withNotes(notes, said)].filter(Boolean).join("\n\n");
+      // What the cloud agent is still owed (a patch of its own taken only in part): with this message, when it goes to the cloud.
+      /** @type {string[]} */
+      const owed = where === "cloud" && Array.isArray(s.cloudOwed) ? s.cloudOwed.slice() : [];
+      const message = [carry, sent, goalNote(s.goal), todoNote, owed.map((x) => `[${x}]`).join("\n"), withNotes(notes, said)].filter(Boolean).join("\n\n");
       const before = s.turns ?? 0;
       delete s.turnOk;
       delete s.patchHandled;
       s.turnTyped = typed;
       const patches = s.applied?.length ?? 0;
+      delete s.turnPart;
       delete s.turnReply;
       s.turnSteer = [];
       s.mode = where;
@@ -17532,7 +17712,12 @@ async function codeCmd(positional, flags, layout) {
         // What was typed, never what a command file expands to: that text was
         // checked for this side only, and the record crosses to the other (Codex).
         const steered = Array.isArray(s.turnSteer) && s.turnSteer.length ? `\n(sent while the agent worked: ${s.turnSteer.join(" · ")})` : "";
-        s.transcript.push({ where, you: `${typed}${steered}`, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(where === "cloud" ? { applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) } : {}), ...(where === "local" && s.privateSeen === true ? { private: true } : {}), ...(where === "local" && typeof s.turnThinking === "string" ? { thinking: s.turnThinking } : {}) });
+        // The turn was answered: what it carried to the cloud agent is no longer owed (what this turn itself came to owe stays).
+        if (owed.length && Array.isArray(s.cloudOwed)) {
+          s.cloudOwed = s.cloudOwed.filter((/** @type {string} */ x) => !owed.includes(x));
+          if (!s.cloudOwed.length) delete s.cloudOwed;
+        }
+        s.transcript.push({ where, you: `${typed}${steered}`, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(where === "cloud" && s.turnPart ? { part: s.turnPart } : {}), ...(where === "cloud" ? { applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) } : {}), ...(where === "local" && s.privateSeen === true ? { private: true } : {}), ...(where === "local" && typeof s.turnThinking === "string" ? { thinking: s.turnThinking } : {}) });
         delete s.turnThinking;
         s.here[where]++;
         // Where this conversation was last worked on: /resume goes back there.
@@ -17575,7 +17760,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     // Nothing of the old conversation stays in the count (Codex).
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo"]) delete s[k];
+    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo", "cloudOwed", "turnPart"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };
@@ -17598,7 +17783,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     if (to.briefed === true) s.cloudBriefed = s.context;
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo"]) delete s[k];
+    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo", "cloudOwed", "turnPart"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };

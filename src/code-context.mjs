@@ -337,7 +337,8 @@ export function cloudBrief(dir, sent) {
 
 // ------------------------------------------------- one session, two places
 
-/** @typedef {{ where: "local" | "cloud", you: string, agent: string, applied?: boolean, thinking?: string }} Exchange */
+/** @typedef {{ where: "local" | "cloud", you: string, agent: string, applied?: boolean, part?: { taken: string[], refused: string[] }, thinking?: string }} Exchange
+ * `part`: the patch was taken file by file — whose changes went in, whose were declined. */
 
 const clip = (/** @type {string} */ t, /** @type {number} */ n) => (t.length > n ? `${t.slice(0, n)} […]` : t);
 
@@ -357,7 +358,7 @@ export function carryNote(transcript, to, from = 0, maxChars = 8_000) {
   // The newest first when it has to be cut: what was just done matters most.
   for (const e of [...missed].reverse()) {
     // A cloud turn's changes are in the folder only when its patch was applied.
-    const outcome = e.where === "cloud" && typeof e.applied === "boolean" ? `\n(${e.applied ? "its changes were applied to the folder" : "its changes are NOT in the folder: the patch was not applied, or was taken back"})` : "";
+    const outcome = e.where === "cloud" && typeof e.applied === "boolean" ? `\n(${e.applied ? (e.part?.refused?.length ? `only part of its changes were applied to the folder — applied, to: ${e.part.taken.slice(0, 40).join(", ")}; declined by the person, to: ${e.part.refused.slice(0, 40).join(", ")} (for these the folder is as it was)` : "its changes were applied to the folder") : "its changes are NOT in the folder: the patch was not applied, or was taken back"})` : "";
     const text = `The person: ${clip(e.you.trim(), 1_500)}\nThe agent: ${clip(e.agent.trim() || "(no reply)", 2_500)}${outcome}`;
     if (used + text.length > maxChars && lines.length) {
       lines.unshift("[… earlier exchanges left out]");

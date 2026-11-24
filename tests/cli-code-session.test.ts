@@ -900,6 +900,79 @@ test("/search finds a conversation by a line only a tool printed and goes back t
   }
 });
 
+test("a cloud patch taken file by file: two of three go in, the third is left out, /undo takes back exactly those two, and the agent's next turn is told", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const THREE =
+    "diff --git a/a.txt b/a.txt\nindex 7898192..422c2b7 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1,2 @@\n a\n+b\n" +
+    "diff --git a/two.txt b/two.txt\nnew file mode 100644\nindex 0000000..f719efd\n--- /dev/null\n+++ b/two.txt\n@@ -0,0 +1 @@\n+two\n" +
+    "diff --git a/three.txt b/three.txt\nnew file mode 100644\nindex 0000000..2bdf67a\n--- /dev/null\n+++ b/three.txt\n@@ -0,0 +1 @@\n+three\n";
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID, context: "code-pf" }),
+    [`GET ${WS}/runs/${RUN}`]: () => ({
+      id: RUN, flow: "adhoc:coder", status: "completed", snapshot: { id: ID }, startedAt: "2026-11-19T01:00:00.000Z", finishedAt: "2026-11-19T01:00:05.000Z",
+      steps: [{ agent: "coder", group: 1, status: "completed", attempts: 1, costUsd: 0.02, events: [{ t: "2026-11-19T01:00:01.000Z", type: "text", text: "Made three changes." }], result: "Made three changes." }],
+    }),
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "changed" }), "application/json") : raw(THREE, "text/x-diff")),
+    [`GET ${WS}/sessions/code-pf/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-pf", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("make three changes\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    t.send("y\r");
+    at = await t.until(/apply it to[^\n]*\(f: file by file\)/, at, 30_000);
+    t.send("f\r");
+    at = await t.until(/1\/3 a\.txt \|\s+1 \+[^\n]*take it\? \[y\/n\] \(d shows it\)/, at);
+    t.send("d\r");
+    at = await t.until(/\+b\s[\s\S]*1\/3 a\.txt[^\n]*take it\?/, at);
+    assert.doesNotMatch(t.out().slice(at - 400), /\+two/, "d shows that file's change alone");
+    t.send("y\r");
+    at = await t.until(/2\/3 two\.txt[^\n]*take it\?/, at);
+    t.send("n\r");
+    at = await t.until(/3\/3 three\.txt[^\n]*take it\?/, at);
+    t.send("y\r");
+    at = await t.until(/a\.txt[^\n]*\n[^\n]*three\.txt[^\n]*\n[^\n]*2 files changed[\s\S]*apply these 2 of 3 files\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/left out: two\.txt — the whole patch is kept at [\s\S]*✓ applied[\s\S]*\/undo takes it back/, at);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
+    assert.equal(fs.readFileSync(path.join(d, "three.txt"), "utf8"), "three\n");
+    assert.equal(fs.existsSync(path.join(d, "two.txt")), false, "the refused file is not in the folder");
+    // The agent's next turn knows which went in and which was refused.
+    t.send("go on\r");
+    // The fake platform answers with the same patch, which no longer applies: said, and the prompt comes back.
+    at = await t.until(/send it\? \[y\]es|does not apply/, at, 30_000);
+    if (!/does not apply/.test(t.out().slice(at - 200, at))) {
+      t.send("y\r");
+      at = await t.until(/does not apply/, at, 30_000);
+    }
+    at = await t.until(/\w ❯ /, at);
+    const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
+    assert.equal(posts.length, 2);
+    assert.match(JSON.parse(posts[1]!.body).task, /Changes applied, to: a\.txt, three\.txt\. Changes declined by the person, to: two\.txt — for these the folder is as it was before/);
+    // Kept with the conversation: a restart, or the other side taking over, is told the same.
+    const kept = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"));
+    assert.deepEqual(Object.values(kept as Record<string, any>)[0].transcript[0].part, { taken: ["a.txt", "three.txt"], refused: ["two.txt"] });
+    // /undo takes back exactly what was applied.
+    t.send("/undo\r");
+    at = await t.until(/take back the last change/, at);
+    t.send("y\r");
+    at = await t.until(/taken back/, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n");
+    assert.equal(fs.existsSync(path.join(d, "three.txt")), false);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 function sse(content: Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string) {
   const ev = (e: Record<string, unknown>) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
   let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1 } } });
