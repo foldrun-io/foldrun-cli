@@ -422,6 +422,50 @@ export function autoUpdate(current, { env = process.env, write = (/** @type {str
       if (line) write(`  ${line}\n`);
     }
     if (skipReason({ env })) return;
+    startCheck(current, env);
+  } catch {}
+}
+
+/**
+ * A long `foldrun code` session (FOL-261): the same daily check, run by the
+ * session between turns — never during one. Never throws.
+ * @param {string} current
+ */
+export function sessionCheck(current, { env = process.env } = {}) {
+  try {
+    if (!npmShaped(PKG_ROOT) || skipReason({ env })) return;
+    startCheck(current, env);
+  } catch {}
+}
+
+/**
+ * A version newer than `current` that a session should hear about: the one
+ * made active for this installation (`ready`: /restart takes it — a major
+ * too, once `foldrun update` took it), or a major only announced. Null:
+ * none, or updates are off.
+ * @param {string} current
+ * @returns {{ version: string, ready: boolean } | null}
+ */
+export function stagedUpdate(current, env = process.env, pkgRoot = PKG_ROOT) {
+  try {
+    if (off(env) || !npmShaped(pkgRoot)) return null;
+    // What a start would hand over to: read from the active record, not from the last check's (Codex).
+    if (activeBin(current, env, pkgRoot)) return { version: String(readJson(activeFile(env, pkgRoot)).version), ready: true };
+    const s = readState(env, pkgRoot);
+    const to = String(s.to ?? "");
+    if (s.state === "major" && VERSION.test(to) && updateKind(to, current) === "notice") return { version: to, ready: false };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** The installed foldrun's own bin: what /restart starts, and it hands over to the staged version itself. */
+export const installedBin = (pkgRoot = PKG_ROOT) => path.join(pkgRoot, "bin", "foldrun.mjs");
+
+/** Start the background check in a detached child, marked now so two starts start one. */
+function startCheck(/** @type {string} */ current, /** @type {NodeJS.ProcessEnv} */ env) {
+  try {
     // Mark the check now, so two commands started together start one child.
     writeState({ ...readState(env), checkedAt: new Date().toISOString() }, env);
     // The child gets the home resolved here and, for a staged copy, the

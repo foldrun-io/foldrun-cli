@@ -16,7 +16,7 @@ import { readCodePrefs, writeCodePrefs, thinkingLines, commandMenu } from "./cod
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
-import { handedOver } from "./self-update.mjs";
+import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED_OVER } from "./self-update.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
@@ -2386,6 +2386,55 @@ function actingAs(url, flags) {
   if (env("FOLDRUN_TOKEN")) return `acting with FOLDRUN_TOKEN · ${url}`;
   const p = chosenProfile(flags);
   return p ? `acting as ${p.name}  ${p.account} · ${p.role ?? "?"} · ${p.email ?? "api key"} · ${p.url}` : null;
+}
+
+/** The exit code a restarted session gives its supervisor: "start me again, as the file says". */
+const RESTART_CODE = 75;
+
+/**
+ * Start foldrun code again (FOL-261). The first process stays as the one
+ * supervisor and starts each next session itself, so a session restarted
+ * ten times is still two processes, not eleven (Codex): a session started
+ * by it writes its next start to the file it was given and exits 75.
+ * @param {string[]} args @param {Record<string, string | null>} envNow
+ */
+async function restartSession(args, envNow) {
+  const file = process.env.FOLDRUN_RESTART_FILE;
+  if (file) {
+    fs.writeFileSync(file, JSON.stringify({ args, env: envNow }), { mode: 0o600 });
+    return RESTART_CODE;
+  }
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-restart-"));
+  const next = path.join(own, "next.json");
+  const { spawn: run } = await import("node:child_process");
+  let plan = { args, env: envNow };
+  try {
+    for (;;) {
+      /** @type {NodeJS.ProcessEnv} */
+      const env = { ...process.env, FOLDRUN_RESTART_FILE: next };
+      for (const [k, v] of Object.entries(plan.env)) {
+        if (v === null) delete env[k];
+        else env[k] = v;
+      }
+      fs.rmSync(next, { force: true });
+      // Ctrl-C reaches the session too, which handles it: the supervisor stays for it (Codex).
+      const hold = () => {};
+      process.on("SIGINT", hold);
+      const code = await new Promise((done) => {
+        const child = run(process.execPath, plan.args, { stdio: "inherit", env });
+        child.on("error", (err) => {
+          console.log(`  ${c.red("✗")} could not start foldrun again: ${plainText(explain(err))}\n`);
+          done(1);
+        });
+        child.on("exit", (n) => done(n ?? 1));
+      }).finally(() => process.off("SIGINT", hold));
+      // Again only when the session asked for it, in the file it was given; anything else is its own exit.
+      if (code !== RESTART_CODE || !fs.existsSync(next)) return /** @type {number} */ (code);
+      plan = JSON.parse(fs.readFileSync(next, "utf8"));
+    }
+  } finally {
+    fs.rmSync(own, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -15073,6 +15122,10 @@ function statusBlock(s, url) {
     row("cloud jobs", `${s.localOnly === true ? "off — the agent starts none" : "on — the agent may start them, each asked first"} (/cloud-jobs)`),
     typeof s.goal === "string" ? row("goal", `${plainText(s.goal)} (/goal clear drops it)`) : null,
     s.account ? row("account", plainText(s.account.label)) : null,
+    row("foldrun", (() => {
+      const up = stagedUpdate(CLI_VERSION);
+      return `${CLI_VERSION}${up ? (!up.ready ? ` · ${up.version} is out (a major: foldrun update, then /restart)` : ` · ${up.version} is ready — /restart`) : ""}`;
+    })()),
     row("agent", `${s.agent} in project ${s.ws}`),
     row("platform", url),
     row("folder", homeTilde(s.dir)),
@@ -15164,7 +15217,10 @@ function startTypeAhead(onInt, onSend, queue) {
         else if (queue.add(t)) text = "";
       } else if (k === "\t") text = text && !text.endsWith(" ") ? `${text} ` : text;
       else if (k === "\x7f" || k === "\b") text = [...text].slice(0, -1).join("");
-      else if ((k === "\r" || k === "\n") && onSend && alone && text.trim()) {
+      // /restart with Enter during any turn, here or in the cloud: queued for after it, never words for the agent (FOL-261).
+      else if ((k === "\r" || k === "\n") && queue && alone && isRestartLine(text)) {
+        if (queue.add("/restart")) text = "";
+      } else if ((k === "\r" || k === "\n") && onSend && alone && text.trim()) {
         const t = text.trim();
         text = "";
         onSend(t);
@@ -15199,6 +15255,9 @@ function startTypeAhead(onInt, onSend, queue) {
   };
 }
 
+/** A line that is the /restart command: its name exactly, as the prompt parser reads one (Codex). */
+const isRestartLine = (/** @type {string} */ t) => /^\/restart(?:\s|$)/i.test(t.trim()) && /^\/restart$/i.test(/^(\/[\w:?-]*)/.exec(t.trim())?.[1] ?? "");
+
 /** How many messages wait for the turn to end: the working line says so. */
 let queuedNow = 0;
 
@@ -15219,6 +15278,11 @@ function queueOf(/** @type {any} */ s) {
           console.log(`  ${c.grey("⏮")} ${c.dim(i >= 0 && i < list.length ? `dropped: ${clipLine(plainText(list.splice(i, 1)[0] ?? ""))}` : `nothing at ${own[2]} — ${list.length} queued`)}`);
         } else console.log(list.length ? list.map((x, i) => `  ${c.dim(String(i + 1).padStart(2))} ${c.grey(clipLine(plainText(x)))}`).join("\n") : `  ${c.dim("nothing is queued")}`);
         queuedNow = list.length;
+        return true;
+      }
+      // One restart, however often it is asked for (Codex).
+      if (isRestartLine(t) && list.some(isRestartLine)) {
+        console.log(`  ${c.dim("/restart is queued already")}`);
         return true;
       }
       if (list.length >= 20) {
@@ -15717,7 +15781,9 @@ function pickOne({ title, subtitle = "", choices, tick = null, start = undefined
       ...choices.slice(from, to).map((x, j) => {
         const i = from + j;
         // One screen row each, so redrawing goes up exactly as far (Codex).
-        const line = clipCells(`${i + 1}. ${x.name.padEnd(width)}   ${x.note}${x.v === tick ? "  ✔" : ""}`, (process.stdout.columns || 80) - 5);
+        // The tick stays on a narrow screen: the note is what is cut (FOL-261).
+        const mark = x.v === tick ? "  ✔" : "";
+        const line = `${clipCells(`${i + 1}. ${x.name.padEnd(width)}   ${x.note}`, (process.stdout.columns || 80) - 5 - mark.length)}${mark}`;
         return i === at ? `  ${c.cyan(`❯ ${line}`)}` : `    ${c.dim(line)}`;
       }),
       ...(to < choices.length ? [`    ${c.dim(`↓ ${choices.length - to} more`)}`] : []),
@@ -18192,6 +18258,8 @@ async function codeCmd(positional, flags, layout) {
   if (flags.continue === true && !onlyHere && flags.local !== true ? resumed?.localOnly === true || localOnly : localOnly) /** @type {any} */ (s).localOnly = true;
   // Off only by the person's own word: the flag, or their environment (never a file of the folder).
   if (flags["no-sandbox"] === true || flags.sandbox === false || process.env.FOLDRUN_CODE_SANDBOX === "off") /** @type {any} */ (s).sandboxOff = true;
+  // A /restart hands strict approvals on (FOL-261): only ever stricter, so the variable cannot loosen anything.
+  if (process.env.FOLDRUN_CODE_STRICT === "1") /** @type {any} */ (s).strict = true;
   // One session, two places (24 Nov 2026): what was said on one side goes
   // ahead of the next message on the other, once.
   // Restored before anything is kept: the first save must not wipe what a
@@ -18739,6 +18807,15 @@ async function codeCmd(positional, flags, layout) {
         console.log(`  ${c.amber("!")} ${c.grey(`the turn did not finish${s.mode === "cloud" ? " (or its patch was not put in the folder)" : ""}, so ${kept.length === 1 ? "the queued message was" : `the ${kept.length} queued messages were`} not sent — ${kept.length === 1 ? "it is" : "they are"} on your line`)}`);
       }
     }
+    // Between turns (FOL-261): the daily look for a newer foldrun, and once a session, a version ready for /restart.
+    if (!fromQueue) {
+      sessionCheck(CLI_VERSION);
+      const up = stagedUpdate(CLI_VERSION);
+      if (up && /** @type {any} */ (s).updateSaid !== `${up.version}:${up.ready}`) {
+        /** @type {any} */ (s).updateSaid = `${up.version}:${up.ready}`;
+        console.log(`  ${c.cyan("↑")} ${c.grey(!up.ready ? `foldrun ${up.version} is out — a major version, which may change what worked: foldrun update takes it, then /restart` : `foldrun ${up.version} is ready — /restart to use it (this conversation continues)`)}\n`);
+      }
+    }
     const line = fromQueue ?? (await readCodeMessage(prompt, completer, s));
     if (isLeave(line)) {
       await s.mcp?.closeAll?.().catch(() => undefined);
@@ -18813,6 +18890,31 @@ async function codeCmd(positional, flags, layout) {
         name = again ? /** @type {string} */ (again[1]).toLowerCase() : name;
         rest = again ? (again[2] ?? "").trim() : "";
       }
+    }
+    if (name === "/restart") {
+      // What was queued goes first: the restart waits behind it (Codex).
+      if (Array.isArray(s.queue)) s.queue = s.queue.filter((/** @type {string} */ x) => !isRestartLine(x));
+      if (Array.isArray(s.queue) && s.queue.length) {
+        s.queue.push("/restart");
+        queuedNow = s.queue.length;
+        say(`${s.queue.length - 1} queued message${s.queue.length === 2 ? "" : "s"} go first — /restart runs after them`);
+        continue;
+      }
+      // The installed foldrun again, on this folder, place, account, agent and conversation (FOL-261).
+      const args = [installedBin(actingFor()), "code", dir, s.mode === "cloud" ? "--cloud" : "--local", "--to", ws, "--agent", agent, "--context", s.context, "--continue", "--url", url];
+      const acct = /** @type {any} */ (s).account;
+      if (acct?.profile) args.push("--profile", acct.profile);
+      if (typeof flags.token === "string") args.push("--token", flags.token);
+      if (flags.timeout !== undefined && flags.timeout !== true) args.push("--timeout", String(flags.timeout));
+      // The session's settings as they are now, not as it was started (Codex): the sandbox on or off, strict approvals.
+      /** @type {Record<string, string | null>} */
+      const envNow = { [HANDED_OVER]: null, FOLDRUN_CODE_SANDBOX: s.sandboxOff === true ? "off" : null, FOLDRUN_CODE_STRICT: s.strict === true ? "1" : null };
+      const up = stagedUpdate(CLI_VERSION);
+      console.log(`  ${c.dim(`starting foldrun${up?.ready ? ` ${up.version}` : " again"} — the same conversation (${plainText(s.context)})`)}\n`);
+      remember();
+      await s.mcp?.closeAll?.().catch(() => undefined);
+      await s.box?.close?.().catch(() => undefined);
+      return await restartSession(args, envNow);
     }
     if (name === "/help" || name === "/?") {
       // Enter-to-send is told only where it works: on this computer, with an engine that takes it.

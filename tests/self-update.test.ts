@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { updateKind, skipReason, announcement, checkAndUpdate, readState, activeBin, versionsDir, installDir, stateFile, CHECK_EVERY_MS, HANDED_OVER } from "../src/self-update.mjs";
+import { updateKind, skipReason, announcement, checkAndUpdate, stagedUpdate, readState, activeBin, versionsDir, installDir, stateFile, CHECK_EVERY_MS, HANDED_OVER } from "../src/self-update.mjs";
 
 test("updateKind: a newer minor or patch installs, a newer major is only announced, nothing else", () => {
   assert.equal(updateKind("27.2.0", "27.1.0"), "install");
@@ -101,6 +101,23 @@ test("checkAndUpdate: a newer minor is installed BESIDE this copy (no install sc
   assert.equal(activeBin("27.1.0", n.env, other), null, "nothing staged for it, nothing rolled back for this one");
   assert.ok(activeBin("27.1.0", n.env, npmCopy));
   assert.ok(path.isAbsolute(installDir({ FOLDRUN_HOME: "rel/home" }, npmCopy)), "a relative FOLDRUN_HOME is resolved once");
+});
+
+test("stagedUpdate: a long session hears of a staged minor (for /restart) and of a major (announced only); not the version it runs, nor with updates off (FOL-261)", unix, () => {
+  const n = fakeNpm("27.2.0");
+  assert.equal(stagedUpdate("27.1.0", n.env, npmCopy), null, "nothing staged yet");
+  checkAndUpdate({ current: "27.1.0", env: n.env, pkgRoot: npmCopy });
+  assert.deepEqual(stagedUpdate("27.1.0", n.env, npmCopy), { version: "27.2.0", ready: true });
+  assert.equal(stagedUpdate("27.2.0", n.env, npmCopy), null, "the session already runs it");
+  assert.equal(stagedUpdate("27.1.0", { ...n.env, FOLDRUN_NO_AUTO_UPDATE: "1" }, npmCopy), null, "off is off");
+  assert.equal(stagedUpdate("27.1.0", n.env, path.join(path.sep, "src", "foldrun-cli")), null, "a git checkout");
+  const m = fakeNpm("28.0.0");
+  checkAndUpdate({ current: "27.1.0", env: m.env, pkgRoot: npmCopy });
+  assert.deepEqual(stagedUpdate("27.1.0", m.env, npmCopy), { version: "28.0.0", ready: false }, "a major: told, never taken");
+  assert.equal(activeBin("27.1.0", m.env, npmCopy), null);
+  // foldrun update in another terminal takes the major: now it is ready for /restart (Codex).
+  checkAndUpdate({ current: "27.1.0", major: true, env: m.env, pkgRoot: npmCopy });
+  assert.deepEqual(stagedUpdate("27.1.0", m.env, npmCopy), { version: "28.0.0", ready: true });
 });
 
 test("checkAndUpdate: a new major is announced, not installed; foldrun update (major: true) takes it; --check (install: false) changes nothing", unix, () => {

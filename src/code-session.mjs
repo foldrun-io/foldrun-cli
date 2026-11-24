@@ -24,6 +24,7 @@ export const CODE_COMMANDS = [
   ["/add-dir [path]", "another folder the agent may read without asking (changes there are still asked each time)"],
   ["/rewind [turn]", "take back what the agent's Write and Edit changed on this computer, from a turn onward — every file or none"],
   ["/status", "this session: turns, cost, model, conversation"],
+  ["/restart", "start foldrun again on this folder, place, account, agent and conversation — how a long session takes a newer foldrun it was told is ready (typed during a turn, it is queued for after it)"],
   ["/cost [explain]", "what this session has spent — explain: where it went, row by row (turns, sub-agents, cloud jobs): model calls, tokens read, how much came from the cache, cost, who paid, and the biggest cause"],
   ["/usage", "your foldrun plan and the credit left on it"],
   ["/context", "what fills the agent's context: instructions, skills, the conversation, the last turn"],

@@ -160,6 +160,14 @@ A CLI installed with `npm i -g foldrun` updates itself:
   is set). A later command in a terminal
   says so, at most once: `foldrun updated 27.1.0 → 27.2.0`. The `foldrun code` header names the
   version it runs.
+- A `foldrun code` session left open does the same look between turns
+  (never during one), at most once a day. When a newer version is ready it
+  says once, after a turn: `foldrun 31.3.0 is ready — /restart to use it
+  (this conversation continues)`. `/restart` starts the installed foldrun
+  again on the same folder, place, account, agent and conversation; typed
+  while a turn runs, it is queued for after it, behind any message already
+  queued. The sandbox setting and strict approvals go on as they are. `/status` shows the version
+  running and the one ready.
 - A newer **major** release can change what worked, so it is only
   announced, at most once, with the command that takes it.
 - A failed install is announced at most once, and you keep the version you

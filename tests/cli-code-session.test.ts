@@ -2415,6 +2415,76 @@ test("--local: `foldrun use` in another terminal mid-session does not move this 
   }
 });
 
+test("/restart starts foldrun again on the same folder, place and conversation (FOL-261)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-rs/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: JSON.parse(String(b)).dailyUsd }),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      // The first turn runs a slow command, so /restart can be typed while it runs.
+      if (asked.length === 1) return sse([{ type: "tool_use", id: "q1", name: "Bash", input: { command: "sleep 3" } }]);
+      return sse([{ type: "text", text: `answer ${asked.length - 1}` }]);
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-rs", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/session\s+code-rs · new[\s\S]*\w ❯ /);
+    t.send("/status\r");
+    at = await t.until(/foldrun\s+\d+\.\d+\.\d+/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("first\r");
+    at = await t.until(/sleep 3[\s\S]*allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    await new Promise((r) => setTimeout(r, 400));
+    // Typed with Enter while the turn runs: queued once, however often (Codex), never sent to the agent.
+    const typeThenEnter = async (x: string) => {
+      t.send(x);
+      await new Promise((r) => setTimeout(r, 60));
+      t.send("\r");
+    };
+    await typeThenEnter("/restart");
+    at = await t.until(/⏭ \/restart · queued for after this turn/, at);
+    await typeThenEnter("/restart");
+    at = await t.until(/\/restart is queued already/, at);
+    at = await t.until(/answer 1/, at, 30_000);
+    at = await t.until(/starting foldrun again — the same conversation \(code-rs\)/, at);
+    // A new process: its own box, the same session, and the turn before it is still in the conversation.
+    at = await t.until(/works\s+on this computer[\s\S]*session\s+code-rs · continuing[\s\S]*\w ❯ /, at);
+    t.send("second\r");
+    at = await t.until(/answer 2/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    // Strict approvals go on with it; a second restart is started by the first process, not stacked on the second.
+    t.send("/permissions strict\r");
+    at = await t.until(/the commands that only look are asked too/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/restart\r");
+    at = await t.until(/session\s+code-rs · continuing[\s\S]*\w ❯ /, at);
+    const tree = spawnSync("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8" }).stdout;
+    const ours = tree.split("\n").filter((l) => l.includes("code-rs") && l.includes("foldrun.mjs") && !l.includes("python"));
+    assert.equal(ours.length, 2, `the first process and the session now:\n${ours.join("\n")}`);
+    t.send("/permissions\r");
+    at = await t.until(/Strict[^\n]*✔/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b");
+    at = await t.until(/nothing changed[\s\S]*\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.doesNotMatch(JSON.stringify(asked[1].messages), /\/restart/, "never words for the agent");
+  assert.match(JSON.stringify(asked[2].messages), /first[\s\S]*answer 1[\s\S]*second/, "the conversation went on");
+});
+
 test("the session names its account (FOL-260): a box row and /status for the default profile, --profile and a token; the prompt names the profile when several are signed in", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
