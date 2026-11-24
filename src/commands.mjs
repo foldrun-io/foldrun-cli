@@ -9513,7 +9513,27 @@ async function sessionsCmd(positional, flags, layout) {
     console.log();
     return 0;
   }
-  throw new Error('`foldrun sessions send <conversation> "…"` or `foldrun sessions messages <conversation> [--waiting]`');
+  if (verb) throw new Error('`foldrun sessions` lists the project\'s conversations; `foldrun sessions send <conversation> "…"`, `foldrun sessions messages <conversation> [--waiting]`, `foldrun sessions search <words>`');
+  // No verb: the project's conversations, the most recently used first (FOL-236).
+  const limit = typeof flags.limit === "string" && /^\d+$/.test(flags.limit) ? `?limit=${flags.limit}` : "";
+  const got = await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(ws)}/sessions${limit}`);
+  const list = Array.isArray(got?.sessions) ? got.sessions : [];
+  if (flags.json === true) {
+    console.log(JSON.stringify(list, null, 2));
+    return 0;
+  }
+  if (!list.length) {
+    console.log(`\n  ${c.dim(`no conversations in ${ws} yet — a turn on the platform (foldrun code in the cloud, a run with a context) makes one; turns on a computer alone are not listed`)}\n`);
+    return 0;
+  }
+  console.log();
+  for (const x of list) {
+    const when = typeof x.lastAt === "string" ? x.lastAt.replace("T", " ").slice(0, 16) : "";
+    console.log(`  ${c.white(plainText(String(x.context)))} ${c.dim(`· ${x.turns} turn${x.turns === 1 ? "" : "s"} · ${plainText(String(x.agent ?? "—"))} · ${plainText(String(x.lastStatus ?? ""))} · ${when}`)}`);
+    if (x.lastSummary) console.log(`    ${c.grey(noBidi(plainText(String(x.lastSummary))).replace(/\s+/g, " ").slice(0, 120))}`);
+  }
+  console.log(`\n  ${c.dim("foldrun code --context <id> carries one on · foldrun sessions messages <id> what it was sent")}\n`);
+  return 0;
 }
 
 /** Unicode direction controls out: a preview must read as what the agent gets. */
@@ -9523,7 +9543,7 @@ const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/
 function sessionMessageLine(m) {
   const who = plainText(String(m?.from ?? "someone"));
   const where = m?.fromContext ? c.dim(` (${plainText(String(m.fromContext))})`) : "";
-  const used = m?.run ? c.dim(` · in ${plainText(String(m.run))}`) : c.dim(" · waiting");
+  const used = m?.run ? c.dim(` · in ${plainText(String(m.run))}`) : m?.usedLocally ? c.dim(" · used in a turn on a computer") : c.dim(" · waiting");
   const text = noBidi(plainText(String(m?.text ?? ""))).replace(/\s+/g, " ").trim();
   return `  ${c.bold(noBidi(who))}${where}${used}\n    ${text}`;
 }
@@ -16865,6 +16885,23 @@ async function localMessagesBlock(/** @type {any} */ s) {
   ].join("\n");
 }
 
+/**
+ * A turn on this computer makes no run, so the messages it carried are
+ * marked used on the platform here (FOL-236): they no longer wait, count
+ * toward the limit, or come back when the session moves to the cloud. A
+ * platform without the route (older) leaves them to this session's memory.
+ */
+async function takeLocalMessages(/** @type {any} */ s, /** @type {string[]} */ ids) {
+  try {
+    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/sessions/${enc(s.context)}/messages/take`, { method: "POST", body: JSON.stringify({ ids }) });
+    const refused = Array.isArray(got?.refused) ? got.refused.length : 0;
+    if (refused) console.log(`  ${c.dim(`${refused} of the messages this turn carried had been used by another turn meanwhile`)}`);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return;
+    console.log(`  ${c.dim(`the messages this turn carried could not be marked used on the platform (${plainText(explain(err))}) — this session will not offer them again`)}`);
+  }
+}
+
 /** foldrun's docs as a tool of the local agent (24 Nov 2026): it knows the platform from the pages, not from a guess. */
 const FOLDRUN_DOCS_TOOL = "foldrun_docs";
 const FOLDRUN_DOCS_DESCRIPTION = "Read foldrun's own documentation (the pages this CLI carries, offline). With no page: the list of pages. With a page: its text. Read the page before you answer how foldrun does something or write a flow, agent, tool, skill or hook file — e.g. flows, agents, scheduling, deploying, tools, secrets, cli, coding-agents.";
@@ -18838,6 +18875,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     delete s.turnShown;
     const stop = s.allowanceStop;
     delete s.allowanceStop;
+    // The other sessions' messages a turn here carried are used on the platform once the turn was sent (FOL-236).
+    if (where === "local" && shown.length && !(stop && !stop.sent)) await takeLocalMessages(s, shown);
     if (!stop || !process.stdin.isTTY || !process.stdout.isTTY) return;
     const go = await waitForReset(where);
     if (!go) return;

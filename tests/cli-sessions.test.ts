@@ -128,3 +128,31 @@ test("code --task: nothing waiting, nothing said, no messages field", async () =
   assert.equal(JSON.parse(run.body).messages, undefined);
 });
 
+
+test("sessions with no verb: the project's conversations, newest first; --json; nothing from a summary reaches the terminal as control (FOL-236)", async () => {
+  const list = [
+    { context: "code-b", turns: 3, agent: "coder", lastAt: "2026-11-24T10:00:00.000Z", lastStatus: "completed", lastRun: "r3", startedBy: "user:u1", lastSummary: "fixed \u001b[31mthe\u001b[0m test" },
+    { context: "code-a", turns: 1, agent: "coder", lastAt: "2026-11-23T10:00:00.000Z", lastStatus: "failed", lastRun: "r1", startedBy: null, lastSummary: null },
+  ];
+  const s = await serve({ [`GET ${WS}/sessions`]: () => ({ sessions: list }) });
+  const r = await at(s.url, "sessions", "--to", "desk", "--limit", "5");
+  const j = await at(s.url, "sessions", "--to", "desk", "--json");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.ok(r.out.indexOf("code-b") < r.out.indexOf("code-a"));
+  assert.match(r.out, /3 turns · coder · completed · 2026-11-24 10:00/);
+  assert.match(r.out, /foldrun code --context <id>/);
+  assert.doesNotMatch(r.out, /\u001b\[31m/);
+  assert.equal(s.seen.find((x) => x.url === `${WS}/sessions`)!.query.get("limit"), "5");
+  assert.deepEqual(JSON.parse(j.out.slice(j.out.indexOf("["))).map((x: any) => x.context), ["code-b", "code-a"]);
+});
+
+test("a message a turn on a computer used reads so in the list, not as waiting (FOL-236)", async () => {
+  const s = await platform([]);
+  s.close();
+  const s2 = await serve({ [`GET ${MSG}`]: () => ({ context: "code-me", messages: [{ ...waitingNote, id: "sm-l", usedLocally: true, usedAt: "2026-11-24T00:00:00.000Z" }] }) });
+  const r = await at(s2.url, "sessions", "messages", "code-me", "--to", "desk");
+  s2.close();
+  assert.match(r.out, /used in a turn on a computer/);
+  assert.doesNotMatch(r.out, /waiting/);
+});

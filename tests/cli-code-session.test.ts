@@ -3570,3 +3570,53 @@ test("f at a command's question keeps a rule for the folder: later sessions run 
     s.close();
   }
 });
+
+test("a turn on this computer marks the other sessions' messages it carried used, once it was sent (FOL-236)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const taken: any[] = [];
+  let used = false;
+  const note = { id: "sm-l1", workspace: "desk", context: "code-tk", from: "ana@example.com", sender: "user:u1", fromContext: "code-api", text: "the API moved to /v2", at: "2026-11-24T01:00:00.000Z" };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-tk/messages`]: () => ({ messages: used ? [] : [note] }),
+    [`POST ${WS}/sessions/code-tk/messages/take`]: (b) => {
+      taken.push(JSON.parse(String(b)));
+      used = true;
+      return { taken: [{ ...note, usedLocally: true }], refused: [] };
+    },
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: JSON.parse(String(b)).dailyUsd, walletUsd: JSON.parse(String(b)).walletUsd }),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      if (asked.length === 1) assert.equal(taken.length, 0, "not marked used before the turn is sent");
+      return sse([{ type: "text", text: `Reply ${asked.length}.` }]);
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-tk", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("go\r");
+    for (;;) {
+      at = await t.until(/include it in this turn\? \[y\/N\]|\[y\/N\]|Reply 1\./, at);
+      const seen = t.out().slice(0, at);
+      if (/Reply 1\./.test(seen.slice(-40))) break;
+      t.send("y\r");
+    }
+    at = await t.until(/\w ❯ /, at);
+    assert.match(JSON.stringify(asked[0].messages), /the API moved to \/v2/, "the message went in the turn");
+    assert.deepEqual(taken, [{ ids: ["sm-l1"] }]);
+    t.send("again\r");
+    at = await t.until(/Reply 2\./, at);
+    assert.equal(taken.length, 1, "used, it is not offered again");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});

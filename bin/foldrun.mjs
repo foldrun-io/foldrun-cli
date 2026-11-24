@@ -271,6 +271,7 @@ const HELP = `foldrun — agents are just folders
   foldrun stop <run-id> <run-id>…  stop several (runs/bulk): lists them, asks once (--dry-run, --yes)
   foldrun answer <run-id> "…"  answer the question an agent is asking mid-step (--option <n> picks a choice)
   foldrun message <run-id> "…" say something to a running agent — it hears it after its next tool call
+  foldrun sessions                          the project's conversations, the most recently used first: id, turns, last agent and status (--limit, --to, --json)
   foldrun sessions send <conversation> "…"  message another conversation of the project — it waits until that session's person includes it in a turn (--from <conversation>, --to, --json)
   foldrun sessions messages <conversation>  what a conversation was sent, oldest first (--waiting only those not yet in a turn, --to, --json)
   foldrun sessions search <words>  find a foldrun code conversation kept on this computer by what was said in it — messages, replies, tool calls and their output (--here this folder only, --json)
