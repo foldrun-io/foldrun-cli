@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [31.3.1] — 2026-11-24
+
+### deps
+
+- @foldrun/core ^27.4.0 ([bc91b9c](https://github.com/foldrun-io/foldrun-cli/commit/bc91b9c))
+
 ## [31.3.0] — 2026-11-24
 
 - test(code): /st suggests /restart too (FOL-261) ([5b66027](https://github.com/foldrun-io/foldrun-cli/commit/5b66027))
