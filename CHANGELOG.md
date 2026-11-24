@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [31.3.0] — 2026-11-24
+
+- test(code): /st suggests /restart too (FOL-261) ([5b66027](https://github.com/foldrun-io/foldrun-cli/commit/5b66027))
+- feat(code): a long session hears of a newer foldrun; /restart takes it (FOL-261) ([e347231](https://github.com/foldrun-io/foldrun-cli/commit/e347231))
+
 ## [31.2.0] — 2026-11-24
 
 - feat(code): the session names its account — box, /status, prompt (FOL-260) ([3be16bf](https://github.com/foldrun-io/foldrun-cli/commit/3be16bf))
