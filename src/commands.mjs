@@ -29,7 +29,7 @@ import { koderLine } from "./koder-path.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
 import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX } from "./code-mcp.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
@@ -9572,6 +9572,8 @@ async function sureToDelete(flags, verb, what) {
 
 async function confirmed(flags, verb, question, expect) {
   if (flags.yes === true) return true;
+  // A script's turn of foldrun code asks nothing, even at a terminal: its stdin may be the next message (Codex).
+  if (verb === "foldrun code" && typeof flags.task === "string") throw new Error(`${verb} -p asks nothing — ${question.replace(/\s*\[y\/N\]\s*$/, "")}: pass --yes to mean it`);
   if (!process.stdin.isTTY) {
     throw new Error(`${verb} needs a person — this is not a terminal, so pass --yes to mean it`);
   }
@@ -17371,7 +17373,11 @@ async function codeLocalTurn(s, text) {
       // the person's keys or reach a site that is not allowed, so it runs
       // without a question — as Claude Code's sandbox does (owner, 24 Nov
       // 2026). /permissions strict asks; a sub-agent's are always asked.
-      if (name === "Bash" && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current()) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      // A script's turn (-p) without --yes: a command may change files too, so it is refused below (Codex).
+      if (name === "Bash" && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current() && (!s.headless || s.headless.yes === true)) {
+        if (s.headless) s.headless.commands = true;
+        return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      }
       // Sending the folder to cloud agents, and putting one's patch into
       // the folder (cloud_apply, which is a change inside it).
       const cloud = isCloudAgents(name);
@@ -17411,8 +17417,8 @@ async function codeLocalTurn(s, text) {
         }
         return {
           behavior: /** @type {const} */ ("deny"),
-          message: scope === "changes" && !child
-            ? "This turn runs from a script with no one to ask, and it was not started with --yes, so files are not changed. Say what you would change instead."
+          message: (scope === "changes" || (name === "Bash" && s.box?.current())) && !child && s.headless.yes !== true
+            ? "This turn runs from a script with no one to ask, and it was not started with --yes, so files are not changed and commands that could change them are not run (commands that only look, like ls or git status, still run). Say what you would change instead."
             : "This turn runs from a script with no one to ask: reading, commands inside the sandbox and (with --yes) file changes inside the folder are what it may do. Do the work without this, or say what the person should run.",
         };
       }
@@ -18268,6 +18274,7 @@ async function codeLocalTurn(s, text) {
   if (used.lastInput > 0) delete s.modelChanged;
   if (used.lastInput > 0) (s.measure ??= {}).local = { tokens: used.lastInput, model: used.lastModel || undefined, at: used.lastAt || Date.now() };
   s.turnOk = ok && !cancel.asked;
+  s.turnStopped = cancel.asked;
   const how = cancel.asked ? c.bold(c.amber("■ stopped")) : ok ? c.bold(c.green("✓ done")) : c.bold(c.red("✗ not finished"));
   const parts = [c.white(formatSecs(secs)), s.model ? c.violet(shortModel(plainText(s.model))) : null, s.planLabel ? c.grey(`on ${s.planLabel}`) : null].filter(Boolean);
   console.log(`\n  ${how} ${c.grey("·")} ${parts.join(` ${c.grey("·")} `)}`);
@@ -18275,13 +18282,47 @@ async function codeLocalTurn(s, text) {
   console.log();
 }
 
-/** A file's content as a digest, or null when there is none (for -p's "applied"). */
+/** A file's content as a digest, or null when there is none (for -p's "applied"). Only a regular file is read: a FIFO would block the process (Codex). */
 function fileDigest(/** @type {string} */ file) {
   try {
+    const st = fs.lstatSync(file);
+    if (!st.isFile()) return `${st.mode}:${st.isSymbolicLink() ? fs.readlinkSync(file) : ""}`;
+    if (st.size > 64 * 1024 * 1024) return `${st.size}:${st.mtimeMs}`;
     return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   } catch {
     return null;
   }
+}
+
+/** What a git folder holds beyond its last commit, as one string — two that differ mean the folder changed (for -p's "applied", which commands can change too). Null outside git. */
+async function folderState(/** @type {string} */ dir) {
+  const out = await new Promise((resolve) => {
+    execFile("git", ["-C", dir, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : String(stdout)));
+  });
+  if (typeof out !== "string") return null;
+  // This process's own stdout and stderr, when a script sends them to a file in the folder, are not the agent's changes.
+  const own = [1, 2].flatMap((fd) => {
+    try {
+      const st = fs.fstatSync(fd);
+      return st.isFile() ? [`${st.dev}:${st.ino}`] : [];
+    } catch {
+      return [];
+    }
+  });
+  const ours = (/** @type {string} */ f) => {
+    try {
+      const st = fs.lstatSync(f);
+      return own.includes(`${st.dev}:${st.ino}`);
+    } catch {
+      return false;
+    }
+  };
+  return out
+    .split("\0")
+    .filter(Boolean)
+    .filter((e) => !ours(path.join(dir, e.slice(3))))
+    .map((e) => `${e}\t${fileDigest(path.join(dir, e.slice(3)))}`)
+    .join("\n");
 }
 
 /** The messages of `--input-format stream-json`, one JSON object per line, as
@@ -18612,11 +18653,16 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         if (s.mode === "local") {
           // On this computer: the folder is changed in place, never asked (decide).
           s.engine = "foldrun";
-          s.headless = { yes: flags.yes === true, before: new Map() };
+          s.headless = { yes: flags.yes === true, before: new Map(), commands: false };
           delete s.turnOk;
+          delete s.turnStopped;
+          const was = await folderState(dir);
           await codeLocalTurn(s, task);
-          status = s.turnOk === true ? "completed" : "failed";
-          applied = [...s.headless.before].some(([f, was]) => fileDigest(f) !== was);
+          status = s.turnStopped === true ? "cancelled" : s.turnOk === true ? "completed" : "failed";
+          // In git: what the folder holds against its last commit, before and after (commands change files too).
+          // Outside git: the file tools' targets, and a command that ran with --yes counts as a change.
+          const now = was === null ? null : await folderState(dir);
+          applied = was !== null && now !== null ? was !== now : [...s.headless.before].some(([f, d]) => fileDigest(f) !== d) || s.headless.commands === true;
         } else {
           status = String(await codeTurn(s, [carry, task].filter(Boolean).join("\n\n"), await messagesForTurn(s, false)));
           if ((s.turns ?? 0) > before) s.cloudBriefed = s.context;
@@ -18655,6 +18701,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       } else throw err;
     } finally {
       runEventSink = null;
+      // The sandbox's own temporary and helper folders go with the process (Codex).
+      await s.box?.close?.().catch(() => undefined);
     }
     return code;
   }

@@ -20,8 +20,9 @@ import path from "node:path";
 
 /**
  * Where package managers keep a project's downloads inside the walls (FOL-272):
- * one folder per project, outside ~/.foldrun (which the walls keep unread,
- * as it holds credentials) — $XDG_CACHE_HOME/foldrun/packages/<project>.
+ * one folder per project, outside ~/.foldrun and the XDG foldrun folders
+ * (which the walls keep unread, as they hold credentials — a cache under
+ * them was refused as an overlap, Codex) — $XDG_CACHE_HOME/foldrun-packages/<project>.
  * @param {string} dir the project folder
  */
 export function packageCacheFor(dir, env = process.env, home = os.homedir()) {
@@ -33,7 +34,7 @@ export function packageCacheFor(dir, env = process.env, home = os.homedir()) {
   }
   const base = typeof env.XDG_CACHE_HOME === "string" && path.isAbsolute(env.XDG_CACHE_HOME) ? env.XDG_CACHE_HOME : path.join(home, ".cache");
   const id = crypto.createHash("sha256").update(real).digest("hex").slice(0, 16);
-  return path.join(base, "foldrun", "packages", `${path.basename(real).replace(/[^\w.-]/g, "_").slice(0, 40)}-${id}`);
+  return path.join(base, "foldrun-packages", `${path.basename(real).replace(/[^\w.-]/g, "_").slice(0, 40)}-${id}`);
 }
 
 /** The tool that runs one command outside the walls. */

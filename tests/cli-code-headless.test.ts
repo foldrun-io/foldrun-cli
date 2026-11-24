@@ -346,6 +346,19 @@ test("-p on this computer with no model key says so and asks nothing (the next s
   }
 });
 
+test("-p asks nothing at setup either: a missing project is refused, not asked about (Codex)", async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({ [`GET ${WS}`]: () => raw("{}", "application/json", {}, 404) });
+  try {
+    const r = await runIn(home, s.url, ["code", d, "--local", "--to", "desk", "-p", "hi", "--output-format", "json"]);
+    assert.equal(r.code, 1);
+    assert.match(lines(r.out)[0].error, /-p asks nothing — create desk\?: pass --yes to mean it/);
+  } finally {
+    s.close();
+  }
+});
+
 test("a script's turn in a folder that works on this computer must say where it runs", async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

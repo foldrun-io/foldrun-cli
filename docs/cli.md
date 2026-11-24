@@ -803,9 +803,10 @@ nothing. It runs where the flag says:
   goes to the cloud. `--yes` applies the patch; without it the patch is kept
   and its path is said.
 - `--local -p` / `--local-only -p`: on this computer, in the sandbox. Nobody
-  is there to answer a question, so a file change inside the folder goes ahead
-  only with `--yes`; without it nothing is changed and the agent says what it
-  would change. Commands run inside the sandbox; anything that would be asked
+  is there to answer a question, so file changes inside the folder and
+  commands in the sandbox (which can change files too) run only with `--yes`;
+  without it only commands that look (`ls`, `git status`) run, nothing is
+  changed and the agent says what it would change. Anything that would be asked
   at a terminal (a command outside the sandbox, an MCP server, a cloud job) is
   refused and the agent is told why. The computer needs its model key first:
   run `foldrun code --local` once at a terminal, or `foldrun login` with model
@@ -820,7 +821,10 @@ foldrun code -p "fix the failing test" --output-format json --yes   # koder -p �
 - `--output-format json` prints one object when the turn ends:
   `{"type":"result","schema":1,"status":"completed","is_error":false,"result":"…","session_id":"code-…","run_id":"…","cost_usd":0.02,"applied":true,"where":"cloud"}`.
   `where` is `cloud` or `local`; `applied` says whether files in the folder
-  changed (on this computer: compared before and after the turn).
+  changed (on this computer: what git sees against the last commit, before
+  and after the turn, leaving out the files this command's own output goes
+  to; outside git, the files the agent wrote, and any command it ran).
+  Ctrl-C ends the turn as `cancelled`, exit 130.
 - `--output-format stream-json` prints one JSON object per line as the turn
   goes: `system` (subtype `init`, with the session id), `message` (the
   agent's words), `tool_call` and `tool_result` (with `call`, `tool`,
