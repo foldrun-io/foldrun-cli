@@ -137,3 +137,13 @@ test("rows are kept per conversation — the platform, project, agent, folder an
     else process.env.FOLDRUN_HOME = was;
   }
 });
+
+test("a call's start marks the turn read even when it reports no input count (a translated provider — Codex round 11)", () => {
+  const m = meter();
+  assert.equal(m.started, false);
+  m.note({ type: "stream_event", parent_tool_use_id: "toolu_1", event: { type: "message_start", message: { usage: { input_tokens: 5 } } } });
+  assert.equal(m.started, false, "a sub-agent's call is not the turn's");
+  m.note({ type: "stream_event", event: { type: "message_start", message: { model: "gpt-x", usage: { input_tokens: 0 } } } });
+  assert.equal(m.started, true);
+  assert.equal(m.lastInput, 0);
+});

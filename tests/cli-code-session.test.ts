@@ -3623,7 +3623,7 @@ test("a turn on this computer holds the other sessions' messages it carries and 
   }
 });
 
-test("a turn on this computer that never reached the model frees what it held, and offers it again (FOL-236, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("a turn on this computer that never reached the model holds nothing, and offers its messages again (FOL-236, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const calls: any[] = [];
@@ -3652,14 +3652,15 @@ test("a turn on this computer that never reached the model frees what it held, a
     t.send("n\r");
     at = await t.until(/\w ❯ /, at);
     await new Promise((r) => setTimeout(r, 300));
-    assert.deepEqual(calls, [{ ids: ["sm-f1"] }, { hold: "lt-bbbbbbbbbbbbbbbbbbbbbbbb", outcome: "freed" }], "held, then freed — never used");
+    // Held only once the turn is about to be sent, after the key prompt: declined there, nothing was held (Codex round 11).
+    assert.deepEqual(calls, [], "never held — the turn stopped at the key prompt");
     t.send("again\r");
     at = await t.until(/include it in this turn\? \[y\/N\]/, at);
     t.send("n\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("n\r");
     at = await t.until(/\w ❯ /, at);
-    assert.equal(calls.length, 2, "declined: nothing held");
+    assert.equal(calls.length, 0, "declined: nothing held");
     t.send("/quit\r");
     await t.done;
   } finally {

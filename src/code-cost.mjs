@@ -84,6 +84,8 @@ export function meter() {
     lastModel: "",
     /** When the last call started (ms): the cache was used then. */
     lastAt: 0,
+    /** A model call of the turn began (its start, or a whole answer, arrived): the model read what was sent. Some translators report no input count at the start, so this does not wait on one (Codex). */
+    started: false,
     note,
   };
   /** A call whose answer has begun and not ended: what its start reported (input and cache), counted if the answer never comes. */
@@ -105,6 +107,7 @@ export function meter() {
     open = null;
   };
   function note(/** @type {any} */ e) {
+    if (!e?.parent_tool_use_id && ((e?.type === "stream_event" && e.event?.type === "message_start") || e?.type === "assistant")) m.started = true;
     if (e?.type === "stream_event" && !e.parent_tool_use_id && e.event?.type === "message_start" && e.event.message?.usage && typeof e.event.message.usage === "object") {
       open = { model: typeof e.event.message.model === "string" ? e.event.message.model : "", usage: { ...e.event.message.usage } };
       // What this call read in all: the conversation as it stands now (FOL-262's hints measure by it).
