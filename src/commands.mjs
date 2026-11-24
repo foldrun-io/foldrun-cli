@@ -14729,6 +14729,8 @@ function reposBelowSearch(/** @type {string} */ dir) {
     try {
       entries = fs.readdirSync(d, { withFileTypes: true });
     } catch {
+      // A folder that cannot be read may hold a repository: the search cannot say there are none (Codex).
+      complete = false;
       return;
     }
     for (const e of entries) {
@@ -14741,7 +14743,13 @@ function reposBelowSearch(/** @type {string} */ dir) {
       const isRepo = fs.existsSync(path.join(sub, ".git")) || (fs.existsSync(path.join(sub, "HEAD")) && fs.existsSync(path.join(sub, "objects")) && fs.existsSync(path.join(sub, "refs")));
       if (isRepo) found.push(sub);
       else if (depth < REPOS_BELOW_DEPTH) walk(sub, depth + 1);
-      else if (fs.readdirSync(sub, { withFileTypes: true }).some((x) => x.isDirectory())) complete = false;
+      else {
+        try {
+          if (fs.readdirSync(sub, { withFileTypes: true }).some((x) => x.isDirectory())) complete = false;
+        } catch {
+          complete = false;
+        }
+      }
       if (found.length >= 10 || !complete) return;
     }
   };
@@ -14757,13 +14765,12 @@ export function inGitRepo(/** @type {string} */ dir) {
 }
 
 /**
- * Set up git where the cloud was chosen and there is none (FOL-274): asked, never assumed.
- * @returns {Promise<boolean>} whether the folder is in a repository now
+ * Why git is not to be offered in `dir`, or null when it may be: never in the home folder, nor in a folder
+ * that holds repositories of its own (a folder of projects made one repository would take them all in — the
+ * report), nor where that cannot be told (a search cut short, a folder that cannot be read). The home folder
+ * by where it leads: a link to it is it (Codex).
  */
-async function offerGit(/** @type {string} */ dir) {
-  // Never in the home folder, nor in a folder that holds repositories of its own: a folder of projects
-  // made one repository would take them all in (the report: a folder of foldrun's repos side by side).
-  // By where each leads: a link to the home folder is the home folder (Codex).
+export function offerGitCheck(/** @type {string} */ dir) {
   const real = (/** @type {string} */ p) => {
     try {
       return fs.realpathSync(p);
@@ -14771,17 +14778,21 @@ async function offerGit(/** @type {string} */ dir) {
       return path.resolve(p);
     }
   };
-  if (real(dir) === real(os.homedir())) {
-    console.log(`  ${c.dim("this is your home folder: git is not set up here — start in a project's folder to use the cloud")}`);
-    return false;
-  }
-  const { found: holds, complete } = reposBelowSearch(dir);
-  if (!holds.length && !complete) {
-    console.log(`  ${c.dim("this folder is too large to tell whether it holds repositories of its own: git is not set up here — start in a project's folder to use the cloud")}`);
-    return false;
-  }
-  if (holds.length) {
-    console.log(`  ${c.dim(`this folder holds git repositories of its own (${holds.slice(0, 3).map((x) => plainText(path.basename(x))).join(", ")}${holds.length > 3 ? ", …" : ""}): git is not set up around them — start in one of them to use the cloud`)}`);
+  if (real(dir) === real(os.homedir())) return "this is your home folder: git is not set up here — start in a project's folder to use the cloud";
+  const { found, complete } = reposBelowSearch(dir);
+  if (found.length) return `this folder holds git repositories of its own (${found.slice(0, 3).map((x) => plainText(path.basename(x))).join(", ")}${found.length > 3 ? ", …" : ""}): git is not set up around them — start in one of them to use the cloud`;
+  if (!complete) return "this folder is too large to tell whether it holds repositories of its own, or part of it cannot be read: git is not set up here — start in a project's folder to use the cloud";
+  return null;
+}
+
+/**
+ * Set up git where the cloud was chosen and there is none (FOL-274): asked, never assumed.
+ * @returns {Promise<boolean>} whether the folder is in a repository now
+ */
+async function offerGit(/** @type {string} */ dir) {
+  const no = offerGitCheck(dir);
+  if (no) {
+    console.log(`  ${c.dim(no)}`);
     return false;
   }
   const yes = /^y(es)?$/i.test((await promptVisible(`  the cloud needs git to send a copy and bring changes back. Set it up here (git init)? [y/N] `)).trim());

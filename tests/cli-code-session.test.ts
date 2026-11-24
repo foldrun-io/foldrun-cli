@@ -3768,6 +3768,19 @@ test("a folder of repositories is told three levels down, hidden folders and bar
     assert.deepEqual(reposBelow(d).map((x: string) => path.relative(d, x)).sort(), [".hidden/store.git", "clients/team/app"]);
     assert.equal(spawnSync("git", ["init", "-q", path.join(d, "org/clients/team/app")]).status, 0);
     assert.ok(reposBelow(d).some((x: string) => path.relative(d, x) === "org/clients/team/app"), "four levels down too (Codex round 15)");
+    // A folder that cannot be read makes the search incomplete: git is then not offered (Codex round 16).
+    if (process.getuid?.() !== 0) {
+      const e = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-rb-locked-"));
+      fs.mkdirSync(path.join(e, "locked"));
+      fs.chmodSync(path.join(e, "locked"), 0o000);
+      try {
+        const { offerGitCheck } = await import("../src/commands.mjs");
+        assert.match(String(offerGitCheck(e)), /too large to tell|cannot tell/);
+      } finally {
+        fs.chmodSync(path.join(e, "locked"), 0o755);
+        fs.rmSync(e, { recursive: true, force: true });
+      }
+    }
   } finally {
     fs.rmSync(d, { recursive: true, force: true });
   }
