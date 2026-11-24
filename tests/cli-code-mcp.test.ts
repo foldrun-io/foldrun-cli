@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readMcpConfig, resolveServer, resolveAgentServer, approveServer, forgetServer, forgetServersNamed, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX, connectServer, remoteSiteProblem } from "../src/code-mcp.mjs";
+import { readMcpConfig, resolveServer, resolveAgentServer, approveServer, forgetServer, forgetServersNamed, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX, connectServer, remoteSiteProblem, allowSiteFor } from "../src/code-mcp.mjs";
 import { SERVER } from "./mcp-server.ts";
 import { readAgents, agentMcpServers, AGENT_MCP_MAX, agentActs, agentTool, agentJob, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder, TODOS_MAX } from "../src/code-agents.mjs";
 
@@ -474,4 +474,17 @@ test("a remote server adds one site by its literal name: never a wildcard, an ad
   );
   assert.match(got.why, /must name one site/);
   assert.equal(connected, 0);
+});
+
+test("the session's site list (Codex round 9): off, nothing is checked (localhost reaches a server as the person); a sub-agent's new site mid-turn is asked for, never added", () => {
+  const off: any = { sandboxOff: true };
+  assert.equal(allowSiteFor(off)("localhost"), null);
+  assert.equal(off.sandboxSites, undefined, "no list kept while it is off");
+  const on: any = { sandboxSites: ["known.example.com"] };
+  assert.match(allowSiteFor(on, { addNow: false })("new.example.com")!, /not on the sandbox's list — \/permissions sandbox allow new\.example\.com/);
+  assert.deepEqual(on.sandboxSites, ["known.example.com"], "not added mid-turn");
+  assert.equal(allowSiteFor(on, { addNow: false })("KNOWN.example.com"), null, "one already allowed goes on");
+  assert.equal(allowSiteFor(on)("new.example.com"), null);
+  assert.deepEqual(on.sandboxSites, ["known.example.com", "new.example.com"]);
+  assert.match(allowSiteFor(on)("localhost")!, /must name one site/, "inside the walls a bare name is not added");
 });

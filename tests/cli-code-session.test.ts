@@ -3571,7 +3571,7 @@ test("f at a command's question keeps a rule for the folder: later sessions run 
   }
 });
 
-test("a turn on this computer marks the other sessions' messages it carried used, once it was sent (FOL-236)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("a turn on this computer holds the other sessions' messages it carries and marks them used once the model read it (FOL-236)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -3584,16 +3584,18 @@ test("a turn on this computer marks the other sessions' messages it carried used
     [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
     [`GET ${WS}/sessions/code-tk/messages`]: () => ({ messages: used ? [] : [note] }),
     [`POST ${WS}/sessions/code-tk/messages/take`]: (b) => {
-      taken.push(JSON.parse(String(b)));
-      used = true;
-      return { taken: [{ ...note, usedLocally: true }], refused: [] };
+      const body = JSON.parse(String(b));
+      taken.push(body);
+      if (body.ids) return { taken: [note], refused: [], hold: "lt-aaaaaaaaaaaaaaaaaaaaaaaa" };
+      used = body.outcome === "used";
+      return { used: 1 };
     },
     "GET /v1/me": () => ({ account: "acme" }),
     "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/keys": (b) => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: JSON.parse(String(b)).dailyUsd, walletUsd: JSON.parse(String(b)).walletUsd }),
     "POST /v1/messages": (b) => {
       asked.push(JSON.parse(String(b)));
-      if (asked.length === 1) assert.equal(taken.length, 0, "not marked used before the turn is sent");
+      if (asked.length === 1) assert.deepEqual(taken, [{ ids: ["sm-l1"] }], "held before the turn is sent, not used yet");
       return sse([{ type: "text", text: `Reply ${asked.length}.` }]);
     },
   });
@@ -3609,10 +3611,55 @@ test("a turn on this computer marks the other sessions' messages it carried used
     }
     at = await t.until(/\w ❯ /, at);
     assert.match(JSON.stringify(asked[0].messages), /the API moved to \/v2/, "the message went in the turn");
-    assert.deepEqual(taken, [{ ids: ["sm-l1"] }]);
+    assert.deepEqual(taken, [{ ids: ["sm-l1"] }, { hold: "lt-aaaaaaaaaaaaaaaaaaaaaaaa", outcome: "used" }], "used once the model read the turn");
     t.send("again\r");
     at = await t.until(/Reply 2\./, at);
-    assert.equal(taken.length, 1, "used, it is not offered again");
+    assert.equal(taken.length, 2, "used, it is not offered again");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("a turn on this computer that never reached the model frees what it held, and offers it again (FOL-236, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const calls: any[] = [];
+  const note = { id: "sm-f1", workspace: "desk", context: "code-fr", from: "ana@example.com", sender: "user:u1", text: "look at /v2", at: "2026-11-24T01:00:00.000Z" };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-fr/messages`]: () => ({ messages: [note] }),
+    [`POST ${WS}/sessions/code-fr/messages/take`]: (b) => {
+      const body = JSON.parse(String(b));
+      calls.push(body);
+      return body.ids ? { taken: [note], refused: [], hold: "lt-bbbbbbbbbbbbbbbbbbbbbbbb" } : { freed: true };
+    },
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-fr", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("go\r");
+    at = await t.until(/include it in this turn\? \[y\/N\]/, at);
+    t.send("y\r");
+    // The key for this computer: declined, so nothing reaches a model.
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("n\r");
+    at = await t.until(/\w ❯ /, at);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(calls, [{ ids: ["sm-f1"] }, { hold: "lt-bbbbbbbbbbbbbbbbbbbbbbbb", outcome: "freed" }], "held, then freed — never used");
+    t.send("again\r");
+    at = await t.until(/include it in this turn\? \[y\/N\]/, at);
+    t.send("n\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("n\r");
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(calls.length, 2, "declined: nothing held");
     t.send("/quit\r");
     await t.done;
   } finally {

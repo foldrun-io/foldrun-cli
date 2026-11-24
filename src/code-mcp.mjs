@@ -328,6 +328,22 @@ export function remoteSiteProblem(/** @type {any} */ s, /** @type {string} */ ho
   return null;
 }
 
+/** A site allowed in the session's sandbox for this session only (a remote MCP server the person said yes to — FOL-222). */
+export function allowSiteFor(/** @type {any} */ s, /** @type {{ addNow?: boolean }} */ o = {}) {
+  return (/** @type {string} */ host) => {
+    // With the sandbox off there is no list: the server is reached as the person (localhost too — Codex).
+    if (s.sandboxOff === true) return null;
+    const problem = remoteSiteProblem(s, host);
+    if (problem) return problem;
+    const sites = (s.sandboxSites ??= []);
+    if (sites.includes(host.toLowerCase())) return null;
+    // Mid-turn a new site would reopen the walls under the commands running in them (Codex): asked for, not added.
+    if (o.addNow === false) return `${host} is not on the sandbox's list — /permissions sandbox allow ${host}, then ask again`;
+    sites.push(host.toLowerCase());
+    return null;
+  };
+}
+
 /**
  * Connect one server as resolved, and read its tools the way every server's
  * are read here: an over-long input description left out, a description
