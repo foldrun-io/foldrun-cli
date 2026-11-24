@@ -248,6 +248,118 @@ test("--input-format stream-json takes each message as it comes: a client may wa
   assert.equal(tasks.length, 2);
 });
 
+// -p on this computer (FOL-223): no questions — a change only with --yes, a missing model key said, not asked.
+function modelStream(content: Array<{ type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown }>) {
+  const ev = (e: Record<string, unknown>) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
+  let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1 } } });
+  content.forEach((b, index) => {
+    if (b.type === "text") {
+      out += ev({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
+      out += ev({ type: "content_block_delta", index, delta: { type: "text_delta", text: b.text } });
+    } else {
+      out += ev({ type: "content_block_start", index, content_block: { type: "tool_use", id: b.id, name: b.name, input: {} } });
+      out += ev({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(b.input) } });
+    }
+    out += ev({ type: "content_block_stop", index });
+  });
+  out += ev({ type: "message_delta", delta: { stop_reason: content.some((b) => b.type === "tool_use") ? "tool_use" : "end_turn" }, usage: { output_tokens: 5 } });
+  out += ev({ type: "message_stop" });
+  return raw(out, "text/event-stream");
+}
+
+async function localPlatform(d: string) {
+  const said: string[] = [];
+  let calls = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: default\n---\nYou code.\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": (b) => {
+      calls++;
+      // The first call edits hello.txt; the second reads what the tool answered and replies with it.
+      if (calls % 2 === 1) return modelStream([{ type: "tool_use", id: `t${calls}`, name: "Write", input: { file_path: path.join(d, "new.txt"), content: "changed\n" } }]);
+      const body = JSON.parse(String(b));
+      const last = JSON.stringify(body.messages.at(-1));
+      said.push(last);
+      return modelStream([{ type: "text", text: /no one to ask/.test(last) ? "Not changed: no --yes." : "Changed it." }]);
+    },
+  });
+  return { s, said };
+}
+
+const seedKey = (home: string, url: string) =>
+  fs.writeFileSync(path.join(home, "code-local-keys.json"), JSON.stringify({ [`${url}#acme`]: { id: "key-1", key: "fr_gw_test", gatewayUrl: url, kind: "account" } }), { mode: 0o600 });
+
+function runIn(home: string, url: string, args: string[]): Promise<{ out: string; err: string; code: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args, "--url", url, "--token", "k"], {
+      env: { ...process.env, FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", FOLDRUN_NO_AUTO_UPDATE: "1" },
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (x) => (out += x));
+    child.stderr.on("data", (x) => (err += x));
+    child.stdin.end();
+    child.on("close", (code) => resolve({ out, err, code: code ?? 1 }));
+  });
+}
+
+test("-p on this computer: a file change only with --yes; without it the agent is told why and nothing changes", { timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const { s, said } = await localPlatform(d);
+  seedKey(home, s.url);
+  try {
+    const no = await runIn(home, s.url, ["code", d, "--local", "--no-sandbox", "--to", "desk", "-p", "change hello", "--output-format", "json"]);
+    assert.equal(no.code, 0, no.err);
+    const r1 = lines(no.out)[0];
+    assert.equal(r1.where, "local");
+    assert.equal(r1.applied, false);
+    assert.equal(r1.result, "Not changed: no --yes.");
+    assert.equal(fs.existsSync(path.join(d, "new.txt")), false, "nothing written");
+    assert.match(said[0]!, /not started with --yes/);
+    const yes = await runIn(home, s.url, ["code", d, "--local", "--no-sandbox", "--to", "desk", "-p", "change hello", "--yes", "--output-format", "json"]);
+    assert.equal(yes.code, 0, yes.err);
+    const r2 = lines(yes.out)[0];
+    assert.equal(r2.applied, true);
+    assert.equal(r2.result, "Changed it.");
+    assert.equal(fs.readFileSync(path.join(d, "new.txt"), "utf8"), "changed\n", yes.err);
+  } finally {
+    s.close();
+  }
+});
+
+test("-p on this computer with no model key says so and asks nothing (the next stdin line is not taken as an answer)", { timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const { s } = await localPlatform(d);
+  try {
+    const r = await runIn(home, s.url, ["code", d, "--local", "--no-sandbox", "--to", "desk", "-p", "hi", "--output-format", "json"]);
+    assert.equal(r.code, 1, r.out + r.err);
+    assert.equal(lines(r.out)[0].is_error, true);
+    assert.match(r.err, /no model key on this computer yet/);
+    assert.doesNotMatch(r.err, /make it\?/);
+  } finally {
+    s.close();
+  }
+});
+
+test("a script's turn in a folder that works on this computer must say where it runs", async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  fs.writeFileSync(path.join(home, "code-sessions.json"), JSON.stringify({ [path.resolve(d)]: { context: "code-0000000000000000", ws: "desk", agent: "coder", url: "x", mode: "local" } }));
+  const { s } = await localPlatform(d);
+  try {
+    const r = await runIn(home, s.url, ["code", d, "--to", "desk", "-p", "hi"]);
+    assert.notEqual(r.code, 0);
+    assert.match(r.err + r.out, /--local -p \(here; file changes only with --yes\) or --cloud -p/);
+  } finally {
+    s.close();
+  }
+});
+
 test("streamEvent: one shape per event, nothing for a platform note", () => {
   assert.equal(streamEvent({ type: "info", text: "clock" }, { agent: "coder" }), null);
   assert.deepEqual(streamEvent({ type: "text", text: "hi" }, { agent: "coder" }), { type: "message", agent: "coder", text: "hi" });

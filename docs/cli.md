@@ -796,9 +796,21 @@ the next turn runs the new one.
 
 ### From a script, CI or another agent
 
-`-p "<task>"` (the short form of `--task`) runs one turn in the cloud and
-exits, asking nothing. `--yes` applies the patch; without it the patch is
-kept and its path is said.
+`-p "<task>"` (the short form of `--task`) runs one turn and exits, asking
+nothing. It runs where the flag says:
+
+- `--cloud -p` (and a folder that works in the cloud): a copy of the folder
+  goes to the cloud. `--yes` applies the patch; without it the patch is kept
+  and its path is said.
+- `--local -p` / `--local-only -p`: on this computer, in the sandbox. Nobody
+  is there to answer a question, so a file change inside the folder goes ahead
+  only with `--yes`; without it nothing is changed and the agent says what it
+  would change. Commands run inside the sandbox; anything that would be asked
+  at a terminal (a command outside the sandbox, an MCP server, a cloud job) is
+  refused and the agent is told why. The computer needs its model key first:
+  run `foldrun code --local` once at a terminal, or `foldrun login` with model
+  access. A folder that works on this computer must say `--local` or
+  `--cloud` for a script's turn.
 
 ```sh
 foldrun code -p "fix the failing test" --output-format json --yes   # koder -p … is the same
@@ -807,19 +819,24 @@ foldrun code -p "fix the failing test" --output-format json --yes   # koder -p �
 - `--output-format text` (the default) prints what a person reads.
 - `--output-format json` prints one object when the turn ends:
   `{"type":"result","schema":1,"status":"completed","is_error":false,"result":"…","session_id":"code-…","run_id":"…","cost_usd":0.02,"applied":true,"where":"cloud"}`.
+  `where` is `cloud` or `local`; `applied` says whether files in the folder
+  changed (on this computer: compared before and after the turn).
 - `--output-format stream-json` prints one JSON object per line as the turn
   goes: `system` (subtype `init`, with the session id), `message` (the
   agent's words), `tool_call` and `tool_result` (with `call`, `tool`,
   `input` / `output`, `ms`), `error`, then `result`. A sub-agent's lines
-  carry `"subagent": true`.
+  carry `"subagent": true`. A turn on this computer gives `system` and
+  `result` only for now.
 - `--input-format stream-json` reads the turns from stdin, one
-  `{"type":"user","text":"…"}` per line, as turns of one session.
+  `{"type":"user","text":"…"}` per line, as turns of one session. Each turn
+  starts when its line arrives, so a client may wait for a result before it
+  sends the next.
 
 With either JSON format stdout holds only JSON; what a person would read
 goes to stderr. A failure is a `result` with `"is_error": true` and an
 `error`, and a non-zero exit. The shape has a `schema` number, and fields are
-only ever added to it. A script's turn runs in the cloud; on this computer the
-agent asks before each change, so it needs a terminal.
+only ever added to it. The process exits only after every JSON line is
+written.
 
 In CI:
 

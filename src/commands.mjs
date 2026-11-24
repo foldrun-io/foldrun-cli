@@ -16056,6 +16056,14 @@ async function localKeyFor(s, cancel) {
   const kept = readLocalKey(file, s.keySlot);
   const have = kept && s.modelsUrl ? { ...kept, gatewayUrl: s.modelsUrl } : kept;
   if (have?.kind === "account" || have?.upgradeAsked) return have;
+  // A script's turn (-p, FOL-223) has no one to answer a question: an older
+  // key is used as it is, and a missing one is said, never asked for — a
+  // prompt would read the script's next stdin line as the answer.
+  if (s.headless) {
+    if (have) return have;
+    console.log(`  ${c.red("✗")} no model key on this computer yet — run \`foldrun code --local\` once at a terminal to make one, or \`foldrun login\` with model access ticked`);
+    return null;
+  }
   if (have) {
     // A key kept before CLI 27.3: $20 in all, its wallet budget not settable.
     // It keeps working; the person is asked once whether to swap it (Codex).
@@ -17390,6 +17398,24 @@ async function codeLocalTurn(s, text) {
         if (scope === "changes") changed.add(localCallSummary("Write", { file_path: file }, s.dir));
         return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       }
+      // A script's turn (-p, FOL-223): no one is there to ask. A file change
+      // inside the folder goes ahead only with --yes; everything else that
+      // would be asked is refused, and the agent is told why.
+      if (s.headless) {
+        if (scope === "changes" && !child && s.headless.yes === true) {
+          changed.add(localCallSummary("Write", { file_path: file }, s.dir));
+          // What the file holds now, so "applied" says whether it really changed (a call may still fail).
+          const abs = path.resolve(s.dir, String(file));
+          if (!s.headless.before.has(abs)) s.headless.before.set(abs, fileDigest(abs));
+          return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+        }
+        return {
+          behavior: /** @type {const} */ ("deny"),
+          message: scope === "changes" && !child
+            ? "This turn runs from a script with no one to ask, and it was not started with --yes, so files are not changed. Say what you would change instead."
+            : "This turn runs from a script with no one to ask: reading, commands inside the sandbox and (with --yes) file changes inside the folder are what it may do. Do the work without this, or say what the person should run.",
+        };
+      }
       stopTicker();
       await keyboardBack();
       try {
@@ -18249,6 +18275,15 @@ async function codeLocalTurn(s, text) {
   console.log();
 }
 
+/** A file's content as a digest, or null when there is none (for -p's "applied"). */
+function fileDigest(/** @type {string} */ file) {
+  try {
+    return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
 /** The messages of `--input-format stream-json`, one JSON object per line, as
  *  they arrive (FOL-223). A line that is not a message stops the session with
  *  its number; an empty stdin is said as such. */
@@ -18351,8 +18386,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   // before any question is asked (Codex).
   if (flags.engine === "claude") throw new Error("Claude Code is no longer an engine for foldrun code — on this computer foldrun's own agent works in your folder; leave out --engine");
   if (flags.engine !== undefined && flags.engine !== "foldrun") throw new Error(`--engine takes only foldrun — got ${JSON.stringify(flags.engine)}`);
-  if ((flags.local === true || onlyHere) && typeof flags.task === "string") throw new Error("on this computer the agent asks before each change, so it needs you at a terminal — a script's turn runs in the cloud (--cloud --task …)");
-  if ((flags.local === true || onlyHere) && !process.stdin.isTTY) throw new Error("on this computer the agent asks before each change, so it needs you at a terminal");
+  // -p on this computer (FOL-223): no questions; file changes only with --yes, commands in the sandbox (see decide).
+  if ((flags.local === true || onlyHere) && typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error("on this computer the agent asks before each change, so it needs you at a terminal");
   const sessionsFile = path.join(credentialsDir(), "code-sessions.json");
   // Where and with which project (owner, 19 Nov 2026: "keep it as simple as
   // possible"): flags first. A person at a terminal is asked where at every
@@ -18369,7 +18404,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   let localOnly = onlyHere ? true : chosen?.localOnly === true;
   // A script's turn runs in the cloud: never for a folder that chose this
   // computer, unless --cloud says so (Codex: no silent upload).
-  if (typeof flags.task === "string" && mode === "local") throw new Error("this folder works on this computer, which needs you at a terminal — --cloud --task sends it to the cloud for this one turn");
+  if (typeof flags.task === "string" && mode === "local" && flags.local !== true && !onlyHere) throw new Error("this folder works on this computer — say where this script's turn runs: --local -p (here; file changes only with --yes) or --cloud -p (a copy goes to the cloud)");
   if (asking && flags.local !== true && !onlyHere && flags.cloud !== true && !(flags.continue === true && mode)) {
     console.log(`\n  ${c.bold(c.sweep("◆ foldrun code"))}\n`);
     // Three answers (owner, 24 Nov 2026: "it has to have 3 options and the where allows to change" — FOL-263),
@@ -18529,7 +18564,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   }
   // A script's --cloud turn in a folder that works on this computer is one
   // turn: the folder keeps its choice and its conversation (Codex).
-  const oneTurn = typeof flags.task === "string" && chosen?.mode === "local";
+  const oneTurn = typeof flags.task === "string" && (chosen?.mode === "local" || mode === "local");
   const remember = () => {
     if (!oneTurn) rememberSession(sessionsFile, dir, { context: s.context, ws, agent, url, mode: s.mode, .../** @type {any} */ (/** @type {any} */ (s).localOnly === true ? { localOnly: true } : {}), ...(s.engine ? { engine: s.engine } : {}), ...sessionCarry(s) });
   };
@@ -18546,7 +18581,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     const emit = (/** @type {any} */ o) => { void io?.emit(o); };
     if (machine) {
       if (outFormat === "stream-json") {
-        emit({ type: "system", subtype: "init", schema: 1, session_id: s.context, project: ws, agent, folder: dir, where: "cloud", version: CLI_VERSION });
+        emit({ type: "system", subtype: "init", schema: 1, session_id: s.context, project: ws, agent, folder: dir, where: s.mode === "local" ? "local" : "cloud", version: CLI_VERSION });
         runEventSink = (e, step) => {
           const line = streamEvent(e, step);
           if (line) emit(line);
@@ -18571,12 +18606,25 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         // an added folder goes along only if the person already said yes to it (Codex).
         const carry = carryNote(s.transcript.filter((/** @type {any} */ e, /** @type {number} */ i) => i < s.told.cloud || !(e.private === true && e.share !== true)), "cloud", s.told.cloud);
         delete s.turnReply;
-        const status = await codeTurn(s, [carry, task].filter(Boolean).join("\n\n"), await messagesForTurn(s, false));
-        if ((s.turns ?? 0) > before) s.cloudBriefed = s.context;
-        const applied = (s.applied?.length ?? 0) > patches;
+        /** @type {string} */
+        let status;
+        let applied;
+        if (s.mode === "local") {
+          // On this computer: the folder is changed in place, never asked (decide).
+          s.engine = "foldrun";
+          s.headless = { yes: flags.yes === true, before: new Map() };
+          delete s.turnOk;
+          await codeLocalTurn(s, task);
+          status = s.turnOk === true ? "completed" : "failed";
+          applied = [...s.headless.before].some(([f, was]) => fileDigest(f) !== was);
+        } else {
+          status = String(await codeTurn(s, [carry, task].filter(Boolean).join("\n\n"), await messagesForTurn(s, false)));
+          if ((s.turns ?? 0) > before) s.cloudBriefed = s.context;
+          applied = (s.applied?.length ?? 0) > patches;
+        }
         if ((s.turns ?? 0) > before) {
-          s.transcript.push({ where: "cloud", you: task, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(s.turnPart ? { part: s.turnPart } : {}), applied, ...(s.lastRun ? { run: String(s.lastRun) } : {}) });
-          s.told.cloud = s.transcript.length;
+          s.transcript.push({ where: s.mode === "local" ? "local" : "cloud", you: task, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(s.turnPart ? { part: s.turnPart } : {}), applied, ...(s.lastRun ? { run: String(s.lastRun) } : {}) });
+          if (s.mode !== "local") s.told.cloud = s.transcript.length;
         }
         remember();
         if (machine) {
@@ -18590,9 +18638,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
             ...(s.lastRun ? { run_id: String(s.lastRun) } : {}),
             cost_usd: Math.max(0, (s.costUsd ?? 0) - costBefore),
             applied,
-            where: "cloud",
+            where: s.mode === "local" ? "local" : "cloud",
             // A turn that did not complete says why, as a thrown failure does (Codex).
-            ...(status !== "completed" ? { error: status === "cancelled" ? "the turn was stopped" : `the cloud run ended ${String(status ?? "failed")}${s.lastRun ? ` — foldrun runs show ${String(s.lastRun)}` : ""}` } : {}),
+            ...(status !== "completed" ? { error: status === "cancelled" ? "the turn was stopped" : s.mode === "local" ? "the turn on this computer did not finish — its lines on stderr say why" : `the cloud run ended ${String(status ?? "failed")}${s.lastRun ? ` — foldrun runs show ${String(s.lastRun)}` : ""}` } : {}),
           });
         }
         code = status === "completed" ? 0 : status === "cancelled" ? 130 : 1;
@@ -18601,7 +18649,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     } catch (err) {
       // A script reading JSON gets the failure as JSON too, not only on stderr.
       if (machine) {
-        emit({ type: "result", schema: 1, status: "failed", is_error: true, error: plainText(explain(err)), session_id: s.context, where: "cloud" });
+        emit({ type: "result", schema: 1, status: "failed", is_error: true, error: plainText(explain(err)), session_id: s.context, where: s.mode === "local" ? "local" : "cloud" });
         console.error(`  ${c.red("✗")} ${plainText(explain(err))}`);
         code = 1;
       } else throw err;
