@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines } from "./code-session.mjs";
+import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
 import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
@@ -9051,7 +9052,55 @@ async function messageCmd(positional, flags, layout) {
  * project, which waits until its person includes it in a turn; and what a
  * conversation was sent. Session messages: foldrun-docs runs.md.
  */
+/**
+ * `foldrun sessions search <words>` — the lines of the `foldrun code`
+ * conversations kept on this computer that hold every word: what the person
+ * wrote, what the agent answered, tool calls and what they printed. Every
+ * folder, or `--here` for this one.
+ */
+async function sessionsSearchCmd(/** @type {string[]} */ typed, /** @type {any} */ flags) {
+  const words = searchWords(typed.map((w) => (/\s/.test(w) ? `"${w}"` : w)).join(" "));
+  if (!words.length) throw new Error('`foldrun sessions search <words>` — every word on one line, in any case; "a phrase" in quotes (--here: this folder only, --json)');
+  if (words.length > MAX_WORDS) throw new Error(`\`foldrun sessions search\` takes ${MAX_WORDS} words at most — every one must be on the line, so none is left out quietly`);
+  const real = (/** @type {string} */ d) => {
+    try {
+      return fs.realpathSync(d);
+    } catch {
+      return path.resolve(d);
+    }
+  };
+  const here = real(process.cwd());
+  const found = searchConversations(words, { ...(flags.here === true ? { only: (/** @type {any} */ x) => real(x.dir) === here } : {}), max: 50 });
+  // One argument for a POSIX shell, whatever is in it: the command can be copied as it is.
+  const sh = (/** @type {string} */ v) => (/^[A-Za-z0-9_\/.:@%+=-]+$/.test(v) ? v : `'${v.replaceAll("'", "'\\''")}'`);
+  /** The command that opens the conversation again: its folder, platform, project, agent and id — the things its file is named by. */
+  const reopen = (/** @type {import("./code-search.mjs").Listed} */ x) => ["foldrun", "code", sh(x.dir), x.localOnly ? "--local-only" : "--local", ...(x.url ? ["--url", sh(x.url)] : []), "--to", sh(x.ws), ...(x.agent ? ["--agent", sh(x.agent)] : []), "--context", sh(x.context), "--continue"].join(" ");
+  if (flags.json === true) {
+    console.log(JSON.stringify({ words, searched: found.searched, more: found.more, hits: found.hits.map((h) => ({ session: h.conversation.context, name: h.conversation.name ?? null, workspace: h.conversation.ws, agent: h.conversation.agent, account: h.conversation.account, dir: h.conversation.dir, at: h.conversation.at, turn: h.turn, who: h.who, line: h.line, reopen: reopen(h.conversation) })) }, null, 2));
+    return 0;
+  }
+  if (!found.hits.length) {
+    console.log(`\n  ${c.dim(`nothing found in the ${found.searched} conversation${found.searched === 1 ? "" : "s"} kept on this computer${flags.here === true ? " for this folder" : ""} — turns in the cloud are kept on the platform and are not searched`)}\n`);
+    return 0;
+  }
+  console.log();
+  /** @type {string | null} */
+  let last = null;
+  for (const h of found.hits) {
+    if (h.conversation.file !== last) {
+      last = h.conversation.file;
+      console.log(`  ${c.white(plainText(h.conversation.name ?? h.conversation.context))} ${c.dim(`· ${plainText(h.conversation.ws)}${h.conversation.account ? ` (${plainText(h.conversation.account)})` : ""} · ${homeTilde(plainText(h.conversation.dir))} · ${h.conversation.at.slice(0, 16).replace("T", " ")}`)}`);
+      console.log(`    ${c.dim(plainText(reopen(h.conversation)))}`);
+    }
+    console.log(`    ${c.cyan(`local turn ${h.turn}`)} ${c.dim(`${h.who}:`)} ${c.grey(plainText(h.line))}`);
+  }
+  console.log(`\n  ${c.dim(`${found.more ? "more lines match: add a word to narrow it · " : ""}only conversations worked on this computer are searched · a conversation opens again under the account named beside it: with another signed in, foldrun use (or --profile) first`)}\n`);
+  return 0;
+}
+
 async function sessionsCmd(positional, flags, layout) {
+  // `foldrun sessions search <words>` reads this computer alone: no platform, no project.
+  if (positional[0] === "search") return sessionsSearchCmd(positional.slice(1), flags);
   const url = platformFor(flags, "sessions");
   const verb = positional[0];
   const context = positional[1];
@@ -14453,7 +14502,8 @@ export function goalWithCheck(/** @type {string} */ rest) {
 }
 
 /** Earlier conversations of a folder that /resume can go back to. */
-const PAST_KEPT = 10;
+// A hundred earlier conversations of a folder (ten before FOL-250): each is a line — its id, its name, when.
+const PAST_KEPT = 100;
 
 /**
  * /doctor: what a session needs, each checked now and said plainly. Nothing
@@ -15677,11 +15727,39 @@ function readEngineConversation(s) {
   }
 }
 
+/** What the list of kept conversations says of this one: whose it is, where, and what it is called. */
+const listedAs = (/** @type {any} */ s) => ({ context: String(s.context), ws: String(s.ws), dir: String(s.dir), url: String(s.url), account: String(accountOfSlot(s) ?? s.costAccount ?? ""), agent: String(s.agent ?? ""), localOnly: s.localOnly === true, ...(typeof s.label === "string" && s.label ? { name: s.label } : {}) });
+
+/**
+ * This conversation's kept file, when it has one — also before a turn on
+ * this computer has found the key (the file is named by the account, which
+ * is then asked for). Null when nothing is kept, or the account cannot be told.
+ */
+async function keptConversationFile(/** @type {any} */ s) {
+  await costAccount(s);
+  const account = accountOfSlot(s) ?? s.costAccount;
+  if (!account) return null;
+  const file = engineConversationFile({ ...s, keySlot: s.keySlot ?? `${s.url}#${account}` });
+  return fs.existsSync(file) ? file : null;
+}
+
+/** Say again what this conversation is called in the list /search reads (its first message, a new name). Never stops anything. */
+async function relist(/** @type {any} */ s) {
+  try {
+    const file = await keptConversationFile(s);
+    if (file) await listConversation(file, listedAs(s));
+  } catch {
+    /* the next turn lists it */
+  }
+}
+
 function saveEngineConversation(s, /** @type {unknown[]} */ list) {
   try {
     const file = engineConversationFile(s);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     writePrivate(file, JSON.stringify(list));
+    // Which conversation this file is, for /search and `foldrun sessions search`.
+    void listConversation(file, listedAs(s));
   } catch {
     /* the next run starts fresh */
   }
@@ -17237,7 +17315,10 @@ async function codeCmd(positional, flags, layout) {
   await ensureCodeAgent(url, flags, ws, agent, await ensureCodeProject(url, flags, ws, agent, picked));
   const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
   // --continue: the last conversation of this folder (19 Nov 2026).
-  const last = typeof flags.context !== "string" && flags.continue === true ? lastSession(sessionsFile, dir, ws) : null;
+  // --continue with a conversation named: the folder's saved one when it is that one (what `foldrun sessions
+  // search` prints), so its goal, todos and what each side was told come back with it — and are not written over.
+  const saved = flags.continue === true ? lastSession(sessionsFile, dir, ws) : null;
+  const last = saved && (typeof flags.context !== "string" || saved.context === flags.context) ? saved : null;
   // The same conversation only on the same server, agent and place (Codex).
   const resumed = last && (last.url === undefined || last.url === url) && (last.agent === undefined || last.agent === agent) && (last.mode ?? "cloud") === mode && (mode !== "local" || last.engine === engine) ? last : null;
   if (flags.continue === true && !resumed && typeof flags.context !== "string") console.log(`  ${c.dim("no earlier conversation of this folder to continue — starting a fresh one")}`);
@@ -17274,6 +17355,23 @@ async function codeCmd(positional, flags, layout) {
   {
     // The todo list of the conversation being continued: read as strictly as when it was written.
     if (carried?.privateSeen === true) s.privateSeen = true;
+    // A conversation opened again by its id, on this computer, without its saved state (the command
+    // `foldrun sessions search` prints, for one that is not the folder's last): the agent reads its kept
+    // history whole, and whether that holds something from an added folder or an MCP server is not known
+    // here — so it is taken as read, and its answers are asked about before they go to the cloud (Codex).
+    if (!carried && typeof flags.context === "string" && flags.continue === true && mode === "local") {
+      s.privateSeen = true;
+      // Its name too, from the list of kept conversations: the first message typed now is not its first.
+      const same = (/** @type {string} */ d) => {
+        try {
+          return fs.realpathSync(d) === fs.realpathSync(dir);
+        } catch {
+          return path.resolve(d) === path.resolve(dir);
+        }
+      };
+      const was = listedConversations().find((x) => x.context === flags.context && x.ws === ws && x.url === url && x.agent === agent && same(x.dir));
+      if (was?.name && !hasControl(was.name)) s.label = was.name.slice(0, 80);
+    }
     const kept = carried && Array.isArray(carried.todos) ? cleanTodos({ todos: carried.todos }) : null;
     if (kept && "todos" in kept && kept.todos.length) {
       s.todos = kept.todos;
@@ -17439,7 +17537,11 @@ async function codeCmd(positional, flags, layout) {
         s.here[where]++;
         // Where this conversation was last worked on: /resume goes back there.
         s.lastWhere = where;
-        s.label ??= plainText(typed).replace(/\s+/g, " ").trim().slice(0, 80) || "(a message)";
+        if (s.label === undefined) {
+          s.label = plainText(typed).replace(/\s+/g, " ").trim().slice(0, 80) || "(a message)";
+          // The turn's conversation was written before it had this name: listed again with it.
+          if (where === "local") await relist(s);
+        }
         if (s.turnReply) s.lastReply = s.turnReply;
         s.told[where] = s.transcript.length;
       }
@@ -17480,6 +17582,33 @@ async function codeCmd(positional, flags, layout) {
     s.here = { local: 0, cloud: 0 };
     // Kept now: /new then /quit must not bring the old one back (Codex).
     remember();
+  };
+  /** Go back to an earlier conversation of this folder; the one being left is kept in its place. */
+  const goBack = (/** @type {any} */ to) => {
+    keepPast(to.context);
+    s.context = to.context;
+    s.label = to.said;
+    // Where it was worked on: its conversation is kept on that side.
+    s.mode = to.mode === "local" ? "local" : "cloud";
+    s.lastWhere = s.mode;
+    // What was allowed with "always" was allowed in the conversation being left (Codex).
+    delete s.localAllow;
+    if (s.mode === "local") s.engine = "foldrun";
+    delete s.localHistory;
+    delete s.lastReply;
+    delete s.cloudBriefed;
+    if (to.briefed === true) s.cloudBriefed = s.context;
+    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo"]) delete s[k];
+    s.notes = [];
+    s.transcript = [];
+    s.told = { local: 0, cloud: 0 };
+    s.here = { local: 0, cloud: 0 };
+    // A conversation kept on this computer is read again whole by the agent, and what it once read from an
+    // added folder or an MCP server is in it; whether it did is not kept with an earlier conversation, so it
+    // is taken as read: its answers are asked about before they go to the cloud (Codex).
+    if (s.mode === "local") s.privateSeen = true;
+    remember();
+    console.log(`  ${c.green("✓")} ${c.dim(`back in: ${plainText(to.said)} — the agent ${s.mode === "local" ? "on this computer" : "in the cloud"} reads that conversation again from your next message; what the other side did in it is not retold`)}\n`);
   };
   const say = (/** @type {string} */ text) => console.log(`  ${c.dim(text)}\n`);
   /**
@@ -17834,6 +17963,78 @@ async function codeCmd(positional, flags, layout) {
       say(`a fresh conversation — the agent no longer reads the earlier turns${s.past?.length ? " (/resume goes back to one)" : ""}`);
       continue;
     }
+    if (name === "/rename") {
+      const to = plainText(rest).replace(/\s+/g, " ").trim().slice(0, 80);
+      if (!to || hasControl(to)) {
+        say(`${typeof s.label === "string" && s.label ? `this conversation is called: ${plainText(s.label)} · ` : ""}/rename <name> names it — /resume and /search show the name`);
+        continue;
+      }
+      s.label = to;
+      remember();
+      // The list /search reads has the name at once, where the conversation is kept on this computer.
+      await relist(s);
+      console.log(`  ${c.green("✓")} ${c.dim(`this conversation is now called: ${to}`)}\n`);
+      continue;
+    }
+    if (name === "/search") {
+      const words = searchWords(rest);
+      if (!words.length) {
+        say('/search <words> — every word on one line, in any case; "a phrase" in quotes. It reads the conversations of this folder kept on this computer: what you wrote, what the agent answered, tool calls and what they printed');
+        continue;
+      }
+      if (words.length > MAX_WORDS) {
+        say(`/search takes ${MAX_WORDS} words at most — every one must be on the line, so none is left out quietly`);
+        continue;
+      }
+      // Whose conversations: this sign-in's and this agent's — the same checkout can hold another account's.
+      await costAccount(s);
+      const account = accountOfSlot(s) ?? s.costAccount;
+      if (!account) {
+        say("could not tell which account this is, so its conversations cannot be told from another's — foldrun whoami");
+        continue;
+      }
+      let here = path.resolve(dir);
+      try {
+        here = fs.realpathSync(here);
+      } catch {
+        /* as given */
+      }
+      const sameDir = (/** @type {string} */ d) => {
+        try {
+          return fs.realpathSync(d) === here;
+        } catch {
+          return path.resolve(d) === here;
+        }
+      };
+      const found = searchConversations(words, { only: (x) => x.ws === ws && x.url === url && x.account === account && x.agent === agent && sameDir(x.dir) });
+      if (!found.hits.length) {
+        say(`nothing found in the ${found.searched} conversation${found.searched === 1 ? "" : "s"} of this folder kept on this computer — turns in the cloud are kept on the platform and are not searched; foldrun sessions search looks in every folder`);
+        continue;
+      }
+      const past = Array.isArray(s.past) ? s.past : [];
+      found.hits.forEach((h, i) => {
+        const mine = h.conversation.context === s.context;
+        const called = plainText(h.conversation.name ?? past.find((/** @type {any} */ e) => e.context === h.conversation.context)?.said ?? h.conversation.context);
+        console.log(`  ${c.cyan(String(i + 1).padStart(2))}  ${c.white(called)} ${c.dim(`· ${h.conversation.at.slice(0, 16).replace("T", " ")} · local turn ${h.turn} · ${h.who}${mine ? " · this conversation" : ""}`)}`);
+        console.log(`      ${c.grey(plainText(h.line))}`);
+      });
+      if (found.more) console.log(`  ${c.dim("… more lines match: add a word to narrow it")}`);
+      const pick = ((await cancellablePrompt(`  ${c.dim("go back to which? a number, or Enter to stay:")} `, null)) ?? "").trim();
+      const k = Number(pick);
+      if (!pick || !Number.isInteger(k) || k < 1 || k > found.hits.length) {
+        console.log();
+        continue;
+      }
+      const hit = found.hits[k - 1].conversation;
+      if (hit.context === s.context) {
+        say("that is this conversation");
+        continue;
+      }
+      const kept = past.find((/** @type {any} */ e) => e.context === hit.context);
+      // On this computer, where the line that was found is kept — whichever side the conversation was last worked on.
+      goBack({ ...(kept ?? { context: hit.context, said: (hit.name ?? hit.context).slice(0, 80), at: hit.at }), mode: "local" });
+      continue;
+    }
     if (name === "/resume") {
       const past = Array.isArray(s.past) ? s.past : [];
       if (!past.length) {
@@ -17842,31 +18043,14 @@ async function codeCmd(positional, flags, layout) {
       }
       const n = Number(rest);
       if (!rest || !Number.isInteger(n) || n < 1 || n > past.length) {
-        past.forEach((/** @type {any} */ e, /** @type {number} */ i) => console.log(`  ${c.cyan(String(i + 1).padStart(2))}  ${c.white(plainText(e.said))} ${c.dim(`· ${String(e.at).slice(0, 16).replace("T", " ")} · ${e.mode === "local" ? "on this computer" : "in the cloud"}`)}`));
-        say("/resume <number> goes back to one — this conversation is kept in its place");
+        // The twenty newest; `/resume all` for every one kept. The numbers are the same either way.
+        const shown = rest === "all" ? past : past.slice(0, 20);
+        shown.forEach((/** @type {any} */ e, /** @type {number} */ i) => console.log(`  ${c.cyan(String(i + 1).padStart(2))}  ${c.white(plainText(e.said))} ${c.dim(`· ${String(e.at).slice(0, 16).replace("T", " ")} · ${e.mode === "local" ? "on this computer" : "in the cloud"}`)}`));
+        say(`/resume <number> goes back to one — this conversation is kept in its place${past.length > shown.length ? ` · ${past.length - shown.length} older: /resume all` : ""} · /search <words> finds one by what was said in it`);
         continue;
       }
       const to = past[n - 1];
-      keepPast(to.context);
-      s.context = to.context;
-      s.label = to.said;
-      // Where it was worked on: its conversation is kept on that side.
-      s.mode = to.mode === "local" ? "local" : "cloud";
-      s.lastWhere = s.mode;
-      // What was allowed with "always" was allowed in the conversation being left (Codex).
-      delete s.localAllow;
-      if (s.mode === "local") s.engine = "foldrun";
-      delete s.localHistory;
-      delete s.lastReply;
-      delete s.cloudBriefed;
-      if (to.briefed === true) s.cloudBriefed = s.context;
-      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo"]) delete s[k];
-      s.notes = [];
-      s.transcript = [];
-      s.told = { local: 0, cloud: 0 };
-      s.here = { local: 0, cloud: 0 };
-      remember();
-      console.log(`  ${c.green("✓")} ${c.dim(`back in: ${plainText(to.said)} — the agent ${s.mode === "local" ? "on this computer" : "in the cloud"} reads that conversation again from your next message; what the other side did in it is not retold`)}\n`);
+      goBack(to);
       continue;
     }
     if (name === "/rewind") {
@@ -17967,6 +18151,8 @@ async function codeCmd(positional, flags, layout) {
         if (verb === "off") s.localOnly = true;
         else delete s.localOnly;
         remember();
+        // The command `foldrun sessions search` prints to open this conversation again follows the choice.
+        await relist(s);
         const stillCloud = s.mode === "cloud" ? " — this session is working in the cloud now, where every message sends the folder: /local first, for this to matter" : "";
         say(verb === "off" ? `off — on this computer the agent has no cloud agents and cannot message other sessions: it sends no copy of this folder. What you send yourself still goes (/cloud <task>, /send, an MCP server you said yes to)${stillCloud}` : `on — the agent on this computer may hand work to cloud agents; each time it is shown and asked first, and costs foldrun credits${stillCloud}`);
       } else if (verb) say("/cloud-agents on · off");

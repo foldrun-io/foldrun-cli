@@ -827,6 +827,79 @@ test("/cost explain ranks what used the model, its figures add up, and foldrun u
   }
 });
 
+test("/search finds a conversation by a line only a tool printed and goes back to it; /rename names it; foldrun sessions search finds it from the shell", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "s1", name: "Bash", input: { command: "printf 'ERR-%s\\n' ZX81" } }]),
+    () => sse([{ type: "text", text: "it printed a code" }]),
+    () => sse([{ type: "text", text: "a new start" }]),
+    () => sse([{ type: "text", text: "back again" }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-se/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-se", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/search\r");
+    at = await t.until(/\/search <words> — every word on one line/, at);
+    t.send("run it\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/it printed a code/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/rename the printing one\r");
+    at = await t.until(/this conversation is now called: the printing one/, at);
+    t.send("/clear\r");
+    at = await t.until(/a fresh conversation/, at);
+    t.send("hello\r");
+    at = await t.until(/a new start/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    // The words are in no message and in no command: only in what the command printed.
+    t.send("/search err-zx81\r");
+    at = await t.until(/ 1  the printing one · [^\n]* · local turn 1 · tool output\s+ERR-ZX81\s+go back to which\? a number, or Enter to stay:/, at);
+    t.send("1\r");
+    at = await t.until(/back in: the printing one/, at);
+    t.send("/resume\r");
+    at = await t.until(/ 1  hello · [\s\S]*\/search <words> finds one by what was said in it/, at);
+    t.send("and now\r");
+    at = await t.until(/back again/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    // The agent reads the conversation it went back to: the tool's output is in what was sent.
+    assert.match(JSON.stringify(asked[3].messages), /ERR-ZX81/);
+    t.send("/search nothing-like-this\r");
+    at = await t.until(/nothing found in the 2 conversations of this folder kept on this computer — turns in the cloud/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
+    const env = { ...outerEnv(), FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1" };
+    const j = JSON.parse(execFileSync(process.execPath, [cli, "sessions", "search", "ERR-ZX81", "--json"], { env, encoding: "utf8", cwd: os.tmpdir() }));
+    assert.deepEqual(j.hits.map((h: any) => [h.session, h.name, h.workspace, h.turn, h.who, h.line]), [["code-se", "the printing one", "desk", 1, "tool output", "ERR-ZX81"]]);
+    const shown = execFileSync(process.execPath, [cli, "sessions", "search", "err-zx81"], { env, encoding: "utf8", cwd: os.tmpdir() });
+    assert.match(shown, /the printing one · desk \(acme\) · [\s\S]*foldrun code \S+ --local --url \S+ --to desk --agent coder --context code-se --continue[\s\S]*local turn 1 tool output: ERR-ZX81[\s\S]*only conversations worked on this computer are searched/);
+    assert.match(execFileSync(process.execPath, [cli, "sessions", "search", "err-zx81", "--here"], { env, encoding: "utf8", cwd: os.tmpdir() }), /nothing found in the 0 conversations kept on this computer for this folder/);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 function sse(content: Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string) {
   const ev = (e: Record<string, unknown>) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
   let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1 } } });
