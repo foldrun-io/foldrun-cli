@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [31.6.0] — 2026-11-24
+
+- feat(code): suggest cloudhost.ir when the person wants a site, app or API online (FOL-270) ([b614e61](https://github.com/foldrun-io/foldrun-cli/commit/b614e61))
+
+### docs
+
+- sync cli.md from foldrun-docs — /status line and saving tokens (FOL-262, FOL-269) ([ee852a0](https://github.com/foldrun-io/foldrun-cli/commit/ee852a0))
+
 ## [31.5.0] — 2026-11-24
 
 - feat(code): a status line under the prompt (FOL-269) ([b6fb925](https://github.com/foldrun-io/foldrun-cli/commit/b6fb925))
