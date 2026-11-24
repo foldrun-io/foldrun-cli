@@ -435,6 +435,73 @@ test("/effort (FOL-256): the effort: line of the agent's file — a picker, a le
   }
 });
 
+test("token hints (FOL-262): a new model, a break past the cache's life — each once, with the size and its cost; none while the cache is warm; /cost tips off stops them; /cost explain lists them", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: default\n---\nYou code.\n";
+  const big = { cache_read_input_tokens: 40_000 };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: file, sha256: "x" }),
+    [`PUT ${WS}/source`]: (b) => {
+      file = JSON.parse(String(b)).content;
+      return { ok: true };
+    },
+    [`GET ${WS}/sessions/code-tk/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "GET /v1/account/usage/rates": () => ({ catalogue: { models: { prices: [{ model: "claude-sonnet-test", inputPerMTok: 3, outputPerMTok: 15 }] } } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": () => sse([{ type: "text", text: "Done." }], undefined, big),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-tk", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "250", FOLDRUN_CODE_CACHE_TTL_MS: "2500" });
+  const count = (re: RegExp) => (t.out().match(new RegExp(re.source, "g")) ?? []).length;
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Done\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    // Warm: the next message says nothing.
+    t.send("two\r");
+    at = await t.until(/Done\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(count(/the cache has expired/), 0, "no hint while the cache is warm");
+    // A break past the cache's life: said before the message goes, priced by the model that served the last call.
+    await new Promise((r) => setTimeout(r, 3000));
+    t.send("three\r");
+    at = await t.until(/back after 0 min: the cache has expired, so this message reads the conversation again at full price — about 40\.1k tokens \(~\$0\.12\)[\s\S]*Done\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    // Another model: once, with the size (its own price is not known before it answers).
+    t.send("/model fast\r");
+    at = await t.until(/another model has no cache of this conversation: your next message reads it all at full price — about 40\.1k tokens\. /, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/model default\r");
+    at = await t.until(/\w ❯ /, at);
+    // Off: no more, for you.
+    t.send("/cost tips off\r");
+    at = await t.until(/token hints off/, at);
+    t.send("/effort high\r");
+    at = await t.until(/effort high from your next message/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/cost explain\r");
+    at = await t.until(/hints given[\s\S]*back after[\s\S]*another model/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(count(/another model has no cache/), 2, "once on screen, once in /cost explain");
+  assert.equal(count(/changes what the model is sent/), 0, `off is off:\n${t.out().split("\n").filter((l) => /changes what the model is sent|❯/.test(l)).join("\n")}`);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).tips, false);
+});
+
 test("/effort on this computer (FOL-256): the next turn's model call carries the agent's effort as output_config.effort; default sends none", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const engine: any = await import("@foldrun/core/engine-loop");
   assert.equal(engine.ENGINE_FEATURES?.effort, true, "the core this CLI depends on sends an effort");
@@ -1124,9 +1191,9 @@ test("a cloud patch taken file by file: two of three go in, the third is left ou
   }
 });
 
-function sse(content: Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string) {
+function sse(content: Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string, usage: Record<string, number> = {}) {
   const ev = (e: Record<string, unknown>) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
-  let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1 } } });
+  let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1, ...usage } } });
   content.forEach((b, index) => {
     if (b.type === "text") {
       out += ev({ type: "content_block_start", index, content_block: { type: "text", text: "" } });

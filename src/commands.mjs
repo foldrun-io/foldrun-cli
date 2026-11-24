@@ -16,6 +16,7 @@ import { readCodePrefs, writeCodePrefs, thinkingLines, commandMenu } from "./cod
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
+import { giveHint, hintLine, CACHE_TTL_MS } from "./code-hints.mjs";
 import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED_OVER } from "./self-update.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
@@ -14665,6 +14666,8 @@ function sessionCarry(/** @type {any} */ s) {
     ...(Array.isArray(s.past) && s.past.length ? { past: s.past.slice(0, PAST_KEPT) } : {}),
     ...(typeof s.label === "string" && s.label ? { label: s.label } : {}),
     ...(s.lastWhere === "local" || s.lastWhere === "cloud" ? { lastWhere: s.lastWhere } : {}),
+    // Each side's last measure, so a conversation picked up the next day still hears its cache expired (FOL-262, Codex).
+    ...(s.measure && typeof s.measure === "object" ? { measure: s.measure } : {}),
     // The conversation kept on this computer still holds what was read: later answers stay marked (Codex).
     ...(s.privateSeen === true ? { privateSeen: true } : {}),
     ...(typeof s.goal === "string" ? { goal: s.goal } : {}),
@@ -15475,6 +15478,7 @@ async function codeModel(url, flags, ws, agent, want, s) {
     throw err;
   }
   console.log(`  ${c.green("✓")} ${c.bold(modelLabel(want, cat))} from your next message ${c.dim(`— kept for ${plainText(ws)}`)}\n`);
+  return true;
 }
 
 /** The tiers foldrun code offers, and what each runs on foldrun's own models. */
@@ -15749,6 +15753,7 @@ async function codeEffort(url, flags, ws, agent, want, s) {
   if (word !== "default" && s.mode === "local" && engine.ENGINE_FEATURES?.effort !== true) console.log(`  ${c.dim("this foldrun's engine cannot send it yet: update foldrun (`foldrun update`); a turn in the cloud runs it already")}`);
   // What a model without this level does with it is said when a turn runs on it: here by the session, in the cloud in the run's trail.
   console.log();
+  return true;
 }
 
 /** "high" → "High", "default" → "the model's default". */
@@ -18168,6 +18173,10 @@ async function codeLocalTurn(s, text) {
     s.cachedTokens = Number(result.usage.cache_read_input_tokens ?? 0) > 0 ? Number(result.usage.cache_read_input_tokens) : undefined;
     delete s.modelCalls;
   }
+  // The conversation on this computer as it now stands, and when its cache was last used (FOL-262): the
+  // last call that was read, timed when it started — kept even when no final result came (Codex).
+  if (used.lastInput > 0) delete s.modelChanged;
+  if (used.lastInput > 0) (s.measure ??= {}).local = { tokens: used.lastInput, model: used.lastModel || undefined, at: used.lastAt || Date.now() };
   s.turnOk = ok && !cancel.asked;
   const how = cancel.asked ? c.bold(c.amber("■ stopped")) : ok ? c.bold(c.green("✓ done")) : c.bold(c.red("✗ not finished"));
   const parts = [c.white(formatSecs(secs)), s.model ? c.violet(shortModel(plainText(s.model))) : null, s.planLabel ? c.grey(`on ${s.planLabel}`) : null].filter(Boolean);
@@ -18353,6 +18362,15 @@ async function codeCmd(positional, flags, layout) {
       if (mine.context === s.context && typeof mine.label === "string" && mine.label && !hasControl(mine.label)) {
         s.label = mine.label.slice(0, 80);
         if (mine.lastWhere === "local" || mine.lastWhere === "cloud") s.lastWhere = mine.lastWhere;
+        if (mine.measure && typeof mine.measure === "object") {
+          /** @type {any} */
+          const got = {};
+          for (const side of ["local", "cloud"]) {
+            const x = mine.measure[side];
+            if (x && Number.isFinite(x.tokens) && Number.isFinite(x.at)) got[side] = { tokens: Number(x.tokens), at: Number(x.at), ...(typeof x.model === "string" ? { model: x.model } : {}) };
+          }
+          /** @type {any} */ (s).measure = got;
+        }
       }
     }
   }
@@ -18447,12 +18465,37 @@ async function codeCmd(positional, flags, layout) {
    * (FOL-252). Nothing is scheduled: the wait is a timer here, and ends
    * with the terminal. Once: a turn that stops again hands back.
    */
+  /**
+   * A token hint (FOL-262), once a session for its kind: the conversation's size (the last call's
+   * read, or the last cloud turn's per call), at the model's listed price when it can be read.
+   */
+  const hint = async (/** @type {Parameters<typeof giveHint>[1]} */ kind, /** @type {any} */ o = {}, /** @type {"local" | "cloud"} */ side = s.mode === "local" ? "local" : "cloud") => {
+    const a = /** @type {any} */ (s);
+    const off = readCodePrefs().tips === false;
+    if (off || a.hints?.some((/** @type {any} */ h) => h.kind === kind)) return;
+    const m = a.measure?.[side];
+    const base = { tokens: Number(m?.tokens) || 0, side, ...o };
+    // Nothing worth saying: no call for the price list (Codex).
+    if (!hintLine(kind, base)) return;
+    // Priced only by the model that served this side's last call, and not once /model chose another (Codex).
+    if (base.price === undefined && m?.model && a.modelChanged !== true) {
+      if (a.rates === undefined) a.rates = await remoteCall(url, flags, "/v1/account/usage/rates").catch(() => null);
+      base.price = priceOf(a.rates, m.model);
+    }
+    giveHint(s, kind, base, { off, print: (l) => console.log(`  ${c.amber("$")} ${c.grey(l)}\n`) });
+  };
   const runTurn = async (/** @type {"local" | "cloud"} */ where, /** @type {string} */ said, /** @type {string} */ typed = said) => {
+    // Before a turn that pays more than it seems (FOL-262): back after the cache expired; a very long message.
+    // Each side's own conversation and cache: a one-off cloud task does not stand for the conversation here (Codex).
+    const last = /** @type {any} */ (s).measure?.[where]?.at;
+    if (typeof last === "number" && Date.now() - last > (Number(process.env.FOLDRUN_CODE_CACHE_TTL_MS) || CACHE_TTL_MS)) await hint("break", { minutes: (Date.now() - last) / 60_000 }, where);
+    await hint("paste", { tokens: Math.round(said.length / 4) }, where);
     delete s.allowanceStop;
     delete s.turnShown;
     const notes = Array.isArray(s.notes) ? s.notes.slice() : [];
     const extra = s.cloudExtra;
     await runTurnOnce(where, said, typed);
+    await hint("big", {}, where);
     /** @type {string[]} */
     const shown = Array.isArray(s.turnShown) ? s.turnShown : [];
     delete s.turnShown;
@@ -18693,7 +18736,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     // Nothing of the old conversation stays in the count (Codex).
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo", "cloudOwed", "turnPart"]) delete s[k];
+    for (const k of ["measure", "hints", "turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo", "cloudOwed", "turnPart"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };
@@ -18716,7 +18759,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     if (to.briefed === true) s.cloudBriefed = s.context;
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo", "cloudOwed", "turnPart"]) delete s[k];
+    for (const k of ["measure", "hints", "turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo", "cloudOwed", "turnPart"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };
@@ -18874,7 +18917,7 @@ async function codeCmd(positional, flags, layout) {
         const rows = m ? (await m.look().catch(() => ({ rows: [] }))).rows : [];
         return { mcp: rows.map((/** @type {any} */ r) => ({ name: String(r.name), state: String(r.state), source: String(r.source ?? "") })) };
       }
-      return { localOnly: s.localOnly === true, mode: s.mode, sandboxOff: s.sandboxOff === true, strict: s.strict === true };
+      return { localOnly: s.localOnly === true, mode: s.mode, sandboxOff: s.sandboxOff === true, strict: s.strict === true, tips: readCodePrefs().tips !== false };
     };
     // Another sign-in under this session's profile name: stop, never go on as a different account showing the old one (Codex).
     {
@@ -19105,6 +19148,8 @@ async function codeCmd(positional, flags, layout) {
           { role: "assistant", content: [{ type: "text", text: summary }] },
         ];
         saveEngineConversation(s, s.localHistory);
+        // What was measured was the history just replaced (Codex): no hint quotes it now, nor after --continue.
+        if (/** @type {any} */ (s).measure) delete /** @type {any} */ (s).measure.local;
         remember();
         console.log(`  ${c.green("✓")} ${c.dim(`conversation shortened: ${had.length} messages are now this summary — the next turn starts from it`)}\n`);
       } else {
@@ -19127,13 +19172,30 @@ async function codeCmd(positional, flags, layout) {
       continue;
     }
     if (name === "/cost" && rest) {
+      const tips = /^tips(?:\s+(on|off))?$/i.exec(rest);
+      if (tips) {
+        // Token hints (FOL-262): a choice of /cost, not a command of its own (owner's rule: related options are one command).
+        const prefs = readCodePrefs();
+        if (!tips[1]) say(`token hints are ${prefs.tips === false ? "off" : "on"} · /cost tips ${prefs.tips === false ? "on" : "off"}`);
+        else if (!writeCodePrefs({ ...prefs, tips: tips[1].toLowerCase() === "on" })) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
+        else say(tips[1].toLowerCase() === "on" ? "token hints on — one line before a turn that re-reads the whole conversation, with its cost and the cheaper way; each kind once a session" : "token hints off — for you, in every folder");
+        continue;
+      }
       if (rest !== "explain") {
-        say("/cost · /cost explain");
+        say("/cost · /cost explain · /cost tips on|off");
         continue;
       }
       const rows = Array.isArray(s.ledger) ? s.ledger : [];
+      // The token hints given this session (FOL-262): shown even when nothing was paid yet (Codex).
+      const hintsGiven = () => {
+        if (!Array.isArray(s.hints) || !s.hints.length) return;
+        console.log(`  ${c.bold(c.white("hints given"))}`);
+        for (const h of s.hints) console.log(`  ${c.dim(String(h.at).slice(11, 16))} ${c.grey(plainText(h.line))}`);
+        console.log();
+      };
       if (!rows.length) {
         say("nothing has used the model yet in this conversation, since this terminal opened it");
+        hintsGiven();
         continue;
       }
       // The listed prices, for the turns on this computer: read once.
@@ -19145,6 +19207,7 @@ async function codeCmd(positional, flags, layout) {
         }
       }
       printCostExplained(explainCost(rows, s.rates ?? null), { inSession: true, context: String(s.context) });
+      hintsGiven();
       continue;
     }
     if (name === "/cost") {
@@ -19156,7 +19219,11 @@ async function codeCmd(positional, flags, layout) {
     }
     if (name === "/model") {
       try {
-        await codeModel(url, flags, ws, agent, rest, s);
+        if (await codeModel(url, flags, ws, agent, rest, s)) {
+          // The next turn's model is not the one measured: its price is not known here (Codex).
+          /** @type {any} */ (s).modelChanged = true;
+          await hint("model", { price: null });
+        }
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
       }
@@ -19326,7 +19393,7 @@ async function codeCmd(positional, flags, layout) {
       // One setting, two doors: /thinking high is /effort high, and says so.
       if (name === "/thinking") say(`/thinking ${rest.toLowerCase()} sets how hard the model thinks — that is /effort; /thinking on|off shows or hides the summary of its thinking`);
       try {
-        await codeEffort(url, flags, ws, agent, rest, s);
+        if (await codeEffort(url, flags, ws, agent, rest, s)) await hint("tools", { what: "a new effort" });
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
       }
@@ -19335,10 +19402,13 @@ async function codeCmd(positional, flags, layout) {
     if (name === "/thinking") {
       const prefs = readCodePrefs();
       if (rest === "on" || rest === "off") {
-        if (!writeCodePrefs({ ...prefs, thinking: rest === "on" })) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
+        const saved = writeCodePrefs({ ...prefs, thinking: rest === "on" });
+        if (!saved) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
         else if (rest === "off") say("thinking is not shown");
         else if (/** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.thinking !== true) say("saved — but this foldrun's engine cannot ask for it yet: update foldrun (`foldrun update`) and it shows");
         else say(`a summary of the model's thinking is shown above its reply, dimmed — for you, in every folder, from the next message. It costs nothing more: the model thinks the same either way (how hard it thinks is /effort)${s.mode === "cloud" ? ". A turn in the cloud does not return it: it shows on this computer (/local)" : ""}`);
+        // Asking for the summaries changes the request's thinking setting: the messages are read again once (FOL-262, Codex).
+        if (saved && (prefs.thinking === true) !== (rest === "on") && s.mode === "local" && /** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.thinking === true) await hint("tools", { what: `/thinking ${rest}` });
       } else if (rest) say("/thinking · /thinking on · /thinking off — how hard it thinks is /effort (low to max)");
       else say(`thinking is ${prefs.thinking === true ? "shown: a summary, dimmed, above the reply (on this computer; a turn in the cloud does not return it)" : "not shown"} · /thinking ${prefs.thinking === true ? "off" : "on"}`);
       continue;
@@ -19585,6 +19655,7 @@ async function codeCmd(positional, flags, layout) {
         continue;
       }
       if (verb === "on") {
+        const wasOn = row.state === "on";
         if (row.state === "on") say("already running");
         else if (row.state === "waiting") {
           show(row);
@@ -19595,12 +19666,16 @@ async function codeCmd(positional, flags, layout) {
           m.turnOn(row.name);
           started(await m.restart(row, soon()), row.name);
         }
+        // The tools offered on this computer: said only for the conversation here (Codex).
+        if (!wasOn && s.mode === "local" && (await m.look()).rows.some((/** @type {any} */ x) => x.name === row.name && x.state === "on")) await hint("tools", { what: "its tools" }, "local");
         continue;
       }
       if (verb === "off") {
+        const wasOn = row.state === "on";
         await m.turnOff(row.name);
         if (s.localAllow?.mcp) s.localAllow.mcp.clear();
         say(`${plainText(row.name)} is off for this session — its tools are no longer offered, and what you allowed with "always" for MCP tools is asked again`);
+        if (wasOn && s.mode === "local") await hint("tools", { what: "a tool list without it" }, "local");
         continue;
       }
       if (verb === "restart") {
@@ -19666,6 +19741,7 @@ async function codeCmd(positional, flags, layout) {
       if (where === "local") s.engine = "foldrun";
       remember();
       const missed = s.transcript.slice(s.told[where]).filter((e) => e.where !== where).length;
+      if (Number(s.turns) > 0) await hint("place");
       console.log(`  ${c.green("✓")} ${c.white(`working ${place} from here on`)} ${c.dim(where === "local" ? "— the agent works in your folder and asks before each change and command" : "— each message takes your folder to the agent; you apply what comes back")}`);
       say(missed ? `the same session: the agent there is told what the last ${missed === 1 ? "turn" : `${missed} turns`} did` : "the same session");
       continue;
@@ -20455,6 +20531,13 @@ export function noteSessionTurn(s, run, cost) {
   if (model) s.model = model;
   const t = step?.tokens;
   s.contextTokens = t ? Number(t.input ?? 0) : undefined;
+  // The cloud conversation's own measure (FOL-262): one call's read, and its cache used just now.
+  // The last call's own read where the run lists its calls; else the turn's total over its calls (Codex).
+  const lastCall = Array.isArray(step?.calls) ? step.calls.at(-1) : null;
+  const callIn = Number(lastCall?.tokens?.input);
+  if ((Number.isFinite(callIn) && callIn > 0) || (t && Number(t.input) > 0)) delete s.modelChanged;
+  if (Number.isFinite(callIn) && callIn > 0) (s.measure ??= {}).cloud = { tokens: callIn, model: typeof lastCall.model === "string" ? lastCall.model : s.model, at: Date.now() };
+  else if (t && Number(t.input) > 0) (s.measure ??= {}).cloud = { tokens: Number(t.input) / Math.max(1, Number(step?.turns) || 1), model: s.model, at: Date.now() };
   // Every model call of a turn re-reads the agent's instructions; all but
   // the first take them from the cache at a tenth of the price. Shown, so a
   // big number is not read as a big bill (owner, 24 Nov 2026).

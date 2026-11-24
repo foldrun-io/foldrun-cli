@@ -78,6 +78,12 @@ export function meter() {
     close: () => {},
     /** What the last call left in the cache: what it read from it and what it wrote to it. */
     lastCached: 0,
+    /** What the last call read in all — the conversation's size as it now stands; 0 until a call starts. */
+    lastInput: 0,
+    /** The model that answered the last call, as the API named it: what its price is listed under. */
+    lastModel: "",
+    /** When the last call started (ms): the cache was used then. */
+    lastAt: 0,
     note,
   };
   /** A call whose answer has begun and not ended: what its start reported (input and cache), counted if the answer never comes. */
@@ -101,6 +107,11 @@ export function meter() {
   function note(/** @type {any} */ e) {
     if (e?.type === "stream_event" && !e.parent_tool_use_id && e.event?.type === "message_start" && e.event.message?.usage && typeof e.event.message.usage === "object") {
       open = { model: typeof e.event.message.model === "string" ? e.event.message.model : "", usage: { ...e.event.message.usage } };
+      // What this call read in all: the conversation as it stands now (FOL-262's hints measure by it).
+      const u = e.event.message.usage;
+      m.lastInput = num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
+      m.lastModel = open.model;
+      m.lastAt = Date.now();
       return;
     }
     // What the answer's end reported (its output count, mostly), should the answer itself never arrive whole.

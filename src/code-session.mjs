@@ -25,7 +25,7 @@ export const CODE_COMMANDS = [
   ["/rewind [turn]", "take back what the agent's Write and Edit changed on this computer, from a turn onward — every file or none"],
   ["/status", "this session: turns, cost, model, conversation"],
   ["/restart", "start foldrun again on this folder, place, account, agent and conversation — how a long session takes a newer foldrun it was told is ready (typed during a turn, it is queued for after it)"],
-  ["/cost [explain]", "what this session has spent — explain: where it went, row by row (turns, sub-agents, cloud jobs): model calls, tokens read, how much came from the cache, cost, who paid, and the biggest cause"],
+  ["/cost [explain|tips on|off]", "what this session has spent — tips on|off: a line before a turn that re-reads the whole conversation (after a break, a new model…), with its cost; explain: where it went, row by row (turns, sub-agents, cloud jobs): model calls, tokens read, how much came from the cache, cost, who paid, and the biggest cause"],
   ["/usage", "your foldrun plan and the credit left on it"],
   ["/context", "what fills the agent's context: instructions, skills, the conversation, the last turn"],
   ["/compact [what to keep]", "shorten the conversation to the agent's own summary, so a long session stays fast (this computer)"],
@@ -104,7 +104,7 @@ export const CODE_TIPS = [
  * @param {{ thinking?: boolean, localOnly?: boolean, mode?: string, sandboxOff?: boolean, strict?: boolean,
  *   past?: Array<{ said: string, at?: string }>, turns?: Array<{ turn: number, label: string }>,
  *   todos?: Array<{ content: string, status?: string }>, queue?: string[], mcp?: Array<{ name: string, state: string, source?: string }>,
- *   explained?: boolean }} st
+ *   explained?: boolean, tips?: boolean }} st
  * @returns {{ title: string, subtitle: string, choices: Array<{ v: string, name: string, note: string, ask?: string }>, tick: string | null, start: string } | null}
  */
 export function commandMenu(name, st) {
@@ -170,9 +170,11 @@ export function commandMenu(name, st) {
         subtitle: "/cost explain types it straight away",
         choices: [
           { v: "/cost ", name: "The total", note: "turns here and in the cloud" },
-          { v: "/cost explain", name: "Where it went", note: "row by row: model calls, tokens, the cache" },
+          { v: "/cost explain", name: "Where it went", note: "row by row: model calls, tokens, the cache, the hints given" },
+          { v: "/cost tips on", name: "Token hints on", note: "one line before a turn that re-reads the conversation (a break, /model…)" },
+          { v: "/cost tips off", name: "Token hints off", note: "for you, in every folder" },
         ],
-        tick: null,
+        tick: st.tips === false ? "/cost tips off" : "/cost tips on",
         start: "/cost ",
       };
     case "/mcp": {
@@ -983,23 +985,23 @@ const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
 /**
  * What the person chose for `foldrun code` on this computer, whichever
- * folder they are in: today, whether the model's thinking is shown.
- * @returns {{ thinking?: boolean }}
+ * folder they are in: whether the model's thinking is shown, and whether token hints are (FOL-262: off only when said).
+ * @returns {{ thinking?: boolean, tips?: boolean }}
  */
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}) } : {};
   } catch {
     return {};
   }
 }
 
-/** @param {{ thinking?: boolean }} prefs @returns {boolean} whether it was kept */
+/** @param {{ thinking?: boolean, tips?: boolean }} prefs @returns {boolean} whether it was kept */
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;
