@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.1.2] — 2026-11-24
+
+### docs
+
+- sync the bundled docs (git offered only for the cloud, FOL-274) ([0e7c245](https://github.com/foldrun-io/foldrun-cli/commit/0e7c245))
+
 ## [32.1.1] — 2026-11-24
 
 - fix(code): a folder that cannot be read leaves the folder-of-repos check unsure, and git is then not offered (FOL-274, Codex round 16) ([2e0f6ff](https://github.com/foldrun-io/foldrun-cli/commit/2e0f6ff))
