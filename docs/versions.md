@@ -151,7 +151,8 @@ A CLI installed with `npm i -g foldrun` updates itself:
   the command up. It asks npm for `foldrun@latest`, so your own registry,
   proxy and certificates apply.
 - A newer **minor or patch** release is installed beside the one you run,
-  in `updates/` under `~/.foldrun` (or `FOLDRUN_HOME`), one folder per
+  in `updates/` under `~/.foldrun` (or `FOLDRUN_HOME`, or the XDG cache
+  folder: `foldrun home`), one folder per
   installation, with install scripts off. It is made active only once it
   names its own version and its commands load. The copy you run is never
   replaced.

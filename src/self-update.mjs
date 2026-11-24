@@ -32,6 +32,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { foldrunDirs } from "./dirs.mjs";
 
 export const CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 30 * 60 * 1000;
@@ -43,10 +44,13 @@ const OWN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 /** Set by the global copy for the staged one it hands over to. */
 export const HANDED_OVER = "FOLDRUN_HANDED_OVER_FROM";
 
-/** ~/.foldrun, or FOLDRUN_HOME — the same place the credentials live; always absolute. */
+/** Where staged updates are kept: ~/.foldrun, FOLDRUN_HOME, or the XDG cache folder (dirs.mjs); always absolute. */
 export function homeDir(env = process.env) {
-  return path.resolve(env.FOLDRUN_HOME || path.join(os.homedir(), ".foldrun"));
+  return path.resolve(foldrunDirs(env).cache);
 }
+
+/** What a child started from the home folder is told: a FOLDRUN_HOME made absolute when one is set — and none otherwise, so it reads the same layout from the same environment. */
+const homeEnv = (/** @type {NodeJS.ProcessEnv} */ env) => (env.FOLDRUN_HOME ? { FOLDRUN_HOME: path.resolve(env.FOLDRUN_HOME) } : {});
 
 /** A copy's identity: its real folder (a symlinked global bin resolves to it). */
 const copyId = (/** @type {string} */ root) => {
@@ -70,6 +74,8 @@ const PKG_ROOT =
 
 /** The copy this one checks, stages and announces as (tests). */
 export const actingFor = () => PKG_ROOT;
+/** Whether this copy is a staged update run for another installation (its launcher handed over to it). */
+export const handedOver = () => PKG_ROOT !== OWN_ROOT;
 
 /** This installation's own folder: record, versions, notices, lock. */
 export function installDir(env = process.env, pkgRoot = PKG_ROOT) {
@@ -295,7 +301,7 @@ export function stage(version, env = process.env, pkgRoot = PKG_ROOT) {
   const final = path.join(root, version);
   const binOf = (/** @type {string} */ d) => path.join(d, "node_modules", "foldrun", "bin", "foldrun.mjs");
   const run = (/** @type {string[]} */ args) =>
-    spawnSync(process.execPath, args, { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL", cwd: os.homedir(), env: { ...process.env, FOLDRUN_NO_AUTO_UPDATE: "1", FOLDRUN_HOME: homeDir(env) } });
+    spawnSync(process.execPath, args, { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL", cwd: os.homedir(), env: { ...process.env, FOLDRUN_NO_AUTO_UPDATE: "1", ...homeEnv(env) } });
   // It names itself, and the code every ordinary command loads — its
   // commands and the core it was built with — loads, offline (Codex).
   const says = (/** @type {string} */ d) => {
@@ -421,7 +427,7 @@ export function autoUpdate(current, { env = process.env, write = (/** @type {str
     // The child gets the home resolved here and, for a staged copy, the
     // installation it acts for.
     /** @type {NodeJS.ProcessEnv} */
-    const childEnv = { ...env, FOLDRUN_HOME: homeDir(env) };
+    const childEnv = { ...env, ...homeEnv(env) };
     if (PKG_ROOT !== OWN_ROOT) childEnv[HANDED_OVER] = PKG_ROOT;
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "--background-check", current], { detached: true, stdio: "ignore", env: childEnv, cwd: os.homedir(), windowsHide: true });
     child.unref();

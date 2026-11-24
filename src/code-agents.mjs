@@ -36,7 +36,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { credentialsDir } from "./credentials.mjs";
+import { credentialsDir, configDir, cacheDir } from "./credentials.mjs";
 
 export const AGENT_TOOL = "agent";
 export const AGENT_CALLS_A_TURN = 8;
@@ -141,7 +141,7 @@ export function readAgents(/** @type {string} */ dir) {
   /** @type {AgentDef[]} */
   const agents = [...BUILT_IN_AGENTS];
   const problems = [];
-  for (const [source, folder] of /** @type {const} */ ([["yours", path.join(credentialsDir(), "agents")], ["project", path.join(dir, ".claude", "agents")]])) {
+  for (const [source, folder] of /** @type {const} */ ([["yours", path.join(configDir(), "agents")], ["project", path.join(dir, ".claude", "agents")]])) {
     let names;
     try {
       names = fs.readdirSync(folder).filter((f) => f.endsWith(".md")).sort();
@@ -363,7 +363,7 @@ export function addableFolder(/** @type {string} */ sessionDir, /** @type {strin
   };
   if (real === path.parse(real).root) return { problem: "not the whole disk" };
   if (real === real2(home)) return { problem: "not your whole home folder — add the folder you mean" };
-  const kept = [credentialsDir(), ...[".ssh", ".aws", ".gnupg", ".config", ".kube", ".docker", ".netrc", ".npmrc"].map((n) => path.join(home, n))].map(real2);
+  const kept = [credentialsDir(), configDir(), cacheDir(), ...[".ssh", ".aws", ".gnupg", ".config", ".kube", ".docker", ".netrc", ".npmrc"].map((n) => path.join(home, n))].map(real2);
   for (const k of kept) {
     if (within(k, real)) return { problem: `${real} is where keys are kept (${k}) — not added` };
     if (within(real, k)) return { problem: `${real} holds ${k}, where keys are kept — add a folder beside it instead` };

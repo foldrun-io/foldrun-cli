@@ -23,10 +23,18 @@
 
 import fs from "node:fs";
 import crypto from "node:crypto";
-import os from "node:os";
 import path from "node:path";
+import { foldrunDirs } from "./dirs.mjs";
 
-export const credentialsDir = () => process.env.FOLDRUN_HOME ?? path.join(os.homedir(), ".foldrun");
+/**
+ * Where the sign-in, the keys and everything foldrun keeps for itself live:
+ * `~/.foldrun`, FOLDRUN_HOME, or the XDG state folder (dirs.mjs, FOL-254).
+ */
+export const credentialsDir = () => foldrunDirs().state;
+/** What the person writes — mcp.json, agents/, code-prefs.json: the same folder, or the XDG config folder. */
+export const configDir = () => foldrunDirs().config;
+/** What can be fetched again — the gallery, the version check: the same folder, or the XDG cache folder. */
+export const cacheDir = () => foldrunDirs().cache;
 const file = () => path.join(credentialsDir(), "credentials.json");
 
 /** A platform URL as the map keys it: scheme and host, no trailing slash. */

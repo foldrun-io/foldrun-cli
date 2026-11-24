@@ -15,6 +15,8 @@ import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines } from "./code-session.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
+import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
+import { handedOver } from "./self-update.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
@@ -28,7 +30,7 @@ import { sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTS
 import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX } from "./code-mcp.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
-import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
+import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, configDir, cacheDir, setProfileWorkspace } from "./credentials.mjs";
 
 // NO_COLOR (no-color.org) turns the escapes off — for a log file, a CI
 // job, or a test that wants to match what a person reads. The tests had
@@ -1918,7 +1920,7 @@ async function runTarget(target, flags) {
  * The CLI keeps a copy per platform here and points the local runner at it:
  * the same lookup order, the workspace first, then the account, then this.
  */
-const galleryCacheDir = (url) => path.join(credentialsDir(), "gallery", new URL(url).host);
+const galleryCacheDir = (url) => path.join(cacheDir(), "gallery", new URL(url).host);
 
 /** Write the gallery as the platform lays its own shelf down: <kind>/<file>. */
 function writeGalleryCache(dir, tools) {
@@ -2798,14 +2800,14 @@ function updateNotice(res) {
     const latest = res.headers.get("x-foldrun-cli");
     if (!latest || !updateTo(latest, CLI_VERSION)) return;
     noticeDone = true;
-    const file = path.join(credentialsDir(), "version-check.json");
+    const file = path.join(cacheDir(), "version-check.json");
     try {
       const last = JSON.parse(fs.readFileSync(file, "utf8"));
       if (Date.now() - Date.parse(last.notifiedAt) < UPDATE_EVERY_MS) return;
     } catch {}
     const platform = printable(res.headers.get("x-foldrun-version") ?? "") || null;
     console.error(`  ${c.dim(`foldrun ${latest} is out (this is ${CLI_VERSION})${platform ? `, released with platform ${platform}` : ""} — npm i -g foldrun@latest`)}`);
-    fs.mkdirSync(credentialsDir(), { recursive: true });
+    fs.mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
     fs.writeFileSync(file, JSON.stringify({ notifiedAt: new Date().toISOString(), cli: latest, platform }) + "\n");
   } catch {}
 }
@@ -5314,6 +5316,243 @@ async function whoami(flags) {
  * was in a different place each time: a tunnel, a stale profile, a proxy
  * variable, a box that was down.
  */
+/** Where foldrun keeps its files, in one line: the layout in use and its folders (FOL-254). */
+function homeLayoutLine() {
+  const d = foldrunDirs();
+  if (d.layout === "xdg") return `XDG folders — config ${homeTilde(d.config)} · state ${homeTilde(d.state)} · cache ${homeTilde(d.cache)}`;
+  if (d.layout === "FOLDRUN_HOME") return `${homeTilde(path.resolve(d.state))}  ${c.dim("(FOLDRUN_HOME)")}`;
+  const xdg = xdgDirs();
+  return `${homeTilde(d.state)}${xdg ? `  ${c.dim("(XDG folders are set; ~/.foldrun exists, so it is used — foldrun home migrate moves it, asked first)")}` : ""}`;
+}
+
+/** Everything under a path, counted: files, folders and links, never followed. */
+function countUnder(/** @type {string} */ p) {
+  let n = 0;
+  const walk = (/** @type {string} */ x) => {
+    n++;
+    const st = fs.lstatSync(x);
+    if (st.isDirectory()) for (const e of fs.readdirSync(x)) walk(path.join(x, e));
+  };
+  walk(p);
+  return n;
+}
+
+/** Each path under `from` whose mode is looser at the same place under `to` — a move must leave none. */
+function loosened(/** @type {string} */ from, /** @type {string} */ to) {
+  /** @type {string[]} */
+  const out = [];
+  const walk = (/** @type {string} */ a, /** @type {string} */ b) => {
+    const sa = fs.lstatSync(a);
+    const sb = fs.lstatSync(b);
+    if (!sa.isSymbolicLink() && (sb.mode & 0o777 & ~(sa.mode & 0o777)) !== 0) out.push(b);
+    if (sa.isDirectory()) for (const e of fs.readdirSync(a)) walk(path.join(a, e), path.join(b, e));
+  };
+  walk(from, to);
+  return out;
+}
+
+/**
+ * `foldrun home` — where foldrun keeps its files on this computer, and
+ * which is where. `foldrun home migrate` moves an existing ~/.foldrun into
+ * the XDG folders the environment names: asked first, nothing overwritten,
+ * no mode loosened, and ~/.foldrun is removed only once it is empty.
+ * @param {string[]} positional @param {Record<string, any>} flags
+ */
+async function homeCmd(positional, flags) {
+  const d = foldrunDirs();
+  if (positional[0] !== undefined && positional[0] !== "migrate") throw new Error("usage: foldrun home [migrate] [--yes] [--json]");
+  if (positional[0] !== "migrate") {
+    if (flags.json === true) return console.log(JSON.stringify({ layout: d.layout, config: path.resolve(d.config), state: path.resolve(d.state), cache: path.resolve(d.cache) }, null, 2));
+    console.log(`\n  ${c.bold("layout")}  ${d.layout === "xdg" ? "XDG folders" : d.layout === "FOLDRUN_HOME" ? "FOLDRUN_HOME (one folder)" : "~/.foldrun (one folder)"}`);
+    const row = (/** @type {string} */ k, /** @type {string} */ where, /** @type {string} */ what) => console.log(`  ${c.dim(k.padEnd(7))} ${homeTilde(path.resolve(where)).padEnd(34)} ${c.dim(what)}`);
+    row("config", d.config, "what you write: mcp.json, agents/, code-prefs.json");
+    row("state", d.state, "what foldrun keeps: the sign-in and keys, sessions, history, conversations, checkpoints, approvals");
+    row("cache", d.cache, "what can be fetched again: the gallery, the version check, staged updates");
+    const xdg = xdgDirs();
+    if (d.layout === "home" && xdg) console.log(`\n  ${c.dim("XDG folders are set, and ~/.foldrun exists, so it is used as it is. foldrun home migrate moves it there, asked first.")}`);
+    else if (d.layout === "home") console.log(`\n  ${c.dim("With XDG_CONFIG_HOME, XDG_STATE_HOME or XDG_CACHE_HOME set and no ~/.foldrun, foldrun uses those folders instead (foldrun docs cli).")}`);
+    console.log();
+    return;
+  }
+  // ---- migrate
+  const classic = path.join(os.homedir(), ".foldrun");
+  const xdg = xdgDirs();
+  if (process.env.FOLDRUN_HOME) throw new Error("FOLDRUN_HOME is set: that folder is used for everything, and nothing is moved");
+  if (!xdg) throw new Error("no XDG folder is set (XDG_CONFIG_HOME, XDG_STATE_HOME or XDG_CACHE_HOME, as an absolute path): there is nowhere to move ~/.foldrun to");
+  /** The entry itself, a link not followed: only "not there" is absent. */
+  const there = (/** @type {string} */ p) => {
+    try {
+      return fs.lstatSync(p);
+    } catch (err) {
+      if (/** @type {{ code?: string }} */ (err).code === "ENOENT") return null;
+      throw err;
+    }
+  };
+  const top = there(classic);
+  if (!top) return console.log(`\n  ${c.green("✓")} ${c.dim(`nothing to move: there is no ~/.foldrun — ${homeLayoutLine()}`)}\n`);
+  if (top.isSymbolicLink()) throw new Error("~/.foldrun is a link to another folder: it is left as it is — move what it points to yourself, then remove the link");
+  // A staged update lives under ~/.foldrun/updates, and the launcher that hands over to it looks only there:
+  // moved, the next command would be the old CLI, which does not know the XDG folders and would find no sign-in.
+  // A project or account folder that is the home folder itself keeps its vault and runs in ~/.foldrun, by another rule.
+  // Known by what is in it (the vault's key, the installation's marks), wherever this was run from.
+  const store = [".secret-key", ".foldrun-install", "keys.json", "secrets.json"].filter((n) => there(path.join(classic, n)));
+  if (store.length) throw new Error(`~/.foldrun also holds a foldrun project's own store (${store.join(", ")}): your home folder is, or was, a project, and its secrets and runs are read from there — it is not moved. Keep ~/.foldrun, or move that project's store out of it first`);
+  if (handedOver()) throw new Error("this foldrun is a staged update, started by an older installed one that does not know the XDG folders — update the installed one first (npm i -g foldrun@latest), then run foldrun home migrate");
+  /** What is under a path, as a comparable text: every name with its kind, size, time and mode. */
+  const stamp = (/** @type {string} */ root) => {
+    /** @type {string[]} */
+    const rows = [];
+    const walk = (/** @type {string} */ x) => {
+      const st = fs.lstatSync(x);
+      rows.push(`${path.relative(root, x)}|${st.isSymbolicLink() ? `link ${fs.readlinkSync(x)}` : st.isDirectory() ? "dir" : `${st.size} ${st.mtimeMs}`}|${st.mode & 0o777}`);
+      if (st.isDirectory()) for (const e of fs.readdirSync(x).sort()) walk(path.join(x, e));
+    };
+    walk(root);
+    return rows.join("\n");
+  };
+  // Taken with the plan: what is asked about is what is moved, or nothing is.
+  const before = stamp(classic);
+  const entries = fs.readdirSync(classic).sort();
+  /** @type {{ name: string, from: string, to: string, kind: "config" | "state" | "cache", temp?: string, placed?: boolean }[]} */
+  const plan = entries.map((name) => {
+    const kind = /** @type {"config" | "state" | "cache"} */ (kindOf(name));
+    return { name, from: path.join(classic, name), to: path.join(xdg[kind], name), kind };
+  });
+  const kinds = /** @type {const} */ (["config", "state", "cache"]).filter((k) => plan.some((p) => p.kind === k));
+  // Nothing is overwritten: a name already there — a link that points nowhere too — stops the whole move before it begins.
+  const taken = plan.filter((p) => there(p.to));
+  if (taken.length) throw new Error(`already there, and never overwritten: ${taken.map((p) => homeTilde(p.to)).join(", ")} — move or remove ${taken.length === 1 ? "it" : "them"} first, then run this again; nothing was moved`);
+  // A folder that is there already must be no more open than ~/.foldrun is: a file kept private by its folder stays so.
+  const open = kinds.filter((k) => {
+    const st = there(xdg[k]);
+    return st && (!st.isDirectory() || st.isSymbolicLink() || (st.mode & 0o777 & ~(top.mode & 0o777)) !== 0);
+  });
+  if (open.length) throw new Error(`${open.map((k) => homeTilde(xdg[k])).join(", ")} ${open.length === 1 ? "is" : "are"} more open to other people than ~/.foldrun is (or not a folder): chmod 700 ${open.length === 1 ? "it" : "them"} first — nothing was moved`);
+  // A relative link that points outside what moves with it would point somewhere else afterwards.
+  /** Where a path under ~/.foldrun will be. */
+  const after = (/** @type {string} */ x) => {
+    const [name, ...rest] = path.relative(classic, x).split(path.sep);
+    return path.join(xdg[/** @type {"config" | "state" | "cache"} */ (kindOf(name))], name, ...rest);
+  };
+  /** @type {string[]} */
+  const adrift = [];
+  for (const p of plan) {
+    const walk = (/** @type {string} */ x) => {
+      const st = fs.lstatSync(x);
+      if (st.isSymbolicLink()) {
+        const target = fs.readlinkSync(x);
+        const lands = path.resolve(path.dirname(x), target);
+        const inside = lands.startsWith(classic + path.sep);
+        // Written in full and pointing into ~/.foldrun: nothing will be there. Written relative: it must reach, from
+        // where the link will be, where its target will be — true when both move together, false when they part.
+        if (path.isAbsolute(target) ? inside || lands === classic : !inside || path.resolve(path.dirname(after(x)), target) !== after(lands)) adrift.push(x);
+      } else if (st.isDirectory()) for (const e of fs.readdirSync(x)) walk(path.join(x, e));
+    };
+    walk(p.from);
+  }
+  if (adrift.length) throw new Error(`${adrift.slice(0, 5).map((x) => homeTilde(x)).join(", ")}${adrift.length > 5 ? ` and ${adrift.length - 5} more` : ""}: a link that would point somewhere else, or nowhere, once moved (written relative to where it is, or pointing into ~/.foldrun) — replace ${adrift.length === 1 ? "it" : "them"} with the file itself, or point ${adrift.length === 1 ? "it" : "them"} outside ~/.foldrun by a full path, first; nothing was moved`);
+  console.log(`\n  ${c.bold("move ~/.foldrun into the XDG folders")}`);
+  for (const kind of /** @type {const} */ (["config", "state", "cache"])) {
+    const names = plan.filter((p) => p.kind === kind).map((p) => p.name);
+    console.log(`  ${c.dim(kind.padEnd(7))} ${homeTilde(xdg[kind]).padEnd(34)} ${names.length ? names.join(", ") : c.dim("(nothing)")}`);
+  }
+  console.log(`  ${c.dim("The sign-in and keys go to the state folder. Modes are kept (files 0600, folders 0700); nothing is overwritten. Close other foldrun sessions first: one that is open keeps writing to the old place.")}`);
+  if (flags.yes !== true) {
+    if (!process.stdin.isTTY) throw new Error("this moves your files, so it asks first — run it in a terminal, or with --yes");
+    const answer = (await promptVisible(`  ${c.bold("move them?")} ${c.grey("[y/N]")} `)).trim();
+    if (!/^y(es)?$/i.test(answer)) return console.log(`  ${c.dim("nothing was moved")}\n`);
+  }
+  // Everything is COPIED into place first (a clone where the disk can, so it costs no room), and ~/.foldrun stays
+  // whole and in use until one rename sets it aside — the moment the XDG folders come into use. It is then checked
+  // against what was copied: anything a session wrote meanwhile undoes the move instead of being lost.
+  /** @type {string[]} */
+  const made = [];
+  let aside = "";
+  const undo = () => {
+    /** @type {string[]} */
+    const notes = [];
+    for (const p of [...plan].reverse()) {
+      try {
+        if (p.placed) fs.rmSync(p.to, { recursive: true, force: true });
+        if (p.temp) fs.rmSync(p.temp, { recursive: true, force: true });
+      } catch {
+        notes.push(`${homeTilde(p.placed ? p.to : (p.temp ?? p.to))} could not be removed`);
+      }
+    }
+    for (const d of made.reverse()) {
+      try {
+        fs.rmdirSync(d);
+      } catch {
+        /* not empty, or not ours to remove */
+      }
+    }
+    if (aside) {
+      // Never over something written since: both are kept, and said.
+      if (there(classic)) notes.push(`a new ~/.foldrun was made meanwhile, so yours was left beside it as ${homeTilde(aside)} — put the two together by hand`);
+      else {
+        try {
+          fs.renameSync(aside, classic);
+        } catch {
+          notes.push(`your folder is whole at ${homeTilde(aside)} — rename it back to ~/.foldrun`);
+        }
+      }
+    }
+    return notes;
+  };
+  try {
+    for (const k of kinds) {
+      if (there(xdg[k])) continue;
+      // Each folder made on the way is the person's alone.
+      /** @type {string[]} */
+      const missing = [];
+      for (let d = xdg[k]; !there(d); d = path.dirname(d)) missing.unshift(d);
+      for (const d of missing) {
+        fs.mkdirSync(d, { mode: 0o700 });
+        made.push(d);
+      }
+    }
+    if (stamp(classic) !== before) throw new Error("~/.foldrun changed while you were asked — close other foldrun sessions, then run this again");
+    for (const p of plan) {
+      // Beside its final name, so putting it in place is one rename on one disk.
+      p.temp = `${p.to}.moving-${crypto.randomBytes(4).toString("hex")}`;
+      fs.cpSync(p.from, p.temp, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, mode: fs.constants.COPYFILE_FICLONE });
+      const loose = loosened(p.from, p.temp);
+      if (loose.length) throw new Error(`${homeTilde(loose[0])} would have been left more open than it was`);
+      if (countUnder(p.from) !== countUnder(p.temp)) throw new Error(`the copy of ${p.name} did not come out whole`);
+    }
+    for (const p of plan) {
+      if (there(p.to)) throw new Error(`${homeTilde(p.to)} appeared meanwhile`);
+      const temp = /** @type {string} */ (p.temp);
+      if (fs.lstatSync(temp).isFile()) {
+        // A second name for the same file: refused by the system itself when the name is taken, so nothing is replaced.
+        fs.linkSync(temp, p.to);
+        p.placed = true;
+        fs.rmSync(temp);
+      } else {
+        // A folder: the system refuses to rename one over a file or over a folder with anything in it.
+        fs.renameSync(temp, p.to);
+        p.placed = true;
+      }
+      p.temp = undefined;
+    }
+    // The switch: one rename. Then what was set aside must be exactly what was copied.
+    const to = `${classic}.moved-${crypto.randomBytes(4).toString("hex")}`;
+    fs.renameSync(classic, to);
+    aside = to;
+    if (stamp(aside) !== before) throw new Error("~/.foldrun was written to during the move — close other foldrun sessions, then run this again");
+    try {
+      fs.rmSync(aside, { recursive: true });
+    } catch (err) {
+      console.log(`  ${c.amber("!")} ${c.dim(`moved, but the old copy could not be removed (${explain(err)}): ${homeTilde(aside)} — it is not used any more and can be deleted`)}`);
+    }
+  } catch (err) {
+    const notes = undo();
+    if (notes.length) throw new Error(`the move stopped (${explain(err)}). ${notes.join("; ")}`);
+    throw new Error(`the move stopped (${explain(err)}) — everything was put back; ~/.foldrun is as it was`);
+  }
+  console.log(`  ${c.green("✓")} ${c.dim(`moved — ${homeLayoutLine()}`)}\n`);
+}
+
 async function doctor(flags) {
   const results = [];
   const line = (ok, label, detail) => {
@@ -5325,6 +5564,7 @@ async function doctor(flags) {
   const major = Number(process.versions.node.split(".")[0]);
   line(major >= 22, "node", `${process.version}${major >= 22 ? "" : " — foldrun needs 22 or newer"}  ${c.dim(process.execPath)}`);
   line(true, "cli", `foldrun ${CLI_VERSION}  ${c.dim(fileURLToPath(new URL("..", import.meta.url)))}`);
+  line(true, "files", homeLayoutLine());
   try {
     const root = coreRoot();
     const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
@@ -14406,7 +14646,7 @@ function readableBy(/** @type {any} */ s, /** @type {unknown} */ p) {
 /** The session's sandbox holder (code-sandbox.mjs): made once, opened at the first turn on this computer. */
 function boxOf(/** @type {any} */ s) {
   // Where this CLI keeps the sign-in and the computer's model key, wherever FOLDRUN_HOME puts it: never readable inside (Codex).
-  return (s.box ??= sandboxFor({ dir: s.dir, sites: () => (Array.isArray(s.sandboxSites) ? s.sandboxSites : []), denyRead: () => [credentialsDir()] }));
+  return (s.box ??= sandboxFor({ dir: s.dir, sites: () => (Array.isArray(s.sandboxSites) ? s.sandboxSites : []), denyRead: () => [...new Set([credentialsDir(), configDir(), cacheDir()])] }));
 }
 
 /** The walls for this session now: the handle; null when the person turned them off; or why they cannot be had. */
@@ -18654,7 +18894,7 @@ async function codeCmd(positional, flags, layout) {
     if (name === "/thinking") {
       const prefs = readCodePrefs();
       if (rest === "on" || rest === "off") {
-        if (!writeCodePrefs({ ...prefs, thinking: rest === "on" })) say("that could not be saved — ~/.foldrun is not writable");
+        if (!writeCodePrefs({ ...prefs, thinking: rest === "on" })) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
         else if (rest === "off") say("thinking is not shown");
         else if (/** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.thinking !== true) say("saved — but this foldrun's engine cannot ask for it yet: update foldrun (`foldrun update`) and it shows");
         else say(`a summary of the model's thinking is shown above its reply, dimmed — for you, in every folder, from the next message. It costs nothing more: the model thinks the same either way${s.mode === "cloud" ? ". A turn in the cloud does not return it: it shows on this computer (/local)" : ""}`);
@@ -18812,7 +19052,7 @@ async function codeCmd(positional, flags, layout) {
       const names = await cloudAgentNames(s);
       console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim(`— run in ${plainText(ws)}'s sandbox with the agent's own tools; only the prompt is sent, none of this folder; costs credits, asked first`)}`);
       console.log(`  ${names.length ? names.map((/** @type {string} */ n) => c.cyan(plainText(n))).join(c.dim(", ")) : c.dim(`none yet — the project ${plainText(ws)} has no agents (a first /cloud turn makes it and its ${plainText(agent)})`)}`);
-      say(`define your own: ~/.foldrun/agents/<name>.md, or .claude/agents/<name>.md in this folder (frontmatter name, description, tools, and mcpServers: for MCP servers of its own, as in a cloud agent's file; then its instructions). A project's cloud agents are its agents/<name>/agent.md (foldrun docs agents). To have cloud agents change a copy of this folder, the agent uses cloud_agents; a whole turn there is /cloud.`);
+      say(`define your own: ${homeTilde(path.join(configDir(), "agents"))}/<name>.md, or .claude/agents/<name>.md in this folder (frontmatter name, description, tools, and mcpServers: for MCP servers of its own, as in a cloud agent's file; then its instructions). A project's cloud agents are its agents/<name>/agent.md (foldrun docs agents). To have cloud agents change a copy of this folder, the agent uses cloud_agents; a whole turn there is /cloud.`);
       continue;
     }
     if (name === "/mcp") {
@@ -18854,7 +19094,7 @@ async function codeCmd(positional, flags, layout) {
       };
       if (!verb) {
         for (const o of ownRows()) console.log(`  ${c.white(plainText(o.id).padEnd(16))} ${c.dim("sub-agent's own")} ${"problem" in o.r ? c.red(`cannot start: ${plainText(o.r.problem)}`) : o.keptAsNow ? c.cyan(`your yes is kept — starts with that sub-agent's job, stops with it · /mcp forget ${plainText(o.id)}`) : c.amber("asked when that sub-agent's job starts")}${o.kept && !o.keptAsNow ? c.dim(` · a yes is kept for it as it read before (/mcp forget ${plainText(o.id)} drops it)`) : ""}`);
-        if (!rows.length && !problems.length) say('no MCP servers — /mcp add <name> -- <program> [args…] or /mcp add <name> <https address> names one (in ~/.foldrun/mcp.json; --project writes this folder\'s .mcp.json)');
+        if (!rows.length && !problems.length) say(`no MCP servers — /mcp add <name> -- <program> [args…] or /mcp add <name> <https address> names one (in ${homeTilde(path.join(configDir(), "mcp.json"))}; --project writes this folder's .mcp.json)`);
         for (const r of rows) {
           const state = r.state === "on" ? c.green(`running · ${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}`) : r.state === "waiting" ? c.amber(`waits for your yes — /mcp on ${plainText(r.name)}`) : r.state === "ready" ? c.cyan("starts with your next message on this computer") : r.state === "off" ? c.grey(`off for this session — /mcp on ${plainText(r.name)}`) : r.state === "failed" ? c.red(`did not start: ${plainText(String(r.why))} — /mcp restart ${plainText(r.name)}`) : r.state === "hidden" ? c.grey(`not used: ${plainText(String(r.why))}`) : c.red(`cannot be started: ${plainText(String(r.why))}`);
           console.log(`  ${c.white(plainText(r.name).padEnd(16))} ${c.dim(r.source === "project" ? "project" : "yours  ")} ${state}`);
@@ -23669,6 +23909,8 @@ export async function run(command, positional, flags, workspace, layout) {
       return signupCmd(positional, flags);
     case "doctor":
       return doctor(flags);
+    case "home":
+      return homeCmd(positional, flags);
     case "version":
       return versionCmd(flags);
     case "api":

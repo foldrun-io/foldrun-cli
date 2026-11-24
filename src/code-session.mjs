@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { credentialsDir } from "./credentials.mjs";
+import { configDir } from "./credentials.mjs";
 
 /** Every slash command, with what it does — /help prints this list. */
 export const CODE_COMMANDS = [
@@ -823,7 +823,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 // ------------------------------------------------ what a person set for themselves
 
-const prefsFile = () => path.join(credentialsDir(), "code-prefs.json");
+const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
 /**
  * What the person chose for `foldrun code` on this computer, whichever
@@ -842,7 +842,7 @@ export function readCodePrefs() {
 /** @param {{ thinking?: boolean }} prefs @returns {boolean} whether it was kept */
 export function writeCodePrefs(prefs) {
   try {
-    fs.mkdirSync(credentialsDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
     fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {

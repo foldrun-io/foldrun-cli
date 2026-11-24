@@ -62,6 +62,7 @@
 //   foldrun whoami          who the platform thinks this terminal is
 //   foldrun me              the person this machine is signed in as; their name and timezone
 //   foldrun doctor          what is between this terminal and the platform, checked
+//   foldrun home            where its files are kept (~/.foldrun or XDG); migrate moves them
 //   foldrun accounts        every account signed in here; `use <name>` switches
 //   foldrun keys  <verb>    ls / create / revoke — the account's API keys
 //   foldrun a2a   <verb>    ls / publish / unpublish / card / call / status / cancel — flows served to outside agents (A2A 1.0)
@@ -378,7 +379,9 @@ Signing in
   foldrun team invites revoke <id>   take an invite back: its link stops working at once (an admin's; a key may)
   foldrun onboarding        the account's getting-started steps, done or not, the next one first; --to <workspace> adds that project's checklist (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
-  foldrun doctor            check the path to the platform: node, CLI, model credential, account, DNS, a timed /v1/healthz
+  foldrun doctor            check the path to the platform: node, CLI, where its files are kept, model credential, account, DNS, a timed /v1/healthz
+  foldrun home              where foldrun keeps its files on this computer: ~/.foldrun, or the XDG config, state and cache folders when those are set and there is no ~/.foldrun (--json)
+  foldrun home migrate      move an existing ~/.foldrun into the XDG folders — asks first (--yes), overwrites nothing, loosens no mode
   foldrun accounts          every account signed in on this machine, and which one is active
   foldrun accounts prune    forget the saved sign-ins that no longer work (--unreachable: also those whose platform did not answer)
   foldrun use <name>        act as one of them from here on

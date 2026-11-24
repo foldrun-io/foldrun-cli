@@ -36,7 +36,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { credentialsDir } from "./credentials.mjs";
+import { credentialsDir, configDir } from "./credentials.mjs";
 import { writePrivate } from "./code-session.mjs";
 
 export const MCP_TOOLS_MAX = 100;
@@ -59,7 +59,7 @@ const sha = (/** @type {string | Buffer} */ x) => crypto.createHash("sha256").up
 /** The two files, the person's own first. */
 export function mcpFiles(/** @type {string} */ dir) {
   return [
-    { source: /** @type {const} */ ("yours"), file: path.join(credentialsDir(), "mcp.json") },
+    { source: /** @type {const} */ ("yours"), file: path.join(configDir(), "mcp.json") },
     { source: /** @type {const} */ ("project"), file: path.join(dir, ".mcp.json") },
   ];
 }
@@ -646,10 +646,11 @@ export function editMcpFile(/** @type {string} */ file, /** @type {string} */ na
     if (had) throw new Error(`${path.basename(file)} already names a server ${name} — /mcp rm ${name} first`);
     doc.mcpServers[name] = entry;
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // The person's own folder is theirs alone when it is made; a project's folder is there already.
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${crypto.randomBytes(6).toString("hex")}.tmp`;
   // The person's own file is theirs alone; a project's keeps the mode it had (a new one is an ordinary file).
-  let mode = path.dirname(file) === credentialsDir() ? 0o600 : 0o644;
+  let mode = path.dirname(file) === configDir() ? 0o600 : 0o644;
   try {
     mode = fs.statSync(file).mode & 0o777;
   } catch {
