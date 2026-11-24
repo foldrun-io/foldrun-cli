@@ -191,7 +191,7 @@ test("one server failing or offering too much does not stop the others; a tool n
     assert.match(String(rows[1]!.why), /did not start/);
     assert.match(String(rows[2]!.why), new RegExp(`more than ${MCP_TOOLS_MAX} tools`));
     assert.equal(m.tools().length, 2);
-    // A failed server is not started again at every message; /mcp restart tries.
+    // A failed server is not started again at every message; /setup mcp restart tries.
     assert.deepEqual(await m.startReady(signal), []);
     assert.match(String(await m.restart(rows[1], signal)), /did not start/);
   } finally {
@@ -199,7 +199,7 @@ test("one server failing or offering too much does not stop the others; a tool n
   }
 });
 
-test("/mcp add takes no secret on the line; the file is edited one entry at a time", () => {
+test("/setup mcp add takes no secret on the line; the file is edited one entry at a time", () => {
   assert.deepEqual(parseMcpAdd('kit --env MY_TOKEN -- npx -y "@scope/server" --flag'), { name: "kit", project: false, entry: { command: "npx", args: ["-y", "@scope/server", "--flag"], env: { MY_TOKEN: "${MY_TOKEN}" } } });
   assert.deepEqual(parseMcpAdd('web --project --header "Authorization: Bearer ${MY_TOKEN}" https://x.example/mcp'), { name: "web", project: true, entry: { type: "http", url: "https://x.example/mcp", headers: { Authorization: "Bearer ${MY_TOKEN}" } } });
   for (const bad of ['web --header "Authorization: Bearer sk-live-123" https://x.example/mcp', "kit --env MY_TOKEN=abc -- node", "kit", "kit --", "bad/name -- node", "kit https://a https://b", "kit --header \"A: ${B}\" -- node"]) {
@@ -275,7 +275,7 @@ test("the todo list is data: bounded, one plain line an item, known states; it c
   assert.equal(todosFromReply("TODOS:\nnothing that reads as an item"), null);
 });
 
-test("/add-dir: a folder for reading — never the disk, the home folder, or anything that holds or is inside where keys are kept", () => {
+test("/setup dirs: a folder for reading — never the disk, the home folder, or anything that holds or is inside where keys are kept", () => {
   const d = folder();
   const other = folder({ "x.txt": "x" });
   assert.deepEqual(addableFolder(d, other), { dir: other });

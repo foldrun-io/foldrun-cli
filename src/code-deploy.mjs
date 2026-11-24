@@ -52,7 +52,7 @@ variable, no key):
 }
 \`\`\`
 
-Then they type \`/mcp on cloudhost\`: it shows the address and the header's
+Then they type \`/setup mcp on cloudhost\`: it shows the address and the header's
 variable and asks them. Each of its tools is asked before you use it; if they
 answer "always" for a tool, later calls of that tool this session are not asked
 again — so a production deploy, a domain or anything paid still waits for their

@@ -31,7 +31,7 @@
 // sub-agent's conversation only.
 //
 // Not here: OAuth sign-in to a remote server, resources, prompts, a list
-// that changes while connected (`/mcp restart` reads it again).
+// that changes while connected (`/setup mcp restart` reads it again).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -331,7 +331,7 @@ function changeApprovals(/** @type {(all: ReturnType<typeof readApprovals>) => v
  */
 export async function connectServer(o, name, resolved, signal, taken) {
   const walls = resolved.spec.type === "stdio" && o.sandbox ? await o.sandbox() : null;
-  if (walls && "refused" in walls) return { why: `the sandbox could not start (${walls.refused}) — /sandbox` };
+  if (walls && "refused" in walls) return { why: `the sandbox could not start (${walls.refused}) — /permissions sandbox` };
   const conn = await o.connect({ [name]: resolved.spec }, { env: {}, toolEnv: baseEnv(o.env()), cwd: o.dir, signal, killOnClose: true, maxTools: MCP_TOOLS_MAX, ...(walls ? { sandbox: walls } : {}) });
   const cut = [];
   const tools = [];
@@ -485,7 +485,7 @@ export function mcpManager(o) {
     if (!entry) return "it is no longer named in the file";
     const resolved = resolvedNow(entry);
     if ("problem" in resolved) return resolved.problem;
-    if (!readApprovals()[resolved.hash]) return `it changed since you were shown it — /mcp on ${name} shows it as it is now`;
+    if (!readApprovals()[resolved.hash]) return `it changed since you were shown it — /setup mcp on ${name} shows it as it is now`;
     const row = { name, resolved };
     const key = `${row.name}\n${row.resolved.hash}`;
     failed.delete(key);
@@ -582,13 +582,13 @@ export function mcpManager(o) {
 }
 
 /**
- * `/mcp add <name> [--project] [--env NAME]… [--header "Name: ${VAR}"]… -- <program> [args…]`
+ * `/setup mcp add <name> [--project] [--env NAME]… [--header "Name: ${VAR}"]… -- <program> [args…]`
  * or `… <https address>`. No secret is taken on the line: a variable is
  * handed by name, a header's secret part is a `${NAME}`.
  * @returns {{ problem: string } | { name: string, project: boolean, entry: Record<string, unknown> }}
  */
 export function parseMcpAdd(/** @type {string} */ rest) {
-  const usage = 'the form is /mcp add <name> [--project] [--env NAME]… -- <program> [args…]   or   /mcp add <name> [--project] [--header "Name: ${VAR}"]… <https address>';
+  const usage = 'the form is /setup mcp add <name> [--project] [--env NAME]… -- <program> [args…]   or   /setup mcp add <name> [--project] [--header "Name: ${VAR}"]… <https address>';
   // Words, with quotes: nothing is run by a shell.
   /** @type {string[]} */
   const words = [];
@@ -643,7 +643,7 @@ export function editMcpFile(/** @type {string} */ file, /** @type {string} */ na
     if (!had) return false;
     delete doc.mcpServers[name];
   } else {
-    if (had) throw new Error(`${path.basename(file)} already names a server ${name} — /mcp rm ${name} first`);
+    if (had) throw new Error(`${path.basename(file)} already names a server ${name} — /setup mcp rm ${name} first`);
     doc.mcpServers[name] = entry;
   }
   // The person's own folder is theirs alone when it is made; a project's folder is there already.

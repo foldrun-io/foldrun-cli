@@ -12,51 +12,50 @@ import { spawnSync } from "node:child_process";
 import { configDir } from "./credentials.mjs";
 
 /** Every slash command, with what it does — /help prints this list. */
-export const CODE_COMMANDS = [
-  ["/help", "these commands"],
-  ["/init", "have the agent write (or bring up to date) this folder's AGENTS.md: what it is, how to build, test and run it"],
-  ["/review", "have the agent review what is changed in the folder and not committed — it reports, it changes nothing"],
-  ["/diff", "what is changed in the folder now (git diff)"],
-  ["/undo", "take back the last patch this session applied"],
-  ["/mcp [on|off|tools|add|rm …]", "MCP servers: the ones this folder and you name, started only with your yes to each; every tool call is asked"],
-  ["/agents", "the sub-agents the agent can hand a job to on this computer, and your project's agents a cloud job can run as"],
-  ["/todos [add|done|rm|clear]", "the todo list of this session — the agent keeps it, here and in the cloud"],
-  ["/add-dir [path]", "another folder the agent may read without asking (changes there are still asked each time)"],
-  ["/rewind [turn]", "take back what the agent's Write and Edit changed on this computer, from a turn onward — every file or none"],
-  ["/status [line on|off]", "this session: turns, cost, model, conversation — line on|off: the status line under the prompt (conversation, id, model, effort, size, cache)"],
-  ["/restart", "start foldrun again on this folder, place, account, agent and conversation — how a long session takes a newer foldrun it was told is ready (typed during a turn, it is queued for after it)"],
-  ["/cost [explain|tips on|off]", "what this session has spent — tips on|off: a line before a turn that re-reads the whole conversation (after a break, a new model…), with its cost; explain: where it went, row by row (turns, sub-agents, cloud jobs): model calls, tokens read, how much came from the cache, cost, who paid, and the biggest cause"],
-  ["/usage", "your foldrun plan and the credit left on it"],
-  ["/context", "what fills the agent's context: instructions, skills, the conversation, the last turn"],
-  ["/compact [what to keep]", "shorten the conversation to the agent's own summary, so a long session stays fast (this computer)"],
-  ["/plan <task>", "the agent reads and says how it would do it — nothing is changed or run (this computer)"],
-  ["/goal <what must be true>", "set a goal: the agent keeps going turn after turn until it is met — /goal --check \"<command>\" <goal> takes it as met only when your command exits 0; /goal clear drops it"],
-  ["/model", "choose the model: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away)"],
-  ["/effort [level]", "how hard the model thinks: low, medium, high, xhigh, max, or default (the model's own) — the effort: line of the agent's file, here and in the cloud (/effort high sets it straight away)"],
-  ["/local", "work on this computer from here on — the same session; the agent is told what was done in the cloud"],
-  ["/cloud [task]", "alone: move this session to the cloud — each message from here on works on a copy of your folder there (/local comes back). With a task: one cloud job — that task runs on a copy in the cloud, its changes come back for you to apply, and you stay where you are"],
-  ["/skills", "the skills this folder holds — /<skill> [what to do] uses one"],
-  ["/memory", "the instruction files the agent reads here (AGENTS.md, CLAUDE.md)"],
-  ["/permissions [rm <n>]", "what runs without a question, and the commands kept for this folder (f at a question: always in this folder) — rm <n> removes one, /permissions reset asks again, /permissions strict asks for read-only commands too"],
-  ["/copy", "copy the agent's last reply"],
-  ["/export [--thinking] [file]", "write this session's messages and replies to a file (--thinking: with the thinking summaries /thinking showed)"],
-  ["/clear", "a fresh conversation — the agent forgets the earlier turns (/new too)"],
-  ["/resume [number|all]", "go back to an earlier conversation of this folder, by its name and date — /clear keeps the one you leave"],
-  ["/rename <name>", "name this conversation: /resume and /search show the name in place of its first message"],
-  ["/search <words>", "find a conversation of this folder by what was said in it — your messages, the agent's replies, tool calls and what they printed — then go back to it; conversations kept on this computer only"],
-  ["/doctor", "check what a session needs: node, git, the folder, your sign-in, the project and its agent"],
-  ["/sessions", "this session's id, and the other sessions of this project on this computer"],
-  ["/send <conversation> <text>", "message another session — the agent can too, when you ask it"],
-  ["/messages", "what other sessions sent this one"],
-  ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
-  ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
-  ["/thinking [on|off]", "show a summary of the model's thinking above its reply, dimmed — off by default, remembered for you on this computer; /export --thinking writes it too. How hard it thinks is /effort (/thinking high is /effort high)"],
-  ["/cloud-jobs [on|off]", "whether the agent on this computer may start cloud jobs, each asked first (off: it sends nothing of this folder to the cloud and cannot message other sessions; what you send yourself still goes). /cloud-agents is the old name"],
-  ["/sandbox", "the sandbox the agent's commands run in on this computer: what it lets through · allow <site> · deny <site> · off · on"],
+/** The commands, in the groups /help shows (FOL-263; owner, 24 Nov 2026: "i think we need to orgnize them"). */
+export const CODE_GROUPS = [
+  { group: "Where & how", commands: [
+    ["/where [local|local+cloud|cloud|send <task>]", "where this session works: this computer only (the agent sends nothing to the cloud), this computer with agents in the cloud, or the cloud (on a copy; you apply what comes back) — send <task> sends one task to the cloud and you stay where you are"],
+    ["/model [<model>|effort <level>|thinking on|off]", "the model and how it thinks: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away); effort: how hard it thinks — low, medium, high, xhigh, max, or default (the model's own), the effort: line of the agent's file, here and in the cloud; thinking on|off: a summary of its thinking above each reply, dimmed (off by default, remembered for you on this computer; /export --thinking writes it too)"],
+  ] },
+  { group: "Give it a job", commands: [
+    ["/plan <task>", "the agent reads and says how it would do it — nothing is changed or run (this computer)"],
+    ["/goal <what must be true>", "set a goal: the agent keeps going turn after turn until it is met — /goal --check \"<command>\" <goal> takes it as met only when your command exits 0; /goal clear drops it"],
+    ["/review", "have the agent review what is changed in the folder and not committed — it reports, it changes nothing"],
+    ["/init", "have the agent write (or bring up to date) this folder's AGENTS.md: what it is, how to build, test and run it"],
+  ] },
+  { group: "What it can use", commands: [
+    ["/permissions [strict|relaxed|sandbox …|rm <n>|reset]", "what the agent may do without asking: strict asks for every command, relaxed lets the ones that only look run; sandbox [on|off|allow <site>|deny <site>]: the walls its commands run in on this computer; the rules kept for this folder (rm <n>; reset asks everything again)"],
+    ["/setup [instructions|skills|agents|mcp …|dirs [path]|check]", "what the agent reads and reaches here — instructions: the files it reads (AGENTS.md, CLAUDE.md); skills: the ones this folder holds (/<skill> [what to do] uses one); agents: the sub-agents it can hand a job to, and your project's agents a cloud job can run as; mcp [on|off|tools|add|rm …]: MCP servers, each started only with your yes, every tool call asked; dirs [path]: another folder it may read without asking; check: what a session needs (node, git, the folder, your sign-in, the project and its agent)"],
+  ] },
+  { group: "Changes", commands: [
+    ["/diff", "what is changed in the folder now (git diff)"],
+    ["/undo [patch|<turn>]", "take back changes, newest first: patch takes back the last patch applied from the cloud; <turn> takes back what the agent changed on this computer from that turn on (the conversation stays). Alone: everything that can be taken back"],
+  ] },
+  { group: "Conversations", commands: [
+    ["/resume [number|all|new|find <words>]", "go back to an earlier conversation of this folder, by its name and date (this one is kept in its place); new starts a fresh one — the agent forgets the earlier turns; find <words> searches what was said in them"],
+    ["/rename <name>", "name this conversation: /resume shows the name in place of its first message"],
+    ["/compact [what to keep]", "shorten the conversation to the agent's own summary, so a long session stays fast (this computer)"],
+    ["/export [copy|--thinking] [file]", "copy puts the agent's last reply on the clipboard; otherwise this session's messages and replies go to a file (--thinking: with the thinking summaries /model thinking showed)"],
+    ["/todos [add|done|rm|clear]", "the todo list of this session — the agent keeps it, here and in the cloud"],
+    ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
+  ] },
+  { group: "Status", commands: [
+    ["/status [cost|explain|usage|context|tips on|off|line on|off]", "this session: turns, model, where it works, the account — cost: what it spent; explain: where it went, row by row; usage: your foldrun plan and the credit left; context: what fills the agent's context; tips on|off: a line before a turn that re-reads the whole conversation; line on|off: the status line under the prompt"],
+    ["/sessions [send <id> <text>|read]", "this session's id and the other sessions of this project on this computer — send messages one (the agent can too, when you ask it); read shows what they sent this one"],
+  ] },
+  { group: "App", commands: [
+    ["/help", "these commands"],
+    ["/restart", "start foldrun again on this folder, place, account, agent and conversation — how a long session takes a newer foldrun it was told is ready (typed during a turn, it is queued for after it)"],
+    ["/quit", "leave — exit or quit typed alone too (Ctrl-D too)"],
+  ] },
 ];
 
+/** Every command, in /help's order: [name with its words, what it does]. */
+export const CODE_COMMANDS = CODE_GROUPS.flatMap((g) => g.commands);
+
 /** Names that work and are not listed on their own line. */
-export const CODE_ALIASES = ["/new", "/exit", "/?"];
+export const CODE_ALIASES = /** @type {string[]} */ ([]);
 
 /** The prompt /init sends. */
 export const INIT_PROMPT = [
@@ -72,12 +71,13 @@ export const REVIEW_PROMPT = [
   "Change nothing — this is a review. If nothing is changed, say so.",
 ].join("\n");
 
-/** Whether a message is a way out of the session: /quit, /exit, or the bare
+/** Whether a message is a way out of the session: /quit, or the bare
  *  word exit or quit on its own, as Claude Code takes them (owner, 20 Nov
  *  2026). Only the whole message: "exit the loop early" is a message. */
 export function isLeave(/** @type {string | null} */ line) {
   if (line === null) return true;
-  return /^\/?(exit|quit)$/i.test(line.trim());
+  // /quit, or exit or quit typed alone (FOL-263: /exit went; the word stays).
+  return /^(\/quit|exit|quit)$/i.test(line.trim());
 }
 
 /** The tips under the commands. */
@@ -104,107 +104,193 @@ export const CODE_TIPS = [
  * @param {{ thinking?: boolean, localOnly?: boolean, mode?: string, sandboxOff?: boolean, strict?: boolean,
  *   past?: Array<{ said: string, at?: string }>, turns?: Array<{ turn: number, label: string }>,
  *   todos?: Array<{ content: string, status?: string }>, queue?: string[], mcp?: Array<{ name: string, state: string, source?: string }>,
- *   explained?: boolean, tips?: boolean }} st
- * @returns {{ title: string, subtitle: string, choices: Array<{ v: string, name: string, note: string, ask?: string }>, tick: string | null, start: string } | null}
+ *   explained?: boolean, tips?: boolean, repo?: boolean, line?: boolean, patch?: string, effort?: string }} st
+ * @returns {{ title: string, subtitle: string, choices: Array<{ v: string, name: string, note: string, ask?: string, optional?: boolean, path?: boolean }>, tick: string | null, start: string } | null}
  */
+
+/** @typedef {"local-only" | "local" | "cloud"} WhereChoice */
+
+/**
+ * The three ways to work (FOL-263): the start question's answers and /where's list. Outside a git
+ * repository the two that use the cloud say they need it (FOL-274). Plain words (FOL-271).
+ * @param {boolean} repo
+ * @returns {Array<{ v: WhereChoice, name: string, note: string }>}
+ */
+export function whereChoices(repo) {
+  const git = "needs git — offered when you pick it";
+  return [
+    { v: "local-only", name: "This computer only", note: "the agent sends nothing to the cloud (/where send does, when you ask)" },
+    { v: "local", name: "This computer, agents in the cloud", note: repo ? "your files stay here; heavy jobs go to the cloud, each asked first" : git },
+    { v: "cloud", name: "The cloud", note: repo ? "works on a copy there; you apply what comes back" : git },
+  ];
+}
+
+/** /where's typed word for each way to work. */
+export const WHERE_WORD = /** @type {const} */ ({ "local-only": "local", local: "local+cloud", cloud: "cloud" });
+
 export function commandMenu(name, st) {
-  const onOff = (/** @type {string} */ cmd, /** @type {string} */ title, /** @type {boolean} */ on, /** @type {string} */ onNote, /** @type {string} */ offNote) => {
-    const tick = `${cmd} ${on ? "on" : "off"}`;
-    return { title, subtitle: `${cmd} on · ${cmd} off types it straight away`, choices: [{ v: `${cmd} on`, name: "On", note: onNote }, { v: `${cmd} off`, name: "Off", note: offNote }], tick, start: tick };
-  };
   const clip = (/** @type {string} */ x) => String(x).replace(/\s+/g, " ").trim().slice(0, 60);
   switch (name) {
-    case "/thinking":
-      return onOff("/thinking", "Show the model's thinking?", st.thinking === true, "a summary, dimmed, above each reply", "replies only (how hard it thinks is /effort)");
-    case "/cloud-jobs":
-    case "/cloud-agents":
-      return onOff("/cloud-jobs", "May the agent here start cloud jobs?", st.localOnly !== true, "each asked first; on foldrun credits", "it sends nothing of this folder to the cloud");
-    case "/local":
-    case "/cloud": {
-      const tick = st.mode === "cloud" ? "/cloud" : "/local";
+    case "/model":
+      // The model, how hard it thinks, and whether its thinking shows: one command (FOL-263, owner).
+      return {
+        title: "The model",
+        subtitle: "/model <model> · effort <level> · thinking on|off types it straight away",
+        choices: [
+          { v: "/model", name: "Model…", note: "Default, Max, Fast or any model behind foldrun's proxy" },
+          { v: "/model effort", name: "How hard it thinks…", note: st.effort ? `now ${st.effort === "default" ? "the model's own" : st.effort}` : "low to max, or the model's own" },
+          { v: st.thinking === true ? "/model thinking off" : "/model thinking on", name: st.thinking === true ? "Hide its thinking" : "Show its thinking", note: st.thinking === true ? "replies only" : "a summary, dimmed, above each reply" },
+        ],
+        tick: null,
+        start: "/model",
+      };
+    case "/setup":
+      // What the agent reads and reaches here: one command (FOL-263; owner's yes to /setup, 24 Nov 2026).
+      return {
+        title: "What the agent reads and reaches",
+        subtitle: "/setup instructions · skills · agents · mcp · dirs <path> · check types it straight away",
+        choices: [
+          { v: "/setup instructions", name: "Instructions", note: "the files it reads here (AGENTS.md, CLAUDE.md)" },
+          { v: "/setup skills", name: "Skills", note: "the ones this folder holds — /<skill> uses one" },
+          { v: "/setup agents", name: "Sub-agents", note: "the agents it can hand a job to" },
+          { v: "/setup mcp", name: "MCP servers", note: "start, stop, add or remove one" },
+          { v: "/setup dirs", name: "Extra folders", note: "folders it may read without asking" },
+          { v: "/setup dirs ", name: "Add a folder…", note: "for this session; changes there are still asked", ask: "the folder" },
+          { v: "/setup check", name: "Check setup", note: "node, git, the folder, your sign-in, the project" },
+        ],
+        tick: null,
+        start: "/setup instructions",
+      };
+    case "/help":
+      // /help is a list too (owner, 24 Nov 2026): every command, by group; the one picked runs (or opens its own list).
+      return {
+        title: "Commands",
+        subtitle: "pick one to run it — one that needs words asks for them",
+        choices: CODE_GROUPS.flatMap((g) => g.commands.map(([c, d]) => {
+          const [cmd = "", ...words] = String(c).split(" ");
+          const needs = /^</.test(words[0] ?? "");
+          return { v: needs ? `${cmd} ` : cmd, name: `${cmd}${needs ? "…" : ""}`, note: `${g.group} · ${clip(String(d).split(/ — |: /)[0] ?? "")}`, ...(needs ? { ask: String(words.join(" ")).replace(/[<>]/g, "") } : {}) };
+        })),
+        tick: null,
+        start: "/where",
+      };
+    case "/where": {
+      // The three ways to work and one task sent to the cloud (FOL-263): one command, one list.
+      const now = /** @type {WhereChoice} */ (st.mode === "cloud" ? "cloud" : st.localOnly === true ? "local-only" : "local");
+      const tick = `/where ${WHERE_WORD[now]}`;
       return {
         title: "Where should this session work?",
-        subtitle: "/local · /cloud · /cloud <task> types it straight away",
+        subtitle: "/where local · local+cloud · cloud · send <task> types it straight away",
         choices: [
-          { v: "/local", name: "This computer", note: "the agent works in your folder, asking before changes" },
-          { v: "/cloud", name: "The cloud", note: "each message works on a copy there; you apply what comes back" },
-          { v: "/cloud ", name: "Send one cloud job…", note: "one task on a copy in the cloud; you stay where you are", ask: "the task" },
+          ...whereChoices(st.repo !== false).map((x) => ({ v: `/where ${WHERE_WORD[x.v]}`, name: x.name, note: x.note })),
+          { v: "/where send ", name: "Send one task to the cloud…", note: st.repo !== false ? "it runs on a copy there; you stay where you are" : "needs git — offered when you pick it", ask: "the task" },
         ],
         tick,
-        start: name,
-      };
-    }
-    case "/sandbox": {
-      const tick = st.sandboxOff === true ? "/sandbox off" : "/sandbox on";
-      return {
-        title: "The sandbox for the agent's commands",
-        subtitle: "/sandbox allow <site> · deny <site> · on · off types it straight away",
-        choices: [
-          { v: "/sandbox ", name: "Show it", note: "what it holds and the sites it may reach" },
-          { v: "/sandbox allow ", name: "Allow a site…", note: "for this session", ask: "the site (example.com)" },
-          { v: "/sandbox deny ", name: "Take a site away…", note: "for this session", ask: "the site" },
-          { v: "/sandbox on", name: "On", note: "commands run inside it" },
-          { v: "/sandbox off", name: "Off", note: "commands run as you; asked first (relaxed lets read-only ones run unasked)" },
-        ],
-        tick,
-        start: "/sandbox ",
+        start: tick,
       };
     }
     case "/permissions":
       return {
         title: "What the agent may do without asking",
-        subtitle: "/permissions strict · relaxed · rm <n> · reset types it straight away",
+        subtitle: "/permissions strict · relaxed · sandbox on|off · rm <n> · reset types it straight away",
         choices: [
           { v: "/permissions ", name: "Show them", note: "what is allowed ahead, and the rules kept for this folder" },
           { v: "/permissions relaxed", name: "Relaxed", note: "commands that only look are not asked" },
           { v: "/permissions strict", name: "Strict", note: "every command is asked, even one that only looks" },
           { v: "/permissions rm ", name: "Remove a rule…", note: "by its number in the list", ask: "the rule's number" },
           { v: "/permissions reset", name: "Forget this session's yeses", note: "every change, command and send is asked again" },
+          // The sandbox is one of the things the agent may or may not do (FOL-263: /sandbox went into /permissions).
+          { v: "/permissions sandbox", name: "The sandbox", note: "what it holds and the sites its commands may reach" },
+          { v: st.sandboxOff === true ? "/permissions sandbox on" : "/permissions sandbox off", name: st.sandboxOff === true ? "Sandbox on" : "Sandbox off", note: st.sandboxOff === true ? "commands run inside it again" : "commands run as you; each asked first" },
+          { v: "/permissions sandbox allow ", name: "Allow a site…", note: "for this session", ask: "the site (example.com)" },
+          { v: "/permissions sandbox deny ", name: "Take a site away…", note: "for this session", ask: "the site" },
         ],
         tick: st.strict === true ? "/permissions strict" : "/permissions relaxed",
         start: "/permissions ",
       };
-    case "/cost":
+    case "/status":
+      // One command for what the session is, has spent and holds (FOL-263: /cost, /usage, /context went in).
       return {
-        title: "What this session has spent",
-        subtitle: "/cost explain types it straight away",
+        title: "This session",
+        subtitle: "/status cost · explain · usage · context · tips on|off · line on|off types it straight away",
         choices: [
-          { v: "/cost ", name: "The total", note: "turns here and in the cloud" },
-          { v: "/cost explain", name: "Where it went", note: "row by row: model calls, tokens, the cache, the hints given" },
-          { v: "/cost tips on", name: "Token hints on", note: "one line before a turn that re-reads the conversation (a break, /model…)" },
-          { v: "/cost tips off", name: "Token hints off", note: "for you, in every folder" },
+          { v: "/status", name: "The session", note: "turns, model, where it works, the account" },
+          { v: "/status cost", name: "What it spent", note: "turns here and in the cloud" },
+          { v: "/status explain", name: "Where it went", note: "row by row: model calls, tokens, the cache, the hints given" },
+          { v: "/status usage", name: "Plan and credit", note: "your foldrun plan and what is left" },
+          { v: "/status context", name: "What fills the context", note: "instructions, skills, the conversation" },
+          { v: st.tips === false ? "/status tips on" : "/status tips off", name: st.tips === false ? "Token hints on" : "Token hints off", note: "a line before a turn that re-reads the conversation" },
+          { v: st.line === false ? "/status line on" : "/status line off", name: st.line === false ? "Status line on" : "Status line off", note: "the line under the prompt" },
         ],
-        tick: st.tips === false ? "/cost tips off" : "/cost tips on",
-        start: "/cost ",
+        tick: null,
+        start: "/status",
       };
-    case "/mcp": {
+    case "/sessions":
+      return {
+        title: "Other sessions of this project",
+        subtitle: "/sessions send <id> <text> · read types it straight away",
+        choices: [
+          { v: "/sessions list", name: "List them", note: "this session's id and the others on this computer" },
+          { v: "/sessions send ", name: "Send a message…", note: "it waits until that session's person sends their next message", ask: "<id> <text>" },
+          { v: "/sessions read", name: "Read what they sent", note: "messages other sessions sent this one" },
+        ],
+        tick: null,
+        start: "/sessions list",
+      };
+    case "/export":
+      return {
+        title: "Take the conversation out",
+        subtitle: "/export copy · /export <file> · /export --thinking <file> types it straight away",
+        choices: [
+          { v: "/export copy", name: "Copy the last reply", note: "to the clipboard" },
+          { v: "/export ", name: "Save to a file…", note: "every message and reply", ask: "the file (Enter alone: a name is chosen)", optional: true, path: true },
+          { v: "/export --thinking ", name: "Save with the thinking…", note: "and the thinking summaries /model thinking showed", ask: "the file", path: true },
+        ],
+        tick: null,
+        start: "/export copy",
+      };
+    case "/setup mcp": {
       // Only what an action can reach: a server hidden by one of yours, or one that cannot start, is in the list alone (Codex).
       const servers = (st.mcp ?? []).filter((x) => x.state !== "hidden" && x.state !== "problem");
       return {
         title: "MCP servers",
-        subtitle: "/mcp on|off|restart|tools|forget <name> · add · rm types it straight away",
+        subtitle: "/setup mcp on|off|restart|tools|forget <name> · add · rm types it straight away",
         choices: [
-          { v: "/mcp ", name: "List them", note: "every server, whether it runs, its tools" },
+          { v: "/setup mcp ", name: "List them", note: "every server, whether it runs, its tools" },
           ...servers.flatMap((x) => [
-            { v: `/mcp ${x.state === "on" ? "off" : "on"} ${x.name}`, name: `${x.state === "on" ? "Stop" : "Start"} ${clip(x.name)}`, note: x.state === "on" ? "running now" : x.state === "waiting" ? "waits for your yes" : "not running" },
-            ...(x.state === "on" ? [{ v: `/mcp tools ${x.name}`, name: `Tools of ${clip(x.name)}`, note: "what it offers the agent" }, { v: `/mcp restart ${x.name}`, name: `Restart ${clip(x.name)}`, note: "stop it and start it again" }] : []),
+            { v: `/setup mcp ${x.state === "on" ? "off" : "on"} ${x.name}`, name: `${x.state === "on" ? "Stop" : "Start"} ${clip(x.name)}`, note: x.state === "on" ? "running now" : x.state === "waiting" ? "waits for your yes" : "not running" },
+            ...(x.state === "on" ? [{ v: `/setup mcp tools ${x.name}`, name: `Tools of ${clip(x.name)}`, note: "what it offers the agent" }, { v: `/setup mcp restart ${x.name}`, name: `Restart ${clip(x.name)}`, note: "stop it and start it again" }] : []),
           ]),
-          { v: "/mcp add ", name: "Add a server…", note: "<name> -- <program> [args…], or <name> <https address>", ask: "<name> -- <program> [args…], or <name> <https address>" },
+          { v: "/setup mcp add ", name: "Add a server…", note: "<name> -- <program> [args…], or <name> <https address>", ask: "<name> -- <program> [args…], or <name> <https address>" },
           // Removed from the file it is written in: the folder's .mcp.json takes --project (Codex).
-          ...servers.map((x) => ({ v: `/mcp rm ${x.name}${x.source === "project" ? " --project" : ""}`, name: `Remove ${clip(x.name)}`, note: x.source === "project" ? "from this folder's .mcp.json" : "from your own mcp.json" })),
-          ...(servers.length ? [{ v: "/mcp forget ", name: "Take back a yes…", note: "it is asked about again before it starts", ask: "the server's name" }] : []),
+          ...servers.map((x) => ({ v: `/setup mcp rm ${x.name}${x.source === "project" ? " --project" : ""}`, name: `Remove ${clip(x.name)}`, note: x.source === "project" ? "from this folder's .mcp.json" : "from your own mcp.json" })),
+          ...(servers.length ? [{ v: "/setup mcp forget ", name: "Take back a yes…", note: "it is asked about again before it starts", ask: "the server's name" }] : []),
         ],
         tick: null,
-        start: "/mcp ",
+        start: "/setup mcp ",
       };
     }
     case "/resume": {
       const past = (st.past ?? []).slice(0, 20);
-      if (!past.length) return null;
+      // None kept here: New and Find stay (Find reads its own index), the cursor on Find so Enter clears nothing (Codex).
+      if (!past.length) {
+        return {
+          title: "Conversations of this folder",
+          subtitle: "none kept yet · /resume new · find <words> types it straight away",
+          choices: [
+            { v: "/resume find ", name: "Find one…", note: "by what was said in it", ask: "the words" },
+            { v: "/resume new", name: "New conversation", note: "the agent forgets the earlier turns" },
+          ],
+          tick: null,
+          start: "/resume find ",
+        };
+      }
       return {
-        title: "Go back to an earlier conversation",
-        subtitle: "this one is kept in its place · /resume <number> types it straight away",
+        title: "Conversations of this folder",
+        subtitle: "this one is kept in its place · /resume <number> · new · find <words> types it straight away",
         choices: [
+          { v: "/resume new", name: "New conversation", note: "the agent forgets the earlier turns" },
+          { v: "/resume find ", name: "Find one…", note: "by what was said in it", ask: "the words" },
           { v: "/resume ", name: "List them", note: "the twenty newest, numbered" },
           ...past.map((e, i) => ({ v: `/resume ${i + 1}`, name: `${i + 1}. ${clip(e.said)}`, note: String(e.at ?? "").slice(0, 16).replace("T", " ") })),
         ],
@@ -212,15 +298,20 @@ export function commandMenu(name, st) {
         start: "/resume ",
       };
     }
-    case "/rewind": {
-      const turns = st.turns ?? [];
-      if (!turns.length) return null;
+    case "/undo": {
+      // Everything that can be taken back, newest first (FOL-263: /rewind went into /undo).
+      const turns = (st.turns ?? []).slice().reverse();
+      if (!turns.length && !st.patch) return null;
       return {
-        title: "Take back the files from a turn on",
-        subtitle: "that turn and every turn after it; the conversation stays · /rewind <number> types it straight away",
-        choices: [{ v: "/rewind ", name: "List them", note: "each turn and the files it changed" }, ...turns.map((x) => ({ v: `/rewind ${x.turn}`, name: `turn ${x.turn}`, note: clip(x.label) }))],
+        title: "Take back changes",
+        subtitle: "newest first · /undo patch · /undo <turn> types it straight away",
+        choices: [
+          ...(st.patch ? [{ v: "/undo patch", name: "The last patch from the cloud", note: clip(st.patch) }] : []),
+          ...turns.map((x) => ({ v: `/undo ${x.turn}`, name: `Turn ${x.turn} and after`, note: clip(x.label) })),
+          ...(turns.length ? [{ v: "/undo list", name: "List the turns", note: "each turn and the files it changed" }] : []),
+        ],
         tick: null,
-        start: "/rewind ",
+        start: st.patch ? "/undo patch" : `/undo ${turns[0]?.turn}`,
       };
     }
     case "/todos": {
@@ -244,7 +335,7 @@ export function commandMenu(name, st) {
 }
 
 /** The commands that open a list when typed alone (FOL-259), as /help marks them. */
-export const MENU_COMMANDS = ["/thinking", "/cloud-jobs", "/local", "/cloud", "/sandbox", "/permissions", "/cost", "/mcp", "/resume", "/rewind", "/todos", "/effort", "/model"];
+export const MENU_COMMANDS = ["/where", "/model", "/permissions", "/setup", "/undo", "/resume", "/export", "/todos", "/status", "/sessions", "/help"];
 
 /** @param {{ steers?: boolean, extra?: Array<{ name: string, hint?: string, desc: string }> }} [o] steers: Enter sends into a running turn (foldrun's own loop, FOL-213); extra: the folder's own commands and skills. */
 export function helpText({ steers = false, extra = [] } = {}) {
@@ -252,7 +343,10 @@ export function helpText({ steers = false, extra = [] } = {}) {
   const w = Math.min(30, Math.max(...[...CODE_COMMANDS, ...own].map(([c]) => c.length)));
   const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now; Tab queues it as a message of its own for after the turn (/queue)" : t)) : CODE_TIPS;
   const rows = (/** @type {string[][]} */ list) => list.map(([c, d]) => `${c.padEnd(w)}  ${d}`);
-  return ["typed alone, a command marked ▸ opens a list to choose from (↑↓, Enter); typed with its words, it runs straight away", "", ...rows(CODE_COMMANDS.map(([c, d]) => [c, MENU_COMMANDS.includes(String(c).split(" ")[0]) ? `▸ ${d}` : d])), ...(own.length ? ["", "this folder's own:", ...rows(own)] : []), "", ...tips].join("\n");
+  const mark = (/** @type {string} */ c) => (MENU_COMMANDS.includes(String(c).split(" ")[0] ?? "") ? `▸ ${c}` : `  ${c}`);
+  // In groups, by what the person is doing (FOL-263).
+  const groups = CODE_GROUPS.flatMap((g) => ["", g.group, ...rows(g.commands.map(([c, d]) => [mark(c), d]))]);
+  return ["typed alone, a command marked ▸ opens a list to choose from (↑↓, Enter); typed with its words, it runs straight away", ...groups, ...(own.length ? ["", "this folder's own:", ...rows(own)] : []), "", ...tips].join("\n");
 }
 
 // ------------------------------------------------------------- history

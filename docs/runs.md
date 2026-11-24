@@ -592,7 +592,7 @@ was sent to; nothing reaches that conversation's agent until its person
 includes it in a turn.
 
 - **Send:** `POST …/sessions/<context>/messages` with `{text, from?}` —
-  in `foldrun code`, `/send <conversation> <text>`; from a script,
+  in `foldrun code`, `/sessions send <conversation> <text>`; from a script,
   `foldrun sessions send <conversation> "<text>" --to <project>`. Whoever
   may start runs in the project may send, the same right that already lets
   them join the conversation by its id.
@@ -614,7 +614,7 @@ includes it in a turn.
 - **On this computer:** a turn that runs on your computer has no run for
   the platform to bind messages to, so they stay listed as waiting there;
   the session remembers which ones it has shown you and offers each once
-  (`/messages` still lists them all). `/sessions` shows the session's own id
+  (`/sessions read` still lists them all). `/sessions` shows the session's own id
   — what another session needs to reach it — and the other sessions of the
   project on this computer.
 - **Not live:** a message is never put into a running step. To say

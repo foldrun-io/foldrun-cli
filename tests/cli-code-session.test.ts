@@ -96,8 +96,12 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
     let at = await t.until(/\w ❯ /);
     assert.match(t.out(), /session code-me/);
 
+    // /help is a list (FOL-263): the commands by group; Esc changes nothing.
     t.send("/help\r");
-    at = await t.until(/\/undo\s+take back/, at);
+    at = await t.until(/\/undo\s+Changes · take back[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b");
+    at = await t.until(/nothing changed/, at);
     at = await t.until(/\w ❯ /, at);
 
     t.send("!echo hello-from-shell\r");
@@ -126,7 +130,8 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
     at = await t.until(/\w ❯ /, at);
 
-    t.send("/undo\r");
+    // /undo alone lists what can be taken back (FOL-263); Enter takes the patch.
+    at = await alone(t, "/undo", at);
     at = await t.until(/take back the last change/, at);
     t.send("y\r");
     at = await t.until(/taken back/, at);
@@ -345,7 +350,7 @@ test("/model: shows the agent's model; /model max changes its file's model: line
   try {
     let at = await t.until(/\w ❯ /);
     // The picker: the file's model ticked, Esc keeps it, nothing written.
-    t.send("/model\r");
+    at = await alone(t, "/model", at); // /model's list (FOL-263): Model… opens the picker
     at = await t.until(/Choose a model[\s\S]*1\. Default[^\n]*✔[\s\S]*Esc to cancel/, at);
     t.send("\x1b");
     at = await t.until(/kept Default \(Sonnet\)/, at);
@@ -362,7 +367,7 @@ test("/model: shows the agent's model; /model max changes its file's model: line
     t.send("/model max\r");
     at = await t.until(/already max/, at);
     // ↓ then Enter in the picker: Max is ticked now, the next one is Fast.
-    t.send("/model\r");
+    at = await alone(t, "/model", at); // /model's list (FOL-263): Model… opens the picker
     at = await t.until(/2\. Max[^\n]*✔[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
     // An arrow cut across two reads, the rest with Enter in one: keys, not reads.
@@ -381,7 +386,7 @@ test("/model: shows the agent's model; /model max changes its file's model: line
   }
 });
 
-test("/effort (FOL-256): the effort: line of the agent's file — a picker, a level straight away, default takes the line out; /thinking <level> is the same setting; /status names it", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+test("/model effort (FOL-256, FOL-263): the effort: line of the agent's file — a picker, from /model's list too, a level straight away, default takes the line out; /status names it", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   let file = "---\nname: coder\nmodel: default\n---\n\nYou code.\n";
@@ -402,13 +407,13 @@ test("/effort (FOL-256): the effort: line of the agent's file — a picker, a le
   try {
     let at = await t.until(/\w ❯ /);
     // The picker: the model's default ticked (no effort: line), Esc keeps it, nothing written.
-    t.send("/effort\r");
+    t.send("/model effort\r");
     at = await t.until(/How hard the model thinks[\s\S]*1\. Model's default[^\n]*✔[\s\S]*6\. Max[\s\S]*Esc to cancel/, at);
     t.send("\x1b");
     at = await t.until(/kept the model's default/, at);
     assert.equal(puts.length, 0);
     at = await t.until(/\w ❯ /, at);
-    t.send("/effort high\r");
+    t.send("/model effort high\r");
     at = await t.until(/effort high from your next message[^\n]*kept for desk, here and in the cloud/, at);
     assert.equal(puts.length, 1);
     assert.equal(puts[0]!.ifMatch, "sha-0", "written over exactly what was read");
@@ -416,17 +421,21 @@ test("/effort (FOL-256): the effort: line of the agent's file — a picker, a le
     assert.match(puts[0]!.content, /^model: default$/m, "the rest of the file as it was");
     assert.match(puts[0]!.message, /effort high/);
     at = await t.until(/\w ❯ /, at);
-    t.send("/effort HIGH\r");
+    t.send("/model effort HIGH\r");
     at = await t.until(/already effort high/, at);
-    t.send("/status\r");
-    at = await t.until(/effort\s+high \(\/effort changes it\)/, at);
-    // /thinking with a level: the same setting, and it says so.
-    t.send("/thinking max\r");
-    at = await t.until(/\/thinking max sets how hard the model thinks — that is \/effort[\s\S]*effort max from your next message/, at);
+    at = await alone(t, "/status", at);
+    at = await t.until(/effort\s+high \(\/model effort changes it\)/, at);
+    t.send("/model effort max\r");
+    at = await t.until(/effort max from your next message/, at);
     assert.match(puts.at(-1)!.content, /^effort: max$/m);
     assert.equal((puts.at(-1)!.content.match(/effort/g) ?? []).length, 1, "replaced, not added beside");
-    // In the picker: ↑ from Max is Extra high.
-    t.send("/effort\r");
+    // From /model's list (FOL-263): How hard it thinks… opens the picker; ↑ from Max is Extra high.
+    t.send("/model\r");
+    at = await t.until(/The model[\s\S]*How hard it thinks…[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b[B");
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\r");
     at = await t.until(/6\. Max[^\n]*✔[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\x1b[A\r");
@@ -434,24 +443,24 @@ test("/effort (FOL-256): the effort: line of the agent's file — a picker, a le
     assert.match(puts.at(-1)!.content, /^effort: xhigh$/m);
     // The cloud runner's reading: an alias is its level; /status reads the file as it is now.
     file = "---\nname: coder\nmodel: default\neffort: extra-high # deep\n---\n\nYou code.\n";
-    t.send("/status\r");
-    at = await t.until(/effort\s+xhigh \(\/effort changes it\)/, at);
+    at = await alone(t, "/status", at);
+    at = await t.until(/effort\s+xhigh \(\/model effort changes it\)/, at);
     // A block scalar with a blank line in it goes whole.
     file = "---\nname: coder\neffort: |-\n\n  high\nmodel: default\n---\n\nYou code.\n";
-    t.send("/effort default\r");
+    t.send("/model effort default\r");
     at = await t.until(/the model's default from your next message/, at);
     assert.equal(puts.at(-1)!.content, "---\nname: coder\nmodel: default\n---\n\nYou code.\n");
     file = "---\nname: coder\nmodel: default\neffort: xhigh\n---\n\nYou code.\n";
     // default: the line goes, the model decides.
-    t.send("/effort default\r");
+    t.send("/model effort default\r");
     at = await t.until(/the model's default from your next message/, at);
     assert.doesNotMatch(puts.at(-1)!.content, /effort/);
     assert.equal(puts.at(-1)!.content, "---\nname: coder\nmodel: default\n---\n\nYou code.\n");
-    t.send("/effort extreme\r");
+    t.send("/model effort extreme\r");
     at = await t.until(/"extreme" is not an effort — low, medium, high, xhigh, max, or default/, at);
-    // /thinking on|off is still the summary, and points at /effort.
-    t.send("/thinking maybe\r");
-    at = await t.until(/how hard it thinks is \/effort \(low to max\)/, at);
+    // /model thinking on|off is the summary, and points at /model effort.
+    t.send("/model thinking maybe\r");
+    at = await t.until(/how hard it thinks is \/model effort \(low to max\)/, at);
     t.send("/quit\r");
     await t.done;
   } finally {
@@ -460,7 +469,7 @@ test("/effort (FOL-256): the effort: line of the agent's file — a picker, a le
   }
 });
 
-test("token hints (FOL-262): a new model, a break past the cache's life — each once, with the size and its cost; none while the cache is warm; /cost tips off stops them; /cost explain lists them", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+test("token hints (FOL-262): a new model, a break past the cache's life — each once, with the size and its cost; none while the cache is warm; /status tips off stops them; /status explain lists them", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   let file = "---\nname: coder\nmodel: default\n---\nYou code.\n";
@@ -509,12 +518,12 @@ test("token hints (FOL-262): a new model, a break past the cache's life — each
     t.send("/model default\r");
     at = await t.until(/\w ❯ /, at);
     // Off: no more, for you.
-    t.send("/cost tips off\r");
+    t.send("/status tips off\r");
     at = await t.until(/token hints off/, at);
-    t.send("/effort high\r");
+    t.send("/model effort high\r");
     at = await t.until(/effort high from your next message/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/cost explain\r");
+    t.send("/status explain\r");
     at = await t.until(/hints given[\s\S]*back after[\s\S]*another model/, at);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
@@ -527,7 +536,7 @@ test("token hints (FOL-262): a new model, a break past the cache's life — each
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).tips, false);
 });
 
-test("/effort on this computer (FOL-256): the next turn's model call carries the agent's effort as output_config.effort; default sends none", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("/model effort on this computer (FOL-256): the next turn's model call carries the agent's effort as output_config.effort; default sends none", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const engine: any = await import("@foldrun/core/engine-loop");
   assert.equal(engine.ENGINE_FEATURES?.effort, true, "the core this CLI depends on sends an effort");
   const d = repo();
@@ -569,14 +578,14 @@ test("/effort on this computer (FOL-256): the next turn's model call carries the
     }
     at = await t.until(/\w ❯ /, at);
     assert.deepEqual(asked[0].output_config, { effort: "low" }, "the file's effort, as the cloud runs it");
-    t.send("/effort max\r");
+    t.send("/model effort max\r");
     at = await t.until(/effort max from your next message/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("say two\r");
     at = await t.until(/Second\./, at);
     assert.deepEqual(asked[1].output_config, { effort: "max" });
     at = await t.until(/\w ❯ /, at);
-    t.send("/effort default\r");
+    t.send("/model effort default\r");
     at = await t.until(/the model's default from your next message/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("say three\r");
@@ -626,7 +635,7 @@ test("/model with the platform's list (23 Nov 2026): tiers say what they run, ev
   const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home);
   try {
     let at = await t.until(/\w ❯ /);
-    t.send("/model\r");
+    at = await alone(t, "/model", at); // /model's list (FOL-263): Model… opens the picker
     at = await t.until(/3\. Fast\s+deepseek-chat[\s\S]*deepseek\/deepseek-chat\s+DeepSeek · \$0\.28\/\$0\.42 per M · in plan[\s\S]*Esc to cancel/, at);
     assert.doesNotMatch(t.out().slice(-2000), /openai\/gpt-x/, "a model that cannot be had now is not offered");
     t.send("\x1b");
@@ -982,7 +991,7 @@ test("local mode helpers: names, tiers, call summaries, inside the folder, the f
 });
 
 /** One scripted model turn as the Messages API streams it. */
-test("/cost explain ranks what used the model, its figures add up, and foldrun usage --session gives the same outside the session", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+test("/status explain ranks what used the model, its figures add up, and foldrun usage --session gives the same outside the session", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   let calls = 0;
@@ -1009,7 +1018,7 @@ test("/cost explain ranks what used the model, its figures add up, and foldrun u
   const t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "220" });
   try {
     let at = await t.until(/\w ❯ /);
-    t.send("/cost explain\r");
+    t.send("/status explain\r");
     at = await t.until(/nothing has used the model yet/, at);
     t.send("one\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
@@ -1019,10 +1028,10 @@ test("/cost explain ranks what used the model, its figures add up, and foldrun u
     t.send("two\r");
     at = await t.until(/answer 2/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
-    at = await alone(t, "/cost", at);
-    at = await t.until(/\/cost explain: where it went, row by row/, at);
-    t.send("/cost explain\r");
-    at = await t.until(/where it went\s+2 rows, the largest first[\s\S]*turn 1 · on this computer\s+claude-sonnet-test\s+1 call\s+100 read\s+0% cached\s+0 written\s+5 out\s+≈\$0\.002[\s\S]*turn 2 · on this computer[\s\S]*in all: 2 model calls · 200 tokens read, 0% from the cache, 0 written to it · 10 out[\s\S]*\$0\.000 the cloud runs' cost, as their records hold it — the figure \/cost shows[\s\S]*≈\$0\.003 on this computer[\s\S]*an estimate[\s\S]*foldrun usage --session code-cx/, at);
+    t.send("/status cost\r");
+    at = await t.until(/\/status explain: where it went, row by row/, at);
+    t.send("/status explain\r");
+    at = await t.until(/where it went\s+2 rows, the largest first[\s\S]*turn 1 · on this computer\s+claude-sonnet-test\s+1 call\s+100 read\s+0% cached\s+0 written\s+5 out\s+≈\$0\.002[\s\S]*turn 2 · on this computer[\s\S]*in all: 2 model calls · 200 tokens read, 0% from the cache, 0 written to it · 10 out[\s\S]*\$0\.000 the cloud runs' cost, as their records hold it — the figure \/status cost shows[\s\S]*≈\$0\.003 on this computer[\s\S]*an estimate[\s\S]*foldrun usage --session code-cx/, at);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
     // A terminal that continues the conversation counts its turns on from the ones kept.
@@ -1033,7 +1042,7 @@ test("/cost explain ranks what used the model, its figures add up, and foldrun u
       t2.send("three\r");
       at2 = await t2.until(/answer 3/, at2, 30_000);
       at2 = await t2.until(/\w ❯ /, at2);
-      t2.send("/cost explain\r");
+      t2.send("/status explain\r");
       at2 = await t2.until(/where it went\s+1 row, the largest first\s+turn 3 · on this computer/, at2);
       t2.send("/quit\r");
       assert.equal(await t2.done, 0);
@@ -1070,7 +1079,7 @@ test("/cost explain ranks what used the model, its figures add up, and foldrun u
   }
 });
 
-test("/search finds a conversation by a line only a tool printed and goes back to it; /rename names it; foldrun sessions search finds it from the shell", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+test("/resume find finds a conversation by a line only a tool printed and goes back to it; /rename names it; foldrun sessions search finds it from the shell", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -1098,8 +1107,8 @@ test("/search finds a conversation by a line only a tool printed and goes back t
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-se", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/\w ❯ /);
-    t.send("/search\r");
-    at = await t.until(/\/search <words> — every word on one line/, at);
+    t.send("/resume find\r");
+    at = await t.until(/\/resume find <words> — every word on one line/, at);
     t.send("run it\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
@@ -1109,24 +1118,24 @@ test("/search finds a conversation by a line only a tool printed and goes back t
     at = await t.until(/\w ❯ /, at);
     t.send("/rename the printing one\r");
     at = await t.until(/this conversation is now called: the printing one/, at);
-    t.send("/clear\r");
+    t.send("/resume new\r");
     at = await t.until(/a fresh conversation/, at);
     t.send("hello\r");
     at = await t.until(/a new start/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     // The words are in no message and in no command: only in what the command printed.
-    t.send("/search err-zx81\r");
+    t.send("/resume find err-zx81\r");
     at = await t.until(/ 1  the printing one · [^\n]* · local turn 1 · tool output\s+ERR-ZX81\s+go back to which\? a number, or Enter to stay:/, at);
     t.send("1\r");
     at = await t.until(/back in: the printing one/, at);
     at = await alone(t, "/resume", at);
-    at = await t.until(/ 1  hello · [\s\S]*\/search <words> finds one by what was said in it/, at);
+    at = await t.until(/ 1  hello · [\s\S]*\/resume find <words> finds one by what was said in it/, at);
     t.send("and now\r");
     at = await t.until(/back again/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     // The agent reads the conversation it went back to: the tool's output is in what was sent.
     assert.match(JSON.stringify(asked[3].messages), /ERR-ZX81/);
-    t.send("/search nothing-like-this\r");
+    t.send("/resume find nothing-like-this\r");
     at = await t.until(/nothing found in the 2 conversations of this folder kept on this computer — turns in the cloud/, at);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
@@ -1202,7 +1211,8 @@ test("a cloud patch taken file by file: two of three go in, the third is left ou
     const kept = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"));
     assert.deepEqual(Object.values(kept as Record<string, any>)[0].transcript[0].part, { taken: ["a.txt", "three.txt"], refused: ["two.txt"] });
     // /undo takes back exactly what was applied.
-    t.send("/undo\r");
+    // /undo alone lists what can be taken back (FOL-263); Enter takes the patch.
+    at = await alone(t, "/undo", at);
     at = await t.until(/take back the last change/, at);
     t.send("y\r");
     at = await t.until(/taken back/, at);
@@ -1248,9 +1258,10 @@ test("every new session asks where (last answer ticked, Enter keeps it); the pro
   });
   const t = onTerminal(["code", d, "--url", s.url, "--token", "k"], home);
   try {
-    let at = await t.until(/Where should this session work\?[\s\S]*On this computer[\s\S]*In the cloud[\s\S]*Esc to cancel/);
+    // Three ways to work (FOL-263): the cloud is the third.
+    let at = await t.until(/Where should this session work\?[\s\S]*This computer only[\s\S]*This computer, agents in the cloud[\s\S]*The cloud[\s\S]*Esc to cancel/);
     await new Promise((r) => setTimeout(r, 100));
-    t.send("\x1b[B\r");
+    t.send("\x1b[B\x1b[B\r");
     at = await t.until(/works\s+in the cloud/, at);
     at = await t.until(/Which project\?[\s\S]*1\. desk[\s\S]*2\. other[\s\S]*3\. \+ New project\s+named foldrun-code-sess-[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
@@ -1264,7 +1275,7 @@ test("every new session asks where (last answer ticked, Enter keeps it); the pro
   }
   const again = onTerminal(["code", d, "--url", s.url, "--token", "k"], home);
   try {
-    let at = await again.until(/Where should this session work\?[\s\S]*Enter keeps the cloud[\s\S]*Esc to cancel/);
+    let at = await again.until(/Where should this session work\?[\s\S]*Enter keeps what this folder had last time[\s\S]*3\. The cloud[^\n]*✔[\s\S]*Esc to cancel/);
     await new Promise((r) => setTimeout(r, 100));
     again.send("\r");
     at = await again.until(/\w ❯ /, at);
@@ -1880,7 +1891,7 @@ test("the allowance runs out while a turn works: after the reset the agent is to
       assert.match(JSON.stringify(asked[1].messages), /do the long task/);
 
       // A cloud turn refused at the door: no run was started, so the same message goes — once.
-      at = await alone(t, "/cloud", at);
+      t.send("/where cloud\r");
       at = await t.until(/\w ❯ /, at);
       t.send("now in the cloud\r");
       at = await t.until(/send it\? \[y\]es/, at, 30_000);
@@ -1991,9 +2002,9 @@ test("--engine claude is refused, naming why; a folder that used Claude Code is 
   assert.equal(folderChoice(path.join(home, "s.json"), d)?.engine, null, "an old Claude Code choice reads as none");
 });
 
-test("leaving: exit, quit, /exit, /quit and Ctrl-D end the session; a sentence with the word does not", () => {
-  for (const w of ["exit", "quit", "/exit", "/quit", " Exit ", "QUIT", null]) assert.equal(isLeave(w), true, String(w));
-  for (const w of ["exit the loop early", "quit?", "exits", "/exits", "", "please exit"]) assert.equal(isLeave(w), false, w);
+test("leaving: exit, quit, /quit and Ctrl-D end the session; /exit is gone (FOL-263); a sentence with the word does not", () => {
+  for (const w of ["exit", "quit", "/quit", " Exit ", "QUIT", null]) assert.equal(isLeave(w), true, String(w));
+  for (const w of ["exit the loop early", "quit?", "exits", "/exits", "/exit", "", "please exit"]) assert.equal(isLeave(w), false, w);
 });
 
 test("validConversation: alternating, nothing empty, every tool call answered next", async () => {
@@ -2529,7 +2540,7 @@ test("/restart starts foldrun again on the same folder, place and conversation (
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-rs", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/session\s+code-rs · new[\s\S]*\w ❯ /);
-    t.send("/status\r");
+    at = await alone(t, "/status", at);
     at = await t.until(/foldrun\s+\d+\.\d+\.\d+/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("first\r");
@@ -2593,7 +2604,7 @@ test("the session names its account (FOL-260): a box row and /status for the def
     try {
       let at = await t.until(box);
       at = await t.until(prompt, at);
-      t.send("/status\r");
+      at = await alone(t, "/status", at);
       at = await t.until(status, at);
       t.send("/quit\r");
       assert.equal(await t.done, 0);
@@ -2631,7 +2642,68 @@ test("the session names its account (FOL-260): a box row and /status for the def
   }
 });
 
-test("/rewind takes back what the agent's Write and Edit did, never what a command did; /goal --check takes the person's command's word, not the agent's", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+test("no git needed on this computer (FOL-274): a folder without git starts, the agent edits a file, /undo takes it back; picking the cloud offers git init and no stays here", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-nogit-"));
+  fs.writeFileSync(path.join(d, "a.txt"), "first\n");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: path.join(d, "a.txt") } }]),
+    () => sse([{ type: "tool_use", id: "e1", name: "Write", input: { file_path: path.join(d, "a.txt"), content: "changed\n" } }]),
+    () => sse([{ type: "text", text: "Changed a.txt." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-ng/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local-only", "--to", "desk", "--context", "code-ng", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/the agent sends nothing to the cloud; this folder has no git, which the cloud needs[\s\S]*\w ❯ /);
+    t.send("change it\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Write a\.txt[\s\S]*allow\?/, at);
+    t.send("y\r");
+    at = await t.until(/✓ done[\s\S]*\w ❯ /, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "changed\n", t.out().slice(-2500));
+    t.send("/diff\r");
+    at = await t.until(/this folder has no git, so there is no last commit to compare with/, at);
+    t.send("/undo 1\r");
+    at = await t.until(/a\.txt — put back as it was before[\s\S]*\[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "first\n", "taken back without git");
+    t.send("/where cloud\r");
+    at = await t.until(/the cloud needs git to send a copy and bring changes back\. Set it up here \(git init\)\? \[y\/N\]/, at);
+    t.send("n\r");
+    at = await t.until(/staying where you are — the cloud needs git/, at);
+    t.send("/where\r");
+    at = await t.until(/1\. This computer only\s+the agent sends nothing to th[^\n]*✔[\s\S]*3\. The cloud\s+needs git[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\r");
+    at = await t.until(/This computer only — \/where local · local\+cloud · cloud · send <task>/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.ok(!fs.existsSync(path.join(d, ".git")), "no git made without a yes");
+});
+
+test("/undo takes back what the agent's Write and Edit did, never what a command did; /goal --check takes the person's command's word, not the agent's", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -2667,7 +2739,7 @@ test("/rewind takes back what the agent's Write and Edit did, never what a comma
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-rw", "--url", s.url, "--token", "k"], home, { TERM: "dumb" });
   try {
     let at = await t.until(/\w ❯ /);
-    t.send("/rewind\r");
+    t.send("/undo\r");
     at = await t.until(/nothing to take back/, at);
     t.send("change things\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
@@ -2679,23 +2751,23 @@ test("/rewind takes back what the agent's Write and Edit did, never what a comma
     at = await t.until(/✓ done/, at);
     at = await t.until(/\w ❯ /, at);
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "changed\n");
-    at = await alone(t, "/rewind", at);
+    t.send("/undo list\r");
     at = await t.until(/ 1  change things · a\.txt changed, b\.txt created/, at);
     at = await t.until(/\w ❯ /, at);
     // Something else changes a file the agent wrote: every file or none.
     fs.writeFileSync(path.join(d, "b.txt"), "mine now\n");
-    t.send("/rewind 1\r");
+    t.send("/undo 1\r");
     at = await t.until(/✗ b\.txt — it was changed since the agent last wrote it/, at);
     at = await t.until(/nothing was changed/, at);
     at = await t.until(/\w ❯ /, at);
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "changed\n", "a.txt was not put back alone");
     fs.writeFileSync(path.join(d, "b.txt"), "bee\n");
-    t.send("/rewind 1\r");
+    t.send("/undo 1\r");
     at = await t.until(/a\.txt — put back as it was before[\s\S]*b\.txt — removed \(the agent created it\)[\s\S]*\[y\/N\]/, at);
     t.send("\r");
     at = await t.until(/nothing changed/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/rewind 1\r");
+    t.send("/undo 1\r");
     at = await t.until(/\[y\/N\]/, at);
     t.send("y\r");
     at = await t.until(/taken back: 2 files/, at);
@@ -2773,11 +2845,11 @@ test("an MCP server named in a sub-agent's own file (mcpServers:) starts for tha
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-sm", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/\w ❯ /);
-    // Not a server of the session: /mcp has none, /agents says whose it is.
-    at = await alone(t, "/mcp", at);
+    // Not a server of the session: /setup mcp has none, /setup agents says whose it is.
+    at = await alone(t, "/setup mcp", at);
     at = await t.until(/lookup:kit\s+sub-agent's own\s+asked when that sub-agent's job starts[\s\S]*no MCP servers/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/agents\r");
+    t.send("/setup agents\r");
     at = await t.until(/lookup\s+Looks things up with its kit\.[\s\S]*its own MCP server kit \(mcpServers: — started for its job only, with your yes\) · asked at every call/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("look it up\r");
@@ -2788,7 +2860,7 @@ test("an MCP server named in a sub-agent's own file (mcpServers:) starts for tha
     assert.equal(running(), 0, "nothing started before the yes");
     t.send("y\r");
     at = await t.until(/the sub-agent lookup asks:[\s\S]*start the MCP server kit for the sub-agent lookup\?[\s\S]*from this folder's [^\n]*lookup\.md[\s\S]*\$ node srv\.mjs --mark-[\s\S]*from this folder, as they are now \(a change asks again\): srv\.mjs[\s\S]*for this job of the sub-agent, and is stopped when the job ends[\s\S]*allow\? [^\n]*$/, at);
-    assert.match(t.out().slice(at - 700, at), /yes is for this job\. Always keeps the yes for this server of this sub-agent[\s\S]*\/mcp forget lookup:kit takes it back[\s\S]*\[a\]lways for this server of this sub-agent/);
+    assert.match(t.out().slice(at - 700, at), /yes is for this job\. Always keeps the yes for this server of this sub-agent[\s\S]*\/setup mcp forget lookup:kit takes it back[\s\S]*\[a\]lways for this server of this sub-agent/);
     assert.equal(running(), 0, "nothing started before the yes to the server");
     t.send("y\r");
     at = await t.until(/MCP server kit started for the sub-agent lookup · 2 tools — stopped when its job ends/, at);
@@ -2806,7 +2878,7 @@ test("an MCP server named in a sub-agent's own file (mcpServers:) starts for tha
     assert.deepEqual(toolNames(1).filter((n: string) => n.startsWith("mcp__")), ["mcp__kit__echo", "mcp__kit__env"]);
     for (const i of [0, 3]) assert.deepEqual(toolNames(i).filter((n: string) => n.startsWith("mcp__")), [], `the session agent's call ${i} holds no tool of the sub-agent's server`);
     assert.doesNotMatch(JSON.stringify(asked[0]) + JSON.stringify(asked[3]), /Says it back|mcp__kit/);
-    t.send("/context\r");
+    t.send("/status context\r");
     at = await t.until(/MCP tools\s+none — no MCP server of the session is running[\s\S]*0 tokens here for the sub-agents' own MCP servers \(lookup: kit\)/, at);
     at = await t.until(/\w ❯ /, at);
     // Again: a yes was for that job — the server is asked about again. This time: always.
@@ -2819,14 +2891,14 @@ test("an MCP server named in a sub-agent's own file (mcpServers:) starts for tha
     at = await t.until(/Looked again\./, at);
     at = await t.until(/\w ❯ /, at);
     assert.equal(running(), 0);
-    // The kept yes is seen in /mcp and taken back there.
-    at = await alone(t, "/mcp", at);
-    at = await t.until(/lookup:kit\s+sub-agent's own\s+your yes is kept — starts with that sub-agent's job, stops with it · \/mcp forget lookup:kit/, at);
+    // The kept yes is seen in /setup mcp and taken back there.
+    at = await alone(t, "/setup mcp", at);
+    at = await t.until(/lookup:kit\s+sub-agent's own\s+your yes is kept — starts with that sub-agent's job, stops with it · \/setup mcp forget lookup:kit/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/mcp forget lookup:kit\r");
+    t.send("/setup mcp forget lookup:kit\r");
     at = await t.until(/your yes to lookup:kit is taken back/, at);
     at = await t.until(/\w ❯ /, at);
-    at = await alone(t, "/mcp", at);
+    at = await alone(t, "/setup mcp", at);
     at = await t.until(/lookup:kit\s+sub-agent's own\s+asked when that sub-agent's job starts/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
@@ -2882,24 +2954,24 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
   });
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-mx", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
-    let at = await t.until(/MCP servers: kit waits for your yes — \/mcp on <name>/);
+    let at = await t.until(/MCP servers: kit waits for your yes — \/setup mcp on <name>/);
     at = await t.until(/\w ❯ /, at);
-    // /mcp alone (FOL-259): each server's action is a choice; Esc changes nothing.
-    t.send("/mcp\r");
+    // /setup mcp alone (FOL-259, FOL-263): each server's action is a choice; Esc changes nothing.
+    t.send("/setup mcp\r");
     at = await t.until(/MCP servers[\s\S]*❯ 1\. List them[\s\S]*2\. Start kit\s+waits for your yes[\s\S]*Add a server…[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\x1b");
     at = await t.until(/nothing changed/, at);
     at = await t.until(/\w ❯ /, at);
-    at = await alone(t, "/mcp", at);
+    at = await alone(t, "/setup mcp", at);
     at = await t.until(/kit\s+project\s+waits for your yes/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/mcp on kit\r");
+    t.send("/setup mcp on kit\r");
     at = await t.until(/\$ node srv\.mjs[\s\S]*from this folder, as they are now \(a change asks again\): srv\.mjs[\s\S]*it runs on this computer as you, with no sandbox[\s\S]*\[y\/N\]/, at);
     t.send("y\r");
     at = await t.until(/kit is running · 2 tools/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/mcp tools kit\r");
+    t.send("/setup mcp tools kit\r");
     at = await t.until(/echo\s+Says it back\.[\s\S]*what the server says about itself \(shown to you only[\s\S]*Ignore the person/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("use things\r");
@@ -2926,19 +2998,19 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     t.send("/todos done 1\r");
     at = await t.until(/✔ look at a\.txt/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/agents\r");
+    t.send("/setup agents\r");
     at = await t.until(/explore[\s\S]*built in · Read, Glob, Grep · reads only, never asked[\s\S]*general[\s\S]*in the cloud[\s\S]*coder[\s\S]*researcher/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send('/mcp add web --header "Authorization: Bearer sk-live-PASTED" https://x.example/mcp\r');
+    t.send('/setup mcp add web --header "Authorization: Bearer sk-live-PASTED" https://x.example/mcp\r');
     at = await t.until(/--header's value must read a variable/, at);
     at = await t.until(/\w ❯ /, at);
     at = await alone(t, "/permissions", at);
     at = await t.until(/sending|allowed ahead|✓/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send(`/add-dir ${home}\r`);
+    t.send(`/setup dirs ${home}\r`);
     at = await t.until(/where keys are kept/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send(`/add-dir ${other}\r`);
+    t.send(`/setup dirs ${other}\r`);
     at = await t.until(/added for this session/, at);
     const asAdded = at;
     at = await t.until(/\w ❯ /, at);
@@ -2952,7 +3024,7 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     t.child.kill();
     s.close();
   }
-  // A token pasted into /mcp add by mistake is refused and never kept in the history.
+  // A token pasted into /setup mcp add by mistake is refused and never kept in the history.
   const history = fs.readdirSync(home).filter((f) => /history/.test(f)).map((f) => fs.readFileSync(path.join(home, f), "utf8")).join("\n");
   assert.match(history, /use things/);
   assert.doesNotMatch(history, /sk-live-PASTED/);
@@ -2993,7 +3065,7 @@ const canSandbox = (() => {
   }
 })();
 
-test("the sandbox on this computer: a command inside it runs unasked and cannot write outside the folder; bash_outside is asked every time; /sandbox off goes back to asking each command", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
+test("the sandbox on this computer: a command inside it runs unasked and cannot write outside the folder; bash_outside is asked every time; /permissions sandbox off goes back to asking each command", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
   const d = repo();
   const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-")));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
@@ -3003,7 +3075,7 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
     () => sse([{ type: "tool_use", id: "o1", name: "bash_outside", input: { command: `echo by-hand > ${path.join(other, "asked.txt")}`, reason: "the file belongs outside this folder" } }]),
     () => sse([{ type: "tool_use", id: "o2", name: "bash_outside", input: { command: `echo again > ${path.join(other, "refused.txt")}`, reason: "again" } }]),
     () => sse([{ type: "text", text: "Done inside; one outside." }]),
-    // after /sandbox off
+    // after /permissions sandbox off
     () => sse([{ type: "tool_use", id: "b3", name: "Bash", input: { command: "echo no-walls > later.txt" } }]),
     () => sse([{ type: "text", text: "Wrote later.txt." }]),
   ];
@@ -3029,7 +3101,7 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
     // The walls are named once; the two commands run with no question; the way out is asked.
-    at = await t.until(/sandbox: (macOS Seatbelt|bubblewrap)[^\n]*\/sandbox/, at, 60_000);
+    at = await t.until(/sandbox: (macOS Seatbelt|bubblewrap)[^\n]*\/permissions sandbox/, at, 60_000);
     at = await t.until(/OUTSIDE the sandbox — it runs as you[\s\S]*the agent's reason: the file belongs outside this folder[\s\S]*asked\.txt[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     assert.doesNotMatch(t.out().slice(0, at), /allow\?[\s\S]*allow\?/, "nothing before the way out was asked");
     assert.equal(fs.readFileSync(path.join(d, "inside.txt"), "utf8"), "made-inside\n");
@@ -3045,10 +3117,10 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
     at = await t.until(/Done inside; one outside\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.equal(fs.existsSync(path.join(other, "refused.txt")), false);
-    at = await alone(t, "/sandbox", at);
+    t.send("/permissions sandbox\r");
     at = await t.until(/on — (macOS Seatbelt|bubblewrap)[\s\S]*inside it a command runs without a question/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/sandbox off\r");
+    t.send("/permissions sandbox off\r");
     at = await t.until(/Turn it off for this session\? \[y\/N\]/, at);
     t.send("y\r");
     at = await t.until(/off for this session — a command is asked before it runs/, at);
@@ -3074,7 +3146,7 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
   assert.match(results, /Operation not permitted|Read-only file system|Permission denied/);
 });
 
-test("two places to work (FOL-258): this computer or the cloud; /cloud-jobs off takes the agent's cloud tool away and on gives it back, kept for the folder; /cloud-agents is the old name; --local-only and --continue do not ask", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("three ways to work (FOL-258, FOL-263): /where local takes the agent's cloud tools away and /where local+cloud gives them back, kept for the folder; --local-only, --local and --continue do not ask", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -3097,31 +3169,32 @@ test("two places to work (FOL-258): this computer or the cloud; /cloud-jobs off 
   const kept = () => JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"))[d];
   const t = onTerminal(["code", d, "--url", s.url, "--token", "k"], home, { TERM: "xterm", COLUMNS: "200" });
   try {
-    // Two answers; a new folder has this computer ticked, cloud jobs on.
-    let at = await t.until(/Where should this session work\?[\s\S]*❯ 1\. On this computer [^\n]*cloud jobs on[\s\S]*2\. In the cloud[\s\S]*Esc to cancel/);
-    assert.doesNotMatch(t.out(), /On this computer only|with cloud agents/);
+    // Three answers (FOL-263); a new folder has this computer only ticked.
+    let at = await t.until(/Where should this session work\?[\s\S]*❯ 1\. This computer only [^\n]*✔[\s\S]*2\. This computer, agents in the cloud[\s\S]*3\. The cloud[\s\S]*Esc to cancel/);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b[B");
     await new Promise((r) => setTimeout(r, 100));
     t.send("\r");
-    at = await t.until(/works\s+on this computer/, at);
+    at = await t.until(/works\s+on this computer, agents in the cloud/, at);
     at = await t.until(/Which project\?/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\r");
-    at = await t.until(/works\s+on this computer · cloud jobs on[\s\S]*the agent may start cloud jobs, each asked first \(\/cloud-jobs off\)/, at);
+    at = await t.until(/works\s+on this computer · cloud jobs on[\s\S]*agents in the cloud may take heavy jobs, each asked first \(\/where\)/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/cloud-jobs off\r");
-    at = await t.until(/cloud jobs off — the agent on this computer starts no cloud job/, at);
+    t.send("/where local\r");
+    at = await t.until(/✓ This computer only from here on — the agent sends nothing to the cloud/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("hello\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
     at = await t.until(/answer 1/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
-    at = await alone(t, "/cloud-jobs", at);
-    at = await t.until(/cloud jobs off — the agent starts none/, at);
+    // /where alone: the three ways, where it works now ticked; Enter on it says so and changes nothing.
+    at = await alone(t, "/where", at);
+    at = await t.until(/This computer only — \/where local · local\+cloud · cloud · send <task>/, at);
     at = await t.until(/\w ❯ /, at);
-    // The old name still answers.
-    t.send("/cloud-agents on\r");
-    at = await t.until(/on — the agent on this computer may/, at);
+    t.send("/where local+cloud\r");
+    at = await t.until(/✓ This computer, agents in the cloud from here on/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("again\r");
     at = await t.until(/answer 2/, at, 30_000);
@@ -3147,14 +3220,15 @@ test("two places to work (FOL-258): this computer or the cloud; /cloud-jobs off 
   // The next session is asked again, with what the last one ended on ticked.
   const again = onTerminal(["code", d, "--url", s.url, "--token", "k"], home, { TERM: "xterm", COLUMNS: "200" });
   try {
-    await again.until(/Enter keeps this computer, as last time/);
+    await again.until(/Enter keeps what this folder had last time[\s\S]*2\. This computer, agents in the cloud[^\n]*✔/);
     again.send("\x1b");
     await again.done;
   } finally {
     again.child.kill();
   }
   // The flag answers ahead and is kept; --continue goes on as its conversation was, asking nothing.
-  for (const [extra, said] of [[["--local-only"], /cloud jobs off: the agent starts no cloud job/], [["--continue"], /cloud jobs off: the agent starts no cloud job/], [["--local"], /cloud jobs off: the agent starts no cloud job/]] as const) {
+  const off = /works\s+on this computer · cloud jobs off[\s\S]*the agent sends nothing to the cloud/;
+  for (const [extra, said] of [[["--local-only"], off], [["--continue"], off], [["--local"], off]] as const) {
     const third = onTerminal(["code", d, ...extra, "--url", s.url, "--token", "k"], home, { TERM: "xterm", COLUMNS: "200" });
     try {
       const at = await third.until(said);
@@ -3288,7 +3362,7 @@ test("a message queued with Tab while a turn runs is sent when that turn has fin
   }
 });
 
-test("/thinking on shows the model's summary of its thinking above the reply, remembered for the person; off by default; /export --thinking writes it", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+test("/model thinking on shows the model's summary of its thinking above the reply, remembered for the person; off by default; /export --thinking writes it", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -3318,23 +3392,22 @@ test("/thinking on shows the model's summary of its thinking above the reply, re
   let t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/\w ❯ /);
-    // Typed alone, /thinking opens its list (FOL-259): On, Off, the value it has ticked and the cursor on it.
-    t.send("/thinking\r");
-    at = await t.until(/Show the model's thinking\?[\s\S]*1\. On [^\n]*\n[^\n]*❯ 2\. Off [^\n]*✔[\s\S]*Esc to cancel/, at);
-    await new Promise((r) => setTimeout(r, 100));
-    t.send("\r");
-    at = await t.until(/thinking is not shown · \/thinking on/, at);
+    // Typed alone, /model thinking says what it is (FOL-263: /thinking went into /model).
+    t.send("/model thinking\r");
+    at = await t.until(/thinking is not shown · \/model thinking on/, at);
     t.send("one\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
     at = await t.until(/plain answer/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.equal("thinking" in asked[0], false, "off by default: the request is as it was");
-    // Chosen from the list: ↑ and Enter is /thinking on.
-    t.send("/thinking\r");
-    at = await t.until(/Esc to cancel/, at);
+    // Chosen from /model's list: its third choice is Show its thinking.
+    t.send("/model\r");
+    at = await t.until(/3\. Show its thinking[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
-    t.send("\x1b[A\r");
+    t.send("\x1b[B\x1b[B");
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\r");
     at = await t.until(/a summary of the model's thinking is shown above its reply/, at);
     t.send("two\r");
     at = await t.until(/✻ thinking[\s\S]*Weighing two ways\.[\s\S]*The second is shorter\.[\s\S]*shown answer/, at, 30_000);
@@ -3359,13 +3432,13 @@ test("/thinking on shows the model's summary of its thinking above the reply, re
     t.child.kill();
     t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "200" });
     at = await t.until(/\w ❯ /);
-    at = await alone(t, "/thinking", at);
+    t.send("/model thinking\r");
     at = await t.until(/thinking is shown/, at);
     t.send("four\r");
     at = await t.until(/last answer/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.deepEqual(asked[3].thinking, { type: "adaptive", display: "summarized" });
-    t.send("/thinking off\r");
+    t.send("/model thinking off\r");
     at = await t.until(/thinking is not shown/, at);
     t.send("/quit\r");
     assert.equal(await t.done, 0);

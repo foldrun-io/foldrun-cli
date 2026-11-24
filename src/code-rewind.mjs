@@ -394,7 +394,7 @@ export function settle(/** @type {Journal} */ j, /** @type {string} */ id) {
   }
 }
 
-/** The turns that changed files, newest last: what /rewind lists. */
+/** The turns that changed files, newest last: what /undo lists. */
 export function turnsOf(/** @type {Journal} */ j) {
   try {
     reload(j);
@@ -496,7 +496,7 @@ export function apply(/** @type {Journal} */ j, /** @type {ReturnType<typeof pla
     // and every copy read before the first one is touched. What differs
     // from what was shown stops it with nothing changed.
     const fresh = plan(j, p.turn);
-    if (fresh.conflicts.length || key(fresh) !== key(p)) throw new Error(`nothing was changed: ${fresh.conflicts[0] ? `${fresh.conflicts[0].path} — ${fresh.conflicts[0].why}` : "the files changed since they were shown"} — /rewind ${p.turn} shows it as it is now`);
+    if (fresh.conflicts.length || key(fresh) !== key(p)) throw new Error(`nothing was changed: ${fresh.conflicts[0] ? `${fresh.conflicts[0].path} — ${fresh.conflicts[0].why}` : "the files changed since they were shown"} — /undo ${p.turn} shows it as it is now`);
     /** @type {Map<string, Buffer>} */
     const copies = new Map();
     for (const ch of fresh.changes) {
@@ -511,7 +511,7 @@ export function apply(/** @type {Journal} */ j, /** @type {ReturnType<typeof pla
     for (const ch of fresh.changes) {
       if (ch.done) continue;
       const abs = path.join(j.root, ch.path);
-      if (!insideRoot(j.root, abs) || !samePlace(j.root, ch.path) || !same(stateOf(abs), ch.now)) throw new Error(`${ch.path} changed while the rewind ran — stopped there; /rewind ${p.turn} again shows what is left`);
+      if (!insideRoot(j.root, abs) || !samePlace(j.root, ch.path) || !same(stateOf(abs), ch.now)) throw new Error(`${ch.path} changed while the rewind ran — stopped there; /undo ${p.turn} again shows what is left`);
       if (ch.op === "remove") fs.rmSync(abs, { force: true });
       else {
         const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${crypto.randomBytes(8).toString("hex")}.tmp`);

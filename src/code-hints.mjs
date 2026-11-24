@@ -24,7 +24,7 @@ export const HINT_MIN_TOKENS = 5_000;
 /** A message this long is said before it goes. */
 export const PASTE_TOKENS = 20_000;
 
-/** The kinds, in the order /cost explain lists them. */
+/** The kinds, in the order /status explain lists them. */
 export const HINT_KINDS = /** @type {const} */ (["break", "model", "tools", "place", "big", "paste"]);
 
 /** "12.3k" for 12_345. */
@@ -47,14 +47,14 @@ export function hintLine(kind, o = {}) {
   const cost = usd(tokens, o.price);
   const size = `about ${k(tokens)} tokens${cost ? ` (~${cost})` : ""}`;
   // /compact shortens only a conversation kept on this computer; in the cloud the way is a new one (Codex).
-  const shorter = o.side === "cloud" ? "/clear starts a new conversation" : "/compact shortens it";
+  const shorter = o.side === "cloud" ? "/resume new starts a new conversation" : "/compact shortens it";
   switch (kind) {
     case "break":
       if (tokens < HINT_MIN_TOKENS) return null;
-      return `back after ${Math.round(o.minutes ?? 0)} min: the cache has expired, so this message reads the conversation again at full price — ${size}. ${o.side === "cloud" ? "/clear starts fresh" : "/compact makes later turns read a summary instead; /clear starts fresh"}`;
+      return `back after ${Math.round(o.minutes ?? 0)} min: the cache has expired, so this message reads the conversation again at full price — ${size}. ${o.side === "cloud" ? "/resume new starts fresh" : "/compact makes later turns read a summary instead; /resume new starts fresh"}`;
     case "model":
       if (tokens < HINT_MIN_TOKENS) return null;
-      return `another model has no cache of this conversation: your next message reads it all at full price — ${size}. ${o.side === "cloud" ? "/clear makes that nothing" : "/compact first, or /clear, makes that smaller"}`;
+      return `another model has no cache of this conversation: your next message reads it all at full price — ${size}. ${o.side === "cloud" ? "/resume new makes that nothing" : "/compact first, or /resume new, makes that smaller"}`;
     case "tools":
       if (tokens < HINT_MIN_TOKENS) return null;
       return `${o.what ?? "that"} changes what the model is sent ahead of the conversation, so your next message reads it all again once — ${size}`;

@@ -28,7 +28,7 @@
 // into the agent's instructions (its text was written by the model, from
 // whatever it read).
 //
-// Added folders — `/add-dir`: the agent may READ there without a question.
+// Added folders — `/setup dirs`: the agent may READ there without a question.
 // Changing a file there is still asked every time, and /rewind does not
 // cover it.
 
@@ -340,7 +340,7 @@ export function todosFromReply(/** @type {string} */ reply) {
  */
 export function addableFolder(/** @type {string} */ sessionDir, /** @type {string} */ typed) {
   const word = typed.trim().replace(/^["']|["']$/g, "");
-  if (!word) return { problem: "which folder? /add-dir <path>" };
+  if (!word) return { problem: "which folder? /setup dirs <path>" };
   const home = os.homedir();
   const abs = path.resolve(sessionDir, word === "~" ? home : word.startsWith("~/") ? path.join(home, word.slice(2)) : word);
   let real;

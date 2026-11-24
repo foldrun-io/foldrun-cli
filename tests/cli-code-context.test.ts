@@ -209,13 +209,16 @@ test("one session, two places: each side is told once what the other did; the ne
 test("suggestions: what starts with the typed part first, then what holds it; nothing once the line is more than the command", () => {
   const all = [...CODE_COMMANDS.map(([n, d]) => ({ name: String(n).split(" ")[0]!, desc: String(d) })), { name: "/fix-tests", desc: "Run the tests", kind: "command" }];
   assert.equal(slashMatches("/", all).length, all.length);
-  assert.deepEqual(slashMatches("/co", all).map((x) => x.name), ["/cost", "/context", "/compact", "/copy"]);
-  assert.deepEqual(slashMatches("/st", all).map((x) => x.name), ["/status", "/restart", "/cost", "/fix-tests"]);
+  assert.deepEqual(slashMatches("/co", all).map((x) => x.name), ["/compact"]);
+  assert.deepEqual(slashMatches("/st", all).map((x) => x.name), ["/status", "/restart", "/fix-tests"]);
+  assert.deepEqual(slashMatches("/se", all).map((x) => x.name), ["/setup", "/sessions"]);
   assert.deepEqual(slashMatches("/model max", all), []);
   assert.deepEqual(slashMatches("hello", all), []);
   assert.deepEqual(slashMatches("/zzz", all), []);
   const names = CODE_COMMANDS.map(([n]) => String(n).split(" ")[0]);
-  for (const n of ["/rewind", "/resume", "/doctor", "/usage", "/context", "/compact", "/plan", "/goal", "/init", "/review", "/cost", "/local", "/cloud", "/skills", "/memory", "/permissions", "/copy", "/export", "/clear", "/sessions"]) assert.ok(names.includes(n), n);
+  for (const n of ["/where", "/model", "/resume", "/setup", "/compact", "/plan", "/goal", "/init", "/review", "/permissions", "/export", "/sessions", "/undo", "/status"]) assert.ok(names.includes(n), n);
+  // Gone into the command they belong to (FOL-263), with no other name.
+  for (const n of ["/rewind", "/doctor", "/usage", "/context", "/cost", "/local", "/cloud", "/skills", "/memory", "/copy", "/clear", "/effort", "/thinking", "/mcp", "/agents", "/add-dir"]) assert.ok(!names.includes(n), n);
   assert.equal(new Set(names).size, names.length, "no command listed twice");
   const help = helpText({ extra: [{ name: "/fix-tests", hint: "[which]", desc: "Run the tests" }] });
   assert.match(help, /this folder's own:\n\/fix-tests \[which\]\s+Run the tests/);
@@ -231,31 +234,37 @@ test("a command typed alone opens one list (FOL-259): every choice is a line the
   };
   for (const cmd of MENU_COMMANDS) {
     assert.ok(names.has(cmd), `${cmd} is a command`);
-    if (cmd === "/effort" || cmd === "/model") continue; // their own lists, read from the platform
     const m = commandMenu(cmd, full)!;
     assert.ok(m, cmd);
     assert.ok(m.choices.some((x) => x.v === m.start), `${cmd}: the cursor starts on a choice`);
     if (m.tick !== null) assert.ok(m.choices.some((x) => x.v === m.tick), `${cmd}: the tick is a choice`);
     for (const x of m.choices) {
       assert.ok(names.has(x.v.split(" ")[0]!), `${cmd}: ${x.v} is a command line`);
-      assert.equal(Boolean(x.ask), x.name.endsWith("…"), `${cmd}: ${x.name} — a choice that asks ends in …`);
+      // A choice that asks ends in …; so does one that opens a list of its own (/model's Model…, the owner's words).
+      if (x.ask) assert.ok(x.name.endsWith("…"), `${cmd}: ${x.name} — a choice that asks ends in …`);
+      else if (x.name.endsWith("…")) assert.ok(["/model", "/model effort"].includes(x.v), `${cmd}: ${x.name} ends in … but neither asks nor opens a list`);
       if (x.ask) assert.ok(x.v.endsWith(" "), `${cmd}: ${x.v} is a line still to finish`);
     }
   }
-  assert.equal(commandMenu("/thinking", { thinking: false })!.start, "/thinking off");
-  assert.equal(commandMenu("/cloud-agents", { localOnly: true })!.tick, "/cloud-jobs off", "the old name opens the same list");
-  // /cloud alone still moves the session there: the cursor is on The cloud, the tick where it works now.
-  assert.deepEqual([commandMenu("/cloud", { mode: "local" })!.start, commandMenu("/cloud", { mode: "local" })!.tick], ["/cloud", "/local"]);
-  // A hidden or broken server is listed by /mcp, never offered an action; a server is removed from its own file.
-  assert.deepEqual(commandMenu("/mcp", full)!.choices.map((x) => x.v), ["/mcp ", "/mcp off kit", "/mcp tools kit", "/mcp restart kit", "/mcp on web", "/mcp add ", "/mcp rm kit --project", "/mcp rm web", "/mcp forget "]);
+  // /model: the model, how hard it thinks, and its thinking shown or not — the choice is the other one.
+  assert.deepEqual(commandMenu("/model", { thinking: false })!.choices.map((x) => x.v), ["/model", "/model effort", "/model thinking on"]);
+  assert.equal(commandMenu("/model", { thinking: true })!.choices[2]!.v, "/model thinking off");
+  // /setup: what the agent reads and reaches; its MCP servers are a list of their own.
+  assert.deepEqual(commandMenu("/setup", {})!.choices.map((x) => x.v), ["/setup instructions", "/setup skills", "/setup agents", "/setup mcp", "/setup dirs", "/setup dirs ", "/setup check"]);
+  // A hidden or broken server is listed by /setup mcp, never offered an action; a server is removed from its own file.
+  assert.deepEqual(commandMenu("/setup mcp", full)!.choices.map((x) => x.v), ["/setup mcp ", "/setup mcp off kit", "/setup mcp tools kit", "/setup mcp restart kit", "/setup mcp on web", "/setup mcp add ", "/setup mcp rm kit --project", "/setup mcp rm web", "/setup mcp forget "]);
+  // /where: the tick is where it works now.
+  assert.equal(commandMenu("/where", { mode: "local" })!.tick, "/where local+cloud");
   // Nothing to choose from: the command says so, as before.
-  assert.equal(commandMenu("/resume", {}), null);
-  assert.equal(commandMenu("/rewind", {}), null);
+  assert.deepEqual(commandMenu("/resume", {})!.choices.map((x) => x.v), ["/resume find ", "/resume new"], "none kept: Find and New, the cursor on Find");
+  assert.equal(commandMenu("/resume", {})!.start, "/resume find ");
+  assert.equal(commandMenu("/undo", {}), null);
   assert.equal(commandMenu("/queue", {}), null, "its messages are sent or dropped before the prompt: no list");
   assert.equal(commandMenu("/diff", full), null);
   const help = helpText();
   assert.match(help, /^typed alone, a command marked ▸ opens a list/);
-  assert.match(help, /\/thinking \[on\|off\]\s+▸ /);
+  assert.match(help, /▸ \/setup \[/);
+  assert.match(help, /▸ \/model \[/);
   assert.doesNotMatch(help, /\/diff\s+▸/);
 });
 
@@ -321,7 +330,7 @@ function onTerminal(args: string[], home: string, extraEnv: Record<string, strin
   return { type, until, done, out: () => out, child, alone };
 }
 
-test("on a terminal: / shows the commands under the line, typing narrows them, ↓ and Tab choose, Enter runs the chosen one; the folder's command and skill are offered and sent; /memory, /skills, /sessions", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("on a terminal: / shows the commands under the line, typing narrows them, ↓ and Tab choose, Enter runs the chosen one; the folder's command and skill are offered and sent; /setup instructions, /setup skills, /sessions", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo({
     "a.txt": "a\n",
     "AGENTS.md": "House rule: be brief.\n",
@@ -337,7 +346,7 @@ test("on a terminal: / shows the commands under the line, typing narrows them, �
 
     // "/" alone: the list, the first chosen, more below.
     await t.type("/");
-    at = await t.until(/❯ \/help\s+these commands/, at);
+    at = await t.until(/❯ \/where \[local\|local\+cloud…\s+where this session works/, at);
     at = await t.until(/commands — keep typing to narrow/, at);
     // Typing narrows it to what matches — the folder's own command too.
     await t.type("fi");
@@ -347,24 +356,25 @@ test("on a terminal: / shows the commands under the line, typing narrows them, �
     await t.type("\x03");
     at = await t.until(/desk ❯ /, at);
 
-    // ↓ moves the choice, Tab puts it on the line, Enter runs it.
-    await t.type("/s");
-    at = await t.until(/❯ \/status/, at);
+    // ↓ moves the choice, Tab puts it on the line; a command's word after it runs straight away.
+    await t.type("/se");
+    at = await t.until(/❯ \/setup/, at);
     await t.type("\x1b[B");
-    at = await t.until(/❯ \/skills/, at);
+    at = await t.until(/❯ \/sessions/, at);
+    await t.type("\x1b[A");
     await t.type("\t");
-    await t.type("\r");
+    await t.type(" skills\r");
     at = await t.until(/\/release-notes\s+Write release notes\./, at);
     at = await t.until(/desk ❯ /, at);
 
-    // Enter on a part of a name runs the chosen command.
-    await t.type("/mem");
-    at = await t.until(/❯ \/memory/, at);
-    await t.type("\r");
+    // Enter on a part of a name runs the chosen command: /setup alone opens its list; Instructions is first.
+    await t.type("/setu");
+    at = await t.until(/❯ \/setup/, at);
+    await t.alone("", at);
     at = await t.until(/AGENTS\.md \d+ tokens/, at);
     at = await t.until(/desk ❯ /, at);
 
-    await t.type("/sessions\r");
+    await t.type("/sessions list\r");
     at = await t.until(/code-me — this session/, at);
     at = await t.until(/desk ❯ /, at);
 
@@ -409,7 +419,7 @@ test("on a terminal: / shows the commands under the line, typing narrows them, �
     assert.match(fs.readFileSync(exported, "utf8"), /## 1\. You \(in the cloud\)/);
     await t.type(`/export ${exported}\r`);
     at = await t.until(/is already there — name another file/, at);
-    await t.type("/clear\r");
+    await t.type("/resume new\r");
     at = await t.until(/a fresh conversation/, at);
     await t.type("/quit\r");
     assert.equal(await t.done, 0);
@@ -420,31 +430,31 @@ test("on a terminal: / shows the commands under the line, typing narrows them, �
   }
 });
 
-test("on a terminal: /cloud and /local move one session; the other side is told what was done, once; --continue keeps it", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("on a terminal: /where cloud and /where local+cloud move one session; the other side is told what was done, once; --continue keeps it", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo({ "a.txt": "a\n" });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const s = await platform();
   const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "dumb" });
   try {
     let at = await t.until(/desk ❯ /);
-    await t.alone("/cloud", at);
-    at = await t.until(/already working in the cloud/, at);
+    await t.type("/where cloud\r");
+    at = await t.until(/already: The cloud/, at);
     await t.type("add b\r");
     at = await t.until(/send it\? \[y\]es/, at);
     await t.type("y\r");
     at = await t.until(/apply it to/, at);
     await t.type("y\r");
     at = await t.until(/desk ❯ /, at);
-    await t.alone("/local", at);
-    at = await t.until(/working on this computer from here on/, at);
+    await t.type("/where local+cloud\r");
+    at = await t.until(/This computer, agents in the cloud from here on/, at);
     at = await t.until(/the agent there is told what the last turn did/, at);
-    await t.type("/status\r");
+    await t.alone("/status", at);
     at = await t.until(/works\s+on this computer/, at);
     await t.alone("/permissions", at);
     at = await t.until(/sending this folder's files to the cloud/, at);
     await t.type("/permissions reset\r");
     at = await t.until(/every change, command and send is asked again/, at);
-    await t.type("/undo\r");
+    await t.alone("/undo", at);
     at = await t.until(/take back the last change/, at);
     await t.type("y\r");
     at = await t.until(/taken back/, at);
@@ -556,7 +566,7 @@ test("/usage: the plan and what is left, only what the platform answered", () =>
   assert.doesNotMatch(none, /\$/, "no number is made up");
 });
 
-test("on a terminal: /goal keeps the agent going until it says the goal is met; /usage, /context, /plan and /compact answer", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("on a terminal: /goal keeps the agent going until it says the goal is met; /status context, /plan and /compact answer", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo({ "a.txt": "a\n" });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const tasks: string[] = [];
@@ -596,16 +606,16 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
     at = await t.until(/desk ❯ /, at);
     await t.type("/goal\r");
     at = await t.until(/no goal set/, at);
-    await t.type("/context\r");
+    await t.type("/status context\r");
     at = await t.until(/in the cloud\s+the agent reads desk's own context there/, at);
     at = await t.until(/billed at the model.s cached rate/, at);
     await t.type("/plan how would you add c\r");
     at = await t.until(/\/plan works on this computer/, at);
     await t.type("/compact\r");
     at = await t.until(/the cloud keeps the conversation itself/, at);
-    await t.alone("/local", at);
-    at = await t.until(/working on this computer from here on/, at);
-    await t.type("/context\r");
+    await t.type("/where local+cloud\r");
+    at = await t.until(/This computer, agents in the cloud from here on/, at);
+    await t.type("/status context\r");
     at = await t.until(/instructions\s+none in this folder/, at);
     at = await t.until(/conversation\s+not opened yet/, at);
     await t.type("/compact\r");
@@ -614,24 +624,24 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
     at = await t.until(/commands that only look: pwd, date, ls, and git status/, at);
     await t.type("/permissions strict\r");
     at = await t.until(/the commands that only look are asked too/, at);
-    await t.type("/doctor\r");
+    await t.type("/setup check\r");
     at = await t.until(/✓ git\s/, at);
     at = await t.until(/✓ folder\s[^\n]*a git repository/, at);
     at = await t.until(/✓ project\s+desk with the agent coder/, at);
     at = await t.until(/desk ❯ /, at);
-    await t.type("/resume\r");
+    await t.type("/resume all\r");
     at = await t.until(/no earlier conversation of this folder is kept/, at);
-    await t.type("/clear\r");
+    await t.type("/resume new\r");
     at = await t.until(/a fresh conversation[^\n]*\/resume goes back to one/, at);
     await t.alone("/resume", at);
     at = await t.until(/ 1  \/goal the tests pass/, at);
     await t.type("/resume 1\r");
     at = await t.until(/back in: \/goal the tests pass/, at);
-    await t.type("/status\r");
+    await t.alone("/status", at);
     at = await t.until(/session\s+code-me/, at);
     // Back where that conversation was worked on, whatever side the session had moved to.
     at = await t.until(/works\s+in the cloud/, at);
-    await t.type("/clear\r");
+    await t.type("/resume new\r");
     at = await t.until(/a fresh conversation/, at);
     await t.type("/quit\r");
     await t.done;
@@ -643,7 +653,7 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
   for (const task of tasks) assert.match(task, /The person set a goal for this session: the tests pass/);
   assert.match(tasks[1]!, /Go on toward the goal\./);
   assert.match(tasks[3]!, /check it once more from the start/);
-  // /clear kept the conversation it left; --continue has it for /resume.
+  // /resume new kept the conversation it left; --continue has it for /resume.
   const kept = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"))[d];
   assert.equal(kept.past.length, 1);
   assert.equal(kept.past[0].context, "code-me");
@@ -673,7 +683,7 @@ test("a session message is sent exactly as it was shown: an id, plain text, 4,00
   }
 });
 
-test("--continue keeps what the session carried even when it is left at once; /cloud /review says where a review can run", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+test("--continue keeps what the session carried even when it is left at once; /review in the cloud says where a review can run", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo({ "a.txt": "a\n" });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const s = await platform();
@@ -685,7 +695,7 @@ test("--continue keeps what the session carried even when it is left at once; /c
     at = await t.until(/desk ❯ /, at);
     await t.type("/review\r");
     at = await t.until(/a review needs the folder's git history/, at);
-    await t.alone("/cost", at);
+    await t.type("/status cost\r");
     at = await t.until(/0 turns in the cloud in this conversation, since this terminal opened it/, at);
     await t.type("/quit\r");
     assert.equal(await t.done, 0);
@@ -707,7 +717,7 @@ test("--continue keeps what the session carried even when it is left at once; /c
   const other = onTerminal(["code", d, "--continue", "--to", "desk", "--url", s2.url, "--token", "another-account"], home, { TERM: "dumb" });
   try {
     const at2 = await other.until(/desk ❯ /);
-    await other.type("/export\r");
+    await other.type(`/export ${path.join(home, "other.md")}\r`);
     await other.until(/nothing to write yet/, at2);
     await other.type("/quit\r");
     await other.done;

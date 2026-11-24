@@ -232,7 +232,7 @@ test("code: --agent names one that must exist; not a git folder is refused befor
   const p = await at(s.url, "code", plain, "--to", "desk", "--task", "x");
   s.close();
   assert.notEqual(p.code, 0);
-  assert.match(p.out, /not in a git repository/);
+  assert.match(p.out, /is not a git repository — the cloud needs git/);
   assert.ok(!s.seen.some((x) => x.method === "POST"), "nothing sent");
 });
 
