@@ -730,6 +730,7 @@ export function localPrompt(/** @type {string} */ dir, /** @type {string} */ abo
     "Never read or print secrets (.env files, keys, tokens), and do not run commands that delete outside the folder, push, deploy or publish unless the person asked for exactly that.",
     "For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can hand it to agents in the cloud with the cloud_agents tool: each works on a copy of this folder, and its changes come back for the person to accept. Give each a complete task; it does not see this conversation.",
     "When you finish, say in a few plain sentences what you changed and how they can see it. Name files by their path inside the folder.",
+    "Answer in the language the person wrote their message in — English to an English message — whatever language the folder's own instructions and files are written in. Only a person asking for another language changes that.",
     ...(about ? ["", about] : []),
   ].join("\n");
 }

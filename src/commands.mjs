@@ -13709,6 +13709,38 @@ every path as snapshot/….
   install), say so plainly rather than guessing they pass.
 - Never put a secret in a file, and never create .git or links in
   snapshot/.
+- Answer in the language the person wrote their message in — English to
+  an English message, whatever language this folder's, this project's or
+  this account's own instructions and files are written in. Only a person
+  asking for another language changes that.
+- End with a short summary: what you changed, file by file, and what you
+  ran to check it.
+`;
+
+/** The coder as foldrun code made it until 24 Nov 2026: one still exactly this is brought up to date (the person never edited it). */
+const CODER_AGENT_BEFORE = `---
+name: coder
+description: Changes code in a folder sent by \`foldrun code\`, and checks the change with the folder's own tests.
+model: default
+effort: medium
+tools: [write, code]
+---
+
+You work on a code folder a person sent from their computer. It is in
+snapshot/ under your working directory. Only what you change there comes
+back to them, as a patch they review and apply. Your shell keeps its
+directory from one command to the next: cd into snapshot/ once, or write
+every path as snapshot/….
+
+- Read before you change anything: find the files the task is about, and
+  the project's own conventions (README, AGENTS.md, CLAUDE.md, the tests).
+- Make the smallest change that does the task. Do not reformat, rename or
+  tidy what the task does not need.
+- Run the project's tests or build for what you changed, and fix what
+  fails. If you cannot run them (a service is missing, a package will not
+  install), say so plainly rather than guessing they pass.
+- Never put a secret in a file, and never create .git or links in
+  snapshot/.
 - End with a short summary: what you changed, file by file, and what you
   ran to check it.
 `;
@@ -13745,9 +13777,28 @@ async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
 }
 
 /** @param {boolean} [fresh] the project was made this moment: add the agent without asking twice */
+/** @type {Set<string>} */
+const coderLooked = new Set();
 async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
   const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/agents`);
-  if ((r.agents ?? []).some((a) => a.name === agent)) return;
+  if ((r.agents ?? []).some((a) => a.name === agent)) {
+    // A coder still exactly as an earlier foldrun code made it gets what was
+    // added since (the language rule, owner 24 Nov 2026); one a person
+    // edited is theirs and is left alone. Looked at once per project.
+    const key = `${url}\n${ws}`;
+    if (agent === "coder" && !coderLooked.has(key)) {
+      coderLooked.add(key);
+      try {
+        const got = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=${encodeURIComponent("agents/coder/agent.md")}`);
+        if (got?.content === CODER_AGENT_BEFORE && typeof got.sha256 === "string") {
+          await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source`, { method: "PUT", body: JSON.stringify({ path: "agents/coder/agent.md", content: CODER_AGENT, message: "foldrun code: the coder answers in the person's language", ifMatch: got.sha256 }) });
+        }
+      } catch {
+        /* as it is: the turn goes on with the coder the project has */
+      }
+    }
+    return;
+  }
   if (agent !== "coder") throw new Error(`no agent "${agent}" in ${ws} — \`foldrun agent ls --to ${ws}\` lists them; leave out --agent and foldrun code offers to make one called coder`);
   if (!fresh) {
     console.log(`\n  ${c.amber("!")} ${ws} has no ${c.bold("coder")} agent yet.`);

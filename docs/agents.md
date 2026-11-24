@@ -761,8 +761,10 @@ language: fa-IR        # a BCP-47 tag: en, en-AU, fa, pt-BR
 Prose in AGENTS.md reaches the model and nothing else. A search engine
 asked in English answers in English whatever the agent was told; a browser
 reports `en-US` to every page; a fetch sends no `Accept-Language`.
-`language:` is what those read. Set it and three things happen: the prompt
-gains one sentence naming the language, `web action=search` asks the engine in it
+`language:` is what those read. It never decides how a person is answered:
+an agent answers someone in the language they wrote in, whatever is set
+here. Set it and three things happen: the prompt
+gains a sentence naming the language for what the agent produces on its own, `web action=search` asks the engine in it
 (and for its region, when the tag has one), `web action=browse` reports it as the
 page's locale, and `web action=fetch` requests it. A `language=` argument on
 `web action=search`, or `locale=` on `web action=browse`, overrides it for one call.
