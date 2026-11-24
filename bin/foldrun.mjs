@@ -47,6 +47,7 @@
 //   foldrun eval trends    evals by change: each eval against its last run on a different commit
 //   foldrun agent run <name>  run one agent once on a platform, no flow
 //   foldrun code  [dir]     code with an agent in a sandbox on the platform: it gets the folder, you apply its patch
+//                           (koder is the short name: `koder [dir]` is `foldrun code [dir]`)
 //   foldrun tool test <name>  exercise one tool alone — no model, no run
 //   foldrun hook <verb>     ls / add / test / rm — your own code at every tool call and step
 //   foldrun deploy [dir]    push this account — or one workspace — into an installation
@@ -184,6 +185,7 @@ const HELP = `foldrun — agents are just folders
   foldrun agent run <name>  run one agent once on the platform (--task "…", --to, --wait, --test, --context <id>, --file <path> repeatable)
   foldrun agent run <name> --snapshot [dir|id]  …on a folder: sent first (what git would commit, checked for secrets), the agent works on it in snapshot/, and the patch of its changes is on the run (foldrun report <run-id> patch)
   foldrun code [dir] --local | --cloud  where the session works: on this computer, or in the cloud (asked at a terminal when neither is given). On this computer the agent may also start cloud jobs, each asked first (/cloud-jobs on|off, kept for the folder). --local-only is --local with cloud jobs off
+  koder [dir]               the short name for foldrun code: the same flags, the same session
   foldrun code [dir]        code with an agent on the platform: each message sends the folder (a snapshot), the agent works on it in its own sandbox, and you apply the patch it hands back after git apply --check (--to — made, with its coder agent, after a yes when it does not exist; --agent <name> (default coder, added on first use with a yes), --task "…" one turn and exit, --yes send the folder and apply without asking, --test, --context <id>, --continue the last conversation of this folder, --verbose the platform's notes on each step too, --no-beep no bell when a long turn ends, --include-messages with --task: include the session messages waiting for the conversation)
   foldrun agent run <name> --no-task  run it with no instruction, on its own prompt alone — the dashboard's Run (--to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker> (--isolated: sandbox: own on the worker), --consult <agent> or --can-ask (--description for a worker with none)

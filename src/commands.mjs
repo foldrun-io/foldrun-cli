@@ -25,6 +25,7 @@ import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, 
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
 import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID } from "./code-context.mjs";
+import { koderLine } from "./koder-path.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -5669,6 +5670,10 @@ async function doctor(flags) {
   const major = Number(process.versions.node.split(".")[0]);
   line(major >= 22, "node", `${process.version}${major >= 22 ? "" : " — foldrun needs 22 or newer"}  ${c.dim(process.execPath)}`);
   line(true, "cli", `foldrun ${CLI_VERSION}  ${c.dim(fileURLToPath(new URL("..", import.meta.url)))}`);
+  {
+    const k = koderLine();
+    line(k.ok, "koder", k.text);
+  }
   line(true, "files", homeLayoutLine());
   try {
     const root = coreRoot();
@@ -15077,6 +15082,10 @@ async function doctorBlock(/** @type {any} */ s, /** @type {string} */ url, /** 
   // package.json: engines.node >=22.
   lines.push((major >= 22 ? ok : bad)("node", `${process.versions.node}${major >= 22 ? "" : " — foldrun needs Node 22 or newer"}`));
   lines.push(ok("foldrun", `${CLI_VERSION}`));
+  {
+    const k = koderLine();
+    if (!k.ok) lines.push(bad("koder", plainText(k.text)));
+  }
   const git = spawnSync("git", ["--version"], { encoding: "utf8" });
   lines.push(git.status === 0 ? ok("git", String(git.stdout).trim().replace(/^git version /, "")) : bad("git", "not found — the cloud, /diff, /review and /undo patch need it"));
   const top = spawnSync("git", ["-C", s.dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
@@ -17721,7 +17730,7 @@ async function codeLocalTurn(s, text) {
     if (inside) s.sandboxKept = inside.kept;
     if (walls && s.boxSaid !== walls) {
       s.boxSaid = walls;
-      said(() => console.log(`  ${c.grey(`sandbox: ${plainText(walls.describe())} · /permissions sandbox`)}`));
+      said(() => console.log(`  ${c.grey(`sandbox on: ${plainText(walls.describe())} · /permissions sandbox`)}`));
     }
     // MCP servers: those with the person's yes are started (once a
     // session) and their tools offered. A /plan turn starts and offers none.
@@ -19612,6 +19621,9 @@ async function codeCmd(positional, flags, layout) {
       else if (walls) {
         s.boxSaid = walls;
         console.log(`  ${c.green("on")} ${c.grey(`— ${plainText(walls.describe())}`)}`);
+        // Every folder a command may write, not only "this folder" (core's writable(), FOL-271).
+        const writes = typeof walls.writable === "function" ? walls.writable() : [];
+        if (writes.length) console.log(`  ${c.grey(`commands may write: ${writes.map((/** @type {string} */ w) => plainText(homeTilde(w))).join(", ")}`)}`);
         console.log(`  ${c.grey(`sites: the built-in list of package and code sites (${await boxOf(s).trustedCount()})${sites.length ? `, and yours: ${sites.join(", ")}` : ""}`)}`);
         console.log(`  ${c.grey(`inside it a command runs without a question${s.strict === true ? " — but /permissions strict is on, so each is asked" : ""}; one that needs to leave it (bash_outside) is asked every time, and runs as you`)}`);
         if (Array.isArray(s.sandboxKept) && s.sandboxKept.length) console.log(`  ${c.grey(`kept out of its commands — variables of your shell that hold keys: ${s.sandboxKept.slice(0, 12).map((/** @type {string} */ k) => plainText(k)).join(", ")}${s.sandboxKept.length > 12 ? ` and ${s.sandboxKept.length - 12} more` : ""}`)}`);

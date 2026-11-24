@@ -135,7 +135,8 @@ test("browser doctor, signed out: says what is missing and exits 1", async () =>
   const r = await cli(["browser", "doctor"], { env: { FOLDRUN_HOME: dir } });
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /browser program\s+not signed in — `foldrun login` first/);
-  assert.match(r.out, /Playwright\s+not installed/);
+  assert.match(r.out, /browser driver\s+not installed/);
+  assert.doesNotMatch(r.out, /Playwright/, "what it is built on is not named (FOL-271)");
 });
 
 test("browser reset stops the window's Chrome first, and never a process that is not ours", { skip: process.platform === "win32" }, async () => {

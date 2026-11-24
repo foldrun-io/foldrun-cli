@@ -3101,7 +3101,9 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
     // The walls are named once; the two commands run with no question; the way out is asked.
-    at = await t.until(/sandbox: (macOS Seatbelt|bubblewrap)[^\n]*\/permissions sandbox/, at, 60_000);
+    // Said in plain words, never what the walls are built on (FOL-271).
+    at = await t.until(/sandbox on: changes stay in this folder[^\n]*\/permissions sandbox/, at, 60_000);
+    assert.doesNotMatch(t.out().slice(0, at), /seatbelt|bubblewrap|seccomp|sandbox-runtime/i, "no backend named");
     at = await t.until(/OUTSIDE the sandbox — it runs as you[\s\S]*the agent's reason: the file belongs outside this folder[\s\S]*asked\.txt[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     assert.doesNotMatch(t.out().slice(0, at), /allow\?[\s\S]*allow\?/, "nothing before the way out was asked");
     assert.equal(fs.readFileSync(path.join(d, "inside.txt"), "utf8"), "made-inside\n");
@@ -3118,7 +3120,7 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
     at = await t.until(/\w ❯ /, at);
     assert.equal(fs.existsSync(path.join(other, "refused.txt")), false);
     t.send("/permissions sandbox\r");
-    at = await t.until(/on — (macOS Seatbelt|bubblewrap)[\s\S]*inside it a command runs without a question/, at);
+    at = await t.until(/on — changes stay in this folder[\s\S]*commands may write: [^\n]*[\s\S]*inside it a command runs without a question/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/permissions sandbox off\r");
     at = await t.until(/Turn it off for this session\? \[y\/N\]/, at);

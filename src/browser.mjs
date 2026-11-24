@@ -507,7 +507,7 @@ export async function browserCmd(positional, flags, deps) {
   const ready = async (opts) => {
     const p = await program(opts);
     if (!p.browse) return { error: `${p.note ?? "no browser program yet"} — run \`foldrun browser setup\`` };
-    if (!installedPlaywright(paths)) return { error: "Playwright is not installed for the browser yet — run `foldrun browser setup`" };
+    if (!installedPlaywright(paths)) return { error: "the browser driver is not installed yet — run `foldrun browser setup`" };
     ensureHome(paths);
     return { browse: p.browse, paths };
   };
@@ -549,9 +549,9 @@ export async function browserCmd(positional, flags, deps) {
       const want = playwrightVersion(fs.readFileSync(p.browse, "utf8"));
       const have = installedPlaywright(paths);
       if (have === want) {
-        console.log(`  ${c.green("✓")} Playwright ${have}`);
+        console.log(`  ${c.green("✓")} browser driver ${have}`);
       } else {
-        console.log(`  ${c.dim(`installing Playwright ${want} (no browser download — your Chrome is used); this can take a few minutes…`)}`);
+        console.log(`  ${c.dim(`installing the browser driver ${want} (no browser download — your Chrome is used); this can take a few minutes…`)}`);
         const npm = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm",
           ["install", `playwright@${want}`, "--no-fund", "--no-audit", "--no-update-notifier", "--loglevel=error"],
           { cwd: paths.home, stdio: "inherit", shell: process.platform === "win32", env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" } });
@@ -559,7 +559,7 @@ export async function browserCmd(positional, flags, deps) {
           console.log(`  ${c.red("✗")} npm could not install playwright@${want} — check the connection and run \`foldrun browser setup\` again\n`);
           return 1;
         }
-        console.log(`  ${c.green("✓")} Playwright ${want}`);
+        console.log(`  ${c.green("✓")} browser driver ${want}`);
       }
       console.log(`  ${c.green("✓")} profile ${c.dim(paths.chrome)}\n`);
       console.log(`  ${c.bold("next")}`);
@@ -615,7 +615,7 @@ export async function browserCmd(positional, flags, deps) {
       console.log(`\n  ${c.bold("foldrun browser")}`);
       console.log(`  ${ok(chrome)} Google Chrome      ${chrome ?? "not installed — https://www.google.com/chrome/"}`);
       console.log(`  ${ok(p.browse)} browser program    ${p.browse ? `${new URL(/** @type {string} */ (p.url)).host} ${c.dim(p.browse)}` : (p.note ?? "not fetched — foldrun browser setup")}`);
-      console.log(`  ${ok(have && have === want)} Playwright         ${have ?? "not installed"}${want && have !== want ? c.amber(` (the program wants ${want} — foldrun browser setup)`) : ""}`);
+      console.log(`  ${ok(have && have === want)} browser driver     ${have ?? "not installed"}${want && have !== want ? c.amber(` (the program wants ${want} — foldrun browser setup)`) : ""}`);
       console.log(`  ${c.dim("·")} profile            ${live?.root ?? paths.chrome}${live && live.root !== paths.chrome ? c.amber("  (temp folder: this platform's browser program predates a fixed profile)") : ""}`);
       const open = await windowOpen(paths);
       console.log(`  ${c.dim("·")} window             ${open ? `open ${c.dim(`(pid ${live?.pid})`)}` : live?.alive ? `closed ${c.dim("(Chrome still running with no window; the next call opens one)")}` : "closed"}`);
