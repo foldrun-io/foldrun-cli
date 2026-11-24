@@ -3757,3 +3757,16 @@ test("working here with agents in the cloud asks nothing about git at the start,
     s.close();
   }
 });
+
+test("a folder of repositories is told three levels down, hidden folders and bare repositories too (Codex round 14)", async () => {
+  const { reposBelow } = await import("../src/commands.mjs");
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-rb-"));
+  try {
+    assert.deepEqual(reposBelow(d), []);
+    assert.equal(spawnSync("git", ["init", "-q", path.join(d, "clients/team/app")]).status, 0);
+    assert.equal(spawnSync("git", ["init", "-q", "--bare", path.join(d, ".hidden/store.git")]).status, 0);
+    assert.deepEqual(reposBelow(d).map((x: string) => path.relative(d, x)).sort(), [".hidden/store.git", "clients/team/app"]);
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});

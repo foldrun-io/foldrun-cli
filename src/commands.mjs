@@ -14712,19 +14712,27 @@ const partNames = (/** @type {unknown[]} */ l) => l.filter((x) => typeof x === "
 export function reposBelow(/** @type {string} */ dir) {
   /** @type {string[]} */
   const found = [];
-  const list = (/** @type {string} */ d) => {
+  let seen = 0;
+  // Three levels down (clients/team/app), hidden folders too, a bare repository as well as a work tree (Codex);
+  // never into node_modules or a repository's own .git, and at most a few thousand folders looked at.
+  const walk = (/** @type {string} */ d, /** @type {number} */ depth) => {
+    if (found.length >= 10 || ++seen > 5000) return;
+    let entries;
     try {
-      return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules");
+      entries = fs.readdirSync(d, { withFileTypes: true });
     } catch {
-      return [];
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === ".git" || e.name === "node_modules") continue;
+      const sub = path.join(d, e.name);
+      const isRepo = fs.existsSync(path.join(sub, ".git")) || (fs.existsSync(path.join(sub, "HEAD")) && fs.existsSync(path.join(sub, "objects")) && fs.existsSync(path.join(sub, "refs")));
+      if (isRepo) found.push(sub);
+      else if (depth < 3) walk(sub, depth + 1);
+      if (found.length >= 10) return;
     }
   };
-  for (const e of list(dir)) {
-    const sub = path.join(dir, e.name);
-    if (fs.existsSync(path.join(sub, ".git"))) found.push(sub);
-    else for (const f of list(sub)) if (fs.existsSync(path.join(sub, f.name, ".git"))) found.push(path.join(sub, f.name));
-    if (found.length >= 10) break;
-  }
+  walk(dir, 1);
   return found;
 }
 
@@ -14740,8 +14748,15 @@ export function inGitRepo(/** @type {string} */ dir) {
 async function offerGit(/** @type {string} */ dir) {
   // Never in the home folder, nor in a folder that holds repositories of its own: a folder of projects
   // made one repository would take them all in (the report: a folder of foldrun's repos side by side).
-  const home = os.homedir();
-  if (path.resolve(dir) === path.resolve(home)) {
+  // By where each leads: a link to the home folder is the home folder (Codex).
+  const real = (/** @type {string} */ p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  if (real(dir) === real(os.homedir())) {
     console.log(`  ${c.dim("this is your home folder: git is not set up here — start in a project's folder to use the cloud")}`);
     return false;
   }
@@ -20420,13 +20435,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       }
       /** @type {import("./code-session.mjs").WhereChoice} */
       let want = word === "cloud" ? "cloud" : word === "local+cloud" ? "local" : "local-only";
-      if (want !== "local-only" && !inGitRepo(dir) && !(await offerGit(dir))) {
-        if (want === "cloud") {
-          say("staying where you are — the cloud needs git");
-          continue;
-        }
-        say("agents in the cloud need git too — this computer only");
-        want = "local-only";
+      // Only working in the cloud needs git now; agents in the cloud from here are asked about it when a
+      // job would take the folder, and a job without the folder needs none (Codex).
+      if (want === "cloud" && !inGitRepo(dir) && !(await offerGit(dir))) {
+        say("staying where you are — the cloud needs git");
+        continue;
       }
       const to = want === "cloud" ? "cloud" : "local";
       const jobsBefore = s.localOnly === true;
