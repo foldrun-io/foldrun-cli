@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [31.1.0] — 2026-11-24
+
+- feat(code): a command typed alone opens its list, as /model does (FOL-259) ([e7789ff](https://github.com/foldrun-io/foldrun-cli/commit/e7789ff))
+
 ## [31.0.0] — 2026-11-24
 
 ### Breaking changes
