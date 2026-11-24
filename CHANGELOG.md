@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.6.0] — 2026-11-24
+
+### New in the public API
+
+- `foldrun sessions search`
+- the `--here` flag
+- the `--session` flag
+
+- feat(code): take a cloud patch file by file — f at the apply question (FOL-251) ([9ccdfdc](https://github.com/foldrun-io/foldrun-cli/commit/9ccdfdc))
+- feat(code): /search, /rename and foldrun sessions search — find a conversation by what was said in it (FOL-250) ([5537e28](https://github.com/foldrun-io/foldrun-cli/commit/5537e28))
+- feat(code): /cost explain and foldrun usage --session — where a session's spend went (FOL-249) ([1a60310](https://github.com/foldrun-io/foldrun-cli/commit/1a60310))
+
 ## [30.5.0] — 2026-11-24
 
 - feat(code): /thinking, and commands kept for a folder (f at a question) ([9576aae](https://github.com/foldrun-io/foldrun-cli/commit/9576aae))
