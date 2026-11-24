@@ -242,7 +242,7 @@ test("code with no terminal and no --task says how to script it", async () => {
   const r = await at(s.url, "code", d, "--to", "desk");
   s.close();
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /in a script, give one turn with --task/);
+  assert.match(r.out, /in a script, give one turn with -p "…" \(or --task/);
 });
 
 test("agent run --snapshot: a folder is sent first and the run takes its id; an id is used as it is", async () => {
@@ -459,7 +459,7 @@ test("code: a call that cannot run adds no agent on its way out, even with --yes
   assert.notEqual(empty.code, 0);
   assert.match(empty.out, /--task needs the instruction/);
   assert.notEqual(noTask.code, 0);
-  assert.match(noTask.out, /in a script, give one turn with --task/);
+  assert.match(noTask.out, /in a script, give one turn with -p "…" \(or --task/);
   assert.ok(!s.seen.some((x) => x.method === "PUT"), "no agent written");
 });
 
