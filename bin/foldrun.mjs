@@ -274,6 +274,7 @@ const HELP = `foldrun — agents are just folders
   foldrun rerun <run-id> <run-id>…  rerun several (runs/bulk), from --from <n> (default 1) — lists, asks once (--dry-run, --yes)
   foldrun observe           where the account fails, retries and spends, per project, then the window against the one before, why runs went wrong, the agents and tools to watch (--to <workspace> in full, --since <days>, --json)
   foldrun usage             what the account consumed, and what it was charged week by week (--days <n>, --json)
+  foldrun usage --session [id]  where one foldrun code conversation's spend went, row by row (/cost explain, outside the session; no id lists them; --json)
   foldrun usage --limit <n>  how many rows of by flow and by agent (the most charged; default 10, 0 hides them)
   foldrun usage compute     cores, GiB and disk its running steps may hold — the account, each project, each live run — what they hold now, and the steps waiting for room (--json)
   foldrun usage meters      what the period used, meter by meter: vCPU, RAM, step disk, storage, network with quantity, rate and credits, the plan fee, each step size, the two credit pots, and tokens by provider and model — your own key at 0 credits (--since <day>, --until <day>, --json)

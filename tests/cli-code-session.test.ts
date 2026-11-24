@@ -739,6 +739,94 @@ test("local mode helpers: names, tiers, call summaries, inside the folder, the f
 });
 
 /** One scripted model turn as the Messages API streams it. */
+test("/cost explain ranks what used the model, its figures add up, and foldrun usage --session gives the same outside the session", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let calls = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-cx/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    // Priced by the model that served the call (the answer's own), not the one asked for.
+    // It is listed at $10 in, $100 out per million: 100 in + 5 out a call is $0.0015.
+    "GET /v1/account/usage/rates": () => ({ catalogue: { models: { margin: 1, prices: [{ provider: "x", model: "claude-sonnet-test", inputPerMTok: 10, outputPerMTok: 100 }] } } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      void b;
+      calls++;
+      return sse([{ type: "text", text: `answer ${calls}` }]);
+    },
+  });
+  const args = ["code", d, "--local", "--to", "desk", "--context", "code-cx", "--url", s.url, "--token", "k"];
+  const t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "220" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/cost explain\r");
+    at = await t.until(/nothing has used the model yet/, at);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/answer 1/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("two\r");
+    at = await t.until(/answer 2/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/cost\r");
+    at = await t.until(/\/cost explain: where it went, row by row/, at);
+    t.send("/cost explain\r");
+    at = await t.until(/where it went\s+2 rows, the largest first[\s\S]*turn 1 · on this computer\s+claude-sonnet-test\s+1 call\s+100 read\s+0% cached\s+0 written\s+5 out\s+≈\$0\.002[\s\S]*turn 2 · on this computer[\s\S]*in all: 2 model calls · 200 tokens read, 0% from the cache, 0 written to it · 10 out[\s\S]*\$0\.000 the cloud runs' cost, as their records hold it — the figure \/cost shows[\s\S]*≈\$0\.003 on this computer[\s\S]*an estimate[\s\S]*foldrun usage --session code-cx/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    // A terminal that continues the conversation counts its turns on from the ones kept.
+    const t2 = onTerminal([...args, "--continue"], home, { TERM: "dumb", COLUMNS: "220" });
+    try {
+      let at2 = await t2.until(/\w ❯ /);
+      // The key made for this computer is kept: nothing is asked again.
+      t2.send("three\r");
+      at2 = await t2.until(/answer 3/, at2, 30_000);
+      at2 = await t2.until(/\w ❯ /, at2);
+      t2.send("/cost explain\r");
+      at2 = await t2.until(/where it went\s+1 row, the largest first\s+turn 3 · on this computer/, at2);
+      t2.send("/quit\r");
+      assert.equal(await t2.done, 0);
+    } finally {
+      t2.child.kill();
+    }
+    const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
+    const env = { ...outerEnv(), FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1" };
+    // Not execFileSync: the fake platform answers from this process's own loop.
+    const run = (a: string[]) =>
+      new Promise<{ code: number; out: string }>((done) => {
+        const ch = spawn(process.execPath, [cli, ...a], { env });
+        let out = "";
+        let err = "";
+        ch.stdout.on("data", (x) => (out += x));
+        ch.stderr.on("data", (x) => (err += x));
+        ch.on("close", (code) => done({ code: code ?? 1, out: code ? out + err : out }));
+      });
+    const j = JSON.parse((await run(["usage", "--session", "code-cx", "--json", "--url", s.url, "--token", "k"])).out);
+    assert.equal(j.session, "code-cx");
+    assert.deepEqual(j.rows.map((r: any) => r.turn).sort(), [1, 2, 3]);
+    assert.deepEqual([j.totals.calls, j.totals.read, j.totals.output, j.totals.billedUsd, j.pricesRead, j.workspace], [3, 300, 15, 0, true, "desk"]);
+    assert.equal(Number(j.totals.estimatedUsd.toFixed(6)), 0.0045);
+    // The plan here does not pay for tokens: the payer is not called the plan.
+    assert.equal(j.rows[0].paidBy, "the account's credits");
+    assert.match((await run(["usage", "--session"])).out, /code-cx/);
+    assert.match((await run(["usage", "--session", "code-cx", "--url", s.url, "--token", "k"])).out, /code-cx\s+desk · [\s\S]*where it went[\s\S]*in all: 3 model calls/);
+    const none = await run(["usage", "--session", "nope"]);
+    assert.notEqual(none.code, 0);
+    assert.match(none.out, /no conversation nope has spend kept/);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 function sse(content: Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string) {
   const ev = (e: Record<string, unknown>) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
   let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1 } } });

@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines } from "./code-session.mjs";
+import { meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
 import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID } from "./code-context.mjs";
@@ -13873,6 +13874,7 @@ async function messagesForTurn(s, interactive) {
 }
 
 async function codeTurn(s, task, include = []) {
+  await costAccount(s);
   const { url, flags, ws, agent, dir } = s;
   // Ctrl-C is recorded the moment it is pressed, before the run even has an
   // id, and an interrupted turn never applies a patch — however the race
@@ -14043,6 +14045,8 @@ async function codeTurn(s, task, include = []) {
     }
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
     noteSessionTurn(s, run, cost);
+    costNote(s, cloudRow({ kind: "cloud", turn: costTurn(s), run }));
+    costTurnEnd(s);
     console.log(`\n${turnLine(s, run, cost, cancel.asked)}`);
     // The project records tool calls as metadata (the default), so the lines
     // name the action but not the file or command. Said once a session,
@@ -14345,6 +14349,8 @@ async function runCloudSub(s, job, signal, h) {
     const reply = plainText(String(own.at(-1)?.result ?? "")).trim();
     const cost = (run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
     s.costUsd = (s.costUsd ?? 0) + (Number.isFinite(cost) ? cost : 0);
+    costNote(s, cloudRow({ kind: "cloud-agent", turn: costTurn(s), label: String(job.agent), run }));
+    s.here.cloudAgents = (s.here.cloudAgents ?? 0) + 1;
     const ok = run.status === "completed";
     console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.white(`cloud sub-agent ${plainText(job.agent)}`)} ${c.grey(`· ${plainText(String(run.status))} · ${formatSecs((Date.now() - t0) / 1000)} · ${formatCost(cost)}`)}`);
     if (!ok) return { text: `The cloud sub-agent did not finish (run ${id}: ${plainText(String(run.status))}).${reply ? ` What it said:\n\n${reply.slice(0, AGENT_ANSWER_MAX)}` : ""}`, isError: true };
@@ -16023,11 +16029,41 @@ async function runCloudAgents(s, input, signal, h) {
   if (!chosen.tasks) return { text: chosen.error ?? "no tasks", isError: true };
   const tasks = chosen.tasks;
   const { url, flags, ws, agent, dir } = s;
-  /** @type {Array<{ n: number, task: string, id: string, run: any, done: boolean }>} */
+  /** @type {Array<{ n: number, task: string, id: string, run: any, done: boolean, counted: boolean }>} */
   const runs = [];
   const base = `/v1/workspaces/${enc(ws)}`;
   /** A start whose answer was lost: the run may exist without an id here. */
   let unsure = false;
+  // A run's cost is counted once, when its record is read, against the turn and the conversation
+  // that started it: a sibling that is stopped or fails does not lose it, and a record that
+  // arrives late is never put on a later turn or another conversation (Codex).
+  // (A cloud agent's run is the session's spend too: /cost left it out before FOL-249.)
+  const turnAt = costTurn(s);
+  const tidAt = s.turnId;
+  const contextAt = s.context;
+  const counted = (/** @type {typeof runs[number]} */ r) => {
+    if (r.counted || !r.run || s.context !== contextAt) return;
+    r.counted = true;
+    const cost = (r.run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
+    s.costUsd = (s.costUsd ?? 0) + (Number.isFinite(cost) ? cost : 0);
+    s.here.cloudAgents = (s.here.cloudAgents ?? 0) + 1;
+    const row = cloudRow({ kind: "cloud-agent", turn: turnAt, label: `#${r.n}`, run: r.run });
+    if (typeof tidAt === "string") row.tid = tidAt;
+    (s.ledger ??= []).push(row);
+    if (costScope(s).account) keepRow(costScope(s), row);
+  };
+  /** What the runs not yet counted had used: their records, read once more, briefly, each on its own. */
+  const reconcile = () =>
+    Promise.all(
+      runs.filter((r) => !r.counted).map(async (r) => {
+        try {
+          r.run = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}`, {}, { seconds: 8 });
+          counted(r);
+        } catch {
+          /* foldrun usage has it from the platform's side */
+        }
+      }),
+    );
   /** Stop every run still going; answers the ids whose stop the platform did not take. */
   const stopAll = async () => {
     // All at once: one slow stop never holds back the others (Codex).
@@ -16038,6 +16074,8 @@ async function runCloudAgents(s, input, signal, h) {
     ).filter((x) => x !== null);
     if (failed.length) console.log(`  ${c.amber("!")} ${c.grey(`the platform did not take the stop for ${failed.join(", ")} — foldrun stop <run-id> --to ${plainText(ws)}`)}`);
     if (unsure) console.log(`  ${c.amber("!")} ${c.grey(`a cloud run may have started without its id reaching here — foldrun runs --to ${plainText(ws)} shows it`)}`);
+    // Whatever way out led here (a stop, a launch that failed, an interruption between launches): a started run's cost is still read.
+    await reconcile();
     return failed;
   };
   const stoppedText = (/** @type {string[]} */ failed) => ({
@@ -16088,7 +16126,7 @@ async function runCloudAgents(s, input, signal, h) {
         unsure = true;
         throw new Error(`${url} started no run it could name — ${plainText(JSON.stringify(started ?? null).slice(0, 200))}`);
       }
-      runs.push({ n: i + 1, task, id, run: null, done: false });
+      runs.push({ n: i + 1, task, id, run: null, done: false, counted: false });
       console.log(`  ${c.violet("☁")} ${c.white(`cloud agent ${i + 1}`)} ${c.grey(`· ${id} ·`)} ${c.grey(clipLine(task))}`);
     }
     if (signal.aborted) return stoppedText(await stopAll());
@@ -16114,8 +16152,9 @@ async function runCloudAgents(s, input, signal, h) {
       if (signal.aborted || closed) return;
       r.run = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}`);
       r.done = true;
-      if (signal.aborted || closed) return;
       const cost = (r.run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
+      counted(r);
+      if (signal.aborted || closed) return;
       tick();
       const ok = r.run.status === "completed";
       console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.white(`cloud agent ${r.n}`)} ${c.grey(`· ${plainText(String(r.run.status))} · ${formatSecs((Date.now() - t0) / 1000)} · ${formatCost(cost)}`)}`);
@@ -16199,6 +16238,7 @@ async function runCloudAgents(s, input, signal, h) {
  * answers a question it did not see.
  */
 async function codeLocalTurn(s, text) {
+  await costAccount(s);
   const started = Date.now();
   const abort = new AbortController();
   const cancel = { asked: false, onAsk: new Set() };
@@ -16261,6 +16301,8 @@ async function codeLocalTurn(s, text) {
   const changed = new Set();
   /** @type {any} */
   let result = null;
+  // What the turn's model calls used, counted as they are answered (/cost explain).
+  const used = meter();
   let reply = "";
   /** cloud_agents calls still on their way: waited for before the turn ends, so their stops are sent. */
   /** @type {Set<Promise<unknown>>} */
@@ -16352,6 +16394,7 @@ async function codeLocalTurn(s, text) {
     if (!engineKey || cancel.asked) return;
     s.engineKeyInUse = engineKey.key;
     s.engineKeyKind = engineKey.kind;
+    s.engineKeyMade = true;
     await foldrunPlanLabel(s);
     typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
@@ -16796,6 +16839,7 @@ async function codeLocalTurn(s, text) {
       const onStop = () => childAbort.abort();
       signal.addEventListener("abort", onStop, { once: true });
       if (signal.aborted) childAbort.abort();
+      const used = meter();
       /** What this agent may do: its own tools only; one that only reads is refused, never asked, outside what may be read. */
       const childCan = (/** @type {string} */ name, /** @type {Record<string, any>} */ inp, /** @type {{ signal?: AbortSignal, toolUseID?: string } | undefined} */ opts) => {
         if (!def.tools.includes(name)) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: `${name} is not one of your tools (${def.tools.join(", ")}).` });
@@ -16828,6 +16872,7 @@ async function codeLocalTurn(s, text) {
           },
         });
         for await (const m of /** @type {AsyncIterable<any>} */ (child)) {
+          used.note(m);
           if (m.type === "assistant") {
             for (const b of Array.isArray(m.message?.content) ? m.message.content : []) {
               if (b.type !== "tool_use") continue;
@@ -16842,6 +16887,8 @@ async function codeLocalTurn(s, text) {
         return { text: `The sub-agent failed: ${plainText(explain(err))}`, isError: true };
       } finally {
         signal.removeEventListener("abort", onStop);
+        // What its finished calls used, whether or not it reached a result.
+        for (const row of meteredRows(used, { kind: "sub-agent", turn: costTurn(s), label: String(def.name), paidBy: localPayer(s) })) costNote(s, row);
       }
       agentTurns += Number(res?.num_turns ?? 0) || 1;
       if (signal.aborted) return { text: "Stopped by the person.", isError: true };
@@ -16914,6 +16961,7 @@ async function codeLocalTurn(s, text) {
           },
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
+      used.note(m);
       if (m.type === "system" && m.subtype === "init" && m.model) s.model = String(m.model);
       if (m.type === "system" && m.subtype === "compact_boundary" && Array.isArray(m.conversation)) {
         // The older part was summarised so the conversation fits the
@@ -17055,6 +17103,14 @@ async function codeLocalTurn(s, text) {
     if (said) console.log(`  ${c.red("✗")} ${c.dim(said)}`);
     else if (why) console.log(`  ${c.red("✗")} ${c.grey(clipLine(why))}`);
   }
+  // What the turn's answered model calls used — counted before any way out,
+  // so a turn that failed after a call, or was stopped, keeps it (Codex).
+  for (const row of meteredRows(used, { kind: "local", turn: costTurn(s), paidBy: localPayer(s), ...(typeof s.lastLocalEnd === "number" ? { gapMs: started - s.lastLocalEnd } : {}), ...(typeof s.lastLocalCached === "number" ? { before: s.lastLocalCached } : {}) })) costNote(s, row);
+  if (used.calls) {
+    s.lastLocalEnd = Date.now();
+    if (used.firstRead !== undefined) s.lastLocalCached = used.lastCached;
+  }
+  costTurnEnd(s);
   if (!result && !cancel.asked) return;
   s.turnReply = reply ? plainText(reply) : "";
   // Kept beside the reply, for /export --thinking alone; never sent anywhere.
@@ -17417,7 +17473,7 @@ async function codeCmd(positional, flags, layout) {
     delete s.lastReply;
     delete s.cloudBriefed;
     // Nothing of the old conversation stays in the count (Codex).
-    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld"]) delete s[k];
+    for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo"]) delete s[k];
     s.notes = [];
     s.transcript = [];
     s.told = { local: 0, cloud: 0 };
@@ -17737,11 +17793,32 @@ async function codeCmd(positional, flags, layout) {
       say(`${others.length ? "" : `no other session of ${ws} on this computer — a session on another machine shows its id in its header and on /status. `}/send <id> <text> messages one; the agent can too when you ask it (it shows you the message first); /messages shows what came in`);
       continue;
     }
+    if (name === "/cost" && rest) {
+      if (rest !== "explain") {
+        say("/cost · /cost explain");
+        continue;
+      }
+      const rows = Array.isArray(s.ledger) ? s.ledger : [];
+      if (!rows.length) {
+        say("nothing has used the model yet in this conversation, since this terminal opened it");
+        continue;
+      }
+      // The listed prices, for the turns on this computer: read once.
+      if (s.rates == null && rows.some((/** @type {any} */ r) => r.costUsd === undefined)) {
+        try {
+          s.rates = await remoteCall(url, flags, "/v1/account/usage/rates");
+        } catch {
+          s.rates = null;
+        }
+      }
+      printCostExplained(explainCost(rows, s.rates ?? null), { inSession: true, context: String(s.context) });
+      continue;
+    }
     if (name === "/cost") {
       // Since this terminal started the session: one window for every number (Codex).
       const n = (/** @type {number} */ k, /** @type {string} */ what) => `${k} turn${k === 1 ? "" : "s"} ${what}`;
-      console.log(`  ${c.white(formatCost(s.costUsd ?? 0))} ${c.dim(`for ${n(s.here.cloud, "in the cloud")} in this conversation, since this terminal opened it`)}`);
-      say(`${n(s.here.local, "on this computer")}${s.here.local ? ` — on ${plainText(s.planLabel ?? "your foldrun plan")}; foldrun usage shows what they used` : ""}`);
+      console.log(`  ${c.white(formatCost(s.costUsd ?? 0))} ${c.dim(`for ${n(s.here.cloud, "in the cloud")}${s.here.cloudAgents ? ` and ${s.here.cloudAgents} cloud agent run${s.here.cloudAgents === 1 ? "" : "s"}` : ""} in this conversation, since this terminal opened it`)}`);
+      say(`${n(s.here.local, "on this computer")}${s.here.local ? ` — on ${plainText(s.planLabel ?? "your foldrun plan")}; foldrun usage shows what they used` : ""}${Array.isArray(s.ledger) && s.ledger.length ? " · /cost explain: where it went, row by row" : ""}`);
       continue;
     }
     if (name === "/model") {
@@ -17783,7 +17860,7 @@ async function codeCmd(positional, flags, layout) {
       delete s.lastReply;
       delete s.cloudBriefed;
       if (to.briefed === true) s.cloudBriefed = s.context;
-      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld"]) delete s[k];
+      for (const k of ["turns", "costUsd", "model", "contextTokens", "cachedTokens", "modelCalls", "secs", "goal", "goalCheck", "goalFiles", "lastRun", "todos", "privateSeen", "todosWithheld", "ledger", "lastLocalEnd", "lastLocalCached", "turnNo"]) delete s[k];
       s.notes = [];
       s.transcript = [];
       s.told = { local: 0, cloud: 0 };
@@ -18893,6 +18970,80 @@ async function undoLastPatch(s) {
  * @param {any} run
  * @param {number} cost
  */
+/**
+ * Who pays for a model call made from this computer. The gateway decides it
+ * call by call and does not say: on a coding plan the allowance pays where
+ * it covers the model and has room, credits otherwise — so that is what the
+ * row says, not one of the two.
+ */
+const localPayer = (/** @type {any} */ s) =>
+  // The older kind of key (a platform from before plan-first keys) is paid from bought credits alone, whatever plan the account has.
+  s.engineKeyMade === true && s.engineKeyKind === undefined ? "bought credits (this key is the older kind: the plan does not pay its calls)" : (s.onPlan && s.planLabel ? `${plainText(String(s.planLabel))}'s allowance where it covers the model and has room, else credits` : "the account's credits");
+
+/**
+ * Which account the session's rows are kept under: the one the key in use
+ * was made for, where a turn on this computer has found it (it follows a
+ * new sign-in); else asked once — and asked again while it cannot be told,
+ * rather than kept under no account. Never stops a turn.
+ */
+async function costAccount(/** @type {any} */ s) {
+  if (accountOfSlot(s) !== null || (typeof s.costAccount === "string" && s.costAccount)) return;
+  try {
+    const me = await remoteCall(s.url, s.flags, "/v1/me");
+    if (typeof me?.account === "string" && me.account) s.costAccount = me.account;
+  } catch {
+    /* asked again at the next turn */
+  }
+}
+const accountOfSlot = (/** @type {any} */ s) => (typeof s.keySlot === "string" && s.keySlot.includes("#") ? s.keySlot.slice(s.keySlot.lastIndexOf("#") + 1) : null);
+
+/** Where this conversation's rows are kept: the platform, the account, the project, the agent, the folder and its id. */
+const costScope = (/** @type {any} */ s) => ({ url: String(s.url ?? ""), account: String(accountOfSlot(s) ?? s.costAccount ?? ""), ws: String(s.ws ?? ""), agent: String(s.agent ?? ""), dir: String(s.dir ?? "."), context: String(s.context ?? "") });
+
+/**
+ * The number of the turn now running, in the whole conversation: one more
+ * than the largest kept, read when the turn's first row is written — so a
+ * second terminal working in the same conversation is counted too — and
+ * held until the turn ends (costTurnEnd), for its sub-agents' rows.
+ */
+function costTurn(/** @type {any} */ s) {
+  if (typeof s.turnNo !== "number") {
+    s.turnNo = (keptRows(costScope(s)) ?? []).reduce((n, r) => Math.max(n, r.turn), 0) + 1;
+    // Two terminals that begin a turn in the same instant can read the same number: the turn's own id tells their rows apart.
+    s.turnId = crypto.randomBytes(6).toString("hex");
+  }
+  return s.turnNo;
+}
+const costTurnEnd = (/** @type {any} */ s) => {
+  delete s.turnNo;
+  delete s.turnId;
+};
+
+/** One more row of where the session's spend went (/cost explain): in the session, and kept for `foldrun usage --session`. */
+function costNote(/** @type {any} */ s, /** @type {import("./code-cost.mjs").CostRow} */ row) {
+  if (typeof s.turnId === "string" && row.turn === s.turnNo) row.tid = s.turnId;
+  (s.ledger ??= []).push(row);
+  // Kept only under a known account: a row filed under none would start a second file for the same conversation (Codex).
+  if (typeof s.context === "string" && s.context && costScope(s).account) keepRow(costScope(s), row);
+}
+
+/**
+ * Where the spend went, as /cost explain and `foldrun usage --session` print it.
+ * @param {ReturnType<typeof explainCost>} x
+ * @param {{ inSession?: boolean, context: string }} o
+ */
+function printCostExplained(x, o) {
+  const { count, money } = costWords;
+  const t = x.totals;
+  console.log(`\n  ${c.bold("where it went")}  ${c.dim(`${t.rows} row${t.rows === 1 ? "" : "s"}, the largest first${x.allPriced ? "" : " (by tokens: not every row has a price)"}`)}`);
+  for (const l of explainLines(x)) console.log(`  ${c.white(plainText(l))}`);
+  console.log(`\n  ${c.dim(`in all: ${t.calls} model call${t.calls === 1 ? "" : "s"} · ${count(t.read)} tokens read, ${t.read ? Math.round((t.cacheRead / t.read) * 100) : 0}% from the cache, ${count(t.cacheWrite)} written to it · ${count(t.output)} out`)}`);
+  console.log(`  ${c.white(money(t.billedUsd))} ${c.dim(`the cloud runs' cost, as their records hold it${o.inSession ? " — the figure /cost shows" : ""}`)}`);
+  if (t.estimatedUsd > 0 || t.unpriced) console.log(`  ${c.white(`≈${money(t.estimatedUsd)}`)} ${c.dim(`on this computer, worked out from the tokens at the listed prices (foldrun usage rates) — an estimate: those calls are metered at the gateway by the key, not turn by turn${t.unpriced ? `; ${t.unpriced} row${t.unpriced === 1 ? " has" : "s have"} no listed price` : ""}`)}`);
+  if (x.cause) console.log(`\n  ${c.amber("▸")} ${c.white(plainText(x.cause))}`);
+  console.log(`  ${c.dim(`foldrun usage --session ${plainText(o.context)} gives this outside the session (--json)`)}\n`);
+}
+
 export function noteSessionTurn(s, run, cost) {
   s.turns = (s.turns ?? 0) + 1;
   s.costUsd = (s.costUsd ?? 0) + (Number.isFinite(cost) ? cost : 0);
@@ -19177,7 +19328,55 @@ async function observeCmd(flags) {
  * `foldrun usage` — what the account consumed (the Usage page), and what it
  * was charged week by week from the ledger (`--days`, default 56).
  */
+/**
+ * `foldrun usage --session <id>` — where one foldrun code conversation's
+ * spend went, from the rows the session kept on this computer
+ * (~/.foldrun/code-cost). With no id: the conversations that have rows.
+ */
+async function usageSessionCmd(flags) {
+  const where = (/** @type {any} */ x) => `${plainText(x.ws)} · ${homeTilde(plainText(x.dir))}`;
+  const listed = (/** @type {any[]} */ all) => all.map((x) => `  ${c.white(pad(plainText(x.session), 22))} ${c.dim(`${x.at.slice(0, 16).replace("T", " ")} · ${where(x)} · ${x.key.slice(0, 8)}`)}`).join("\n");
+  // With no id the flag is read as a switch: the list.
+  if (typeof flags.session !== "string" || !flags.session) {
+    const all = keptSessions();
+    if (flags.json === true) console.log(JSON.stringify({ sessions: all }, null, 2));
+    else if (!all.length) console.log(`\n  ${c.dim("no foldrun code conversation on this computer has spend kept yet — /cost explain in a session names its id")}\n`);
+    else console.log(`\n${listed(all)}\n  ${c.dim("foldrun usage --session <id> — or the eight characters at the end of its line, where two share an id")}\n`);
+    return 0;
+  }
+  const id = String(flags.session);
+  let found = findSessions(id);
+  // Two projects or folders with the same id: the one of this folder, else the person says which.
+  if (found.length > 1) {
+    const here = found.filter((x) => x.dir === path.resolve(process.cwd()));
+    if (here.length === 1) found = here;
+    else throw new Error(`more than one conversation is called ${plainText(id).slice(0, 80)}:\n${listed(found)}\n  name one by the eight characters at the end of its line`);
+  }
+  const one = found[0];
+  const rows = one ? rowsOf(one.key) : [];
+  if (!one || !rows.length) throw new Error(`no conversation ${plainText(id).slice(0, 80)} has spend kept on this computer — foldrun usage --session lists the ones that have (they are kept where the session ran)`);
+  // The listed prices, for the turns on this computer, from the platform the session used; without them the tokens still show.
+  let rates = null;
+  if (rows.some((r) => r.costUsd === undefined)) {
+    try {
+      const url = platformFor(flags, "usage");
+      if (!one.url || url === one.url) rates = await remoteCall(url, flags, "/v1/account/usage/rates");
+    } catch {
+      rates = null;
+    }
+  }
+  const x = explainCost(rows, rates);
+  if (flags.json === true) {
+    console.log(JSON.stringify({ session: one.session, key: one.key, workspace: one.ws, dir: one.dir, rows: x.rows, totals: x.totals, cause: x.cause, pricesRead: rates !== null }, null, 2));
+    return 0;
+  }
+  console.log(`\n  ${c.bold(plainText(one.session))}  ${c.dim(where(one))}`);
+  printCostExplained(x, { context: one.session });
+  return 0;
+}
+
 async function usageCmd(flags) {
+  if (flags.session !== undefined) return usageSessionCmd(flags);
   const url = platformFor(flags, "usage");
   const days = flags.days === undefined ? 56 : Number(flags.days);
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("--days is a whole number of days, 1 to 365");
