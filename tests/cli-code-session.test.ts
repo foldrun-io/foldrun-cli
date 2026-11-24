@@ -158,6 +158,31 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
   }
 });
 
+test("the status line under the prompt (FOL-269): the conversation, its id and where it runs, broken between fields on a narrow screen; /status line off hides it, for the person", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1", COLUMNS: "200", NO_COLOR: "1" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    at = await t.until(/new conversation · code-me · cloud/, at);
+    t.send("/rename fix login\r");
+    at = await t.until(/fix login · code-me · cloud/, at);
+    t.send("/status line off\r");
+    at = await t.until(/status line off/, at);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.doesNotMatch(t.out().slice(at), /fix login · code-me/, `off is off: ${JSON.stringify(t.out().slice(at - 300))}`);
+    t.send("/status line on\r");
+    at = await t.until(/fix login · code-me · cloud/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).statusLine, undefined, "on again: nothing kept");
+});
+
 test("a bracketed paste is one message however slowly it arrives; Enter after it sends it; the terminal's paste mode is off again after", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

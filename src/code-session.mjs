@@ -23,7 +23,7 @@ export const CODE_COMMANDS = [
   ["/todos [add|done|rm|clear]", "the todo list of this session — the agent keeps it, here and in the cloud"],
   ["/add-dir [path]", "another folder the agent may read without asking (changes there are still asked each time)"],
   ["/rewind [turn]", "take back what the agent's Write and Edit changed on this computer, from a turn onward — every file or none"],
-  ["/status", "this session: turns, cost, model, conversation"],
+  ["/status [line on|off]", "this session: turns, cost, model, conversation — line on|off: the status line under the prompt (conversation, id, model, effort, size, cache)"],
   ["/restart", "start foldrun again on this folder, place, account, agent and conversation — how a long session takes a newer foldrun it was told is ready (typed during a turn, it is queued for after it)"],
   ["/cost [explain|tips on|off]", "what this session has spent — tips on|off: a line before a turn that re-reads the whole conversation (after a break, a new model…), with its cost; explain: where it went, row by row (turns, sub-agents, cloud jobs): model calls, tokens read, how much came from the cache, cost, who paid, and the biggest cause"],
   ["/usage", "your foldrun plan and the credit left on it"],
@@ -986,22 +986,22 @@ const prefsFile = () => path.join(configDir(), "code-prefs.json");
 /**
  * What the person chose for `foldrun code` on this computer, whichever
  * folder they are in: whether the model's thinking is shown, and whether token hints are (FOL-262: off only when said).
- * @returns {{ thinking?: boolean, tips?: boolean }}
+ * @returns {{ thinking?: boolean, tips?: boolean, statusLine?: boolean }}
  */
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}) } : {};
   } catch {
     return {};
   }
 }
 
-/** @param {{ thinking?: boolean, tips?: boolean }} prefs @returns {boolean} whether it was kept */
+/** @param {{ thinking?: boolean, tips?: boolean, statusLine?: boolean }} prefs @returns {boolean} whether it was kept */
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;

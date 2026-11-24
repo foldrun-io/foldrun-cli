@@ -17,6 +17,7 @@ import { patchSections, joinSections, partNote, patchText, patchBytes } from "./
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
 import { giveHint, hintLine, CACHE_TTL_MS } from "./code-hints.mjs";
+import { statusFields, wrapFields } from "./code-statusline.mjs";
 import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED_OVER } from "./self-update.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
@@ -18471,6 +18472,8 @@ async function codeCmd(positional, flags, layout) {
    */
   const hint = async (/** @type {Parameters<typeof giveHint>[1]} */ kind, /** @type {any} */ o = {}, /** @type {"local" | "cloud"} */ side = s.mode === "local" ? "local" : "cloud") => {
     const a = /** @type {any} */ (s);
+    // What is sent ahead of the conversation changed: that side's cache is not reused (the status line, FOL-269).
+    if (kind === "tools" && a.measure?.[side]) a.measure[side].stale = true;
     const off = readCodePrefs().tips === false;
     if (off || a.hints?.some((/** @type {any} */ h) => h.kind === kind)) return;
     const m = a.measure?.[side];
@@ -19036,6 +19039,15 @@ async function codeCmd(positional, flags, layout) {
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
       }
+      continue;
+    }
+    if (name === "/status" && /^line(\s|$)/i.test(rest)) {
+      // The status line under the prompt (FOL-269): a choice of /status, not a command of its own.
+      const want = /^line\s+(on|off)$/i.exec(rest)?.[1]?.toLowerCase();
+      const prefs = readCodePrefs();
+      if (!want) say(`the status line under the prompt is ${prefs.statusLine === false ? "off" : "on"} · /status line ${prefs.statusLine === false ? "on" : "off"}`);
+      else if (!writeCodePrefs({ ...prefs, statusLine: want === "on" })) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
+      else say(want === "on" ? "status line on — under the prompt: the conversation, its id, model, effort, its size, the cache and where it runs" : "status line off — for you, in every folder");
       continue;
     }
     if (name === "/status") {
@@ -20053,6 +20065,10 @@ function historySearch(rl, history, ask) {
   // \r\n is one Enter (Codex: the \n after the search's \r sent the match).
   const split = (/** @type {string} */ text) => text.match(/\r\n|\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b|[\s\S]/gu) ?? [];
   return {
+    /** Ctrl-R is searching: Enter takes a match to edit, it does not send (FOL-269, Codex). */
+    get searching() {
+      return on;
+    },
     /**
      * Keys as they came — several at once when typed fast, an escape
      * sequence sometimes split across two reads.
@@ -20105,9 +20121,11 @@ function historySearch(rl, history, ask) {
  * @param {() => Array<{ name: string, hint?: string, desc: string, kind?: string }>} all
  * @param {() => number} promptCells the cells the prompt takes on the row
  */
-function slashMenu(rl, all, promptCells) {
+function slashMenu(rl, all, promptCells, status = () => /** @type {string[]} */ ([]), searching = () => false) {
   const ROWS = 8;
   let shown = 0; // rows on screen now
+  let listing = false; // the rows shown are the list (else the status line, FOL-269)
+  let held = false; // Enter was pressed: no status line again under this prompt
   let at = 0; // the chosen one
   let top = 0; // the first one shown
   let closedFor = /** @type {string | null} */ (null); // Esc: away until the line changes
@@ -20119,6 +20137,22 @@ function slashMenu(rl, all, promptCells) {
     // Save the place, clear every row under the line, come back.
     out.write("\x1b7\x1b[B\r\x1b[J\x1b8");
     shown = 0;
+    listing = false;
+  };
+  /** Rows under the line, then back to the cursor: the screen scrolls when the prompt is at its foot. */
+  const put = (/** @type {string[]} */ rows) => {
+    // Where readline itself has the cursor: its own count of cells, joined emoji included (Codex).
+    const col = rl.getCursorPos().cols;
+    out.write(`\n${rows.map((r) => `\x1b[2K${r}`).join("\n")}\x1b[${rows.length}A\r${col > 0 ? `\x1b[${col}C` : ""}`);
+    shown = rows.length;
+  };
+  /** The status line under the prompt (FOL-269): when no list is open and the line fits one row. */
+  const drawStatus = () => {
+    const cols = (out.columns || 80) - 1;
+    // A line far longer than the row is not measured cell by cell (Codex).
+    const rows = held || rl.line.length >= cols || promptCells() + displayWidth(rl.line) >= cols ? [] : status();
+    erase();
+    if (rows.length) put(rows);
   };
   const draw = () => {
     const cols = (out.columns || 80) - 1;
@@ -20141,8 +20175,9 @@ function slashMenu(rl, all, promptCells) {
     erase();
     // Down a row for each (the screen scrolls when the prompt is at its
     // foot), then back up to the line and across to the cursor.
-    out.write(`\n${rows.map((r) => `\x1b[2K${r}`).join("\n")}\x1b[${rows.length}A\r${col > 0 ? `\x1b[${col}C` : ""}`);
-    shown = rows.length;
+    void col;
+    put(rows);
+    listing = true;
   };
   const refresh = () => {
     const line = rl.line;
@@ -20152,14 +20187,14 @@ function slashMenu(rl, all, promptCells) {
     // An exact name alone needs no list: Enter runs it.
     if (hits.length === 1 && hits[0].name === line) hits = [];
     at = Math.max(0, hits.findIndex((x) => x.name === was));
-    if (!hits.length) return erase();
+    if (!hits.length) return drawStatus();
     draw();
   };
   return {
     refresh,
     erase,
     get open() {
-      return shown > 0;
+      return shown > 0 && listing;
     },
     /**
      * One read of the keyboard while the list is up. True: the key was the
@@ -20167,6 +20202,14 @@ function slashMenu(rl, all, promptCells) {
      * @param {Buffer} data @param {(d: string) => void} write
      */
     key(data, write) {
+      // Enter with the status line up: away before readline moves to a new row, and not drawn again (FOL-269).
+      if (!listing) {
+        if (/[\r\n]/.test(data.toString("latin1")) && !searching()) {
+          held = true;
+          erase();
+        }
+        return false;
+      }
       if (!shown) return false;
       const k = data.toString("latin1");
       if (k === "\x1b[A" || k === "\x1bOA" || k === "\x10") {
@@ -20239,7 +20282,18 @@ async function readCodeMessage(state, completer, s) {
     }
     const search = tty ? historySearch(rl, state.history, ask) : null;
     // The list of /commands under the line, on a terminal that can move its cursor.
-    const menu = tty && process.stdout.isTTY && process.env.TERM !== "dumb" && Array.isArray(state.slash) ? slashMenu(rl, () => state.slash, () => displayWidth(`${promptLead(s)} ❯ `)) : null;
+    // The status line under it (FOL-269): read once a prompt, rows to the screen's width.
+    const lineOn = readCodePrefs().statusLine !== false;
+    const ttl = Number(process.env.FOLDRUN_CODE_CACHE_TTL_MS) || CACHE_TTL_MS;
+    // Rows that fit the screen as it is, after their indent; none on a screen too narrow for them (Codex).
+    const statusRows = () => {
+      const w = (process.stdout.columns || 80) - 3;
+      return lineOn && s && w >= 20 ? wrapFields(statusFields(s, { ttlMs: ttl, model: (m) => shortModel(plainText(m)), cost: formatCost }), w).map((r) => `  ${c.grey(r)}`) : [];
+    };
+    const menu = tty && process.stdout.isTTY && process.env.TERM !== "dumb" && Array.isArray(state.slash) ? slashMenu(rl, () => state.slash, () => displayWidth(`${promptLead(s)} ❯ `), statusRows, () => search?.searching === true) : null;
+    // The cache's minutes stay true while the prompt waits (Codex): redrawn once a minute.
+    const ticking = menu && lineOn ? setInterval(() => !settled && !menu.open && search?.searching !== true && menu.refresh(), 60_000) : undefined;
+    ticking?.unref?.();
     if (tty && search) /** @type {any} */ (input).route((/** @type {Buffer} */ data, /** @type {(t: string) => void} */ write) => {
       if (menu?.key(data, write)) return;
       search.feed(data, write);
@@ -20250,6 +20304,7 @@ async function readCodeMessage(state, completer, s) {
     let timer;
     let settled = false;
     let lastInterrupt = 0;
+    let redrawDue = false;
     // Bracketed paste: the terminal marks where a paste starts and ends, so
     // a paste of many lines is one message however slowly it arrives (over
     // ssh the 30 ms grouping alone can split it). On only while this prompt
@@ -20258,7 +20313,14 @@ async function readCodeMessage(state, completer, s) {
     let pasting = false;
     const onKey = (/** @type {unknown} */ _s, /** @type {{ name?: string } | undefined} */ key) => {
       // After readline has taken the key: the list follows what is on the line.
-      if (menu && !pasting) setImmediate(() => !settled && menu.refresh());
+      // One redraw for a burst of keys, not one per key (Codex): a long paste without markers stays fast.
+      if (menu && !pasting && !redrawDue) {
+        redrawDue = true;
+        setImmediate(() => {
+          redrawDue = false;
+          if (!settled) menu.refresh();
+        });
+      }
       if (key?.name === "paste-start") {
         pasting = true;
         clearTimeout(timer); // a send due before the paste waits for it (Codex)
@@ -20287,6 +20349,7 @@ async function readCodeMessage(state, completer, s) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(ticking);
       menu?.erase();
       offBracketed();
       search?.end();
@@ -20353,6 +20416,8 @@ async function readCodeMessage(state, completer, s) {
       rl.write(s.typeAhead);
       s.typeAhead = "";
     }
+    // The status line from the start, not only after a key (FOL-269).
+    if (menu) setImmediate(() => !settled && menu.refresh());
   });
 }
 
