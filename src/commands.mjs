@@ -17145,6 +17145,8 @@ async function codeLocalTurn(s, text) {
     abort.abort();
   };
   process.on("SIGINT", onInt);
+  // A script's Ctrl-C that came during the credit check: the turn is stopped before the model is called.
+  if (s.headless?.stopped === true) onInt();
   /** What the person typed during this turn, in order: sent into it with
    *  Enter (and not yet taken by the engine), or set aside when a question
    *  took the keyboard. What is left starts the next message (FOL-213). */
@@ -17341,7 +17343,7 @@ async function codeLocalTurn(s, text) {
     let turnCloud = null;
     /** @param {string} name @param {Record<string, unknown>} input @param {AbortSignal} [signal] @param {string} [child] a sub-agent's name, when it is the one asking */
     const decide = async (name, input, signal, child) => {
-      if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
+      if (cancel.asked || signal?.aborted || s.headless?.stopped === true) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
       // foldrun's own docs pages: text this CLI shipped with, nothing of the
       // person's read and nothing run — never asked.
       if (name === FOLDRUN_DOCS_TOOL) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
@@ -18300,12 +18302,13 @@ async function folderState(/** @type {string} */ dir) {
   // git runs here, outside the sandbox: only when the repository's own config
   // names no program a lookup would run (a filter, an fsmonitor hook — Codex),
   // and with the same switches the "only looks" commands get.
-  if (!gitOnlyItself(dir, "status")) return null;
   const git = (/** @type {string[]} */ args) =>
     new Promise((resolve) => {
       execFile("git", ["-C", dir, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : String(stdout)));
     });
   const top = await git(["rev-parse", "--show-toplevel"]);
+  // The repository's config is read at its top (gitOnlyItself holds to that folder; from a subfolder it says no — Codex).
+  if (typeof top !== "string" || !gitOnlyItself(top.trim(), "status")) return null;
   // Paths come relative to the repository's top, not this folder; no renames, so each entry is one path.
   const out = typeof top === "string" ? await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=all", "--", "."]) : null;
   if (typeof out !== "string" || typeof top !== "string") return null;
@@ -18669,7 +18672,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           const was = await folderState(dir);
           // Ctrl-C at any point of the turn, even before the model is called (a credit or key check), is a stop (Codex).
           let stopped = false;
-          const mark = () => (stopped = true);
+          // Before the turn's own Ctrl-C handler is up (a credit or key check), the stop is kept here and no tool call runs after it (decide refuses — Codex).
+          const mark = () => {
+            stopped = true;
+            s.headless.stopped = true;
+          };
           process.on("SIGINT", mark);
           try {
             await codeLocalTurn(s, task);
