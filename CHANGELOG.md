@@ -12,6 +12,19 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.8.0] — 2026-11-24
+
+### New in the public API
+
+- `foldrun home`
+- `foldrun home migrate`
+
+- fix(home): migrate sets each copied entry's mode from its source (FOL-254) ([00dcd1b](https://github.com/foldrun-io/foldrun-cli/commit/00dcd1b))
+
+### feat
+
+- XDG config, state and cache folders; foldrun home [migrate] (FOL-254) ([251e711](https://github.com/foldrun-io/foldrun-cli/commit/251e711))
+
 ## [30.7.0] — 2026-11-24
 
 - feat(code): a local sub-agent's own MCP servers, by the cloud's mcpServers: field (FOL-253) ([9232f14](https://github.com/foldrun-io/foldrun-cli/commit/9232f14))
