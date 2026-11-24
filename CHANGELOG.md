@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.4.0] — 2026-11-24
+
+- feat(code): queue a message for after the turn — Tab while a turn runs, /queue ([3b739da](https://github.com/foldrun-io/foldrun-cli/commit/3b739da))
+
 ## [30.3.0] — 2026-11-24
 
 ### New in the public API
