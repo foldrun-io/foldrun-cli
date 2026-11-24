@@ -14710,13 +14710,21 @@ const partNames = (/** @type {unknown[]} */ l) => l.filter((x) => typeof x === "
 
 /** The folders right below `dir` (and one level further) that are git repositories: a folder of projects. */
 export function reposBelow(/** @type {string} */ dir) {
+  return reposBelowSearch(dir).found;
+}
+
+/**
+ * The repositories below `dir`: work trees and bare ones, hidden folders too, never into node_modules or
+ * a repository's own .git, down to REPOS_BELOW_DEPTH levels and at most REPOS_BELOW_DIRS folders.
+ * `complete` is false when the search stopped at either: then it cannot be said there are none (Codex).
+ */
+function reposBelowSearch(/** @type {string} */ dir) {
   /** @type {string[]} */
   const found = [];
   let seen = 0;
-  // Three levels down (clients/team/app), hidden folders too, a bare repository as well as a work tree (Codex);
-  // never into node_modules or a repository's own .git, and at most a few thousand folders looked at.
+  let complete = true;
   const walk = (/** @type {string} */ d, /** @type {number} */ depth) => {
-    if (found.length >= 10 || ++seen > 5000) return;
+    if (found.length >= 10) return;
     let entries;
     try {
       entries = fs.readdirSync(d, { withFileTypes: true });
@@ -14725,16 +14733,23 @@ export function reposBelow(/** @type {string} */ dir) {
     }
     for (const e of entries) {
       if (!e.isDirectory() || e.name === ".git" || e.name === "node_modules") continue;
+      if (++seen > REPOS_BELOW_DIRS) {
+        complete = false;
+        return;
+      }
       const sub = path.join(d, e.name);
       const isRepo = fs.existsSync(path.join(sub, ".git")) || (fs.existsSync(path.join(sub, "HEAD")) && fs.existsSync(path.join(sub, "objects")) && fs.existsSync(path.join(sub, "refs")));
       if (isRepo) found.push(sub);
-      else if (depth < 3) walk(sub, depth + 1);
-      if (found.length >= 10) return;
+      else if (depth < REPOS_BELOW_DEPTH) walk(sub, depth + 1);
+      else if (fs.readdirSync(sub, { withFileTypes: true }).some((x) => x.isDirectory())) complete = false;
+      if (found.length >= 10 || !complete) return;
     }
   };
   walk(dir, 1);
-  return found;
+  return { found, complete };
 }
+const REPOS_BELOW_DEPTH = 6;
+const REPOS_BELOW_DIRS = 20_000;
 
 /** Whether a folder is inside a git repository: only the cloud needs one (FOL-274). */
 export function inGitRepo(/** @type {string} */ dir) {
@@ -14760,7 +14775,11 @@ async function offerGit(/** @type {string} */ dir) {
     console.log(`  ${c.dim("this is your home folder: git is not set up here — start in a project's folder to use the cloud")}`);
     return false;
   }
-  const holds = reposBelow(dir);
+  const { found: holds, complete } = reposBelowSearch(dir);
+  if (!holds.length && !complete) {
+    console.log(`  ${c.dim("this folder is too large to tell whether it holds repositories of its own: git is not set up here — start in a project's folder to use the cloud")}`);
+    return false;
+  }
   if (holds.length) {
     console.log(`  ${c.dim(`this folder holds git repositories of its own (${holds.slice(0, 3).map((x) => plainText(path.basename(x))).join(", ")}${holds.length > 3 ? ", …" : ""}): git is not set up around them — start in one of them to use the cloud`)}`);
     return false;
