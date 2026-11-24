@@ -90,13 +90,166 @@ export const CODE_TIPS = [
   "typing while a turn runs keeps it for your next message (never sent mid-turn); Tab queues it to be sent when the turn has finished (/queue)",
 ];
 
+/**
+ * The list a command opens when it is typed alone (FOL-259, owner: "all on
+ * and off and / command options to be like the model changing"). Each
+ * choice is the line it stands for: choosing it runs that line, so the
+ * typed form and the list are one command. A choice with `ask` asks for
+ * the rest of the line first (its name ends in "…"). `start` is where the
+ * cursor begins — what the command typed alone did before, so Enter at
+ * once changes nothing; `tick` marks the value it has now.
+ * `st` is what the session has now; a list it needs and lacks is empty.
+ * @param {string} name
+ * @param {{ thinking?: boolean, localOnly?: boolean, mode?: string, sandboxOff?: boolean, strict?: boolean,
+ *   past?: Array<{ said: string, at?: string }>, turns?: Array<{ turn: number, label: string }>,
+ *   todos?: Array<{ content: string, status?: string }>, queue?: string[], mcp?: Array<{ name: string, state: string, source?: string }>,
+ *   explained?: boolean }} st
+ * @returns {{ title: string, subtitle: string, choices: Array<{ v: string, name: string, note: string, ask?: string }>, tick: string | null, start: string } | null}
+ */
+export function commandMenu(name, st) {
+  const onOff = (/** @type {string} */ cmd, /** @type {string} */ title, /** @type {boolean} */ on, /** @type {string} */ onNote, /** @type {string} */ offNote) => {
+    const tick = `${cmd} ${on ? "on" : "off"}`;
+    return { title, subtitle: `${cmd} on · ${cmd} off types it straight away`, choices: [{ v: `${cmd} on`, name: "On", note: onNote }, { v: `${cmd} off`, name: "Off", note: offNote }], tick, start: tick };
+  };
+  const clip = (/** @type {string} */ x) => String(x).replace(/\s+/g, " ").trim().slice(0, 60);
+  switch (name) {
+    case "/thinking":
+      return onOff("/thinking", "Show the model's thinking?", st.thinking === true, "a summary, dimmed, above each reply", "replies only (how hard it thinks is /effort)");
+    case "/cloud-jobs":
+    case "/cloud-agents":
+      return onOff("/cloud-jobs", "May the agent here start cloud jobs?", st.localOnly !== true, "each asked first; on foldrun credits", "it sends nothing of this folder to the cloud");
+    case "/local":
+    case "/cloud": {
+      const tick = st.mode === "cloud" ? "/cloud" : "/local";
+      return {
+        title: "Where should this session work?",
+        subtitle: "/local · /cloud · /cloud <task> types it straight away",
+        choices: [
+          { v: "/local", name: "This computer", note: "the agent works in your folder, asking before changes" },
+          { v: "/cloud", name: "The cloud", note: "each message works on a copy there; you apply what comes back" },
+          { v: "/cloud ", name: "Send one cloud job…", note: "one task on a copy in the cloud; you stay where you are", ask: "the task" },
+        ],
+        tick,
+        start: name,
+      };
+    }
+    case "/sandbox": {
+      const tick = st.sandboxOff === true ? "/sandbox off" : "/sandbox on";
+      return {
+        title: "The sandbox for the agent's commands",
+        subtitle: "/sandbox allow <site> · deny <site> · on · off types it straight away",
+        choices: [
+          { v: "/sandbox ", name: "Show it", note: "what it holds and the sites it may reach" },
+          { v: "/sandbox allow ", name: "Allow a site…", note: "for this session", ask: "the site (example.com)" },
+          { v: "/sandbox deny ", name: "Take a site away…", note: "for this session", ask: "the site" },
+          { v: "/sandbox on", name: "On", note: "commands run inside it" },
+          { v: "/sandbox off", name: "Off", note: "commands run as you; asked first (relaxed lets read-only ones run unasked)" },
+        ],
+        tick,
+        start: "/sandbox ",
+      };
+    }
+    case "/permissions":
+      return {
+        title: "What the agent may do without asking",
+        subtitle: "/permissions strict · relaxed · rm <n> · reset types it straight away",
+        choices: [
+          { v: "/permissions ", name: "Show them", note: "what is allowed ahead, and the rules kept for this folder" },
+          { v: "/permissions relaxed", name: "Relaxed", note: "commands that only look are not asked" },
+          { v: "/permissions strict", name: "Strict", note: "every command is asked, even one that only looks" },
+          { v: "/permissions rm ", name: "Remove a rule…", note: "by its number in the list", ask: "the rule's number" },
+          { v: "/permissions reset", name: "Forget this session's yeses", note: "every change, command and send is asked again" },
+        ],
+        tick: st.strict === true ? "/permissions strict" : "/permissions relaxed",
+        start: "/permissions ",
+      };
+    case "/cost":
+      return {
+        title: "What this session has spent",
+        subtitle: "/cost explain types it straight away",
+        choices: [
+          { v: "/cost ", name: "The total", note: "turns here and in the cloud" },
+          { v: "/cost explain", name: "Where it went", note: "row by row: model calls, tokens, the cache" },
+        ],
+        tick: null,
+        start: "/cost ",
+      };
+    case "/mcp": {
+      // Only what an action can reach: a server hidden by one of yours, or one that cannot start, is in the list alone (Codex).
+      const servers = (st.mcp ?? []).filter((x) => x.state !== "hidden" && x.state !== "problem");
+      return {
+        title: "MCP servers",
+        subtitle: "/mcp on|off|restart|tools|forget <name> · add · rm types it straight away",
+        choices: [
+          { v: "/mcp ", name: "List them", note: "every server, whether it runs, its tools" },
+          ...servers.flatMap((x) => [
+            { v: `/mcp ${x.state === "on" ? "off" : "on"} ${x.name}`, name: `${x.state === "on" ? "Stop" : "Start"} ${clip(x.name)}`, note: x.state === "on" ? "running now" : x.state === "waiting" ? "waits for your yes" : "not running" },
+            ...(x.state === "on" ? [{ v: `/mcp tools ${x.name}`, name: `Tools of ${clip(x.name)}`, note: "what it offers the agent" }, { v: `/mcp restart ${x.name}`, name: `Restart ${clip(x.name)}`, note: "stop it and start it again" }] : []),
+          ]),
+          { v: "/mcp add ", name: "Add a server…", note: "<name> -- <program> [args…], or <name> <https address>", ask: "<name> -- <program> [args…], or <name> <https address>" },
+          // Removed from the file it is written in: the folder's .mcp.json takes --project (Codex).
+          ...servers.map((x) => ({ v: `/mcp rm ${x.name}${x.source === "project" ? " --project" : ""}`, name: `Remove ${clip(x.name)}`, note: x.source === "project" ? "from this folder's .mcp.json" : "from your own mcp.json" })),
+          ...(servers.length ? [{ v: "/mcp forget ", name: "Take back a yes…", note: "it is asked about again before it starts", ask: "the server's name" }] : []),
+        ],
+        tick: null,
+        start: "/mcp ",
+      };
+    }
+    case "/resume": {
+      const past = (st.past ?? []).slice(0, 20);
+      if (!past.length) return null;
+      return {
+        title: "Go back to an earlier conversation",
+        subtitle: "this one is kept in its place · /resume <number> types it straight away",
+        choices: [
+          { v: "/resume ", name: "List them", note: "the twenty newest, numbered" },
+          ...past.map((e, i) => ({ v: `/resume ${i + 1}`, name: `${i + 1}. ${clip(e.said)}`, note: String(e.at ?? "").slice(0, 16).replace("T", " ") })),
+        ],
+        tick: null,
+        start: "/resume ",
+      };
+    }
+    case "/rewind": {
+      const turns = st.turns ?? [];
+      if (!turns.length) return null;
+      return {
+        title: "Take back the files from a turn on",
+        subtitle: "that turn and every turn after it; the conversation stays · /rewind <number> types it straight away",
+        choices: [{ v: "/rewind ", name: "List them", note: "each turn and the files it changed" }, ...turns.map((x) => ({ v: `/rewind ${x.turn}`, name: `turn ${x.turn}`, note: clip(x.label) }))],
+        tick: null,
+        start: "/rewind ",
+      };
+    }
+    case "/todos": {
+      const list = st.todos ?? [];
+      return {
+        title: "The todo list",
+        subtitle: "/todos add <step> · done <n> · rm <n> · clear types it straight away",
+        choices: [
+          { v: "/todos ", name: "Show it", note: list.length ? `${list.length} step${list.length === 1 ? "" : "s"}` : "none yet" },
+          { v: "/todos add ", name: "Add a step…", note: "at the end", ask: "the step" },
+          ...list.flatMap((x, i) => (x.status === "completed" ? [] : [{ v: `/todos done ${i + 1}`, name: `Done: ${clip(x.content)}`, note: `step ${i + 1}` }])),
+          ...(list.length ? [{ v: "/todos rm ", name: "Remove a step…", note: "by its number", ask: "the step's number" }, { v: "/todos clear", name: "Clear the list", note: "every step goes" }] : []),
+        ],
+        tick: null,
+        start: "/todos ",
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/** The commands that open a list when typed alone (FOL-259), as /help marks them. */
+export const MENU_COMMANDS = ["/thinking", "/cloud-jobs", "/local", "/cloud", "/sandbox", "/permissions", "/cost", "/mcp", "/resume", "/rewind", "/todos", "/effort", "/model"];
+
 /** @param {{ steers?: boolean, extra?: Array<{ name: string, hint?: string, desc: string }> }} [o] steers: Enter sends into a running turn (foldrun's own loop, FOL-213); extra: the folder's own commands and skills. */
 export function helpText({ steers = false, extra = [] } = {}) {
   const own = extra.map((x) => [`${x.name}${x.hint ? ` ${x.hint}` : ""}`, x.desc]);
   const w = Math.min(30, Math.max(...[...CODE_COMMANDS, ...own].map(([c]) => c.length)));
   const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now; Tab queues it as a message of its own for after the turn (/queue)" : t)) : CODE_TIPS;
   const rows = (/** @type {string[][]} */ list) => list.map(([c, d]) => `${c.padEnd(w)}  ${d}`);
-  return [...rows(CODE_COMMANDS), ...(own.length ? ["", "this folder's own:", ...rows(own)] : []), "", ...tips].join("\n");
+  return ["typed alone, a command marked ▸ opens a list to choose from (↑↓, Enter); typed with its words, it runs straight away", "", ...rows(CODE_COMMANDS.map(([c, d]) => [c, MENU_COMMANDS.includes(String(c).split(" ")[0]) ? `▸ ${d}` : d])), ...(own.length ? ["", "this folder's own:", ...rows(own)] : []), "", ...tips].join("\n");
 }
 
 // ------------------------------------------------------------- history

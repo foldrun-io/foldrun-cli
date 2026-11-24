@@ -810,6 +810,20 @@ then keep each call's input and output, secrets masked). The default,
 — as tracing tools treat tool arguments, keeping them is the project's
 choice.
 
+**Typed alone, a command with choices opens a list**, the same as `/model`:
+↑↓ (or j/k) to move, Enter or a number to choose, Esc for nothing. The
+cursor starts on what the command typed alone always did, so Enter at once
+changes nothing. The value it has now is ticked. A choice that ends in "…"
+asks for the rest on the next line. They are `/thinking`, `/cloud-jobs`,
+`/effort`, `/model`, `/local` and `/cloud` (This computer, The cloud, Send
+one cloud job…), `/sandbox`, `/permissions`, `/mcp` (each server's start,
+stop, tools, restart and removal from the file it is written in; a server
+hidden by one of yours, or one that cannot start, is only listed),
+`/resume`, `/rewind`, `/todos` and `/cost`; `/help` marks them ▸. Each choice is a line the command takes, so
+typing it out (`/thinking on`, `/mcp off kit`) does the same thing straight
+away. Without a terminal, a command typed alone prints its value and what
+it takes, as before (also when the output goes to a file).
+
 | Type | What it does |
 |---|---|
 | `/help` | the commands |

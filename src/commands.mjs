@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { readCodePrefs, writeCodePrefs, thinkingLines } from "./code-session.mjs";
+import { readCodePrefs, writeCodePrefs, thinkingLines, commandMenu } from "./code-session.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
@@ -15658,11 +15658,12 @@ function pickModel(/** @type {string} */ now, /** @type {ProxyCatalog | null} */
  * A list to choose one from, drawn in place: ↑/↓ (or j/k) to move, 1–9 or
  * Enter to choose, Esc, q or Ctrl-C for none. `tick` is ticked and where
  * the cursor starts.
- * @param {{ title: string, subtitle?: string, choices: Array<{ v: string, name: string, note: string }>, tick?: string | null }} o
+ * @param {{ title: string, subtitle?: string, choices: Array<{ v: string, name: string, note: string }>, tick?: string | null, start?: string }} o
  * @returns {Promise<string | null>}
  */
-function pickOne({ title, subtitle = "", choices, tick = null }) {
-  let at = Math.max(0, choices.findIndex((x) => x.v === tick));
+function pickOne({ title, subtitle = "", choices, tick = null, start = undefined }) {
+  // The cursor starts at `start` when it is given (a command's list: what it did typed alone), else at the tick.
+  let at = Math.max(0, choices.findIndex((x) => x.v === (start === undefined ? tick : start)));
   const width = Math.max(...choices.map((x) => x.name.length));
   const fit = (/** @type {string} */ t) => clipCells(t, (process.stdout.columns || 80) - 3);
   const rows = () => {
@@ -18720,10 +18721,48 @@ async function codeCmd(positional, flags, layout) {
       console.log(`  ${c.dim(`exit ${result.code} — its output goes with your next message${s.notes.length > 1 ? ` (${s.notes.length} so far)` : ""}`)}\n`);
       continue;
     }
+    /** What a command's list needs to know now (FOL-259): read only for the command typed. */
+    const menuState = async (/** @type {string} */ cmd) => {
+      if (cmd === "/thinking") return { thinking: readCodePrefs().thinking === true };
+      if (cmd === "/resume") return { past: Array.isArray(s.past) ? s.past : [] };
+      if (cmd === "/rewind") return { turns: rewindTurns(rewindOf(s)) };
+      if (cmd === "/todos") return { todos: Array.isArray(s.todos) ? s.todos : [] };
+      if (cmd === "/mcp") {
+        const m = await mcpOf(s).catch(() => null);
+        const rows = m ? (await m.look().catch(() => ({ rows: [] }))).rows : [];
+        return { mcp: rows.map((/** @type {any} */ r) => ({ name: String(r.name), state: String(r.state), source: String(r.source ?? "") })) };
+      }
+      return { localOnly: s.localOnly === true, mode: s.mode, sandboxOff: s.sandboxOff === true, strict: s.strict === true };
+    };
     // "/name rest": the name as typed, and what follows it.
     const slash = /^(\/[\w:?-]*)(?:\s+([\s\S]*))?$/.exec(line);
-    const name = slash ? /** @type {string} */ (slash[1]).toLowerCase() : "";
-    const rest = slash ? (slash[2] ?? "").trim() : "";
+    let name = slash ? /** @type {string} */ (slash[1]).toLowerCase() : "";
+    let rest = slash ? (slash[2] ?? "").trim() : "";
+    // Typed alone, a command with choices opens them as /model does (FOL-259); the choice is the line it stands for.
+    // Both ends a terminal: a list drawn into a redirected output would wait for a key nobody can see the question for (Codex).
+    if (slash && !rest && codeInteractive && process.stdin.isTTY && process.stdout.isTTY && typeof process.stdin.setRawMode === "function") {
+      const menu = commandMenu(name, await menuState(name));
+      if (menu) {
+        const picked = await pickOne(menu);
+        if (picked === null) {
+          console.log(`  ${c.dim("nothing changed")}\n`);
+          continue;
+        }
+        const choice = menu.choices.find((x) => x.v === picked);
+        let chosen = picked;
+        if (choice?.ask) {
+          const more = (await promptVisible(`  ${c.cyan(choice.name.replace(/…$/, ""))} ${c.dim(`— ${choice.ask}:`)} `)).trim();
+          if (!more) {
+            console.log(`  ${c.dim("nothing changed")}\n`);
+            continue;
+          }
+          chosen = `${picked}${more}`;
+        } else if (picked === menu.tick && picked === menu.start) chosen = picked.split(" ")[0] ?? picked; // the value it has: shown, as typed alone
+        const again = /^(\/[\w:?-]*)(?:\s+([\s\S]*))?$/.exec(chosen.trim());
+        name = again ? /** @type {string} */ (again[1]).toLowerCase() : name;
+        rest = again ? (again[2] ?? "").trim() : "";
+      }
+    }
     if (name === "/help" || name === "/?") {
       // Enter-to-send is told only where it works: on this computer, with an engine that takes it.
       const steers = s.mode === "local" && /** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.steer === true;

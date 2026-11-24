@@ -57,6 +57,15 @@ function outerEnv() {
   return env;
 }
 
+/** A command typed alone opens its list (FOL-259); Enter at once does what it did before. */
+async function alone(t: { send: (x: string) => unknown, until: (re: RegExp, from?: number, ms?: number) => Promise<number> }, cmd: string, at: number) {
+  t.send(`${cmd}\r`);
+  const next = await t.until(/↑↓ to move · Enter to choose · Esc to cancel/, at);
+  await new Promise((r) => setTimeout(r, 100));
+  t.send("\r");
+  return next;
+}
+
 function onTerminal(args: string[], home: string, extraEnv: Record<string, string> = {}) {
   const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
   const child = spawn("python3", ["-c", "import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)", process.execPath, cli, ...args], {
@@ -918,7 +927,7 @@ test("/cost explain ranks what used the model, its figures add up, and foldrun u
     t.send("two\r");
     at = await t.until(/answer 2/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
-    t.send("/cost\r");
+    at = await alone(t, "/cost", at);
     at = await t.until(/\/cost explain: where it went, row by row/, at);
     t.send("/cost explain\r");
     at = await t.until(/where it went\s+2 rows, the largest first[\s\S]*turn 1 · on this computer\s+claude-sonnet-test\s+1 call\s+100 read\s+0% cached\s+0 written\s+5 out\s+≈\$0\.002[\s\S]*turn 2 · on this computer[\s\S]*in all: 2 model calls · 200 tokens read, 0% from the cache, 0 written to it · 10 out[\s\S]*\$0\.000 the cloud runs' cost, as their records hold it — the figure \/cost shows[\s\S]*≈\$0\.003 on this computer[\s\S]*an estimate[\s\S]*foldrun usage --session code-cx/, at);
@@ -1018,7 +1027,7 @@ test("/search finds a conversation by a line only a tool printed and goes back t
     at = await t.until(/ 1  the printing one · [^\n]* · local turn 1 · tool output\s+ERR-ZX81\s+go back to which\? a number, or Enter to stay:/, at);
     t.send("1\r");
     at = await t.until(/back in: the printing one/, at);
-    t.send("/resume\r");
+    at = await alone(t, "/resume", at);
     at = await t.until(/ 1  hello · [\s\S]*\/search <words> finds one by what was said in it/, at);
     t.send("and now\r");
     at = await t.until(/back again/, at, 30_000);
@@ -1779,7 +1788,7 @@ test("the allowance runs out while a turn works: after the reset the agent is to
       assert.match(JSON.stringify(asked[1].messages), /do the long task/);
 
       // A cloud turn refused at the door: no run was started, so the same message goes — once.
-      t.send("/cloud\r");
+      at = await alone(t, "/cloud", at);
       at = await t.until(/\w ❯ /, at);
       t.send("now in the cloud\r");
       at = await t.until(/send it\? \[y\]es/, at, 30_000);
@@ -2454,7 +2463,7 @@ test("/rewind takes back what the agent's Write and Edit did, never what a comma
     at = await t.until(/✓ done/, at);
     at = await t.until(/\w ❯ /, at);
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "changed\n");
-    t.send("/rewind\r");
+    at = await alone(t, "/rewind", at);
     at = await t.until(/ 1  change things · a\.txt changed, b\.txt created/, at);
     at = await t.until(/\w ❯ /, at);
     // Something else changes a file the agent wrote: every file or none.
@@ -2549,7 +2558,7 @@ test("an MCP server named in a sub-agent's own file (mcpServers:) starts for tha
   try {
     let at = await t.until(/\w ❯ /);
     // Not a server of the session: /mcp has none, /agents says whose it is.
-    t.send("/mcp\r");
+    at = await alone(t, "/mcp", at);
     at = await t.until(/lookup:kit\s+sub-agent's own\s+asked when that sub-agent's job starts[\s\S]*no MCP servers/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/agents\r");
@@ -2595,13 +2604,13 @@ test("an MCP server named in a sub-agent's own file (mcpServers:) starts for tha
     at = await t.until(/\w ❯ /, at);
     assert.equal(running(), 0);
     // The kept yes is seen in /mcp and taken back there.
-    t.send("/mcp\r");
+    at = await alone(t, "/mcp", at);
     at = await t.until(/lookup:kit\s+sub-agent's own\s+your yes is kept — starts with that sub-agent's job, stops with it · \/mcp forget lookup:kit/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/mcp forget lookup:kit\r");
     at = await t.until(/your yes to lookup:kit is taken back/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/mcp\r");
+    at = await alone(t, "/mcp", at);
     at = await t.until(/lookup:kit\s+sub-agent's own\s+asked when that sub-agent's job starts/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
@@ -2659,7 +2668,14 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
   try {
     let at = await t.until(/MCP servers: kit waits for your yes — \/mcp on <name>/);
     at = await t.until(/\w ❯ /, at);
+    // /mcp alone (FOL-259): each server's action is a choice; Esc changes nothing.
     t.send("/mcp\r");
+    at = await t.until(/MCP servers[\s\S]*❯ 1\. List them[\s\S]*2\. Start kit\s+waits for your yes[\s\S]*Add a server…[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b");
+    at = await t.until(/nothing changed/, at);
+    at = await t.until(/\w ❯ /, at);
+    at = await alone(t, "/mcp", at);
     at = await t.until(/kit\s+project\s+waits for your yes/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/mcp on kit\r");
@@ -2688,7 +2704,7 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     at = await t.until(/✓ cloud sub-agent coder · completed/, at);
     at = await t.until(/All done: 42\./, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/todos\r");
+    at = await alone(t, "/todos", at);
     at = await t.until(/1 [^\n]*look at a\.txt[\s\S]*2 [^\n]*ask the cloud/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/todos done 1\r");
@@ -2700,7 +2716,7 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     t.send('/mcp add web --header "Authorization: Bearer sk-live-PASTED" https://x.example/mcp\r');
     at = await t.until(/--header's value must read a variable/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/permissions\r");
+    at = await alone(t, "/permissions", at);
     at = await t.until(/sending|allowed ahead|✓/, at);
     at = await t.until(/\w ❯ /, at);
     t.send(`/add-dir ${home}\r`);
@@ -2813,7 +2829,7 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
     at = await t.until(/Done inside; one outside\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.equal(fs.existsSync(path.join(other, "refused.txt")), false);
-    t.send("/sandbox\r");
+    at = await alone(t, "/sandbox", at);
     at = await t.until(/on — (macOS Seatbelt|bubblewrap)[\s\S]*inside it a command runs without a question/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/sandbox off\r");
@@ -2884,7 +2900,7 @@ test("two places to work (FOL-258): this computer or the cloud; /cloud-jobs off 
     t.send("y\r");
     at = await t.until(/answer 1/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
-    t.send("/cloud-jobs\r");
+    at = await alone(t, "/cloud-jobs", at);
     at = await t.until(/cloud jobs off — the agent starts none/, at);
     at = await t.until(/\w ❯ /, at);
     // The old name still answers.
@@ -3086,7 +3102,11 @@ test("/thinking on shows the model's summary of its thinking above the reply, re
   let t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/\w ❯ /);
+    // Typed alone, /thinking opens its list (FOL-259): On, Off, the value it has ticked and the cursor on it.
     t.send("/thinking\r");
+    at = await t.until(/Show the model's thinking\?[\s\S]*1\. On [^\n]*\n[^\n]*❯ 2\. Off [^\n]*✔[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\r");
     at = await t.until(/thinking is not shown · \/thinking on/, at);
     t.send("one\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
@@ -3094,7 +3114,11 @@ test("/thinking on shows the model's summary of its thinking above the reply, re
     at = await t.until(/plain answer/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.equal("thinking" in asked[0], false, "off by default: the request is as it was");
-    t.send("/thinking on\r");
+    // Chosen from the list: ↑ and Enter is /thinking on.
+    t.send("/thinking\r");
+    at = await t.until(/Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b[A\r");
     at = await t.until(/a summary of the model's thinking is shown above its reply/, at);
     t.send("two\r");
     at = await t.until(/✻ thinking[\s\S]*Weighing two ways\.[\s\S]*The second is shorter\.[\s\S]*shown answer/, at, 30_000);
@@ -3119,7 +3143,7 @@ test("/thinking on shows the model's summary of its thinking above the reply, re
     t.child.kill();
     t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "200" });
     at = await t.until(/\w ❯ /);
-    t.send("/thinking\r");
+    at = await alone(t, "/thinking", at);
     at = await t.until(/thinking is shown/, at);
     t.send("four\r");
     at = await t.until(/last answer/, at, 30_000);
@@ -3198,7 +3222,7 @@ test("f at a command's question keeps a rule for the folder: later sessions run 
     at = await t.until(/three done/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.ok(fs.existsSync(path.join(d, "made-one.txt")), "the refused command did not run");
-    t.send("/permissions\r");
+    at = await alone(t, "/permissions", at);
     at = await t.until(/kept for this folder, every session:[\s\S]* 1 commands that start with  touch/, at);
     at = await t.until(/\w ❯ /, at);
     // Strict: the rule is not used.
@@ -3211,9 +3235,15 @@ test("f at a command's question keeps a rule for the folder: later sessions run 
     at = await t.until(/\w ❯ /, at);
     t.send("/permissions relaxed\r");
     at = await t.until(/run without a question/, at);
-    t.send("/permissions\r");
+    at = await alone(t, "/permissions", at);
     at = await t.until(/ 1 commands that start with  touch/, at);
-    t.send("/permissions rm 1\r");
+    // Remove a rule… from /permissions' list asks for the rest of the line (FOL-259).
+    t.send("/permissions\r");
+    at = await t.until(/What the agent may do without asking[\s\S]*Relaxed[^\n]*✔[\s\S]*4\. Remove a rule…[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("4");
+    at = await t.until(/Remove a rule — the rule's number: /, at);
+    t.send("1\r");
     at = await t.until(/removed: commands that start with  touch — it is asked again/, at);
     t.send("five\r");
     at = await t.until(/touch made-five\.txt[\s\S]*allow\? \[y\]es/, at, 30_000);

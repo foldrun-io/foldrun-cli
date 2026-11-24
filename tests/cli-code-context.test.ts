@@ -13,7 +13,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { serve, raw } from "./fake-platform.ts";
 import {
   folderInstructions, folderSkills, folderCommands, frontmatterLines, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, readBody, readOnlyCommand } from "../src/code-context.mjs";
-import { CODE_COMMANDS, helpText, codeCompleter, friendlyTool, localCallSummary, localPrompt } from "../src/code-session.mjs";
+import { CODE_COMMANDS, helpText, codeCompleter, friendlyTool, localCallSummary, localPrompt, commandMenu, MENU_COMMANDS } from "../src/code-session.mjs";
 import { foldrunDocsCall, sessionMessageOf, goalVerdict, usageBlock } from "../src/commands.mjs";
 
 const hasPty = spawnSync("python3", ["-c", "import pty"]).status === 0 && process.platform !== "win32";
@@ -208,6 +208,43 @@ test("suggestions: what starts with the typed part first, then what holds it; no
   assert.deepEqual(codeCompleter(() => [], () => ["/fix-tests"])("/fi")[0], ["/fix-tests"]);
 });
 
+test("a command typed alone opens one list (FOL-259): every choice is a line the command takes; the cursor starts where typing it alone did; /help marks them", () => {
+  const names = new Set(CODE_COMMANDS.map(([n]) => String(n).split(" ")[0]));
+  const full = {
+    thinking: true, localOnly: false, mode: "local", sandboxOff: false, strict: false,
+    past: [{ said: "hello", at: "2026-11-24T10:00:00Z" }], turns: [{ turn: 1, label: "change things" }],
+    todos: [{ content: "a", status: "pending" }], mcp: [{ name: "kit", state: "on", source: "project" }, { name: "web", state: "waiting", source: "yours" }, { name: "web", state: "hidden", source: "project" }, { name: "bad", state: "problem" }],
+  };
+  for (const cmd of MENU_COMMANDS) {
+    assert.ok(names.has(cmd), `${cmd} is a command`);
+    if (cmd === "/effort" || cmd === "/model") continue; // their own lists, read from the platform
+    const m = commandMenu(cmd, full)!;
+    assert.ok(m, cmd);
+    assert.ok(m.choices.some((x) => x.v === m.start), `${cmd}: the cursor starts on a choice`);
+    if (m.tick !== null) assert.ok(m.choices.some((x) => x.v === m.tick), `${cmd}: the tick is a choice`);
+    for (const x of m.choices) {
+      assert.ok(names.has(x.v.split(" ")[0]!), `${cmd}: ${x.v} is a command line`);
+      assert.equal(Boolean(x.ask), x.name.endsWith("…"), `${cmd}: ${x.name} — a choice that asks ends in …`);
+      if (x.ask) assert.ok(x.v.endsWith(" "), `${cmd}: ${x.v} is a line still to finish`);
+    }
+  }
+  assert.equal(commandMenu("/thinking", { thinking: false })!.start, "/thinking off");
+  assert.equal(commandMenu("/cloud-agents", { localOnly: true })!.tick, "/cloud-jobs off", "the old name opens the same list");
+  // /cloud alone still moves the session there: the cursor is on The cloud, the tick where it works now.
+  assert.deepEqual([commandMenu("/cloud", { mode: "local" })!.start, commandMenu("/cloud", { mode: "local" })!.tick], ["/cloud", "/local"]);
+  // A hidden or broken server is listed by /mcp, never offered an action; a server is removed from its own file.
+  assert.deepEqual(commandMenu("/mcp", full)!.choices.map((x) => x.v), ["/mcp ", "/mcp off kit", "/mcp tools kit", "/mcp restart kit", "/mcp on web", "/mcp add ", "/mcp rm kit --project", "/mcp rm web", "/mcp forget "]);
+  // Nothing to choose from: the command says so, as before.
+  assert.equal(commandMenu("/resume", {}), null);
+  assert.equal(commandMenu("/rewind", {}), null);
+  assert.equal(commandMenu("/queue", {}), null, "its messages are sent or dropped before the prompt: no list");
+  assert.equal(commandMenu("/diff", full), null);
+  const help = helpText();
+  assert.match(help, /^typed alone, a command marked ▸ opens a list/);
+  assert.match(help, /\/thinking \[on\|off\]\s+▸ /);
+  assert.doesNotMatch(help, /\/diff\s+▸/);
+});
+
 // ------------------------------------------------------------ on a terminal
 
 import crypto from "node:crypto";
@@ -261,7 +298,13 @@ function onTerminal(args: string[], home: string, extraEnv: Record<string, strin
     child.stdin.write(t);
     await new Promise((r) => setTimeout(r, 150));
   };
-  return { type, until, done, out: () => out, child };
+  /** A command typed alone opens its list (FOL-259): Enter at once does what it did before. */
+  const alone = async (cmd: string, from = 0) => {
+    child.stdin.write(`${cmd}\r`);
+    await until(/↑↓ to move · Enter to choose · Esc to cancel/, from);
+    await type("\r");
+  };
+  return { type, until, done, out: () => out, child, alone };
 }
 
 test("on a terminal: / shows the commands under the line, typing narrows them, ↓ and Tab choose, Enter runs the chosen one; the folder's command and skill are offered and sent; /memory, /skills, /sessions", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
@@ -370,7 +413,7 @@ test("on a terminal: /cloud and /local move one session; the other side is told 
   const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "dumb" });
   try {
     let at = await t.until(/desk ❯ /);
-    await t.type("/cloud\r");
+    await t.alone("/cloud", at);
     at = await t.until(/already working in the cloud/, at);
     await t.type("add b\r");
     at = await t.until(/send it\? \[y\]es/, at);
@@ -378,12 +421,12 @@ test("on a terminal: /cloud and /local move one session; the other side is told 
     at = await t.until(/apply it to/, at);
     await t.type("y\r");
     at = await t.until(/desk ❯ /, at);
-    await t.type("/local\r");
+    await t.alone("/local", at);
     at = await t.until(/working on this computer from here on/, at);
     at = await t.until(/the agent there is told what the last turn did/, at);
     await t.type("/status\r");
     at = await t.until(/works\s+on this computer/, at);
-    await t.type("/permissions\r");
+    await t.alone("/permissions", at);
     at = await t.until(/sending this folder's files to the cloud/, at);
     await t.type("/permissions reset\r");
     at = await t.until(/every change, command and send is asked again/, at);
@@ -546,14 +589,14 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
     at = await t.until(/\/plan works on this computer/, at);
     await t.type("/compact\r");
     at = await t.until(/the cloud keeps the conversation itself/, at);
-    await t.type("/local\r");
+    await t.alone("/local", at);
     at = await t.until(/working on this computer from here on/, at);
     await t.type("/context\r");
     at = await t.until(/instructions\s+none in this folder/, at);
     at = await t.until(/conversation\s+not opened yet/, at);
     await t.type("/compact\r");
     at = await t.until(/nothing to shorten yet/, at);
-    await t.type("/permissions\r");
+    await t.alone("/permissions", at);
     at = await t.until(/commands that only look: pwd, date, ls, and git status/, at);
     await t.type("/permissions strict\r");
     at = await t.until(/the commands that only look are asked too/, at);
@@ -566,7 +609,7 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
     at = await t.until(/no earlier conversation of this folder is kept/, at);
     await t.type("/clear\r");
     at = await t.until(/a fresh conversation[^\n]*\/resume goes back to one/, at);
-    await t.type("/resume\r");
+    await t.alone("/resume", at);
     at = await t.until(/ 1  \/goal the tests pass/, at);
     await t.type("/resume 1\r");
     at = await t.until(/back in: \/goal the tests pass/, at);
@@ -599,7 +642,7 @@ test("on a terminal: /goal keeps the agent going until it says the goal is met; 
   const again = onTerminal(["code", d, "--cloud", "--to", "desk", "--url", s3.url, "--token", "k"], home, { TERM: "dumb" });
   try {
     const at3 = await again.until(/desk ❯ /);
-    await again.type("/resume\r");
+    await again.alone("/resume", at3);
     await again.until(/ 1  \/goal the tests pass/, at3);
     await again.type("/quit\r");
     await again.done;
@@ -628,7 +671,7 @@ test("--continue keeps what the session carried even when it is left at once; /c
     at = await t.until(/desk ❯ /, at);
     await t.type("/review\r");
     at = await t.until(/a review needs the folder's git history/, at);
-    await t.type("/cost\r");
+    await t.alone("/cost", at);
     at = await t.until(/0 turns in the cloud in this conversation, since this terminal opened it/, at);
     await t.type("/quit\r");
     assert.equal(await t.done, 0);
@@ -679,7 +722,7 @@ test("on a terminal, in the cloud: the session's todo list goes with the turn an
   const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-td", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/desk ❯ /);
-    await t.type("/todos\r");
+    await t.alone("/todos", at);
     at = await t.until(/no todo list/, at);
     await t.type("/todos add write b\r");
     at = await t.until(/○ write b/, at);
