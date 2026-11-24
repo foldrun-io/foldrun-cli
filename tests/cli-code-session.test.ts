@@ -3720,6 +3720,9 @@ test("/rename and /resume (FOL-264): a name kept on the platform too; /resume li
     at = await t.until(/webhook URLs changed for intake/, at);
     assert.deepEqual(renamed, [{ name: "desk2" }]);
     at = await t.until(/\w ❯ /, at);
+    t.send("/resume all\r");
+    at = await t.until(/\w ❯ /, at);
+    assert.ok(s.seen.some((x: any) => x.url === "/v1/workspaces/desk2/sessions"), "the session goes on under the new name");
     t.send("/quit\r");
     await t.done;
   } finally {

@@ -18234,6 +18234,12 @@ async function codeLocalTurn(s, text) {
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
       used.note(m);
+      // The model began reading this turn: what it carried is used now, not at the turn's end — a hold
+      // would lapse in a long turn, and a stream that breaks later must not give read messages back (Codex).
+      if (!s.turnRead && used.lastInput > 0) {
+        s.turnRead = true;
+        await settleLocalMessages(s);
+      }
       // After every call that was answered — a reply, or the summary a compaction paid for.
       if (m.type === "assistant" || (m.type === "system" && (m.subtype === "compact_boundary" || m.subtype === "compact_failed"))) checkCeiling();
       if (m.type === "system" && m.subtype === "init" && m.model) s.model = String(m.model);
@@ -18412,8 +18418,6 @@ async function codeLocalTurn(s, text) {
   // last call that was read, timed when it started — kept even when no final result came (Codex).
   if (used.lastInput > 0) delete s.modelChanged;
   if (used.lastInput > 0) (s.measure ??= {}).local = { tokens: used.lastInput, model: used.lastModel || undefined, at: used.lastAt || Date.now() };
-  // The model read this turn's message: what it carried is used (FOL-236).
-  if (used.lastInput > 0) s.turnRead = true;
   s.turnOk = ok && !cancel.asked;
   s.turnStopped = cancel.asked;
   const how = cancel.asked ? c.bold(c.amber("■ stopped")) : ok ? c.bold(c.green("✓ done")) : c.bold(c.red("✗ not finished"));
@@ -19211,6 +19215,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   };
   /** Go back to an earlier conversation of this folder; the one being left is kept in its place. */
   const goBack = (/** @type {any} */ to) => {
+    // The numbers shown before no longer point where they did.
+    delete s.resumeShown;
     keepPast(to.context);
     s.context = to.context;
     s.label = to.said;
@@ -19376,7 +19382,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     const menuState = async (/** @type {string} */ cmd) => {
       if (cmd === "/model") return { thinking: readCodePrefs().thinking === true, effort: typeof s.effort === "string" ? s.effort : undefined };
       // This folder's, then the project's in the cloud that it does not keep (FOL-264): numbered as /resume <n> reads them.
-      if (cmd === "/resume") return { past: [...(Array.isArray(s.past) ? s.past : []), ...(await cloudConversations(s))] };
+      if (cmd === "/resume") {
+        s.resumeShown = [...(Array.isArray(s.past) ? s.past : []), ...(await cloudConversations(s))];
+        return { past: s.resumeShown };
+      }
       if (cmd === "/undo") {
         const last = s.applied?.at(-1);
         return { turns: rewindTurns(rewindOf(s)), patch: last ? `${last.files?.length ?? "its"} file${last.files?.length === 1 ? "" : "s"}${last.runId ? ` · run ${String(last.runId)}` : ""}` : undefined };
@@ -19778,6 +19787,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       continue;
     }
     if (name === "#new") {
+      delete s.resumeShown;
       fresh();
       say(`a fresh conversation — the agent no longer reads the earlier turns${s.past?.length ? " (/resume goes back to one)" : ""}`);
       continue;
@@ -19809,6 +19819,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       }
       if (what === "project") {
         await renameProjectFromSession(s, to);
+        // Everything after names the project by its new name: messages, the folder's saved session (Codex).
+        ws = s.ws;
         remember();
         continue;
       }
@@ -19887,7 +19899,12 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     }
     if (name === "/resume") {
       // This folder's conversations kept here, then the project's in the cloud that are not (FOL-264): one list.
-      const past = [...(Array.isArray(s.past) ? s.past : []), ...(await cloudConversations(s))];
+      // A number picks from the list that was shown (the picker's, or the last listing), not one asked again:
+      // a cloud turn in between would move another conversation into its place (Codex).
+      const n0 = Number(rest);
+      const shownList = Number.isInteger(n0) && n0 >= 1 && Array.isArray(s.resumeShown) ? s.resumeShown : null;
+      const past = shownList ?? [...(Array.isArray(s.past) ? s.past : []), ...(await cloudConversations(s))];
+      if (!shownList) s.resumeShown = past;
       if (!past.length) {
         say("no earlier conversation of this folder is kept — /resume new starts a new one and keeps the one you leave");
         continue;
