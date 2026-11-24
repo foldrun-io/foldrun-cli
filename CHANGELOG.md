@@ -12,6 +12,13 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.1.1] — 2026-11-24
+
+- fix(code): a folder that cannot be read leaves the folder-of-repos check unsure, and git is then not offered (FOL-274, Codex round 16) ([2e0f6ff](https://github.com/foldrun-io/foldrun-cli/commit/2e0f6ff))
+- fix(code): the folder-of-repos check looks six levels down, and a search it had to cut short offers no git (FOL-274, Codex round 15) ([ff59a22](https://github.com/foldrun-io/foldrun-cli/commit/ff59a22))
+- fix(code): /where local+cloud no longer asks for git; the folder-of-repos check looks three levels down, hidden and bare too; the home folder by where it leads (FOL-274, Codex round 14) ([5bd6484](https://github.com/foldrun-io/foldrun-cli/commit/5bd6484))
+- fix(code): git is offered only when the session works in the cloud, never in the home folder or around a folder of repositories; a cloud job that would take the folder without git is refused with how to go on (FOL-274) ([5cd6112](https://github.com/foldrun-io/foldrun-cli/commit/5cd6112))
+
 ## [32.1.0] — 2026-11-24
 
 ### New in the public API
