@@ -2363,6 +2363,113 @@ test("/rewind takes back what the agent's Write and Edit did, never what a comma
   assert.match(JSON.stringify(asked[5].messages.at(-1)), /the person's check `test -f done\.txt` exited 1/);
 });
 
+test("an MCP server named in a sub-agent's own file (mcpServers:) starts for that sub-agent's job only: a yes that names the sub-agent, its tools in the sub-agent's context alone, stopped with the job (FOL-253)", { skip: hasPty ? false : "needs python3's pty", timeout: 180_000 }, async () => {
+  const { SERVER } = await import("./mcp-server.ts");
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const calls = path.join(home, "calls.jsonl");
+  const mark = `--mark-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  fs.writeFileSync(path.join(d, "srv.mjs"), SERVER);
+  fs.mkdirSync(path.join(d, ".claude", "agents"), { recursive: true });
+  // The field and shape a cloud agent's file uses: this file deploys as an agent and means the same there.
+  fs.writeFileSync(path.join(d, ".claude", "agents", "lookup.md"), `---\nname: lookup\ndescription: Looks things up with its kit.\ntools: Read\nmcpServers:\n  kit:\n    command: node\n    args: [srv.mjs, "${mark}"]\n    env:\n      CALLS: ${calls}\n---\nYou look things up with your kit and report.\n`);
+  const running = () => spawnSync("pgrep", ["-f", "--", mark], { encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean).length;
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "a1", name: "agent", input: { agent: "lookup", description: "look it up", prompt: "Use your kit to echo the words: from the sub-agent." } }]),
+    // the sub-agent's own two model calls
+    () => sse([{ type: "tool_use", id: "m1", name: "mcp__kit__echo", input: { words: "from the sub-agent" } }]),
+    () => sse([{ type: "text", text: "The kit said it back." }]),
+    () => sse([{ type: "text", text: "Looked up." }]),
+    // again in the same session: the yes is kept, the server is started afresh
+    () => sse([{ type: "tool_use", id: "a2", name: "agent", input: { agent: "lookup", description: "look again", prompt: "Say hello." } }]),
+    () => sse([{ type: "text", text: "Hello." }]),
+    () => sse([{ type: "text", text: "Looked again." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-sm/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const toolNames = (i: number) => (asked[i]?.tools ?? []).map((x: any) => String(x.name));
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-sm", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    // Not a server of the session: /mcp has none, /agents says whose it is.
+    t.send("/mcp\r");
+    at = await t.until(/lookup:kit\s+sub-agent's own\s+asked when that sub-agent's job starts[\s\S]*no MCP servers/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/agents\r");
+    at = await t.until(/lookup\s+Looks things up with its kit\.[\s\S]*its own MCP server kit \(mcpServers: — started for its job only, with your yes\) · asked at every call/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("look it up\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    // The job itself is asked (an agent with a server of its own acts), then the server — the question names the sub-agent.
+    at = await t.until(/the sub-agent lookup \(project[\s\S]*allow\?/, at);
+    assert.equal(running(), 0, "nothing started before the yes");
+    t.send("y\r");
+    at = await t.until(/the sub-agent lookup asks:[\s\S]*start the MCP server kit for the sub-agent lookup\?[\s\S]*from this folder's [^\n]*lookup\.md[\s\S]*\$ node srv\.mjs --mark-[\s\S]*from this folder, as they are now \(a change asks again\): srv\.mjs[\s\S]*for this job of the sub-agent, and is stopped when the job ends[\s\S]*allow\? [^\n]*$/, at);
+    assert.match(t.out().slice(at - 700, at), /yes is for this job\. Always keeps the yes for this server of this sub-agent[\s\S]*\/mcp forget lookup:kit takes it back[\s\S]*\[a\]lways for this server of this sub-agent/);
+    assert.equal(running(), 0, "nothing started before the yes to the server");
+    t.send("y\r");
+    at = await t.until(/MCP server kit started for the sub-agent lookup · 2 tools — stopped when its job ends/, at);
+    // Its call: asked, with the sub-agent named and what goes to the server shown whole.
+    at = await t.until(/the sub-agent lookup asks:[\s\S]*the MCP server kit · its tool echo[\s\S]*"words": "from the sub-agent"[\s\S]*allow\?/, at);
+    assert.equal(fs.existsSync(calls), false, "not called before the yes");
+    assert.equal(running(), 1, "running while its job runs");
+    t.send("y\r");
+    at = await t.until(/sub-agent lookup answered/, at);
+    at = await t.until(/Looked up\./, at);
+    at = await t.until(/\w ❯ /, at);
+    assert.match(fs.readFileSync(calls, "utf8"), /"name":"echo"[\s\S]*from the sub-agent/);
+    assert.equal(running(), 0, "stopped when the job ended");
+    // The tools' definitions: in the sub-agent's requests, never in the session agent's.
+    assert.deepEqual(toolNames(1).filter((n: string) => n.startsWith("mcp__")), ["mcp__kit__echo", "mcp__kit__env"]);
+    for (const i of [0, 3]) assert.deepEqual(toolNames(i).filter((n: string) => n.startsWith("mcp__")), [], `the session agent's call ${i} holds no tool of the sub-agent's server`);
+    assert.doesNotMatch(JSON.stringify(asked[0]) + JSON.stringify(asked[3]), /Says it back|mcp__kit/);
+    t.send("/context\r");
+    at = await t.until(/MCP tools\s+none — no MCP server of the session is running[\s\S]*0 tokens here for the sub-agents' own MCP servers \(lookup: kit\)/, at);
+    at = await t.until(/\w ❯ /, at);
+    // Again: a yes was for that job — the server is asked about again. This time: always.
+    t.send("look again\r");
+    at = await t.until(/the sub-agent lookup \(project[\s\S]*allow\?/, at);
+    t.send("y\r");
+    at = await t.until(/start the MCP server kit for the sub-agent lookup\?[\s\S]*allow\? [^\n]*$/, at);
+    t.send("a\r");
+    at = await t.until(/MCP server kit started for the sub-agent lookup/, at);
+    at = await t.until(/Looked again\./, at);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(running(), 0);
+    // The kept yes is seen in /mcp and taken back there.
+    t.send("/mcp\r");
+    at = await t.until(/lookup:kit\s+sub-agent's own\s+your yes is kept — starts with that sub-agent's job, stops with it · \/mcp forget lookup:kit/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/mcp forget lookup:kit\r");
+    at = await t.until(/your yes to lookup:kit is taken back/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/mcp\r");
+    at = await t.until(/lookup:kit\s+sub-agent's own\s+asked when that sub-agent's job starts/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("MCP, sub-agents, todos and an added folder in one session: a server starts only with a yes and its calls are asked; a reading sub-agent is not asked; a cloud sub-agent sends the prompt alone", { skip: hasPty ? false : "needs python3's pty", timeout: 180_000 }, async () => {
   const { SERVER } = await import("./mcp-server.ts");
   const d = repo();

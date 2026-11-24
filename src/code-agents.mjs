@@ -16,6 +16,12 @@
 //     not reach into one.
 //   - one budget for a person's message: so many calls, so many model
 //     turns in all.
+//   - `mcpServers:` in a definition (FOL-253) is the field a cloud agent's
+//     file uses, read the same way: name → {command, args, env} or {url,
+//     headers}. Such a server starts for that sub-agent's job alone and
+//     stops with it; its tools are the sub-agent's, never the session's.
+//     Nothing starts without the person's yes to that server for that
+//     sub-agent (code-mcp.mjs keeps the rules of a yes).
 //
 // Todo list — `todo_write` replaces it, `todo_read` returns it. It is
 // session data: shown to the person, kept for --continue, and never put
@@ -29,6 +35,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { credentialsDir } from "./credentials.mjs";
 
 export const AGENT_TOOL = "agent";
@@ -40,8 +47,47 @@ const SIX = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
 const READS = ["Read", "Glob", "Grep"];
 const AGENT_NAME = /^[a-z][a-z0-9-]{0,39}$/;
 const DEF_MAX = 40_000;
+/** The MCP servers one definition may name. */
+export const AGENT_MCP_MAX = 5;
 
-/** @typedef {{ name: string, description: string, tools: string[], prompt: string, source: "built in" | "yours" | "project", file?: string }} AgentDef */
+/**
+ * The `mcpServers:` block of a definition, read as YAML — the cloud reads
+ * the same block of the same file. Only a file that opens with a plain
+ * `---` line reaches here (no other front-matter language is read).
+ * @returns {{ servers: { name: string, raw: unknown }[] } | { problem: string } | null} null: the file names none
+ */
+export function agentMcpServers(/** @type {string} */ text) {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
+  if (block === undefined || !/^["']?mcpServers["']?[ \t]*:/m.test(block)) return null;
+  /** @type {any} */
+  let data;
+  try {
+    const matter = createRequire(import.meta.url)("gray-matter");
+    // `{}`: gray-matter caches a failed parse as an empty success without it.
+    data = matter(`---\n${block}\n---\n`, {}).data;
+  } catch (err) {
+    return { problem: `its frontmatter is not YAML that can be read, so its mcpServers: could not be (${err instanceof Error ? err.message.split("\n")[0] : String(err)})` };
+  }
+  const list = data?.mcpServers;
+  if (list === undefined || list === null) return null;
+  if (typeof list !== "object" || Array.isArray(list)) return { problem: "mcpServers: must be a map, name → {command, args, env} or {url, headers}" };
+  // A number or a yes/no written bare (`args: [--port, 8080]`) is that text, as the cloud's reader takes it.
+  const word = (/** @type {unknown} */ v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : v);
+  const words = (/** @type {unknown} */ m) => (m && typeof m === "object" && !Array.isArray(m) ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, word(v)])) : m);
+  const servers = Object.entries(list).map(([name, raw]) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { name, raw };
+    const r = /** @type {Record<string, unknown>} */ ({ ...raw });
+    if (Array.isArray(r.args)) r.args = r.args.map(word);
+    if (r.env !== undefined) r.env = words(r.env);
+    if (r.headers !== undefined) r.headers = words(r.headers);
+    return { name, raw: r };
+  });
+  if (servers.length > AGENT_MCP_MAX) return { problem: `mcpServers: names ${servers.length} servers — a sub-agent here has ${AGENT_MCP_MAX} at most` };
+  return servers.length ? { servers } : null;
+}
+
+/** @typedef {{ name: string, description: string, tools: string[], prompt: string, source: "built in" | "yours" | "project", file?: string, mcp?: { name: string, raw: unknown }[] }} AgentDef
+ * `mcp`: the MCP servers its definition names (mcpServers:), started for its job alone. */
 
 /** @type {AgentDef[]} */
 export const BUILT_IN_AGENTS = [
@@ -113,13 +159,17 @@ export function readAgents(/** @type {string} */ dir) {
         if (!AGENT_NAME.test(name)) throw new Error(`the name ${JSON.stringify(name)} is not lower-case letters, digits and -`);
         if (agents.some((a) => a.name === name)) throw new Error(`there is already an agent ${name} (${agents.find((a) => a.name === name)?.source}) — this one is not used`);
         if (!fm.body) throw new Error("no instructions under the frontmatter");
-        const asked = fm.fields.tools === undefined ? READS : Array.isArray(fm.fields.tools) ? fm.fields.tools : String(fm.fields.tools).split(",").map((x) => x.trim()).filter(Boolean);
+        const asked = fm.fields.tools === undefined ? READS : Array.isArray(fm.fields.tools) ? fm.fields.tools : String(fm.fields.tools).replace(/^\[\s*\]$/, "").split(",").map((x) => x.trim()).filter(Boolean);
         const unknown = asked.filter((t) => !SIX.includes(t));
         const tools = SIX.filter((t) => asked.includes(t));
-        if (!tools.length) throw new Error(`none of its tools is one a sub-agent here has (${SIX.join(", ")})`);
+        // Its own MCP servers, by the field a cloud agent's file uses. One that cannot be read leaves the agent out: it would not be the agent the file describes.
+        const mcp = agentMcpServers(fs.readFileSync(file, "utf8"));
+        if (mcp && "problem" in mcp) throw new Error(mcp.problem);
+        // With servers of its own it may have none of the six: an agent that only calls its server.
+        if (!tools.length && !mcp) throw new Error(`none of its tools is one a sub-agent here has (${SIX.join(", ")})`);
         const description = String(Array.isArray(fm.fields.description) ? fm.fields.description.join(" ") : (fm.fields.description ?? "")).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().slice(0, 400);
         if (!description) throw new Error("no description: — the agent that hands jobs out reads it to choose");
-        agents.push({ name, description, tools, prompt: fm.body, source, file });
+        agents.push({ name, description, tools, prompt: fm.body, source, file, ...(mcp ? { mcp: mcp.servers } : {}) });
         if (unknown.length) problems.push({ file, why: `not given (a sub-agent here has only ${SIX.join(", ")}): ${unknown.join(", ")}` });
       } catch (err) {
         problems.push({ file, why: err instanceof Error ? err.message : String(err) });
@@ -130,7 +180,7 @@ export function readAgents(/** @type {string} */ dir) {
 }
 
 /** Whether an agent can do more than read. */
-export const agentActs = (/** @type {AgentDef} */ a) => a.tools.some((t) => !READS.includes(t));
+export const agentActs = (/** @type {AgentDef} */ a) => a.tools.some((t) => !READS.includes(t)) || Boolean(a.mcp?.length);
 
 /**
  * The tool as the model sees it: who there is to hand a job to, here or in
@@ -143,7 +193,7 @@ export function agentTool(agents, cloud) {
     description: [
       "Hand one self-contained job to a sub-agent. It starts with an empty context — it has not seen this conversation — so the prompt must hold everything it needs: what to do, where, and what to report. Only its final answer comes back to you; what it read does not fill your context. Good for looking into a large area, or a side job you can describe fully. Not for a quick look you can do in one or two calls yourself.",
       "On this computer (where: \"here\", the default) — it works in the person's folder:",
-      ...agents.map((a) => `- ${a.name}: ${a.description} (tools: ${a.tools.join(", ")})`),
+      ...agents.map((a) => `- ${a.name}: ${a.description} (tools: ${[...a.tools, ...(a.mcp?.length ? ["MCP servers of its own"] : [])].join(", ")})`),
       ...(cloud
         ? [
             `In the cloud (where: "cloud") — the job runs in a sandbox of the person's foldrun project ${cloud.project}, as one of its agents, with that agent's own tools (the web, the MCP servers and APIs its definition names). It does NOT see this folder or this computer: nothing is sent but your prompt, so quote in it what it must know. Use it for work that needs no local files — research on the web, a long computation, something that agent's tools can reach — or to keep heavy work off this computer. It costs the person foldrun credits and is asked first. To have cloud agents change a copy of this folder instead, use cloud_agents.`,

@@ -23,6 +23,13 @@
 //   - a server lives for the session, each on its own, and goes — with all
 //     it started — when the session ends.
 //
+// A sub-agent's own servers (FOL-253): an agent definition may name servers
+// with `mcpServers:`, the field a cloud agent's file uses. The same rules
+// hold, with two differences: the yes is to that server FOR THAT SUB-AGENT
+// (its name is part of what is agreed), and the server lives for one job of
+// that sub-agent, not for the session. Its tools are offered to that
+// sub-agent's conversation only.
+//
 // Not here: OAuth sign-in to a remote server, resources, prompts, a list
 // that changes while connected (`/mcp restart` reads it again).
 
@@ -309,6 +316,95 @@ function changeApprovals(/** @type {(all: ReturnType<typeof readApprovals>) => v
 }
 
 /**
+ * Connect one server as resolved, and read its tools the way every server's
+ * are read here: an over-long input description left out, a description
+ * cut, a name another server already offers left out, never "read-only".
+ * A program starts inside the session's sandbox, put up first; one that
+ * cannot be had starts nothing. A server at a web address is reached by
+ * foldrun itself, with the person's yes to it.
+ * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any> }} o
+ * @param {string} name
+ * @param {{ spec: Record<string, any>, hash: string }} resolved
+ * @param {AbortSignal} signal
+ * @param {(tool: string) => string | null} [taken] the server that already offers a tool of that name
+ * @returns {Promise<{ conn: any, tools: any[], said: string, cut: string[] } | { why: string }>}
+ */
+export async function connectServer(o, name, resolved, signal, taken) {
+  const walls = resolved.spec.type === "stdio" && o.sandbox ? await o.sandbox() : null;
+  if (walls && "refused" in walls) return { why: `the sandbox could not start (${walls.refused}) — /sandbox` };
+  const conn = await o.connect({ [name]: resolved.spec }, { env: {}, toolEnv: baseEnv(o.env()), cwd: o.dir, signal, killOnClose: true, maxTools: MCP_TOOLS_MAX, ...(walls ? { sandbox: walls } : {}) });
+  const cut = [];
+  const tools = [];
+  for (const t of conn.tools) {
+    const schema = JSON.stringify(t.input_schema ?? {});
+    if (schema.length > MCP_SCHEMA_MAX) {
+      cut.push(`${t.name}: left out — its input description is ${Math.round(schema.length / 1000)}k characters`);
+      continue;
+    }
+    const other = taken?.(t.name);
+    if (other) {
+      cut.push(`${t.name}: left out — ${other} already offers a tool of that name`);
+      continue;
+    }
+    const description = String(t.description ?? "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, " ");
+    if (description.length > MCP_DESCRIPTION_MAX) cut.push(`${t.name}: its description was cut at ${MCP_DESCRIPTION_MAX} characters`);
+    tools.push({ ...t, description: description.slice(0, MCP_DESCRIPTION_MAX), readOnly: false, server: name, short: t.name.slice(`mcp__${name}__`.length), key: sha(`${resolved.hash}\n${t.name}\n${schema}\n${description}`) });
+  }
+  const said = (conn.instructions ?? []).map((/** @type {any} */ i) => String(i.text ?? "")).join("\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, " ").slice(0, 4000);
+  return { conn, tools, said, cut };
+}
+
+/**
+ * A server one sub-agent's definition names, as it would run now. The
+ * fingerprint holds the sub-agent's name and its definition's file with the
+ * entry, the program and its scripts: a yes is to this server for this
+ * sub-agent, and any of them changing asks again. With the sandbox off the
+ * program runs as the person — another thing to say yes to.
+ * @param {{ name: string, source: string, file?: string }} agent
+ * @param {{ name: string, raw: unknown }} server
+ * @param {string} dir
+ * @param {Record<string, string | undefined>} env
+ * @param {boolean} unwalled
+ */
+export function resolveAgentServer(agent, server, dir, env, unwalled) {
+  /** @type {any} */
+  const r = resolveServer({ name: server.name, source: agent.source, file: String(agent.file ?? ""), raw: server.raw }, dir, env);
+  if ("problem" in r) return r;
+  const bare = r.spec.type === "stdio" && unwalled;
+  return { ...r, hash: sha(`${r.hash}\nsub-agent ${agent.name}${bare ? "\nno-sandbox" : ""}`), shown: { ...r.shown, ...(bare ? { unwalled: true } : {}) } };
+}
+
+/** The person's yes to a server as it is now, kept under its fingerprint. */
+export function approveServer(/** @type {string} */ hash, /** @type {string} */ name, /** @type {string} */ folder) {
+  changeApprovals((all) => {
+    all[hash] = { name, folder, at: new Date().toISOString() };
+  });
+}
+
+/** A kept yes taken back: asked about again before it next starts. */
+export function forgetServer(/** @type {string} */ hash) {
+  changeApprovals((all) => void delete all[hash]);
+}
+
+/**
+ * Every kept yes under a name in a folder, taken back — however the server
+ * read when each was given (the sandbox on or off, an earlier program): a
+ * sub-agent's server is kept as "<sub-agent>:<server>". Returns how many.
+ */
+export function forgetServersNamed(/** @type {string} */ name, /** @type {string} */ folder) {
+  let n = 0;
+  changeApprovals((all) => {
+    for (const [hash, a] of Object.entries(all)) {
+      if (a.name === name && a.folder === folder) {
+        delete all[hash];
+        n++;
+      }
+    }
+  });
+  return n;
+}
+
+/**
  * The servers of one session: read from the files at every look, started
  * only with a yes, kept until the session ends.
  * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, unwalled?: () => boolean }} o
@@ -394,31 +490,10 @@ export function mcpManager(o) {
     const key = `${row.name}\n${row.resolved.hash}`;
     failed.delete(key);
     try {
-      // A program the session starts runs inside the session's sandbox, put
-      // up first; one that cannot be had starts nothing. A server at a web
-      // address is reached by foldrun itself, with the person's yes to it.
-      const walls = row.resolved.spec.type === "stdio" && o.sandbox ? await o.sandbox() : null;
-      if (walls && "refused" in walls) return `the sandbox could not start (${walls.refused}) — /sandbox`;
-      const conn = await o.connect({ [row.name]: row.resolved.spec }, { env: {}, toolEnv: baseEnv(o.env()), cwd: o.dir, signal, killOnClose: true, maxTools: MCP_TOOLS_MAX, ...(walls ? { sandbox: walls } : {}) });
-      const cut = [];
-      const tools = [];
-      for (const t of conn.tools) {
-        const schema = JSON.stringify(t.input_schema ?? {});
-        if (schema.length > MCP_SCHEMA_MAX) {
-          cut.push(`${t.name}: left out — its input description is ${Math.round(schema.length / 1000)}k characters`);
-          continue;
-        }
-        const taken = [...live.entries()].find(([other, l]) => other !== row.name && l.tools.some((x) => x.name === t.name));
-        if (taken) {
-          cut.push(`${t.name}: left out — ${taken[0]} already offers a tool of that name`);
-          continue;
-        }
-        const description = String(t.description ?? "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, " ");
-        if (description.length > MCP_DESCRIPTION_MAX) cut.push(`${t.name}: its description was cut at ${MCP_DESCRIPTION_MAX} characters`);
-        tools.push({ ...t, description: description.slice(0, MCP_DESCRIPTION_MAX), readOnly: false, server: row.name, short: t.name.slice(`mcp__${row.name}__`.length), key: sha(`${row.resolved.hash}\n${t.name}\n${schema}\n${description}`) });
-      }
-      const said = (conn.instructions ?? []).map((/** @type {any} */ i) => String(i.text ?? "")).join("\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, " ").slice(0, 4000);
-      live.set(row.name, { hash: row.resolved.hash, conn, tools, said, cut });
+      const taken = (/** @type {string} */ tool) => [...live.entries()].find(([other, l]) => other !== row.name && l.tools.some((x) => x.name === tool))?.[0] ?? null;
+      const got = await connectServer(o, row.name, row.resolved, signal, taken);
+      if ("why" in got) return got.why;
+      live.set(row.name, { hash: row.resolved.hash, ...got });
       return null;
     } catch (err) {
       const why = (err instanceof Error ? err.message : String(err)).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 400);

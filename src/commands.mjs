@@ -25,7 +25,7 @@ import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
-import { mcpManager, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX } from "./code-mcp.mjs";
+import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX } from "./code-mcp.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, setProfileWorkspace } from "./credentials.mjs";
@@ -14424,6 +14424,35 @@ function sayNoSandbox(/** @type {{ refused: string, hint?: string }} */ no) {
   console.log(`    ${c.grey("nothing was run. /sandbox off works without it — every command is then asked, and runs as you · /cloud works in a sandbox on the platform")}`);
 }
 
+/** The question's own name for starting a sub-agent's MCP server (never a tool the model can call). */
+const MCP_START = "mcp_start";
+
+/**
+ * What a yes to an MCP server would start, shown whole: the program as
+ * found, its arguments, the names of what it is handed.
+ * @param {any} row name, source, file, resolved
+ * @param {any} s
+ * @param {string} [forAgent] a sub-agent's name: the server is its own, for one job
+ */
+function showMcpServer(row, s, forAgent) {
+  const r = row.resolved.shown;
+  const life = forAgent ? "for this job of the sub-agent, and is stopped when the job ends" : "for as long as the session lasts";
+  console.log(`      ${c.grey(`${row.source === "project" ? "from this folder's" : "from your own"} ${plainText(homeTilde(row.file))}`)}`);
+  if (r.kind === "program") {
+    console.log(`      ${c.white(`$ ${plainText(r.line)}`)}`);
+    console.log(`      ${c.grey(`the program: ${plainText(r.program)}`)}`);
+    if (r.scripts.length) console.log(`      ${c.grey(`from this folder, as they are now (a change asks again): ${r.scripts.map((/** @type {string} */ x) => plainText(x)).join(", ")}`)}`);
+    console.log(`      ${c.grey(`it gets: ${r.gets.join("; ")}${r.env.length ? `; and ${r.env.map((/** @type {any} */ e) => `${e.name}${e.from ? ` (from your ${e.from})` : ""}`).join(", ")}` : ""}`)}`);
+    if (s.sandboxOff !== true && s.box?.current()) console.log(`      ${c.grey(`it runs inside this session's sandbox ${life}: it writes only in this folder, cannot read your keys, and reaches only the allowed sites (/sandbox)`)}`);
+    else if (s.sandboxOff !== true) console.log(`      ${c.grey("it runs inside this session's sandbox (/sandbox), which is put up first; if that cannot start, the server is not started")}`);
+    else console.log(`      ${c.amber(`it runs on this computer as you, with no sandbox, ${life} — it can read your files and use the network`)}`);
+  } else {
+    console.log(`      ${c.white(plainText(r.line))}`);
+    if (r.headers.length) console.log(`      ${c.grey(`it is sent the header${r.headers.length === 1 ? "" : "s"}: ${r.headers.map((/** @type {any} */ h) => `${h.name}${h.from.length ? ` (from your ${h.from.join(", ")})` : ""}`).join(", ")}`)}`);
+    console.log(`      ${c.grey(`what the ${forAgent ? "sub-agent" : "agent"} passes to its tools goes to that address; a redirect to another address is refused`)}`);
+  }
+}
+
 async function mcpOf(/** @type {any} */ s) {
   if (s.mcp !== undefined) return s.mcp;
   /** @type {any} */
@@ -14720,6 +14749,11 @@ function contextBlock(/** @type {any} */ s) {
     lines.push(row("foldrun's own", chars(about.length)));
     lines.push(row("instructions", own.files.length ? `${chars(own.text.length)} — ${own.files.map((f) => plainText(f.path)).join(", ")}` : "none in this folder (/init writes AGENTS.md)"));
     lines.push(row("skills", skills.length ? `${chars(skillsNote(skills).length)} — ${skills.length} listed by name; a skill's text is read when used` : "none"));
+    // The tools' own descriptions are read with every call too. A sub-agent's own MCP servers are not among them.
+    const mcpTools = typeof s.mcp?.tools === "function" ? s.mcp.tools() : [];
+    lines.push(row("MCP tools", mcpTools.length ? `${chars(JSON.stringify(mcpTools.map((/** @type {any} */ x) => [x.name, x.description, x.input_schema])).length)} — ${mcpTools.length} tool${mcpTools.length === 1 ? "" : "s"} of ${[...new Set(mcpTools.map((/** @type {any} */ x) => plainText(String(x.server))))].join(", ")} (/mcp)` : typeof s.mcp?.running === "function" && s.mcp.running().length ? `none offered — ${s.mcp.running().map((/** @type {string} */ n) => plainText(n)).join(", ")} ${s.mcp.running().length === 1 ? "is" : "are"} running (/mcp)` : "none — no MCP server of the session is running"));
+    const withOwn = readAgents(s.dir).agents.filter((a) => a.mcp?.length);
+    if (withOwn.length) lines.push(row("", `0 tokens here for the sub-agents' own MCP servers (${withOwn.map((a) => `${plainText(a.name)}: ${(a.mcp ?? []).map((m) => plainText(m.name)).join(", ")}`).join(" · ")}): their tools are read by that sub-agent alone, while its job runs`));
     lines.push(row("conversation", history === null ? "not opened yet — it is read with your first turn here" : history.length ? `${chars(JSON.stringify(history).length)} — ${history.length} messages (/compact shortens it, /clear drops it)` : "empty"));
   } else {
     lines.push(row("in the cloud", `the agent reads ${plainText(s.ws)}'s own context there: the account's and project's AGENTS.md, knowledge and skills — the run's report lists each part and its size`));
@@ -16660,6 +16694,9 @@ async function codeLocalTurn(s, text) {
     /** This turn's MCP tools by name, its sub-agents, and the project's agents a job may be run as in the cloud. */
     /** @type {Map<string, any>} */
     let turnMcp = new Map();
+    /** The tools of sub-agents' own MCP servers while their jobs run: "<sub-agent>\n<tool>" → the tool. */
+    /** @type {Map<string, any>} */
+    const subMcp = new Map();
     /** @type {import("./code-agents.mjs").AgentDef[]} */
     let turnAgents = [];
     /** @type {{ agents: string[], own: string, project: string } | null} */
@@ -16677,7 +16714,8 @@ async function codeLocalTurn(s, text) {
       // answered by the tool (its own message), not asked about.
       const job = name === AGENT_TOOL ? agentJob(input, turnAgents, turnCloud) : null;
       if (job && ("problem" in job || (job.where === "here" && !agentActs(job.def)))) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
-      const mcpTool = turnMcp.get(name) ?? null;
+      // A sub-agent's call is to its own servers' tools; the session's are the session agent's.
+      const mcpTool = (child ? subMcp.get(`${child}\n${name}`) : turnMcp.get(name)) ?? null;
       // /plan: the turn reads and proposes. Whatever would change the
       // folder, run a command or leave this computer is refused unasked —
       // an earlier "always" does not reach into a plan.
@@ -16730,7 +16768,13 @@ async function codeLocalTurn(s, text) {
         if (child) console.log(`    ${c.grey(`the sub-agent ${plainText(child)} asks:`)}`);
         if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
         const width = Math.max(20, (process.stdout.columns || 80) - 10);
-        if (cloud) {
+        if (name === MCP_START) {
+          // A sub-agent's own MCP server (FOL-253): the yes is to this server for this sub-agent, as it is now.
+          const row = /** @type {any} */ (input).row;
+          console.log(`      ${c.white(`start the MCP server ${plainText(row.name)} for the sub-agent ${plainText(String(child))}?`)} ${c.grey("— its definition names it (mcpServers:); its tools go to that sub-agent only, each call asked")}`);
+          showMcpServer(row, s, String(child));
+          console.log(`      ${c.grey(`yes is for this job. Always keeps the yes for this server of this sub-agent, on this computer, until the entry, the program or a script of it changes — /mcp forget ${plainText(String(child))}:${plainText(row.name)} takes it back`)}`);
+        } else if (cloud) {
           const list = cloudTasks(input).tasks ?? [];
           console.log(`      ${c.grey(`sends a copy of this folder to ${plainText(s.ws)} on ${plainText(s.url.replace(/^https?:\/\//, ""))} and runs ${plainText(s.agent)} there, ${list.length === 1 ? "once" : `${list.length} at once`} — costs foldrun credits`)}`);
           list.forEach((t, i) => {
@@ -16814,7 +16858,7 @@ async function codeLocalTurn(s, text) {
           console.log(`      ${c.grey(clipCells(shown, width))}`);
         }
         const alwaysFor = scope === "mcp" ? "]lways for this tool, this session · [" : scope === "cloud-sub" ? "]lways for cloud sub-agents this session · [" : scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud agents this session · [" : scope === "cloud-changes" ? "]lways for cloud agents' changes this session · [" : null;
-        const always = child ? "" : alwaysFor;
+        const always = name === MCP_START ? "]lways for this server of this sub-agent · [" : child ? "" : alwaysFor;
         // "always in this folder": kept for every later session here. Only
         // for a command that rules can match at all, and not under strict.
         const forFolder = !child && s.strict !== true && command !== null && scope === "command" && !("never" in commandParts(command, s.dir, inFolder));
@@ -16901,6 +16945,8 @@ async function codeLocalTurn(s, text) {
           return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
         }
         if (answer === "y" || answer === "yes" || (always && (answer === "a" || answer === "always"))) {
+          // A sub-agent's server: whether the yes is kept is told to the one who starts it.
+          if (name === MCP_START) return { behavior: /** @type {const} */ ("allow"), updatedInput: { ...input, keep: answer.startsWith("a") } };
           if (cloud) grantTicket(input, signal);
           if (answer.startsWith("a")) {
             if (scope === "changes" || scope === "cloud" || scope === "cloud-changes" || scope === "cloud-sub") allow.kinds.add(scope);
@@ -17128,8 +17174,109 @@ async function codeLocalTurn(s, text) {
       if (signal.aborted) childAbort.abort();
       const used = meter();
       turnMeters.push(used);
+      // Its own MCP servers (mcpServers: in its definition, the cloud's field): started for this job only, each
+      // with the person's yes to it for this sub-agent; stopped when the job ends. Nothing of them reaches
+      // the session's own agent — not a tool, not a definition.
+      /** @type {{ name: string, conn: any }[]} */
+      const ownServers = [];
+      /** @type {any[]} */
+      const ownTools = [];
+      const closeOwn = async () => {
+        for (const t of ownTools) if (subMcp.get(`${def.name}\n${t.name}`) === t) subMcp.delete(`${def.name}\n${t.name}`);
+        for (const o of ownServers.splice(0)) {
+          s.subMcpLive?.delete(o.conn);
+          await o.conn.close().catch(() => undefined);
+        }
+      };
+      if (def.mcp?.length) {
+        const notStarted = (/** @type {string} */ why) => ({ text: `The sub-agent ${def.name} was not started: ${why} Do the job another way, or tell the person.`, isError: true });
+        if (s.planOnly) return notStarted("this is a plan-only turn, and it has MCP servers of its own, which a plan does not start.");
+        const m = await mcpOf(s);
+        if (!m) return notStarted("its definition names MCP servers, and this foldrun's engine cannot connect them (the person can update foldrun).");
+        const engineMcp = /** @type {any} */ (await import("@foldrun/core/engine-mcp"));
+        try {
+          /** The server as the definition names it NOW (the file is read again): what a start, kept yes or not, is held to. */
+          const asNow = (/** @type {string} */ serverName) => {
+            const defNow = readAgents(s.dir).agents.find((a) => a.name === def.name && a.source === def.source && a.file === def.file);
+            const entryNow = defNow?.mcp?.find((x) => x.name === serverName);
+            return defNow && entryNow ? resolveAgentServer(defNow, entryNow, s.dir, localEnv(), s.sandboxOff === true) : null;
+          };
+          for (const server of def.mcp) {
+            // Not the definition read when the turn began: an entry edited or taken out since does not start.
+            const resolved = asNow(server.name);
+            if (!resolved) {
+              await closeOwn();
+              return notStarted(`its definition changed since this turn began (its MCP server ${server.name} is no longer named there).`);
+            }
+            if ("problem" in resolved) {
+              said(() => console.log(`  ${c.red("✗")} ${c.grey(`sub-agent ${plainText(def.name)}: its MCP server ${plainText(server.name)} cannot start — ${plainText(resolved.problem)}`)}`));
+              await closeOwn();
+              return notStarted(`its MCP server ${server.name} cannot start here (${resolved.problem}).`);
+            }
+            const row = { name: server.name, source: def.source, file: String(def.file ?? ""), resolved };
+            if (!readApprovals()[resolved.hash]) {
+              const next = gate.then(() => decide(MCP_START, { row }, signal, def.name));
+              gate = next.then(() => undefined, () => undefined);
+              const d = await next;
+              if (d.behavior !== "allow") {
+                await closeOwn();
+                return notStarted(`the person said no to its MCP server ${server.name}.`);
+              }
+              // Asked about what it was a moment ago: it starts only if the definition, read again now, still names exactly that.
+              const again = asNow(server.name);
+              if (!again || "problem" in again || again.hash !== resolved.hash) {
+                await closeOwn();
+                return notStarted(`its MCP server ${server.name} changed while the person was asked.`);
+              }
+              // A yes is for this job; only an "always" is kept.
+              if (/** @type {any} */ (d).updatedInput?.keep === true) approveServer(resolved.hash, `${def.name}:${server.name}`, s.dir);
+            }
+            /** @type {any} */
+            let got;
+            try {
+              got = await connectServer({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), connect: engineMcp.connectMcp }, server.name, resolved, AbortSignal.any([signal, AbortSignal.timeout(90_000)]), (tool) => (ownTools.some((x) => x.name === tool) ? "another of its servers" : null));
+            } catch (err) {
+              got = { why: (err instanceof Error ? err.message : String(err)).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 400) };
+            }
+            if ("why" in got) {
+              said(() => console.log(`  ${c.red("✗")} ${c.grey(`sub-agent ${plainText(def.name)}: its MCP server ${plainText(server.name)} did not start: ${plainText(got.why)}`)}`));
+              await closeOwn();
+              // Why is on the person's screen only: a server's own words (an error page, say) are not handed to the model.
+              return notStarted(`its MCP server ${server.name} did not start (the person was shown why).`);
+            }
+            ownServers.push({ name: server.name, conn: got.conn });
+            // Gone with the process, whatever happens to the job.
+            if (!s.subMcpLive) {
+              s.subMcpLive = new Set();
+              process.on("exit", () => {
+                for (const conn of s.subMcpLive) {
+                  try {
+                    conn.kill?.();
+                  } catch {
+                    /* gone */
+                  }
+                }
+              });
+            }
+            s.subMcpLive.add(got.conn);
+            ownTools.push(...got.tools);
+            said(() => console.log(`  ${c.green("✓")} ${c.grey(`MCP server ${plainText(server.name)} started for the sub-agent ${plainText(def.name)} · ${got.tools.length} tool${got.tools.length === 1 ? "" : "s"} — stopped when its job ends`)}`));
+            for (const line of got.cut) said(() => console.log(`    ${c.grey(plainText(line))}`));
+          }
+        } catch (err) {
+          await closeOwn();
+          return notStarted(`its MCP servers could not be started (${plainText(explain(err))}).`);
+        }
+        if (signal.aborted) {
+          await closeOwn();
+          return { text: "Stopped by the person.", isError: true };
+        }
+        for (const t of ownTools) subMcp.set(`${def.name}\n${t.name}`, t);
+      }
       /** What this agent may do: its own tools only; one that only reads is refused, never asked, outside what may be read. */
       const childCan = (/** @type {string} */ name, /** @type {Record<string, any>} */ inp, /** @type {{ signal?: AbortSignal, toolUseID?: string } | undefined} */ opts) => {
+        // A tool of its own MCP servers: asked at every call, what goes to the server shown whole.
+        if (ownTools.some((x) => x.name === name)) return canUseTool(name, inp, opts, def.name, false);
         if (!def.tools.includes(name)) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: `${name} is not one of your tools (${def.tools.join(", ")}).` });
         if (!acts) {
           const target = name === "Read" ? inp.file_path : (inp.path ?? s.dir);
@@ -17152,6 +17299,19 @@ async function codeLocalTurn(s, text) {
             // The definition's prose is the person's or the project's own text; the folder's instructions go with it as they do for the session's agent.
             systemPrompt: [def.prompt, `You work in the person's folder: ${s.dir}`, Array.isArray(s.extraDirs) && s.extraDirs.length ? `They also added these folders, for reading: ${s.extraDirs.join(", ")}` : "", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
             tools: def.tools,
+            // Its own MCP servers' tools, in its conversation only. What one answers may hold anything: marked,
+            // so the person is asked before the agent's later words about it go to the cloud.
+            ...(ownTools.length
+              ? {
+                  extraTools: ownTools.map((x) => ({
+                    name: x.name, description: x.description, input_schema: x.input_schema, readOnly: false,
+                    run: async (/** @type {any} */ input, /** @type {any} */ ctx) => {
+                      s.privateSeen = true;
+                      return x.run(input, ctx);
+                    },
+                  })),
+                }
+              : {}),
             hooks: { PostToolUse: [{ hooks: [afterTool] }] },
             ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
             maxTurns: Math.min(AGENT_TURNS_EACH, left),
@@ -17177,6 +17337,8 @@ async function codeLocalTurn(s, text) {
         return { text: `The sub-agent failed: ${plainText(explain(err))}`, isError: true };
       } finally {
         signal.removeEventListener("abort", onStop);
+        // Its own MCP servers end with its job.
+        await closeOwn();
         // What its finished calls used, whether or not it reached a result.
         for (const row of meteredRows(used, { kind: "sub-agent", turn: costTurn(s), label: String(def.name), paidBy: localPayer(s) })) costNote(s, row);
       }
@@ -18641,7 +18803,7 @@ async function codeCmd(positional, flags, layout) {
     if (name === "/agents") {
       const { agents, problems } = readAgents(dir);
       console.log(`  ${c.bold(c.white("on this computer"))} ${c.dim("— the agent hands one a job; only its answer comes back")}`);
-      for (const a of agents) console.log(`  ${c.cyan(plainText(a.name).padEnd(14))} ${c.white(clipLine(plainText(a.description)))}\n  ${" ".repeat(14)} ${c.dim(`${a.source}${a.file ? ` · ${plainText(homeTilde(a.file))}` : ""} · ${a.tools.join(", ")}${agentActs(a) ? " · asked at every call, and for each change and command" : " · reads only, never asked"}`)}`);
+      for (const a of agents) console.log(`  ${c.cyan(plainText(a.name).padEnd(14))} ${c.white(clipLine(plainText(a.description)))}\n  ${" ".repeat(14)} ${c.dim(`${a.source}${a.file ? ` · ${plainText(homeTilde(a.file))}` : ""} · ${a.tools.join(", ")}${a.mcp?.length ? ` · its own MCP server${a.mcp.length === 1 ? "" : "s"} ${a.mcp.map((m) => plainText(m.name)).join(", ")} (mcpServers: — started for its job only, with your yes)` : ""}${agentActs(a) ? " · asked at every call, and for each change and command" : " · reads only, never asked"}`)}`);
       for (const x of problems) console.log(`  ${c.amber("!")} ${c.dim(`${plainText(homeTilde(x.file))}: ${plainText(x.why)}`)}`);
       if (s.localOnly === true) {
         console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim("— off: this session works on this computer only, so the agent has no cloud agents (/cloud-agents on)")}\n`);
@@ -18650,7 +18812,7 @@ async function codeCmd(positional, flags, layout) {
       const names = await cloudAgentNames(s);
       console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim(`— run in ${plainText(ws)}'s sandbox with the agent's own tools; only the prompt is sent, none of this folder; costs credits, asked first`)}`);
       console.log(`  ${names.length ? names.map((/** @type {string} */ n) => c.cyan(plainText(n))).join(c.dim(", ")) : c.dim(`none yet — the project ${plainText(ws)} has no agents (a first /cloud turn makes it and its ${plainText(agent)})`)}`);
-      say(`define your own: ~/.foldrun/agents/<name>.md, or .claude/agents/<name>.md in this folder (frontmatter name, description, tools; then its instructions). A project's cloud agents are its agents/<name>/agent.md (foldrun docs agents). To have cloud agents change a copy of this folder, the agent uses cloud_agents; a whole turn there is /cloud.`);
+      say(`define your own: ~/.foldrun/agents/<name>.md, or .claude/agents/<name>.md in this folder (frontmatter name, description, tools, and mcpServers: for MCP servers of its own, as in a cloud agent's file; then its instructions). A project's cloud agents are its agents/<name>/agent.md (foldrun docs agents). To have cloud agents change a copy of this folder, the agent uses cloud_agents; a whole turn there is /cloud.`);
       continue;
     }
     if (name === "/mcp") {
@@ -18662,25 +18824,26 @@ async function codeCmd(positional, flags, layout) {
       const [verb, target, ...more] = rest.split(/\s+/).filter(Boolean);
       // A start may take a minute; the clock runs from the start, not from the question before it.
       const soon = () => AbortSignal.timeout(90_000);
-      /** What a yes would start, shown whole: the program as found, its arguments, the names of what it is handed. */
-      const show = (/** @type {any} */ row) => {
-        const r = row.resolved.shown;
-        console.log(`      ${c.grey(`${row.source === "project" ? "from this folder's" : "from your own"} ${plainText(homeTilde(row.file))}`)}`);
-        if (r.kind === "program") {
-          console.log(`      ${c.white(`$ ${plainText(r.line)}`)}`);
-          console.log(`      ${c.grey(`the program: ${plainText(r.program)}`)}`);
-          if (r.scripts.length) console.log(`      ${c.grey(`from this folder, as they are now (a change asks again): ${r.scripts.map((/** @type {string} */ x) => plainText(x)).join(", ")}`)}`);
-          console.log(`      ${c.grey(`it gets: ${r.gets.join("; ")}${r.env.length ? `; and ${r.env.map((/** @type {any} */ e) => `${e.name}${e.from ? ` (from your ${e.from})` : ""}`).join(", ")}` : ""}`)}`);
-          if (s.sandboxOff !== true && s.box?.current()) console.log(`      ${c.grey("it runs inside this session's sandbox for as long as the session lasts: it writes only in this folder, cannot read your keys, and reaches only the allowed sites (/sandbox)")}`);
-          else if (s.sandboxOff !== true) console.log(`      ${c.grey("it runs inside this session's sandbox (/sandbox), which is put up first; if that cannot start, the server is not started")}`);
-          else console.log(`      ${c.amber("it runs on this computer as you, with no sandbox, for as long as the session lasts — it can read your files and use the network")}`);
-        } else {
-          console.log(`      ${c.white(plainText(r.line))}`);
-          if (r.headers.length) console.log(`      ${c.grey(`it is sent the header${r.headers.length === 1 ? "" : "s"}: ${r.headers.map((/** @type {any} */ h) => `${h.name}${h.from.length ? ` (from your ${h.from.join(", ")})` : ""}`).join(", ")}`)}`);
-          console.log(`      ${c.grey("what the agent passes to its tools goes to that address; a redirect to another address is refused")}`);
-        }
-      };
+      const show = (/** @type {any} */ row) => showMcpServer(row, s);
       const { rows, problems } = await m.look();
+      // Sub-agents' own servers (mcpServers: in a definition): not the session's — listed so a kept yes can be seen
+      // and taken back. Read only for the list or a "<sub-agent>:<server>" name, never for a session server's command.
+      const ownRows = () => {
+        const kept = readApprovals();
+        return readAgents(dir).agents.flatMap((a) => (a.mcp ?? []).map((server) => {
+          /** @type {any} */
+          const r = resolveAgentServer(a, server, dir, localEnv(), s.sandboxOff === true);
+          const id = `${a.name}:${server.name}`;
+          // A yes kept for it in this folder, however it read then (the sandbox on or off).
+          return { id, r, kept: Object.values(kept).some((k) => k.name === id && k.folder === dir), keptAsNow: !("problem" in r) && Boolean(kept[r.hash]) };
+        }));
+      };
+      if (verb === "forget" && target && target.includes(":")) {
+        // By name and folder: every yes kept for it goes, also one given with the sandbox off, or for an entry that no longer reads.
+        const n = forgetServersNamed(target, dir);
+        say(n ? `your yes to ${plainText(target)} is taken back: it is asked about again before it next starts` : `${plainText(target)} has no kept yes in this folder: it is asked about each time the sub-agent's job starts (/mcp lists them)`);
+        continue;
+      }
       const row = target ? rows.find((/** @type {any} */ r) => r.name === target && r.state !== "hidden") : null;
       const started = (/** @type {string | null} */ why, /** @type {string} */ n) => {
         if (why) console.log(`  ${c.red("✗")} ${c.dim(`${plainText(n)} did not start: ${plainText(why)}`)}\n`);
@@ -18690,6 +18853,7 @@ async function codeCmd(positional, flags, layout) {
         }
       };
       if (!verb) {
+        for (const o of ownRows()) console.log(`  ${c.white(plainText(o.id).padEnd(16))} ${c.dim("sub-agent's own")} ${"problem" in o.r ? c.red(`cannot start: ${plainText(o.r.problem)}`) : o.keptAsNow ? c.cyan(`your yes is kept — starts with that sub-agent's job, stops with it · /mcp forget ${plainText(o.id)}`) : c.amber("asked when that sub-agent's job starts")}${o.kept && !o.keptAsNow ? c.dim(` · a yes is kept for it as it read before (/mcp forget ${plainText(o.id)} drops it)`) : ""}`);
         if (!rows.length && !problems.length) say('no MCP servers — /mcp add <name> -- <program> [args…] or /mcp add <name> <https address> names one (in ~/.foldrun/mcp.json; --project writes this folder\'s .mcp.json)');
         for (const r of rows) {
           const state = r.state === "on" ? c.green(`running · ${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}`) : r.state === "waiting" ? c.amber(`waits for your yes — /mcp on ${plainText(r.name)}`) : r.state === "ready" ? c.cyan("starts with your next message on this computer") : r.state === "off" ? c.grey(`off for this session — /mcp on ${plainText(r.name)}`) : r.state === "failed" ? c.red(`did not start: ${plainText(String(r.why))} — /mcp restart ${plainText(r.name)}`) : r.state === "hidden" ? c.grey(`not used: ${plainText(String(r.why))}`) : c.red(`cannot be started: ${plainText(String(r.why))}`);

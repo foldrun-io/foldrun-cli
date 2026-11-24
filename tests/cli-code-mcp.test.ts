@@ -6,9 +6,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readMcpConfig, resolveServer, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX } from "../src/code-mcp.mjs";
+import { readMcpConfig, resolveServer, resolveAgentServer, approveServer, forgetServer, forgetServersNamed, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX } from "../src/code-mcp.mjs";
 import { SERVER } from "./mcp-server.ts";
-import { readAgents, agentActs, agentTool, agentJob, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder, TODOS_MAX } from "../src/code-agents.mjs";
+import { readAgents, agentMcpServers, AGENT_MCP_MAX, agentActs, agentTool, agentJob, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder, TODOS_MAX } from "../src/code-agents.mjs";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-")));
 process.env.FOLDRUN_HOME = home;
@@ -319,4 +319,79 @@ test("what a command inside the sandbox starts with: the person's environment le
   const got = sandboxEnv({ PATH: "/usr/bin", HOME: "/h", JAVA_HOME: "/j", EDITOR: "vi", GH_TOKEN: "x", AWS_SECRET_ACCESS_KEY: "y", NPM_CONFIG_REGISTRY: "https://registry.npmjs.org", DATABASE_URL: "postgres://u:pw@db/x", SSH_AUTH_SOCK: "/tmp/agent", HARMLESS: "sk-live-looks-like-a-key", GONE: undefined });
   assert.deepEqual(Object.keys(got.env).sort(), ["EDITOR", "HOME", "JAVA_HOME", "NPM_CONFIG_REGISTRY", "PATH"]);
   assert.deepEqual(got.kept, ["AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "GH_TOKEN", "HARMLESS", "SSH_AUTH_SOCK"]);
+});
+
+
+test("a sub-agent's own MCP servers (FOL-253): mcpServers: in its definition, the field and shape a cloud agent's file uses", () => {
+  // Block YAML and flow YAML, a program and an address: read as the cloud's parser reads them.
+  const block = agentMcpServers("---\nname: lookup\ndescription: d\nmcpServers:\n  kit:\n    command: node\n    args: [srv.mjs, \"--x\"]\n    env:\n      GIVEN: ${MY_TOKEN}\n  web:\n    url: https://x.example/mcp\n    headers:\n      Authorization: Bearer ${MY_TOKEN}\n---\nLook things up.\n");
+  assert.deepEqual(block, { servers: [{ name: "kit", raw: { command: "node", args: ["srv.mjs", "--x"], env: { GIVEN: "${MY_TOKEN}" } } }, { name: "web", raw: { url: "https://x.example/mcp", headers: { Authorization: "Bearer ${MY_TOKEN}" } } }] });
+  assert.deepEqual(agentMcpServers("---\nname: a\nmcpServers: { kit: { command: node } }\n---\nx"), { servers: [{ name: "kit", raw: { command: "node" } }] });
+  // None named: nothing. Named wrongly: said, never guessed at.
+  assert.equal(agentMcpServers("---\nname: a\ndescription: d\n---\nx"), null);
+  assert.equal(agentMcpServers("---\nname: a\nmcpServers: {}\n---\nx"), null);
+  assert.equal(agentMcpServers("no frontmatter"), null);
+  assert.match((agentMcpServers("---\nname: a\nmcpServers: [kit]\n---\nx") as any).problem, /must be a map/);
+  assert.match((agentMcpServers("---\nname: a\nmcpServers:\n  kit: {command: node\n---\nx") as any).problem, /not YAML that can be read/);
+  const many = Object.fromEntries(Array.from({ length: AGENT_MCP_MAX + 1 }, (_, i) => [`s${i}`, { command: "node" }]));
+  assert.match((agentMcpServers(`---\nname: a\nmcpServers: ${JSON.stringify(many)}\n---\nx`) as any).problem, new RegExp(`${AGENT_MCP_MAX} at most`));
+  // Only a plain --- opens a definition: no other front-matter language is read (a "---js" block is code).
+  assert.equal(agentMcpServers("---js\n{ mcpServers: { kit: { command: process.exit(7) } } }\n---\nx"), null);
+
+  // In a folder: the agent has them, counts as one that acts (asked at every call), and a broken block leaves the agent out.
+  const d = folder({
+    "srv.mjs": SERVER,
+    ".claude/agents/lookup.md": "---\nname: lookup\ndescription: Looks things up.\ntools: Read\nmcpServers:\n  kit:\n    command: node\n    args: [srv.mjs]\n---\nYou look things up.\n",
+    ".claude/agents/reader.md": "---\nname: reader\ndescription: Reads.\ntools: Read\n---\nYou read.\n",
+    ".claude/agents/broken.md": "---\nname: broken\ndescription: Broken.\nmcpServers: [kit]\n---\nYou are broken.\n",
+    // Least privilege: none of the six, only its own server. Without a server, no tools is no agent.
+    ".claude/agents/only.md": "---\nname: only\ndescription: Only its kit.\ntools: []\nmcpServers:\n  kit:\n    command: node\n    args: [srv.mjs]\n---\nYou use your kit.\n",
+    ".claude/agents/none.md": "---\nname: none\ndescription: Nothing.\ntools: []\n---\nYou have nothing.\n",
+  });
+  const { agents, problems } = readAgents(d);
+  const lookup = agents.find((a) => a.name === "lookup")!;
+  assert.deepEqual(lookup.mcp, [{ name: "kit", raw: { command: "node", args: ["srv.mjs"] } }]);
+  assert.equal(agentActs(lookup), true);
+  assert.equal(agentActs(agents.find((a) => a.name === "reader")!), false);
+  assert.equal(agents.some((a) => a.name === "broken"), false);
+  assert.deepEqual(agents.find((a) => a.name === "only")?.tools, []);
+  assert.equal(agents.find((a) => a.name === "only")?.mcp?.length, 1);
+  assert.equal(agents.some((a) => a.name === "none"), false);
+  assert.match(JSON.stringify(agentTool(agents, null)), /only: Only its kit\. \(tools: MCP servers of its own\)/);
+  assert.ok(problems.some((p) => /broken\.md$/.test(p.file) && /must be a map/.test(p.why)));
+  // The parent agent is told the sub-agent's name, description and core tools — nothing of its servers' tools.
+  assert.doesNotMatch(JSON.stringify(agentTool(agents, null)), /mcp__|srv\.mjs/);
+
+  // The yes is to this server for this sub-agent: another sub-agent naming the same entry, the session's own
+  // entry of that name, the sandbox off, or a changed script — each is a different thing to say yes to.
+  const forLookup = resolveAgentServer(lookup, lookup.mcp![0], d, ENV, false);
+  assert.ok("spec" in forLookup);
+  assert.deepEqual(forLookup.shown.scripts, ["srv.mjs"]);
+  const other = resolveAgentServer({ ...lookup, name: "other" }, lookup.mcp![0], d, ENV, false);
+  const session = resolveServer({ name: "kit", source: "project", file: lookup.file!, raw: lookup.mcp![0].raw }, d, ENV);
+  const bare = resolveAgentServer(lookup, lookup.mcp![0], d, ENV, true);
+  assert.ok("hash" in other && "hash" in session && "hash" in bare);
+  assert.equal(new Set([forLookup.hash, other.hash, session.hash, bare.hash]).size, 4);
+  assert.equal((bare.shown as any).unwalled, true);
+  approveServer(forLookup.hash, "lookup:kit", d);
+  assert.equal(readApprovals()[forLookup.hash]?.name, "lookup:kit");
+  assert.equal(readApprovals()[other.hash], undefined);
+  forgetServer(forLookup.hash);
+  assert.equal(readApprovals()[forLookup.hash], undefined, "a kept yes can be taken back");
+  // By name and folder: the yes given with the sandbox on and the one given with it off both go; another folder's stays.
+  approveServer(forLookup.hash, "lookup:kit", d);
+  approveServer(bare.hash, "lookup:kit", d);
+  approveServer(other.hash, "lookup:kit", "/another/folder");
+  assert.equal(forgetServersNamed("lookup:kit", d), 2);
+  assert.equal(readApprovals()[forLookup.hash], undefined);
+  assert.equal(readApprovals()[bare.hash], undefined);
+  assert.equal(readApprovals()[other.hash]?.folder, "/another/folder");
+  forgetServer(other.hash);
+  // A number or a yes/no written bare in YAML is that text, as the cloud reads it.
+  assert.deepEqual(agentMcpServers("---\nname: a\nmcpServers:\n  kit:\n    command: node\n    args: [--port, 8080, true]\n    env:\n      N: 5\n      ON: false\n---\nx"), { servers: [{ name: "kit", raw: { command: "node", args: ["--port", "8080", "true"], env: { N: "5", ON: "false" } } }] });
+  fs.appendFileSync(path.join(d, "srv.mjs"), "\n// changed\n");
+  const after = resolveAgentServer(lookup, lookup.mcp![0], d, ENV, false);
+  assert.ok("hash" in after && after.hash !== forLookup.hash, "a changed script asks again");
+  // The same strict reading as a session's server: a secret only by name, in env or headers.
+  assert.match((resolveAgentServer(lookup, { name: "kit", raw: { command: "node", args: ["--token=${MY_TOKEN}"] } }, d, ENV, false) as any).problem, /a secret goes in "env" or "headers"/);
 });
