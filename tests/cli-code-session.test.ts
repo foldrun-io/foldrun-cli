@@ -386,6 +386,28 @@ test("/model: shows the agent's model; /model max changes its file's model: line
   }
 });
 
+test("the start box and /status name the same session, and /status says where its spent figure comes from (FOL-272)", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    const id = /session (code-[0-9a-f]{16})/.exec(t.out())?.[1];
+    assert.ok(id, `the start box names the session:\n${t.out()}`);
+    const before = at;
+    at = await alone(t, "/status", at);
+    at = await t.until(/spent\s+\$0\.0+ in the cloud this session/, at);
+    const shown = /session\s+(code-[0-9a-f]{16})/.exec(t.out().slice(before))?.[1];
+    assert.equal(shown, id, "the same id in both");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("/model effort (FOL-256, FOL-263): the effort: line of the agent's file — a picker, from /model's list too, a level straight away, default takes the line out; /status names it", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

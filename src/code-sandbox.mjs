@@ -13,11 +13,33 @@
 // their own environment: hostEnv() is that, as it was before the walls.
 
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+/**
+ * Where package managers keep a project's downloads inside the walls (FOL-272):
+ * one folder per project, outside ~/.foldrun (which the walls keep unread,
+ * as it holds credentials) — $XDG_CACHE_HOME/foldrun/packages/<project>.
+ * @param {string} dir the project folder
+ */
+export function packageCacheFor(dir, env = process.env, home = os.homedir()) {
+  let real = path.resolve(dir);
+  try {
+    real = fs.realpathSync(real);
+  } catch {
+    /* as given */
+  }
+  const base = typeof env.XDG_CACHE_HOME === "string" && path.isAbsolute(env.XDG_CACHE_HOME) ? env.XDG_CACHE_HOME : path.join(home, ".cache");
+  const id = crypto.createHash("sha256").update(real).digest("hex").slice(0, 16);
+  return path.join(base, "foldrun", "packages", `${path.basename(real).replace(/[^\w.-]/g, "_").slice(0, 40)}-${id}`);
+}
 
 /** The tool that runs one command outside the walls. */
 export const OUTSIDE_TOOL = "bash_outside";
 export const OUTSIDE_DESCRIPTION =
-  "Run one shell command OUTSIDE the sandbox, as the person, with their full access. Only for a command that was refused inside it for a reason the task really needs — a write outside this folder, a site that is not allowed, a program that needs the person's own keys (git push, a deploy, docker). The person is shown the command and asked every time; say in `reason` why it cannot run inside. Never use it for a command that works in Bash.";
+  "Run one shell command OUTSIDE the sandbox, as the person, with their full access. Only for a command that was refused inside it for a reason the task really needs — a write outside this folder, a site that is not allowed, a program that needs the person's own keys (git push, a deploy, docker). The person is shown the command and asked every time; say in `reason` why it cannot run inside. Never use it for a command that works in Bash. Inside the sandbox, files that hold keys (~/.npmrc, ~/.ssh, ~/.aws, …) cannot be read — npm may print an EPERM about ~/.npmrc, which is not a failure when the command's own result is fine — and package managers keep downloads in a cache the sandbox provides, so npm install, npx and pip install work inside.";
 export const OUTSIDE_SCHEMA = {
   type: "object",
   properties: {
@@ -120,7 +142,7 @@ export function sandboxFor(o) {
       const saved = { ...process.env };
       let got;
       try {
-        got = await core.openLocalSandbox({ cwd: o.dir, sites: [...new Set([...trusted, ...sites])], denyRead: o.denyRead?.() ?? [] });
+        got = await core.openLocalSandbox({ cwd: o.dir, sites: [...new Set([...trusted, ...sites])], denyRead: o.denyRead?.() ?? [], cache: packageCacheFor(o.dir, hostEnv()) });
       } catch (err) {
         got = { refused: `the sandbox did not start: ${err instanceof Error ? err.message : String(err)}` };
       }

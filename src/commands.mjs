@@ -15174,7 +15174,14 @@ function statusBlock(s, url) {
   return [
     row("session", s.context),
     row("turns", String(s.turns ?? 0)),
-    row("spent", `${formatCost(s.costUsd ?? 0)} this session`),
+    // Says where the figure comes from (FOL-272): it is the cloud runs' cost; a turn on
+    // this computer is metered at the gateway by the key, never added here.
+    row("spent", (() => {
+      const local = Number(s.here?.local ?? 0);
+      const cloud = `${formatCost(s.costUsd ?? 0)} in the cloud`;
+      if (!local) return `${cloud} this session`;
+      return `${cloud} · ${local} turn${local === 1 ? "" : "s"} on this computer, metered at the gateway, not here — /status explain estimates ${local === 1 ? "it" : "them"}`;
+    })()),
     s.model ? row("model", shortModel(plainText(s.model))) : null,
     typeof s.effort === "string" ? row("effort", `${s.effort === "default" ? "the model's default" : s.effort} (/model effort changes it)`) : null,
     s.contextTokens !== undefined ? row("last turn", `${readTokens(s)}${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
