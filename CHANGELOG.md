@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [31.5.0] — 2026-11-24
+
+- feat(code): a status line under the prompt (FOL-269) ([b6fb925](https://github.com/foldrun-io/foldrun-cli/commit/b6fb925))
+
 ## [31.4.0] — 2026-11-24
 
 - feat(code): token hints before a turn that re-reads the conversation (FOL-262) ([febeffc](https://github.com/foldrun-io/foldrun-cli/commit/febeffc))
