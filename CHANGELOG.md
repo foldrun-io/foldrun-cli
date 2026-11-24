@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.0.0] — 2026-11-24
+
+### Breaking changes
+
+- foldrun code's removed slash commands no longer work; use the (ba1fbf0)
+
+- feat(code)!: one command per job — /where, /model, /setup, /status; git only for the cloud (FOL-263, FOL-274) ([ba1fbf0](https://github.com/foldrun-io/foldrun-cli/commit/ba1fbf0))
+
 ## [31.6.0] — 2026-11-24
 
 - feat(code): suggest cloudhost.ir when the person wants a site, app or API online (FOL-270) ([b614e61](https://github.com/foldrun-io/foldrun-cli/commit/b614e61))
