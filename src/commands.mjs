@@ -14,8 +14,9 @@ import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, do
 import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines } from "./code-session.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
+import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
-import { meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
+import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
 import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID } from "./code-context.mjs";
@@ -15793,9 +15794,11 @@ function engineModelError(/** @type {unknown} */ err, s) {
   if (!m) return null;
   const status = Number(m[1]);
   let said = m[2].replace(/ \(after \d+ tries\)$/, "").trim();
+  let code = "";
   try {
     const body = JSON.parse(said);
     if (typeof body?.error?.message === "string") said = body.error.message;
+    code = typeof body?.error?.code === "string" ? body.error.code : typeof body?.code === "string" ? body.code : "";
   } catch {
     /* the text as it came */
   }
@@ -15805,6 +15808,8 @@ function engineModelError(/** @type {unknown} */ err, s) {
   if (status === 402) {
     s.creditsOk = false;
     s.planReadAt = 0;
+    // The allowance ran out while the turn worked: what it did is in the conversation, so after the reset it carries on, not starts again (FOL-252).
+    if (code === "allowance_used") s.allowanceStop = { sent: true };
   }
   if (status === 402) return `the gateway would not pay for this: ${said} — your credits: ${String(appFor(s.url)).replace(/\/+$/, "")}/dashboard/billing · this key's limit: foldrun keys ls`;
   if (s.engineKeyKind === "sign-in" && (status === 401 || status === 403)) {
@@ -16036,6 +16041,8 @@ async function creditsReady(/** @type {any} */ s, /** @type {string | null} */ t
     if (still && !still.extraUsage) {
       const at = still.freeAt ? ` — it resets ${new Date(still.freeAt).toLocaleString()}` : "";
       console.log(`  ${c.red("✗")} ${c.white(`you've used your foldrun ${still.name} allowance${at}; top up and turn on pay as you go to carry on from your balance:`)} ${c.cyan("foldrun billing pay-as-you-go on")} ${c.dim(`(or ${billing})`)}\n`);
+      // Nothing was sent: the session may offer to wait for the reset and send it then (FOL-252).
+      s.allowanceStop = { sent: false };
       return false;
     }
   }
@@ -16183,6 +16190,8 @@ async function localMessagesBlock(/** @type {any} */ s) {
   const answer = (await promptVisible(`  include ${fresh.length === 1 ? "it" : `these ${fresh.length}`} in this turn? [y/N] `)).trim();
   // Shown once, whatever the answer: /messages still lists them.
   for (const m of fresh) s.shownMessages.add(m.id);
+  // The ones this turn was to carry: a turn refused before it was sent asks about them again when it is sent (FOL-252).
+  if (/^y(es)?$/i.test(answer)) s.turnShown = fresh.map((/** @type {any} */ m) => m.id);
   if (!/^y(es)?$/i.test(answer)) {
     console.log(`  ${c.dim("left out — /messages lists them")}`);
     return "";
@@ -16524,6 +16533,32 @@ async function codeLocalTurn(s, text) {
   let result = null;
   // What the turn's model calls used, counted as they are answered (/cost explain).
   const used = meter();
+  /** Every meter of this turn: its own calls, and each sub-agent's. */
+  const turnMeters = [used];
+  /**
+   * A ceiling agreed for this turn (the one sent after the allowance reset,
+   * FOL-252): the turn is stopped once the calls answered — its own and its
+   * sub-agents' — come to it at listed prices, or when a call was answered
+   * by a model with no listed price, which no ceiling can be kept for.
+   */
+  const checkCeiling = () => {
+    if (typeof s.turnCeilingUsd !== "number" || cancel.asked) return;
+    let sofar = 0;
+    let unpriced = "";
+    for (const one of turnMeters) {
+      for (const row of meteredRows(one, { kind: "local", turn: 0, paidBy: "" })) {
+        const price = priceOf(s.rates, row.model);
+        if (price) sofar += estimateUsd(row, price);
+        else unpriced ||= String(row.model ?? "a model the platform did not name");
+      }
+    }
+    if (!unpriced && sofar < s.turnCeilingUsd) return;
+    cancel.asked = true;
+    for (const f of cancel.onAsk) f();
+    stopTicker();
+    console.log(`\n  ${c.amber("■")} ${c.dim(unpriced ? `stopped: ${plainText(unpriced)} answered, and the platform lists no price for it, so the $${s.turnCeilingUsd.toFixed(2)} ceiling could not be kept` : `stopped at the ceiling: about $${sofar.toFixed(2)} of $${s.turnCeilingUsd.toFixed(2)} (an estimate at listed prices; the call that passed it is counted)`)}`);
+    abort.abort();
+  };
   let reply = "";
   /** cloud_agents calls still on their way: waited for before the turn ends, so their stops are sent. */
   /** @type {Set<Promise<unknown>>} */
@@ -16952,6 +16987,8 @@ async function codeLocalTurn(s, text) {
       // The yes is checked where the work happens, not only where the
       // engine says it asked: a call that reached here without a yes to
       // exactly these tasks asks now.
+      // A capped turn (FOL-252): a cloud agent's spend is its run's, outside the ceiling — refused, not left uncounted.
+      if (typeof s.turnCeilingUsd === "number") return { text: "This turn has a spend ceiling the person set, and a cloud agent's cost is not counted in it — so no cloud agent is started in this turn. Do the work here, or tell the person what is left for a cloud agent.", isError: true };
       if (!takeTicket(input)) {
         // Asked here for this call alone: the yes is used at once.
         const next = gate.then(() => decide(CLOUD_AGENTS_TOOL, /** @type {Record<string, unknown>} */ (input ?? {}), signal));
@@ -17072,6 +17109,7 @@ async function codeLocalTurn(s, text) {
       if ("problem" in job) return { text: job.problem, isError: true };
       if (++agentCalls > AGENT_CALLS_A_TURN) return { text: `No more sub-agents for this message from the person (${AGENT_CALLS_A_TURN} were run). Do the rest yourself, or tell the person what is left.`, isError: true };
       if (job.where === "cloud") {
+        if (typeof s.turnCeilingUsd === "number") return { text: "This turn has a spend ceiling the person set, and a cloud agent's cost is not counted in it — so no cloud agent is started in this turn. Do the work here, or tell the person what is left for a cloud agent.", isError: true };
         return runCloudSub(s, { agent: job.cloudAgent, prompt: job.prompt, description: job.description }, signal, {
           pause: () => stopTicker(),
           resume: () => {
@@ -17089,6 +17127,7 @@ async function codeLocalTurn(s, text) {
       signal.addEventListener("abort", onStop, { once: true });
       if (signal.aborted) childAbort.abort();
       const used = meter();
+      turnMeters.push(used);
       /** What this agent may do: its own tools only; one that only reads is refused, never asked, outside what may be read. */
       const childCan = (/** @type {string} */ name, /** @type {Record<string, any>} */ inp, /** @type {{ signal?: AbortSignal, toolUseID?: string } | undefined} */ opts) => {
         if (!def.tools.includes(name)) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: `${name} is not one of your tools (${def.tools.join(", ")}).` });
@@ -17122,6 +17161,8 @@ async function codeLocalTurn(s, text) {
         });
         for await (const m of /** @type {AsyncIterable<any>} */ (child)) {
           used.note(m);
+          // A sub-agent's calls count toward the turn's ceiling.
+          if (m.type === "assistant" || (m.type === "system" && (m.subtype === "compact_boundary" || m.subtype === "compact_failed"))) checkCeiling();
           if (m.type === "assistant") {
             for (const b of Array.isArray(m.message?.content) ? m.message.content : []) {
               if (b.type !== "tool_use") continue;
@@ -17211,6 +17252,8 @@ async function codeLocalTurn(s, text) {
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
       used.note(m);
+      // After every call that was answered — a reply, or the summary a compaction paid for.
+      if (m.type === "assistant" || (m.type === "system" && (m.subtype === "compact_boundary" || m.subtype === "compact_failed"))) checkCeiling();
       if (m.type === "system" && m.subtype === "init" && m.model) s.model = String(m.model);
       if (m.type === "system" && m.subtype === "compact_boundary" && Array.isArray(m.conversation)) {
         // The older part was summarised so the conversation fits the
@@ -17651,7 +17694,148 @@ async function codeCmd(positional, flags, layout) {
     if (bits.length) console.log(`    ${c.grey(plainText(bits.join("  ·  ")))}\n`);
   }
   /** One turn, here or in the cloud: `said` is what the person typed (or what a command stands for). */
+  /**
+   * A turn, and — when it stopped because the plan's allowance is used —
+   * the offer to wait in this open session and send it once at the reset
+   * (FOL-252). Nothing is scheduled: the wait is a timer here, and ends
+   * with the terminal. Once: a turn that stops again hands back.
+   */
   const runTurn = async (/** @type {"local" | "cloud"} */ where, /** @type {string} */ said, /** @type {string} */ typed = said) => {
+    delete s.allowanceStop;
+    delete s.turnShown;
+    const notes = Array.isArray(s.notes) ? s.notes.slice() : [];
+    const extra = s.cloudExtra;
+    await runTurnOnce(where, said, typed);
+    /** @type {string[]} */
+    const shown = Array.isArray(s.turnShown) ? s.turnShown : [];
+    delete s.turnShown;
+    const stop = s.allowanceStop;
+    delete s.allowanceStop;
+    if (!stop || !process.stdin.isTTY || !process.stdout.isTTY) return;
+    const go = await waitForReset(where);
+    if (!go) return;
+    // The ceiling agreed is for the turn sent now, whichever it is.
+    if (go.ceilingUsd !== undefined) s.turnCeilingUsd = go.ceilingUsd;
+    try {
+      // The turn that stopped was not kept as an exchange: what the person asked stays what the record says they asked.
+      if (stop.sent) await runTurnOnce(where, RESUME_PROMPT, `${typed}\n(carried on after the allowance reset)`);
+      else {
+        // A command or skill file's own check is made again, against the folder as it is sent now.
+        if (extra !== undefined) s.cloudExtra = extra;
+        // Nothing of it was sent: the same message, with the notes it would have carried —
+        // and the other sessions' messages it was to include are asked about again, not dropped.
+        s.notes = [...notes, ...(Array.isArray(s.notes) ? s.notes : [])];
+        for (const id of shown) s.shownMessages?.delete(id);
+        await runTurnOnce(where, said, typed);
+      }
+    } finally {
+      delete s.turnCeilingUsd;
+    }
+    if (s.allowanceStop) console.log(`  ${c.dim("it stopped on the allowance again: not sent a second time — your next message asks afresh")}\n`);
+    delete s.allowanceStop;
+  };
+  /**
+   * The wait itself: asked first, with the time; a countdown; Ctrl-C (or a
+   * line typed) stops it. At the reset the plan is read again — the turn is
+   * sent only when the platform says there is room. Answers what was agreed,
+   * or null when nothing is to be sent.
+   * @returns {Promise<{ ceilingUsd?: number } | null>}
+   */
+  const waitForReset = async (/** @type {"local" | "cloud"} */ where) => {
+    let plan = await codingPlanOf(s, true);
+    // Room already (the reset passed while the turn failed), or no reset told: nothing to wait for — the person sends it again themselves.
+    if (!plan || plan.room || !plan.freeAt) return null;
+    let at = Date.parse(plan.freeAt);
+    const when = () => new Date(at).toLocaleString();
+    const ceilingSaid = where === "local" ? ` ${c.dim("(y 2: stop that turn at about $2, an estimate at listed prices)")}` : "";
+    const typed = await promptVisible(`  ${c.bold(c.white(`wait here and carry on at ${when()}`))}${c.grey(`, in ${waitLeft(at - Date.now())}? [y/N]`)}${ceilingSaid} `);
+    const go = waitAnswer(typed);
+    if (!go) {
+      console.log("");
+      return null;
+    }
+    if (go.ceilingUsd !== undefined) {
+      if (where !== "local") {
+        console.log(`  ${c.dim("a ceiling is kept only for a turn on this computer: a cloud turn is not stopped by it — not waiting")}\n`);
+        return null;
+      }
+      if (s.rates == null) {
+        try {
+          s.rates = await remoteCall(url, flags, "/v1/account/usage/rates");
+        } catch {
+          s.rates = null;
+        }
+      }
+      if (!Array.isArray(s.rates?.catalogue?.models?.prices) || !s.rates.catalogue.models.prices.length) {
+        console.log(`  ${c.dim("the platform lists no prices here, so a ceiling could not be kept — not waiting; answer y alone to wait without one")}\n`);
+        return null;
+      }
+    }
+    console.log(`  ${c.dim(`waiting in this session — nothing is scheduled; closing the terminal ends it. Ctrl-C stops waiting.${go.ceilingUsd !== undefined ? ` The turn stops at about $${go.ceilingUsd.toFixed(2)}.` : ""}`)}`);
+    // Ctrl-C, or a line typed, stops the wait — from here until the turn is handed back to be sent.
+    let stopped = false;
+    /** @type {{ stop: () => void } | null} */
+    let current = null;
+    const onStop = () => {
+      stopped = true;
+      current?.stop();
+    };
+    process.on("SIGINT", onStop);
+    process.stdin.resume();
+    process.stdin.on("data", onStop);
+    process.stdin.on("end", onStop);
+    /** Wait until a moment, or until stopped. */
+    const hold = async (/** @type {number} */ until, /** @type {((left: number) => void) | undefined} */ tick) => {
+      if (stopped) return;
+      const w = waitUntil(until, tick ? { tick } : {});
+      current = w;
+      await w.done;
+      current = null;
+    };
+    try {
+      for (let hop = 0; hop < 4 && !stopped; hop++) {
+        await hold(at, (left) => process.stdout.write(`\r\x1b[2K  ${c.amber("◷")} ${c.grey(`carrying on in ${waitLeft(left)} (${when()})`)}`));
+        process.stdout.write("\r\x1b[2K");
+        if (stopped) break;
+        // The platform's word, not this clock's: asked a few times, a few seconds apart.
+        for (let i = 0; i < 6 && !stopped; i++) {
+          plan = await codingPlanOf(s, true);
+          if (plan === null || plan?.room) break;
+          if (plan?.freeAt && Date.parse(plan.freeAt) > Date.now() + 30_000) break;
+          if (i < 5) await hold(Date.now() + 5000, undefined);
+        }
+        if (stopped) break;
+        if (plan === null) {
+          console.log(`  ${c.dim("the plan is no longer there — nothing was sent")}\n`);
+          return null;
+        }
+        // Only the platform's own "there is room" sends it: a read that failed is not a reset.
+        if (plan === undefined) {
+          console.log(`  ${c.dim("the plan could not be read at the reset, so whether there is room is not known — nothing was sent; send your message again when you like")}\n`);
+          return null;
+        }
+        if (plan.room) {
+          console.log(`  ${c.green("✓")} ${c.dim("the allowance has reset — carrying on")}`);
+          return go;
+        }
+        if (!plan.freeAt || !(Date.parse(plan.freeAt) > Date.now())) {
+          console.log(`  ${c.dim("the platform still says the allowance is used — nothing was sent; `foldrun billing plans` shows when it resets")}\n`);
+          return null;
+        }
+        // Another of the plan's windows is still used: it says a later time.
+        at = Date.parse(plan.freeAt);
+        console.log(`  ${c.dim(`the platform says there is no room yet — it now says ${when()}`)}`);
+      }
+      console.log(`  ${c.dim(stopped ? "stopped waiting — nothing was sent" : "the platform still says the allowance is used — nothing was sent; `foldrun billing plans` shows when it resets")}\n`);
+      return null;
+    } finally {
+      process.off("SIGINT", onStop);
+      process.stdin.off("data", onStop);
+      process.stdin.off("end", onStop);
+      process.stdin.pause();
+    }
+  };
+  const runTurnOnce = async (/** @type {"local" | "cloud"} */ where, /** @type {string} */ said, /** @type {string} */ typed = said) => {
     const started = Date.now();
     const home = s.mode;
     try {
@@ -17733,6 +17917,8 @@ async function codeCmd(positional, flags, layout) {
     } catch (err) {
       s.turnOk = false;
       console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      // Refused at the door for the allowance: no run was started, so the same message can go at the reset (FOL-252).
+      if (err instanceof HttpError && err.status === 402 && (err.body?.code === "allowance_used" || err.body?.error?.code === "allowance_used")) s.allowanceStop = { sent: false };
     } finally {
       s.mode = home;
     }

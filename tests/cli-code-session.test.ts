@@ -1449,6 +1449,9 @@ test("--local on a foldrun Pro plan past its allowance, extra usage off: the lim
       let at = await t.until(/\w ❯ /);
       t.send("hi\r");
       at = await t.until(/used your foldrun Pro allowance — it resets [^;]+; top up and turn on pay as you go to carry on from your balance: foldrun billing pay-as-you-go on \(or \S+\/dashboard\/billing\)\r?\n/, at);
+      // The offer to wait in this session (FOL-252): a no hands back.
+      at = await t.until(/wait here and carry on at [^\n]*\? \[y\/N\]/, at);
+      t.send("n\r");
       at = await t.until(/\w ❯ /, at);
       t.send("/quit\r");
       await t.done;
@@ -1460,6 +1463,252 @@ test("--local on a foldrun Pro plan past its allowance, extra usage off: the lim
     s.close();
   }
 });
+
+/** A plan whose allowance is used until `freeAt`, then has room — as the platform would answer over time. */
+function resettingPlan(inMs: number) {
+  // The clock starts at the first time the plan is asked for (a turn), not when the test begins: a slow start is not a reset.
+  let freeAt = "";
+  return {
+    answer: () => {
+      freeAt ||= new Date(Date.now() + inMs).toISOString();
+      const free = Date.now() >= Date.parse(freeAt);
+      return { plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: free, freeAt: free ? null : freeAt } };
+    },
+  };
+}
+
+test("the allowance is used before a turn: the open session waits for the reset and sends the message once (FOL-252)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const plan = resettingPlan(6000);
+  const asked: any[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/billing/coding-plan": plan.answer,
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return sse([{ type: "text", text: "Hello after the reset." }]);
+    },
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("say hello\r");
+      at = await t.until(/used your foldrun Pro allowance/, at);
+      at = await t.until(/wait here and carry on at [^\n]*, in \ds\? \[y\/N\]/, at);
+      assert.equal(asked.length, 0, "nothing is sent before the reset");
+      t.send("y\r");
+      at = await t.until(/waiting in this session — nothing is scheduled; closing the terminal ends it\. Ctrl-C stops waiting\./, at);
+      at = await t.until(/carrying on in \ds/, at);
+      at = await t.until(/the allowance has reset — carrying on/, at, 30_000);
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/Hello after the reset\./, at);
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    // Once, not twice: one turn, with the person's own message.
+    assert.equal(asked.length, 1);
+    assert.match(JSON.stringify(asked[0].messages.at(-1)), /say hello/);
+  } finally {
+    s.close();
+  }
+});
+
+test("the wait for the reset is this session's alone: Ctrl-C stops it and nothing is sent; closing the terminal ends the process (FOL-252)", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const plan = resettingPlan(3600_000);
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    "GET /v1/billing/coding-plan": plan.answer,
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("say hello\r");
+      at = await t.until(/wait here and carry on at [^\n]*\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/carrying on in (59m|1h)/, at);
+      t.send("\x03");
+      at = await t.until(/stopped waiting — nothing was sent/, at);
+      at = await t.until(/\w ❯ /, at);
+      // Again, and this time the terminal is closed mid-wait: the process ends with it.
+      t.send("say hello\r");
+      at = await t.until(/wait here and carry on at [^\n]*\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/carrying on in (59m|1h)/, at);
+      // The CLI itself — the process inside the terminal, not the wrapper that holds the pty.
+      const cli = spawnSync("pgrep", ["-P", String(t.child.pid)], { encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean).map(Number);
+      assert.equal(cli.length, 1, "one process in the terminal");
+      t.child.kill("SIGKILL"); // the terminal goes: its pty closes, and the CLI gets the hangup
+      await t.done.catch(() => null);
+      let gone = false;
+      for (let i = 0; i < 50 && !gone; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        try {
+          process.kill(cli[0]!, 0);
+        } catch {
+          gone = true;
+        }
+      }
+      assert.ok(gone, "the CLI is gone with its terminal: nothing is left waiting");
+    } finally {
+      t.child.kill();
+    }
+    assert.doesNotMatch(s.seen.map((x: any) => x.url).join(" "), /\/v1\/keys|\/v1\/messages/, "no key made, no model asked");
+    // Nothing was handed to the system to run later.
+    assert.equal(fs.readdirSync(home).some((f) => /cron|launch|sched|timer/i.test(f)), false);
+  } finally {
+    s.close();
+  }
+});
+
+test("the allowance runs out while a turn works: after the reset the agent is told to carry on, not sent the task again; a cloud turn refused at the door goes once (FOL-252)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let freeAt: string | null = null;
+  const used = () => freeAt !== null && Date.now() < Date.parse(freeAt);
+  const plan = () => ({ plan: { plan: "pro", periodEnd: "2026-12-20T00:00:00Z", extraUsage: false }, allowance: { windows: [], extraUsage: false, room: !used(), freeAt: used() ? freeAt : null } });
+  const refusal = { __status: 402, body: { type: "error", error: { type: "billing_error", code: "allowance_used", message: "foldrun's models: this week's allowance is used" } } };
+  const asked: any[] = [];
+  let runs = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/billing/coding-plan": plan,
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      if (asked.length === 1) {
+        freeAt = new Date(Date.now() + 5000).toISOString();
+        return refusal;
+      }
+      return sse([{ type: "text", text: "Carried on." }]);
+    },
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => {
+      runs++;
+      if (runs === 1) {
+        freeAt = new Date(Date.now() + 5000).toISOString();
+        return { __status: 402, body: { error: "this week's allowance is used", code: "allowance_used" } };
+      }
+      return { ok: true, runId: RUN, snapshot: ID, context: "code-w" };
+    },
+    [`GET ${WS}/runs/${RUN}`]: () => ({
+      id: RUN, flow: "adhoc:coder", status: "completed", snapshot: { id: ID }, startedAt: "2026-11-19T01:00:00.000Z", finishedAt: "2026-11-19T01:00:05.000Z",
+      steps: [{ agent: "coder", group: 1, status: "completed", attempts: 1, costUsd: 0.02, events: [{ t: "2026-11-19T01:00:01.000Z", type: "text", text: "Done in the cloud." }], result: "Done in the cloud." }],
+    }),
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "unchanged" }), "application/json") : raw("", "text/x-diff")),
+    [`GET ${WS}/sessions/code-w/messages`]: () => ({ messages: [] }),
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--context", "code-w", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("do the long task\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/the gateway would not pay for this: foldrun's models: this week's allowance is used/, at, 30_000);
+      at = await t.until(/wait here and carry on at [^\n]*\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/the allowance has reset — carrying on/, at, 40_000);
+      at = await t.until(/Carried on\./, at, 30_000);
+      at = await t.until(/\w ❯ /, at);
+      assert.equal(asked.length, 2, "one call refused, one after the reset");
+      const last = JSON.stringify(asked[1].messages.at(-1));
+      assert.match(last, /Your last turn stopped part-way: the plan's allowance had run out\. It has reset now\./);
+      assert.doesNotMatch(last, /do the long task/, "the task is in the conversation already: not sent again as a new one");
+      // The record keeps what the person asked, with the note that it carried on.
+      const keptW = Object.values(JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8")) as Record<string, any>)[0];
+      assert.equal(keptW.transcript.at(-1).you, "do the long task\n(carried on after the allowance reset)");
+      assert.match(JSON.stringify(asked[1].messages), /do the long task/);
+
+      // A cloud turn refused at the door: no run was started, so the same message goes — once.
+      t.send("/cloud\r");
+      at = await t.until(/\w ❯ /, at);
+      t.send("now in the cloud\r");
+      at = await t.until(/send it\? \[y\]es/, at, 30_000);
+      t.send("y\r");
+      at = await t.until(/wait here and carry on at [^\n]*\? \[y\/N\] $/, at, 30_000);
+      t.send("y\r");
+      at = await t.until(/the allowance has reset — carrying on/, at, 40_000);
+      at = await t.until(/send it\? \[y\]es|Done in the cloud\./, at, 30_000);
+      if (!/Done in the cloud\./.test(t.out().slice(at - 300, at))) {
+        t.send("y\r");
+        at = await t.until(/Done in the cloud\./, at, 30_000);
+      }
+      at = await t.until(/\w ❯ /, at);
+      assert.equal(runs, 2, "refused once, started once");
+      const posts = s.seen.filter((x: any) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
+      assert.match(JSON.parse(posts[1]!.body).task, /now in the cloud$/);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+    }
+  } finally {
+    s.close();
+  }
+});
+
+for (const listed of [true, false]) {
+  test(`a ceiling agreed for the turn sent after the reset stops it — ${listed ? "at about the sum, by listed prices" : "when the model that answered has no listed price"} (FOL-252)`, { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+    const d = repo();
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+    const plan = resettingPlan(4000);
+    let calls = 0;
+    const s = await serve({
+      [`GET ${WS}`]: () => ({ name: "desk" }),
+      [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+      [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+      "GET /v1/me": () => ({ account: "acme" }),
+      "GET /v1/billing/coding-plan": plan.answer,
+      // 100 tokens read at $1,000 a million is ten cents: past a five-cent ceiling at the first call.
+      "GET /v1/account/usage/rates": () => ({ catalogue: { models: { prices: [{ model: listed ? "claude-sonnet-test" : "some-other-model", inputPerMTok: 1000, outputPerMTok: 1000 }] } } }),
+      "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+      "POST /v1/messages": () => {
+        calls++;
+        // It would go on calling a tool for ever: only the ceiling ends it.
+        return sse([{ type: "tool_use", id: `t${calls}`, name: "Read", input: { file_path: path.join(d, "a.txt") } }], "tool_use");
+      },
+    });
+    try {
+      const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+      try {
+        let at = await t.until(/\w ❯ /);
+        t.send("read the file\r");
+        at = await t.until(/wait here and carry on at [^\n]*\? \[y\/N\] \(y 2: stop that turn at about \$2, an estimate at listed prices\)/, at);
+        t.send("y 0.05\r");
+        at = await t.until(/The turn stops at about \$0\.05\./, at);
+        at = await t.until(/the allowance has reset — carrying on/, at, 30_000);
+        at = await t.until(/make it\? \[y\/N\]/, at);
+        t.send("y\r");
+        at = await t.until(listed ? /stopped at the ceiling: about \$0\.10 of \$0\.05 \(an estimate at listed prices; the call that passed it is counted\)/ : /stopped: claude-sonnet-test answered, and the platform lists no price for it, so the \$0\.05 ceiling could not be kept/, at, 30_000);
+        at = await t.until(/\w ❯ /, at);
+        t.send("/quit\r");
+        await t.done;
+      } finally {
+        t.child.kill();
+      }
+      assert.equal(calls, 1, "no call after the one that passed it");
+    } finally {
+      s.close();
+    }
+  });
+}
 
 test("--local with no foldrun subscription (23 Nov 2026): said before the turn, whatever the wallet holds — no key made, no model asked", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
