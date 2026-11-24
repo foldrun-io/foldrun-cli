@@ -18308,8 +18308,8 @@ async function folderState(/** @type {string} */ dir) {
     });
   const top = await git(["rev-parse", "--show-toplevel"]);
   // The repository's config is read at its top (gitOnlyItself holds to that folder; from a subfolder it says no — Codex).
-  // Only git's own line end comes off: a folder named "repo " is not "repo" (Codex).
-  const root = typeof top === "string" ? top.replace(/\r?\n$/, "") : null;
+  // Only git's own newline comes off: a folder named "repo " or "repo\r" is not "repo" (Codex).
+  const root = typeof top === "string" ? top.replace(/\n$/, "") : null;
   if (root === null || !gitOnlyItself(root, "status")) return null;
   // Paths come relative to the repository's top, not this folder; no renames, so each entry is one path.
   const out = typeof top === "string" ? await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=all", "--", "."]) : null;

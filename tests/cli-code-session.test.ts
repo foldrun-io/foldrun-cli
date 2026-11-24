@@ -1322,7 +1322,7 @@ test("every new session asks where (last answer ticked, Enter keeps it); the pro
   s.close();
 });
 
-test("a folder that works on this computer is never sent to the cloud by a script's --task; --cloud --task is", async () => {
+test("a folder that works on this computer is never sent to the cloud by a script's --task: it must say --local or --cloud; --cloud --task is one turn", async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const s = await serve({ [`GET ${WS}`]: () => ({ name: "desk" }), [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }) });
@@ -1331,7 +1331,7 @@ test("a folder that works on this computer is never sent to the cloud by a scrip
     const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
     const r = spawnSync(process.execPath, [cli, "code", d, "--task", "do it", "--url", s.url, "--token", "k"], { encoding: "utf8", env: { ...process.env, FOLDRUN_HOME: home, NO_COLOR: "1" } });
     assert.notEqual(r.status, 0);
-    assert.match(r.stderr + r.stdout, /works on this computer[\s\S]*--cloud --task/);
+    assert.match(r.stderr + r.stdout, /works on this computer — say where this script's turn runs: --local -p[\s\S]*--cloud -p/);
     assert.equal(s.seen.length, 0, "nothing reached the platform");
     // --cloud --task is one turn: the folder still works on this computer after.
     spawnSync(process.execPath, [cli, "code", d, "--cloud", "--task", "do it", "--url", s.url, "--token", "k"], { encoding: "utf8", env: { ...process.env, FOLDRUN_HOME: home, NO_COLOR: "1" } });

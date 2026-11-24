@@ -143,7 +143,8 @@ test("nothing a turn started is left running: a command that leaves a job in the
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   // A number no other process on the machine is likely to sleep for.
   const secs = String(3000 + Math.floor(Math.random() * 900));
-  const running = () => spawnSync("pgrep", ["-f", `sleep ${secs}`], { encoding: "utf8" }).stdout.trim();
+  // Exactly this command line, nothing that merely contains it (Codex).
+  const running = () => spawnSync("pgrep", ["-f", `^sleep ${secs}$`], { encoding: "utf8" }).stdout.trim();
   const s = await localPlatform((n) => (n === 1 ? sse([{ type: "tool_use", id: "b1", name: "Bash", input: { command: `sleep ${secs} & echo started` } }]) : sse([{ type: "text", text: "Started it." }])));
   seedKey(home, s.url);
   let t: ReturnType<typeof onTerminal> | undefined;
@@ -164,7 +165,13 @@ test("nothing a turn started is left running: a command that leaves a job in the
     assert.equal(running(), "", "and nothing after /quit");
   } finally {
     t?.child.kill();
-    spawnSync("pkill", ["-f", `sleep ${secs}`]);
+    for (const pid of running().split("\n").filter(Boolean)) {
+      try {
+        process.kill(Number(pid), "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    }
     s.close();
   }
 });
