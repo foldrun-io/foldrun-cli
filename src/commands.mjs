@@ -31,7 +31,7 @@ import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
-import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX } from "./code-mcp.mjs";
+import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX, remoteSiteProblem } from "./code-mcp.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, configDir, cacheDir, setProfileWorkspace } from "./credentials.mjs";
@@ -14804,11 +14804,9 @@ function readableBy(/** @type {any} */ s, /** @type {unknown} */ p) {
  */
 /** A site allowed in the session's sandbox for this session only (a remote MCP server the person said yes to — FOL-222). */
 function allowSiteFor(/** @type {any} */ s) {
-  return (/** @type {string} */ host) => {
-    const sites = (s.sandboxSites ??= []);
-    if (!sites.includes(host)) sites.push(host);
-  };
+  return (/** @type {string} */ host) => remoteSiteProblem(s, host) ?? (((s.sandboxSites ??= []).includes(host) || s.sandboxSites.push(host)), null);
 }
+
 
 /** The session's sandbox holder (code-sandbox.mjs): made once, opened at the first turn on this computer. */
 function boxOf(/** @type {any} */ s) {
@@ -17790,9 +17788,13 @@ async function codeLocalTurn(s, text) {
       print();
       if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
     };
+    // The sites of the remote MCP servers this turn will start are added
+    // first, so the walls are put up once — never reopened (and the handle
+    // closed) under this turn by a server starting (Codex, FOL-222).
+    if (!s.planOnly && s.sandboxOff !== true) await (await mcpOf(s))?.addRemoteSites?.().catch(() => undefined);
     // The sandbox the agent's commands run in (FOL-214): up before anything
     // of this turn can start a program. One that cannot start runs nothing.
-    const walls = await wallsOf(s);
+    let walls = await wallsOf(s);
     if (walls && "refused" in walls) {
       said(() => sayNoSandbox(walls));
       stopTicker();
@@ -17814,6 +17816,11 @@ async function codeLocalTurn(s, text) {
       const mcp = await mcpOf(s);
       if (mcp) {
         const startedNow = await mcp.startReady(abort.signal);
+        // Still the walls this turn hands on: a site added after all (a server approved meanwhile) reopened them.
+        if (walls) {
+          const now = await wallsOf(s);
+          if (now && !("refused" in now)) walls = now;
+        }
         for (const r of startedNow) said(() => console.log(`  ${r.why ? c.red("✗") : c.green("✓")} ${c.grey(`MCP server ${plainText(r.name)}${r.why ? ` did not start: ${plainText(r.why)} — /setup mcp` : " started"}`)}`));
         if (cancel.asked) return;
         mcpTools = mcp.tools();
@@ -19879,6 +19886,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           continue;
         }
         if (verb === "allow" && !sites.includes(site)) sites.push(site);
+        // A site taken away stays away: a remote MCP server's yes does not add it back (Codex).
+        if (verb === "allow") s.sandboxDenied?.delete?.(site);
+        if (verb === "deny") (s.sandboxDenied ??= new Set()).add(site);
         if (verb === "deny") {
           if (!sites.includes(site)) {
             say(`${site} is not one you added${sites.length ? ` (yours: ${sites.join(", ")})` : ""} — the built-in list is not changed here`);

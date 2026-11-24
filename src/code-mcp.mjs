@@ -316,6 +316,19 @@ function changeApprovals(/** @type {(all: ReturnType<typeof readApprovals>) => v
 }
 
 /**
+ * Why a remote MCP server's site may not be added for it, or null. Only one
+ * site by its literal name — never a wildcard or an address (Codex: an
+ * address of "https://*.example.com" added the whole domain for every
+ * command) — and never one the person took away this session.
+ */
+export function remoteSiteProblem(/** @type {any} */ s, /** @type {string} */ host) {
+  const h = String(host).toLowerCase();
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$/.test(h)) return `its address must name one site (such as mcp.example.com), not ${JSON.stringify(String(host)).slice(0, 80)} — a wildcard, an IP address or a bare name is not added to the sandbox's list`;
+  if (s.sandboxDenied instanceof Set && s.sandboxDenied.has(h)) return `you took ${h} away from the sandbox this session — /permissions sandbox allow ${h} gives it back`;
+  return null;
+}
+
+/**
  * Connect one server as resolved, and read its tools the way every server's
  * are read here: an over-long input description left out, a description
  * cut, a name another server already offers left out, never "read-only".
@@ -323,7 +336,7 @@ function changeApprovals(/** @type {(all: ReturnType<typeof readApprovals>) => v
  * cannot be had starts nothing. A server at a web address is reached by
  * foldrun itself, with the person's yes to it, through the sandbox's site
  * proxy when the sandbox is on (its site allowed for the session).
- * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, allowSite?: (host: string) => void }} o
+ * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, allowSite?: (host: string) => string | null }} o
  * @param {string} name
  * @param {{ spec: Record<string, any>, hash: string }} resolved
  * @param {AbortSignal} signal
@@ -336,11 +349,14 @@ export async function connectServer(o, name, resolved, signal, taken) {
   // declares: the person's yes to the server allows its own site for the session.
   const remote = resolved.spec.type === "http" || resolved.spec.type === "sse";
   if (remote && o.allowSite) {
+    let host;
     try {
-      o.allowSite(new URL(resolved.spec.url).hostname);
+      host = new URL(resolved.spec.url).hostname;
     } catch {
-      return { why: `its address is not one foldrun can reach (${String(resolved.spec.url)})` };
+      return { why: `its address is not one foldrun can reach (${String(resolved.spec.url).slice(0, 120)})` };
     }
+    const problem = o.allowSite(host);
+    if (problem) return { why: problem };
   }
   const walls = (resolved.spec.type === "stdio" || remote) && o.sandbox ? await o.sandbox() : null;
   if (walls && "refused" in walls) return { why: `the sandbox could not start (${walls.refused}) — /permissions sandbox` };
@@ -420,7 +436,7 @@ export function forgetServersNamed(/** @type {string} */ name, /** @type {string
 /**
  * The servers of one session: read from the files at every look, started
  * only with a yes, kept until the session ends.
- * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, allowSite?: (host: string) => void, unwalled?: () => boolean }} o
+ * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, allowSite?: (host: string) => string | null, unwalled?: () => boolean }} o
  */
 export function mcpManager(o) {
   /** @type {Map<string, { hash: string, conn: any, tools: any[], said: string, cut: string[] }>} */
@@ -515,24 +531,30 @@ export function mcpManager(o) {
     }
   };
 
+  /** Every ready remote server's site, so the walls are put up once with all of them (FOL-222). One it may not add is refused when it starts. */
+  const addSites = (/** @type {any[]} */ rows) => {
+    for (const row of rows) {
+      const spec = row.state === "ready" ? row.resolved?.spec : null;
+      if (!spec || (spec.type !== "http" && spec.type !== "sse") || !o.allowSite) continue;
+      try {
+        o.allowSite(new URL(spec.url).hostname);
+      } catch {
+        /* refused when it starts */
+      }
+    }
+  };
+
   return {
     look,
+    /** Add the sites of the remote servers that would start, before the turn puts up its walls. */
+    async addRemoteSites() {
+      addSites((await look()).rows);
+    },
     /** Start every server that has its yes and is not running, off or already failed. Returns what started and what did not. */
     async startReady(/** @type {AbortSignal} */ signal) {
       const { rows } = await look();
       const out = [];
-      // Every remote server's site first, so the walls are put up once with all of them —
-      // never reopened under a program server already running (FOL-222).
-      for (const row of rows) {
-        const spec = row.state === "ready" ? row.resolved?.spec : null;
-        if (spec && (spec.type === "http" || spec.type === "sse") && o.allowSite) {
-          try {
-            o.allowSite(new URL(spec.url).hostname);
-          } catch {
-            /* refused when it starts */
-          }
-        }
-      }
+      addSites(rows);
       for (const row of rows) {
         if (row.state !== "ready") continue;
         const why = await start(row.name, signal);

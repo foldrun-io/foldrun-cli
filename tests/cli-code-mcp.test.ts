@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readMcpConfig, resolveServer, resolveAgentServer, approveServer, forgetServer, forgetServersNamed, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX, connectServer } from "../src/code-mcp.mjs";
+import { readMcpConfig, resolveServer, resolveAgentServer, approveServer, forgetServer, forgetServersNamed, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX, connectServer, remoteSiteProblem } from "../src/code-mcp.mjs";
 import { SERVER } from "./mcp-server.ts";
 import { readAgents, agentMcpServers, AGENT_MCP_MAX, agentActs, agentTool, agentJob, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder, TODOS_MAX } from "../src/code-agents.mjs";
 
@@ -439,7 +439,7 @@ test("a server at a web address goes through the sandbox (FOL-222): its site is 
     dir: os.tmpdir(),
     env: () => ({}),
     sandbox: async () => walls,
-    allowSite: (h: string) => allowed.push(h),
+    allowSite: (h: string) => (allowed.push(h), null),
     connect: async (_servers: any, ctx: any) => {
       handed.push(ctx.sandbox);
       return { tools: [], close: async () => {} };
@@ -457,4 +457,21 @@ test("a server at a web address goes through the sandbox (FOL-222): its site is 
   const off: any = await connectServer({ ...o, sandbox: async () => null }, "far", resolved, new AbortController().signal);
   assert.ok(!("why" in off));
   assert.equal(handed[1], undefined);
+});
+
+test("a remote server adds one site by its literal name: never a wildcard, an address or a site the person took away (Codex, FOL-222)", async () => {
+  assert.equal(remoteSiteProblem({}, "mcp.example.com"), null);
+  assert.match(remoteSiteProblem({}, "*.example.com")!, /must name one site/);
+  assert.match(remoteSiteProblem({}, "10.0.0.1")!, /must name one site/);
+  assert.match(remoteSiteProblem({}, "[::1]")!, /must name one site/);
+  assert.match(remoteSiteProblem({}, "localhost")!, /must name one site/);
+  assert.match(remoteSiteProblem({ sandboxDenied: new Set(["mcp.example.com"]) }, "MCP.example.com")!, /took mcp\.example\.com away/);
+  // A refusal stops the server before anything connects.
+  let connected = 0;
+  const got: any = await connectServer(
+    { dir: os.tmpdir(), env: () => ({}), sandbox: async () => null, allowSite: (h: string) => remoteSiteProblem({}, h), connect: async () => (connected++, { tools: [] }) },
+    "wild", { spec: { type: "http", url: "https://*.example.com/mcp" }, hash: "h" }, new AbortController().signal,
+  );
+  assert.match(got.why, /must name one site/);
+  assert.equal(connected, 0);
 });
