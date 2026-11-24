@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.2.1] — 2026-11-24
+
+- fix(code): the agent answers in the language the person wrote in, here and in the cloud ([0d2ca29](https://github.com/foldrun-io/foldrun-cli/commit/0d2ca29))
+
+### deps
+
+- @foldrun/core ^27.1.1 ([906ee74](https://github.com/foldrun-io/foldrun-cli/commit/906ee74))
+
 ## [30.2.0] — 2026-11-23
 
 - feat(code): MCP servers, sub-agents here and in the cloud, a todo list, added folders ([6193bcf](https://github.com/foldrun-io/foldrun-cli/commit/6193bcf))
