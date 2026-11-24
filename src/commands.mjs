@@ -5337,6 +5337,18 @@ function countUnder(/** @type {string} */ p) {
   return n;
 }
 
+/** Give everything under `to` the mode of the same place under `from` (links have none of their own). */
+function sameModes(/** @type {string} */ from, /** @type {string} */ to) {
+  const walk = (/** @type {string} */ a, /** @type {string} */ b) => {
+    const sa = fs.lstatSync(a);
+    if (sa.isSymbolicLink()) return;
+    if (sa.isDirectory()) for (const e of fs.readdirSync(a)) walk(path.join(a, e), path.join(b, e));
+    // After its contents: a folder that may not be written to is still filled first.
+    fs.chmodSync(b, sa.mode & 0o7777);
+  };
+  walk(from, to);
+}
+
 /** Each path under `from` whose mode is looser at the same place under `to` — a move must leave none. */
 function loosened(/** @type {string} */ from, /** @type {string} */ to) {
   /** @type {string[]} */
@@ -5516,6 +5528,8 @@ async function homeCmd(positional, flags) {
       // Beside its final name, so putting it in place is one rename on one disk.
       p.temp = `${p.to}.moving-${crypto.randomBytes(4).toString("hex")}`;
       fs.cpSync(p.from, p.temp, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, mode: fs.constants.COPYFILE_FICLONE });
+      // Each mode is set from its source, not left to the copy: on Linux a copied folder comes out with the default mode.
+      sameModes(p.from, p.temp);
       const loose = loosened(p.from, p.temp);
       if (loose.length) throw new Error(`${homeTilde(loose[0])} would have been left more open than it was`);
       if (countUnder(p.from) !== countUnder(p.temp)) throw new Error(`the copy of ${p.name} did not come out whole`);
