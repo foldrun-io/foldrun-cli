@@ -795,7 +795,13 @@ the next turn runs the new one.
 
 ### In the session
 
-The header names the agent, the project, the folder and the session's id;
+The header names the account the session runs as (`<profile> · <email> ·
+<account>`, or `--token` / `FOLDRUN_TOKEN` for a key given that way), the
+agent, the project, the folder and the session's id; when more than one
+account is signed in on this computer, the prompt leads with the profile
+(`mehdi · code-demo ❯`), so two terminals on two accounts stay apart (a
+sign-in to another account under the same profile name in another terminal
+stops the session rather than let it go on as that account);
 each turn shows what the agent is doing as it does it (`● Edit src/a.ts`,
 `● Run npm test  2.4s`, paths as your folder knows them) under a line that
 says it is still working, and ends with how long it took, what it cost, what
@@ -831,7 +837,7 @@ it takes, as before (also when the output goes to a file).
 | `/undo` | take back the last patch this session applied (refused if the folder changed since) — exactly what went in, so after a patch taken file by file, those files only |
 | *(when the plan's allowance is used)* `wait here and carry on at <time>?` | a turn that stops because your plan's allowance is used offers to wait. On **y** the open session waits — a countdown, **Ctrl-C** stops it — and at the reset asks the platform again and sends the turn **once**: your own message when nothing of it had been sent (a turn refused before it began, or a cloud turn refused before its run started), or, when the turn had already begun on this computer, a note telling the agent to carry on from what it had done. A turn that stops on the allowance again is not sent a second time. `y 2` also stops that turn at about $2 — an estimate at listed prices, kept for a turn on this computer only: its own calls and its sub-agents' are counted, a model with no listed price stops it, and it starts no cloud agent (whose cost the ceiling could not count). It is the session that waits: nothing is scheduled with the system, no background job is started, and closing the terminal ends the wait. Pay as you go (`foldrun billing pay-as-you-go on`) carries on at once instead |
 | *(at* `apply it?` *)* `f` | take a cloud turn's or a cloud agent's patch file by file, when it changes more than one. Each file is shown with git's stat and asked about: **y** takes it, **n** leaves it, **d** shows its diff first. The files taken are joined into one patch again, checked by git (a file that cannot stand without a refused one is said, and nothing is applied), shown as a stat, and applied on a last yes. The whole patch is kept in a file. The agent is told which files are in the folder and which you refused, so it does not build on a change that is not there. A file goes in whole or not at all: parts of one file are not offered |
-| `/status` | the session: id, turns, spend, model, agent, platform, last run |
+| `/status` | the session: id, turns, spend, model, effort, where it works, cloud jobs, the account it runs as, agent, platform, last run |
 | `/model`, `/model max` | `/model` opens a list — Default (Sonnet), Max (Opus), Fast (Haiku), the current one ticked; ↑/↓ and Enter choose, Esc keeps it. With a name (`fast`, `default`, `max`, a model id) it is set straight away. Either changes the `model:` line of the agent's file from the next message — for every run of that agent, as an edit and deploy would |
 | `/effort`, `/effort high` | how hard the model thinks: `low`, `medium`, `high`, `xhigh`, `max`, or `default` (the model's own). `/effort` opens a list, the current level ticked; with a level it is set straight away. It changes the `effort:` line of the agent's file (`default` takes the line out), read then written so an edit made meanwhile is never lost — so a turn on this computer and a turn in the cloud run the same level, from your next message. A model that has no such level runs at the nearest below it has, and one with none (an older Claude) at its own; that is said once. `/status` names the level. `/thinking high` is the same command and says so |
 | `/new`, `/clear` | a fresh conversation |

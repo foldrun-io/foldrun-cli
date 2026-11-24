@@ -2389,6 +2389,42 @@ function actingAs(url, flags) {
 }
 
 /**
+ * Which account a code session runs as (FOL-260), for its box, /status and
+ * prompt: `<profile> · <email>` (or `api key`), or the token it was given.
+ * `profile` is set only for a signed-in profile, and `several` when more
+ * than one is signed in on this computer — then the prompt names it.
+ * @returns {{ label: string, profile: string | null, several: boolean, pinned?: { url: string, account: string, email: string } }}
+ */
+export function sessionAccount(/** @type {any} */ flags) {
+  if (typeof flags.token === "string") return { label: "--token (an API key)", profile: null, several: false };
+  if (env("FOLDRUN_TOKEN")) return { label: "FOLDRUN_TOKEN (an API key)", profile: null, several: false };
+  const p = chosenProfile(flags);
+  if (!p) return { label: "not signed in", profile: null, several: false };
+  const all = listProfiles();
+  return { label: `${p.name} · ${p.email ?? "api key"}${p.account ? ` · ${p.account}` : ""}`, profile: p.name, several: all.length > 1, pinned: { url: normaliseUrl(p.url), account: String(p.account ?? ""), email: String(p.email ?? "") } };
+}
+
+/**
+ * Whether the session's profile now holds another identity — a sign-in in
+ * another terminal under the same name (Codex). A renewed token for the same
+ * account on the same platform is not a change.
+ */
+function accountChanged(/** @type {any} */ account) {
+  if (!account?.profile || !account.pinned) return null;
+  const now = profileByName(account.profile);
+  if (!now) return `the profile ${account.profile} was signed out`;
+  if (normaliseUrl(now.url) !== account.pinned.url || String(now.account ?? "") !== account.pinned.account || String(now.email ?? "") !== account.pinned.email) return `the profile ${account.profile} now signs in as ${now.email ?? "an api key"} · ${now.account ?? "?"} on ${now.url}`;
+  return null;
+}
+
+/** The prompt's lead: the project, and the profile first when several accounts are signed in here. */
+function promptLead(/** @type {any} */ s) {
+  // The whole profile name: two that share a beginning must not look the same (Codex).
+  const who = s.account?.several && s.account.profile ? `${plainText(s.account.profile)} · ` : "";
+  return `${who}${clipCells(plainText(s.ws), 24)}`;
+}
+
+/**
  * What to add to a 401/403: which credential was refused. Without it a
  * `logs --url` that fails on a machine with three accounts says
  * "forbidden" and leaves the reader to guess which key was sent.
@@ -15036,6 +15072,7 @@ function statusBlock(s, url) {
     row("works", s.mode === "local" ? "on this computer" : "in the cloud"),
     row("cloud jobs", `${s.localOnly === true ? "off — the agent starts none" : "on — the agent may start them, each asked first"} (/cloud-jobs)`),
     typeof s.goal === "string" ? row("goal", `${plainText(s.goal)} (/goal clear drops it)`) : null,
+    s.account ? row("account", plainText(s.account.label)) : null,
     row("agent", `${s.agent} in project ${s.ws}`),
     row("platform", url),
     row("folder", homeTilde(s.dir)),
@@ -18244,6 +18281,8 @@ async function codeCmd(positional, flags, layout) {
   // The answers are kept now, not after a first turn: asked once (owner).
   remember();
 
+  // Which account this session runs as (FOL-260): read now, never kept from an earlier session.
+  /** @type {any} */ (s).account = sessionAccount(flags);
   if (typeof flags.task === "string") {
     console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
     // A script's turn is part of the session too: the cloud is told what the
@@ -18272,6 +18311,8 @@ async function codeCmd(positional, flags, layout) {
     }
   })();
   console.log(`\n${codeHeader([
+    // Which account (FOL-260): two terminals on two accounts look alike once the "acting as" line has scrolled away.
+    .../** @type {Array<[string, string, string]>} */ (s.account ? [["account", c.white(plainText(s.account.label)), plainText(s.account.label)]] : []),
     ["agent", c.violet(plainText(agent)), plainText(agent)],
     ["project", c.cyan(plainText(ws)), plainText(ws)],
     ["server", c.white(plainText(host)), plainText(host)],
@@ -18688,7 +18729,7 @@ async function codeCmd(positional, flags, layout) {
       if (s.turnOk === true) {
         fromQueue = /** @type {string} */ (s.queue.shift());
         queuedNow = s.queue.length;
-        console.log(`${c.bold(c.cyan(clipCells(plainText(s.ws), 24)))} ${c.violet("❯")} ${plainText(fromQueue)} ${c.dim(`· from the queue${s.queue.length ? ` (${s.queue.length} more)` : ""}`)}`);
+        console.log(`${c.bold(c.cyan(promptLead(s)))} ${c.violet("❯")} ${plainText(fromQueue)} ${c.dim(`· from the queue${s.queue.length ? ` (${s.queue.length} more)` : ""}`)}`);
       } else {
         // A turn that was stopped or failed sends nothing after it: what
         // waited is on the line again, to send, change or drop.
@@ -18734,6 +18775,16 @@ async function codeCmd(positional, flags, layout) {
       }
       return { localOnly: s.localOnly === true, mode: s.mode, sandboxOff: s.sandboxOff === true, strict: s.strict === true };
     };
+    // Another sign-in under this session's profile name: stop, never go on as a different account showing the old one (Codex).
+    {
+      const moved = accountChanged(/** @type {any} */ (s).account);
+      if (moved) {
+        await s.mcp?.closeAll?.().catch(() => undefined);
+        await s.box?.close?.().catch(() => undefined);
+        console.log(`  ${c.red("✗")} ${plainText(moved)} — this session ran as ${plainText(/** @type {any} */ (s).account.label)} and stops here; start foldrun code again (--profile picks one)\n`);
+        return 1;
+      }
+    }
     // "/name rest": the name as typed, and what follows it.
     const slash = /^(\/[\w:?-]*)(?:\s+([\s\S]*))?$/.exec(line);
     let name = slash ? /** @type {string} */ (slash[1]).toLowerCase() : "";
@@ -19961,7 +20012,7 @@ async function readCodeMessage(state, completer, s) {
   const { createInterface } = await import("node:readline");
   // The project's name, then a chevron (owner, 19 Nov 2026): where you are
   // talking, which tells two open sessions apart.
-  const ask = `${c.bold(c.cyan(clipCells(plainText(s.ws), 24)))} ${c.violet("❯")} `;
+  const ask = `${c.bold(c.cyan(promptLead(s)))} ${c.violet("❯")} `;
   return new Promise((resolve) => {
     // A copy: readline adds every line it reads, a paste's included; the
     // history kept is one entry per message, added by the caller.
@@ -19986,7 +20037,7 @@ async function readCodeMessage(state, completer, s) {
     }
     const search = tty ? historySearch(rl, state.history, ask) : null;
     // The list of /commands under the line, on a terminal that can move its cursor.
-    const menu = tty && process.stdout.isTTY && process.env.TERM !== "dumb" && Array.isArray(state.slash) ? slashMenu(rl, () => state.slash, () => displayWidth(`${clipCells(plainText(s.ws), 24)} ❯ `)) : null;
+    const menu = tty && process.stdout.isTTY && process.env.TERM !== "dumb" && Array.isArray(state.slash) ? slashMenu(rl, () => state.slash, () => displayWidth(`${promptLead(s)} ❯ `)) : null;
     if (tty && search) /** @type {any} */ (input).route((/** @type {Buffer} */ data, /** @type {(t: string) => void} */ write) => {
       if (menu?.key(data, write)) return;
       search.feed(data, write);

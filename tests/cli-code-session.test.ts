@@ -2415,6 +2415,60 @@ test("--local: `foldrun use` in another terminal mid-session does not move this 
   }
 });
 
+test("the session names its account (FOL-260): a box row and /status for the default profile, --profile and a token; the prompt names the profile when several are signed in", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+  });
+  const creds = (profiles: Record<string, unknown>) => fs.writeFileSync(path.join(home, "credentials.json"), JSON.stringify({ current: "acme", profiles }), { mode: 0o600 });
+  const run = async (args: string[], env: Record<string, string>, box: RegExp, prompt: RegExp, status: RegExp) => {
+    const t = onTerminal(["code", d, "--local", "--to", "desk", ...args], home, { FOLDRUN_URL: "", COLUMNS: "200", ...env });
+    try {
+      let at = await t.until(box);
+      at = await t.until(prompt, at);
+      t.send("/status\r");
+      at = await t.until(status, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+  };
+  try {
+    // One profile: named in the box and /status; the prompt is the project alone.
+    creds({ acme: { url: s.url, token: "fr_api_acme", account: "acme", email: "ana@example.com" } });
+    await run([], {}, /account\s+acme · ana@example\.com · acme/, /\n\s*desk ❯ $/, /account\s+acme · ana@example\.com · acme/);
+    // Two signed in: --profile picks one, and the prompt leads with it.
+    creds({ acme: { url: s.url, token: "fr_api_acme", account: "acme", email: "ana@example.com" }, mehdi: { url: s.url, token: "fr_api_mehdi", account: "taleghani" } });
+    await run(["--profile", "mehdi"], {}, /account\s+mehdi · api key · taleghani/, /mehdi · desk ❯ $/, /account\s+mehdi · api key · taleghani/);
+    await run([], {}, /account\s+acme · ana@example\.com/, /acme · desk ❯ $/, /account\s+acme · ana@example\.com/);
+    // Another sign-in under the same profile name in another terminal: the session stops rather than run as someone else.
+    {
+      const t2 = onTerminal(["code", d, "--local", "--to", "desk", "--profile", "mehdi"], home, { FOLDRUN_URL: "", COLUMNS: "200" });
+      try {
+        await t2.until(/mehdi · desk ❯ $/);
+        creds({ acme: { url: s.url, token: "fr_api_acme", account: "acme", email: "ana@example.com" }, mehdi: { url: s.url, token: "fr_api_other", account: "other-co", email: "bo@example.com" } });
+        t2.send("/status\r");
+        await t2.until(/the profile mehdi now signs in as bo@example\.com · other-co[\s\S]*this session ran as mehdi · api key · taleghani and stops here/);
+        assert.equal(await t2.done, 1);
+      } finally {
+        t2.child.kill();
+      }
+      creds({ acme: { url: s.url, token: "fr_api_acme", account: "acme", email: "ana@example.com" }, mehdi: { url: s.url, token: "fr_api_mehdi", account: "taleghani" } });
+    }
+    // A token is named by where it came from; no profile in the prompt.
+    await run(["--url", s.url, "--token", "k"], {}, /account\s+--token \(an API key\)/, /\n\s*desk ❯ $/, /account\s+--token \(an API key\)/);
+    await run(["--url", s.url], { FOLDRUN_TOKEN: "k" }, /account\s+FOLDRUN_TOKEN \(an API key\)/, /\n\s*desk ❯ $/, /account\s+FOLDRUN_TOKEN/);
+  } finally {
+    s.close();
+  }
+});
+
 test("/rewind takes back what the agent's Write and Edit did, never what a command did; /goal --check takes the person's command's word, not the agent's", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
