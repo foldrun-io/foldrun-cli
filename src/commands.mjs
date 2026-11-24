@@ -18,6 +18,7 @@ import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
 import { mcpManager, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX } from "./code-mcp.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
@@ -14207,6 +14208,27 @@ function readableBy(/** @type {any} */ s, /** @type {unknown} */ p) {
  * The session's MCP servers (code-mcp.mjs), or null when this install's
  * @foldrun/core cannot connect any. Made once; ended with the process.
  */
+/** The session's sandbox holder (code-sandbox.mjs): made once, opened at the first turn on this computer. */
+function boxOf(/** @type {any} */ s) {
+  // Where this CLI keeps the sign-in and the computer's model key, wherever FOLDRUN_HOME puts it: never readable inside (Codex).
+  return (s.box ??= sandboxFor({ dir: s.dir, sites: () => (Array.isArray(s.sandboxSites) ? s.sandboxSites : []), denyRead: () => [credentialsDir()] }));
+}
+
+/** The walls for this session now: the handle; null when the person turned them off; or why they cannot be had. */
+async function wallsOf(/** @type {any} */ s) {
+  if (s.sandboxOff === true) return null;
+  const box = boxOf(s);
+  const walls = await box.open();
+  return walls ?? { refused: box.refusal()?.refused ?? "the sandbox did not start.", hint: box.refusal()?.hint };
+}
+
+/** A sandbox that could not start, said once the same way everywhere. */
+function sayNoSandbox(/** @type {{ refused: string, hint?: string }} */ no) {
+  console.log(`  ${c.red("✗")} ${c.white("no sandbox on this computer:")} ${c.grey(plainText(no.refused))}`);
+  if (no.hint) console.log(`    ${c.grey(plainText(no.hint))}`);
+  console.log(`    ${c.grey("nothing was run. /sandbox off works without it — every command is then asked, and runs as you · /cloud works in a sandbox on the platform")}`);
+}
+
 async function mcpOf(/** @type {any} */ s) {
   if (s.mcp !== undefined) return s.mcp;
   /** @type {any} */
@@ -14218,7 +14240,7 @@ async function mcpOf(/** @type {any} */ s) {
   }
   // Only an engine that ends a server's whole tree, stops an endless tool list and refuses a redirect (Codex).
   const fit = mod?.ENGINE_MCP_FEATURES;
-  s.mcp = typeof mod?.connectMcp === "function" && fit?.killOnClose === true && fit?.maxTools === true && fit?.redirectError === true && fit?.kill === true ? mcpManager({ dir: s.dir, env: () => localEnv(), connect: mod.connectMcp }) : null;
+  s.mcp = typeof mod?.connectMcp === "function" && fit?.killOnClose === true && fit?.maxTools === true && fit?.redirectError === true && fit?.kill === true ? mcpManager({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), unwalled: () => s.sandboxOff === true, connect: mod.connectMcp }) : null;
   if (s.mcp) process.on("exit", () => s.mcp.killAll());
   return s.mcp;
 }
@@ -14360,7 +14382,7 @@ const CHECK_MS = 10 * 60 * 1000;
 function runGoalCheck(/** @type {string} */ command, /** @type {string} */ dir) {
   return new Promise((resolve) => {
     /** @type {Record<string, string | undefined>} */
-    const own = { ...process.env };
+    const own = { ...hostEnv() };
     // Every key the CLI itself reads: the model's, the gateway's, the platform's.
     for (const k of Object.keys(own)) if (/^(ANTHROPIC_|CLAUDE_CODE_)/.test(k) || /^FOLDRUN_.*(KEY|TOKEN|SECRET)/.test(k)) delete own[k];
     delete own.BASH_ENV;
@@ -15085,7 +15107,7 @@ async function pickProject(url, flags, dir, guess) {
 /** The person's own environment, without foldrun's settings and keys: what the agent's commands get. */
 function localEnv() {
   /** @type {Record<string, string | undefined>} */
-  const env = { ...process.env };
+  const env = { ...hostEnv() };
   for (const k of Object.keys(env)) if (/^FOLDRUN_/.test(k)) delete env[k];
   return env;
 }
@@ -16301,14 +16323,20 @@ async function codeLocalTurn(s, text) {
       if (s.planOnly) return { behavior: /** @type {const} */ ("deny"), message: "This is a plan-only turn: nothing is changed, run or sent. Read what you need with Read, Glob and Grep, then give the plan — the files you would change and how, the commands you would run, and what could go wrong. The person runs it by answering." };
       const file = input.file_path ?? input.notebook_path ?? input.path;
       const inside = file !== undefined && bothInside(s.dir, file);
-      const command = name === "Bash" ? String(input.command ?? "") : null;
+      const outside = name === OUTSIDE_TOOL;
+      const command = name === "Bash" || outside ? String(input.command ?? "") : null;
       // A command that only looks (pwd, ls, git status…) runs without a
       // question, in the shape readOnlyCommand hands back: in this folder,
       // git held to itself. /permissions strict asks for these too.
-      if (command !== null && !child && s.strict !== true && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout")) {
+      if (command !== null && !outside && !child && s.strict !== true && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout")) {
         const looks = readOnlyCommand(command, s.dir);
         if (looks) return { behavior: /** @type {const} */ ("allow"), updatedInput: { ...input, command: looks } };
       }
+      // Inside the sandbox a command cannot write outside this folder, read
+      // the person's keys or reach a site that is not allowed, so it runs
+      // without a question — as Claude Code's sandbox does (owner, 24 Nov
+      // 2026). /permissions strict asks; a sub-agent's are always asked.
+      if (name === "Bash" && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current()) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       // Sending the folder to cloud agents, and putting one's patch into
       // the folder (cloud_apply, which is a change inside it).
       const cloud = isCloudAgents(name);
@@ -16318,7 +16346,7 @@ async function codeLocalTurn(s, text) {
       // asked every time.
       // A cloud agent's patch has its own "always": a yes to the agent's own
       // edits is not a yes to what comes back from the cloud (Codex).
-      const scope = mcpTool ? "mcp" : job && !("problem" in job) && job.where === "cloud" ? "cloud-sub" : isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : command !== null ? "command" : null;
+      const scope = mcpTool ? "mcp" : job && !("problem" in job) && job.where === "cloud" ? "cloud-sub" : isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : outside ? "outside" : command !== null ? "command" : null;
       const allowed = scope === "changes" || scope === "cloud" || scope === "cloud-changes" ? allow.kinds.has(scope) : scope === "command" ? allow.commands.has(/** @type {string} */ (command)) : false;
       // An "always" was given to the session's own agent: it does not reach
       // into a sub-agent, whose every change and command is asked (Codex).
@@ -16356,6 +16384,10 @@ async function codeLocalTurn(s, text) {
           const lines = body ? body.replace(/\n$/, "").split("\n").length : 0;
           console.log(`      ${c.grey(`${fs.existsSync(path.resolve(s.dir, String(file ?? ""))) ? "replaces the file" : "a new file"} · ${lines} line${lines === 1 ? "" : "s"}`)}`);
         } else if (command !== null) {
+          if (outside) {
+            console.log(`      ${c.amber("OUTSIDE the sandbox — it runs as you, with your full access to this computer and the network")}`);
+            if (typeof input.reason === "string" && input.reason.trim()) console.log(`      ${c.grey(`the agent's reason: ${clipCells(plainText(input.reason.replace(/\s+/g, " ")), Math.max(20, (process.stdout.columns || 80) - 28))}`)}`);
+          }
           // The whole command, as it will run: nothing clipped or joined (Codex).
           // The whole command, as it will run: nothing clipped or joined (Codex).
           // One too long to read on a screen is refused, never half shown.
@@ -16597,6 +16629,22 @@ async function codeLocalTurn(s, text) {
       print();
       if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
     };
+    // The sandbox the agent's commands run in (FOL-214): up before anything
+    // of this turn can start a program. One that cannot start runs nothing.
+    const walls = await wallsOf(s);
+    if (walls && "refused" in walls) {
+      said(() => sayNoSandbox(walls));
+      stopTicker();
+      return;
+    }
+    // Inside the walls a command is not asked, so it starts without the keys exported in the person's shell.
+    const inside = walls ? sandboxEnv(own) : null;
+    const shellOwn = inside ? inside.env : own;
+    if (inside) s.sandboxKept = inside.kept;
+    if (walls && s.boxSaid !== walls) {
+      s.boxSaid = walls;
+      said(() => console.log(`  ${c.grey(`sandbox: ${plainText(walls.describe())} · /sandbox`)}`));
+    }
     // MCP servers: those with the person's yes are started (once a
     // session) and their tools offered. A /plan turn starts and offers none.
     /** @type {any[]} */
@@ -16661,15 +16709,14 @@ async function codeLocalTurn(s, text) {
           options: {
             cwd: s.dir,
             env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
-            shellEnv: own,
+            shellEnv: shellOwn,
             userAgent: USER_AGENT,
             model: localModelOf(model),
             // The definition's prose is the person's or the project's own text; the folder's instructions go with it as they do for the session's agent.
             systemPrompt: [def.prompt, `You work in the person's folder: ${s.dir}`, Array.isArray(s.extraDirs) && s.extraDirs.length ? `They also added these folders, for reading: ${s.extraDirs.join(", ")}` : "", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
             tools: def.tools,
             hooks: { PostToolUse: [{ hooks: [afterTool] }] },
-            engineHostShell: true,
-            sandbox: { enabled: false },
+            ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
             maxTurns: Math.min(AGENT_TURNS_EACH, left),
             canUseTool: childCan,
             abortController: childAbort,
@@ -16706,12 +16753,14 @@ async function codeLocalTurn(s, text) {
             // The model's key stays with the loop; the commands the agent
             // runs get the person's own environment without it.
             env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
-            shellEnv: own,
+            shellEnv: shellOwn,
             userAgent: USER_AGENT,
             model: localModelOf(model),
-            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" })), folderInstructions(s.dir).text, skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
+            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local" })), folderInstructions(s.dir).text, walls ? SANDBOX_NOTE : "", skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
             tools: ENGINE_TOOLS_LOCAL,
             extraTools: [
+              // The one way out of the sandbox: a command as the person, asked every time.
+              ...(walls ? [{ name: OUTSIDE_TOOL, description: OUTSIDE_DESCRIPTION, input_schema: OUTSIDE_SCHEMA, readOnly: false, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => runOutside(String(input?.command ?? ""), { dir: s.dir, env: own, signal: ctx.signal, timeout: input?.timeout }) }] : []),
               { name: CLOUD_AGENTS_TOOL, description: CLOUD_AGENTS_DESCRIPTION, input_schema: CLOUD_AGENTS_SCHEMA, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => cloudCall(input, ctx.signal) },
               // foldrun's own docs, from the pages this CLI carries: text that
               // shipped with it, read with no command and so no question.
@@ -16744,8 +16793,7 @@ async function codeLocalTurn(s, text) {
               })),
             ],
             hooks: { PostToolUse: [{ hooks: [afterTool] }] },
-            engineHostShell: true,
-            sandbox: { enabled: false },
+            ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
             maxTurns: 80,
             history,
             canUseTool,
@@ -16995,6 +17043,8 @@ async function codeCmd(positional, flags, layout) {
   const resumed = last && (last.url === undefined || last.url === url) && (last.agent === undefined || last.agent === agent) && (last.mode ?? "cloud") === mode && (mode !== "local" || last.engine === engine) ? last : null;
   if (flags.continue === true && !resumed && typeof flags.context !== "string") console.log(`  ${c.dim("no earlier conversation of this folder to continue — starting a fresh one")}`);
   const s = { url, flags, ws, agent, dir, mode, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]), engine: mode === "local" ? engine : undefined };
+  // Off only by the person's own word: the flag, or their environment (never a file of the folder).
+  if (flags["no-sandbox"] === true || flags.sandbox === false || process.env.FOLDRUN_CODE_SANDBOX === "off") /** @type {any} */ (s).sandboxOff = true;
   // One session, two places (24 Nov 2026): what was said on one side goes
   // ahead of the next message on the other, once.
   // Restored before anything is kept: the first save must not wipe what a
@@ -17097,7 +17147,7 @@ async function codeCmd(positional, flags, layout) {
     ["works", mode === "local" ? c.green("on this computer") : c.cyan("in the cloud"), mode === "local" ? "on this computer" : "in the cloud"],
     ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
   ])}`);
-  console.log(`    ${c.grey(mode === "local" ? "the agent works in this folder on your foldrun plan; it asks before every change and command" : "each message takes your folder to the agent; you apply what comes back")}`);
+  console.log(`    ${c.grey(mode === "local" ? (/** @type {any} */ (s).sandboxOff === true ? "the agent works in this folder on your foldrun plan, with no sandbox (--no-sandbox); it asks before every change and command" : "the agent works in this folder on your foldrun plan; its commands run in a sandbox (/sandbox), and it asks before every change to a file") : "each message takes your folder to the agent; you apply what comes back")}`);
   console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
   // The folder's own commands and skills (24 Nov 2026): read at the start
@@ -17316,6 +17366,7 @@ async function codeCmd(positional, flags, layout) {
     const line = await readCodeMessage(prompt, completer, s);
     if (isLeave(line)) {
       await s.mcp?.closeAll?.().catch(() => undefined);
+      await s.box?.close?.().catch(() => undefined);
       console.log(`\n  ${c.dim(s.turns ? `to go on later: foldrun code --continue${dir === process.cwd() ? "" : ` ${plainText(dir)}`}` : "bye")}\n`);
       return 0;
     }
@@ -17641,6 +17692,75 @@ async function codeCmd(positional, flags, layout) {
       console.log(`${todoLines(clean.todos).join("\n") || `    ${c.grey("(the todo list is empty)")}`}\n`);
       continue;
     }
+    if (name === "/sandbox") {
+      const [verb = "", arg = ""] = rest.split(/\s+/);
+      const sites = (s.sandboxSites ??= []);
+      if (verb === "off") {
+        if (s.sandboxOff === true) say("already off — every command is asked, and runs as you");
+        else if (/^y(es)?$/i.test((await promptVisible(`  ${c.amber("!")} without the sandbox the agent's commands run as you: they can write anywhere you can, read your keys and reach any site. Each one is asked first. Turn it off for this session? [y/N] `)).trim())) {
+          await s.mcp?.closeAll?.().catch(() => undefined);
+          await s.box?.close?.().catch(() => undefined);
+          s.sandboxOff = true;
+          delete s.boxSaid;
+          delete s.sandboxKept;
+          // An "always" given to a command while it ran inside the walls is not one for it running as you.
+          s.localAllow?.commands?.clear?.();
+          say("off for this session — a command is asked before it runs, but for the ones that only look (pwd, ls, git status…); MCP servers that are programs ask for a new yes (/sandbox on puts it back)");
+        } else say("left on");
+        continue;
+      }
+      if (verb === "on") {
+        if (s.sandboxOff !== true) say("already on");
+        else {
+          // What was started without it does not go on running beside it.
+          await s.mcp?.closeAll?.().catch(() => undefined);
+          delete s.sandboxOff;
+          say("on — it is put up at your next message on this computer");
+        }
+        continue;
+      }
+      if (verb === "allow" || verb === "deny") {
+        const site = siteOf(arg);
+        if (!site) {
+          say(`/sandbox ${verb} <site> — a site's name, such as api.example.com or *.example.com`);
+          continue;
+        }
+        if (verb === "allow" && !sites.includes(site)) sites.push(site);
+        if (verb === "deny") {
+          if (!sites.includes(site)) {
+            say(`${site} is not one you added${sites.length ? ` (yours: ${sites.join(", ")})` : ""} — the built-in list is not changed here`);
+            continue;
+          }
+          sites.splice(sites.indexOf(site), 1);
+        }
+        // What was started under the old list is stopped; it starts again under the new one (Codex).
+        await s.mcp?.closeAll?.().catch(() => undefined);
+        say(`${verb === "allow" ? "allowed" : "taken away"}: ${site} — for this session, from your next message on this computer (MCP servers started before are restarted then)`);
+        continue;
+      }
+      if (verb) {
+        say("/sandbox · /sandbox allow <site> · deny <site> · off · on");
+        continue;
+      }
+      if (s.mode !== "local") say("in the cloud the agent works in a sandbox on the platform; this is about the one on this computer (/local)");
+      if (s.sandboxOff === true) {
+        console.log(`  ${c.amber("off")} ${c.grey("— the agent's commands run as you; each one is asked first. /sandbox on puts it back")}\n`);
+        continue;
+      }
+      const walls = await wallsOf(s);
+      if (walls && "refused" in walls) sayNoSandbox(walls);
+      else if (walls) {
+        s.boxSaid = walls;
+        console.log(`  ${c.green("on")} ${c.grey(`— ${plainText(walls.describe())}`)}`);
+        console.log(`  ${c.grey(`sites: the built-in list of package and code sites (${await boxOf(s).trustedCount()})${sites.length ? `, and yours: ${sites.join(", ")}` : ""}`)}`);
+        console.log(`  ${c.grey(`inside it a command runs without a question${s.strict === true ? " — but /permissions strict is on, so each is asked" : ""}; one that needs to leave it (bash_outside) is asked every time, and runs as you`)}`);
+        if (Array.isArray(s.sandboxKept) && s.sandboxKept.length) console.log(`  ${c.grey(`kept out of its commands — variables of your shell that hold keys: ${s.sandboxKept.slice(0, 12).map((/** @type {string} */ k) => plainText(k)).join(", ")}${s.sandboxKept.length > 12 ? ` and ${s.sandboxKept.length - 12} more` : ""}`)}`);
+        console.log(`  ${c.grey("not inside it: !commands you type, a goal's check, and MCP servers at a web address — those are yours")}`);
+        console.log(`  ${c.grey("/sandbox allow <site> · deny <site> · off · on")}`);
+      }
+      console.log("");
+      continue;
+    }
     if (name === "/add-dir") {
       const dirs = (s.extraDirs ??= []);
       const drop = /^--rm\s+(.+)$/.exec(rest);
@@ -17709,7 +17829,9 @@ async function codeCmd(positional, flags, layout) {
           console.log(`      ${c.grey(`the program: ${plainText(r.program)}`)}`);
           if (r.scripts.length) console.log(`      ${c.grey(`from this folder, as they are now (a change asks again): ${r.scripts.map((/** @type {string} */ x) => plainText(x)).join(", ")}`)}`);
           console.log(`      ${c.grey(`it gets: ${r.gets.join("; ")}${r.env.length ? `; and ${r.env.map((/** @type {any} */ e) => `${e.name}${e.from ? ` (from your ${e.from})` : ""}`).join(", ")}` : ""}`)}`);
-          console.log(`      ${c.amber("it runs on this computer as you, with no sandbox, for as long as the session lasts — it can read your files and use the network")}`);
+          if (s.sandboxOff !== true && s.box?.current()) console.log(`      ${c.grey("it runs inside this session's sandbox for as long as the session lasts: it writes only in this folder, cannot read your keys, and reaches only the allowed sites (/sandbox)")}`);
+          else if (s.sandboxOff !== true) console.log(`      ${c.grey("it runs inside this session's sandbox (/sandbox), which is put up first; if that cannot start, the server is not started")}`);
+          else console.log(`      ${c.amber("it runs on this computer as you, with no sandbox, for as long as the session lasts — it can read your files and use the network")}`);
         } else {
           console.log(`      ${c.white(plainText(r.line))}`);
           if (r.headers.length) console.log(`      ${c.grey(`it is sent the header${r.headers.length === 1 ? "" : "s"}: ${r.headers.map((/** @type {any} */ h) => `${h.name}${h.from.length ? ` (from your ${h.from.join(", ")})` : ""}`).join(", ")}`)}`);
@@ -17907,7 +18029,7 @@ async function codeCmd(positional, flags, layout) {
     if (name === "/copy") {
       if (!s.lastReply) say("nothing to copy yet — the agent has not replied in this conversation");
       else {
-        const tool = [["pbcopy", []], ["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["clip.exe", []]].find(([bin, args]) => spawnSync(/** @type {string} */ (bin), /** @type {string[]} */ (args), { input: s.lastReply, stdio: ["pipe", "ignore", "ignore"], timeout: 5_000 }).status === 0);
+        const tool = [["pbcopy", []], ["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["clip.exe", []]].find(([bin, args]) => spawnSync(/** @type {string} */ (bin), /** @type {string[]} */ (args), { input: s.lastReply, stdio: ["pipe", "ignore", "ignore"], timeout: 5_000, env: hostEnv() }).status === 0);
         if (tool) say(`copied the last reply (${formatBytes(Buffer.byteLength(s.lastReply))})`);
         else say("no clipboard on this machine (pbcopy, wl-copy, xclip) — /export <file> writes the session to a file");
       }
@@ -18459,7 +18581,8 @@ function runShellLive(dir, command) {
     };
     const ignore = () => {};
     process.on("SIGINT", ignore);
-    const child = spawn(process.env.SHELL || "/bin/sh", ["-c", command], { cwd: dir, stdio: ["inherit", "pipe", "pipe"], env: process.env });
+    // Your own command, with your own environment: not the agent's, so not inside its sandbox.
+    const child = spawn(hostEnv().SHELL || "/bin/sh", ["-c", command], { cwd: dir, stdio: ["inherit", "pipe", "pipe"], env: hostEnv() });
     child.stdout.on("data", (b) => process.stdout.write(keep(b)));
     child.stderr.on("data", (b) => process.stderr.write(keep(b)));
     const done = (/** @type {number} */ code, /** @type {string | null} */ error) => {

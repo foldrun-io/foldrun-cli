@@ -60,7 +60,7 @@ function outerEnv() {
 function onTerminal(args: string[], home: string, extraEnv: Record<string, string> = {}) {
   const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
   const child = spawn("python3", ["-c", "import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)", process.execPath, cli, ...args], {
-    env: { ...outerEnv(), FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", ...extraEnv },
+    env: { ...outerEnv(), FOLDRUN_CODE_SANDBOX: "off", FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", ...extraEnv },
   });
   let out = "";
   child.stdout.on("data", (x) => (out += x));
@@ -2002,4 +2002,99 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
   // The person's own change to the todo list reaches the agent as a note; the added folder is named.
   assert.match(JSON.stringify(asked[6].messages.at(-1)), /The person changed the session's todo list themselves/);
   assert.match(JSON.stringify(asked[6].system), /also added these folders for you to read/);
+});
+
+// Whether this machine can put the walls up at all (CI runners have no
+// bubblewrap): asked in a process of its own, because opening narrows PATH.
+const canSandbox = (() => {
+  if (!hasPty) return false;
+  const probe = `const m = await import("@foldrun/core/local-sandbox"); const w = await m.openLocalSandbox({ cwd: process.env.PROBE_DIR, sites: [] }); if (m.isRefusal(w)) process.exit(3); await w.close(); process.exit(0);`;
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-probe-")));
+  try {
+    execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: path.join(import.meta.dirname, ".."), env: { ...process.env, PROBE_DIR: dir }, stdio: "ignore", timeout: 60_000 });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+test("the sandbox on this computer: a command inside it runs unasked and cannot write outside the folder; bash_outside is asked every time; /sandbox off goes back to asking each command", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
+  const d = repo();
+  const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-")));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "b1", name: "Bash", input: { command: "echo made-inside > inside.txt; echo \"token=[${GH_TOKEN:-unset}] plain=[$PLAIN_SETTING]\" > env.txt" } }, { type: "tool_use", id: "b2", name: "Bash", input: { command: `echo escaped > ${path.join(other, "escape.txt")}` } }]),
+    () => sse([{ type: "tool_use", id: "o1", name: "bash_outside", input: { command: `echo by-hand > ${path.join(other, "asked.txt")}`, reason: "the file belongs outside this folder" } }]),
+    () => sse([{ type: "tool_use", id: "o2", name: "bash_outside", input: { command: `echo again > ${path.join(other, "refused.txt")}`, reason: "again" } }]),
+    () => sse([{ type: "text", text: "Done inside; one outside." }]),
+    // after /sandbox off
+    () => sse([{ type: "tool_use", id: "b3", name: "Bash", input: { command: "echo no-walls > later.txt" } }]),
+    () => sse([{ type: "text", text: "Wrote later.txt." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-sb/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-sb", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "", GH_TOKEN: "ghp_notARealOneButShapedLikeIt", PLAIN_SETTING: "kept" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("do the work\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    // The walls are named once; the two commands run with no question; the way out is asked.
+    at = await t.until(/sandbox: (macOS Seatbelt|bubblewrap)[^\n]*\/sandbox/, at, 60_000);
+    at = await t.until(/OUTSIDE the sandbox — it runs as you[\s\S]*the agent's reason: the file belongs outside this folder[\s\S]*asked\.txt[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
+    assert.doesNotMatch(t.out().slice(0, at), /allow\?[\s\S]*allow\?/, "nothing before the way out was asked");
+    assert.equal(fs.readFileSync(path.join(d, "inside.txt"), "utf8"), "made-inside\n");
+    // A key exported in the person's shell is not set inside; a plain setting is.
+    assert.equal(fs.readFileSync(path.join(d, "env.txt"), "utf8"), "token=[unset] plain=[kept]\n");
+    assert.equal(fs.existsSync(path.join(other, "escape.txt")), false, "the write outside the folder was refused by the sandbox");
+    assert.equal(fs.existsSync(path.join(other, "asked.txt")), false, "nothing outside before the yes");
+    t.send("y\r");
+    // The second one is asked again — there is no "always" for the way out — and a no runs nothing.
+    at = await t.until(/OUTSIDE the sandbox[\s\S]*refused\.txt[\s\S]*allow\? \[y\]es · \[n\]o/, at, 30_000);
+    assert.equal(fs.readFileSync(path.join(other, "asked.txt"), "utf8"), "by-hand\n");
+    t.send("n\r");
+    at = await t.until(/Done inside; one outside\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(fs.existsSync(path.join(other, "refused.txt")), false);
+    t.send("/sandbox\r");
+    at = await t.until(/on — (macOS Seatbelt|bubblewrap)[\s\S]*inside it a command runs without a question/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/sandbox off\r");
+    at = await t.until(/Turn it off for this session\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/off for this session — a command is asked before it runs/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("one more\r");
+    at = await t.until(/echo no-walls > later\.txt[\s\S]*allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Wrote later\.txt\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  // The model was offered the way out and told about the walls only while they were up.
+  assert.ok(asked[0].tools.some((x: any) => x.name === "bash_outside"));
+  assert.match(JSON.stringify(asked[0].system), /run inside a sandbox on this computer/);
+  assert.ok(!asked[4].tools.some((x: any) => x.name === "bash_outside"));
+  assert.doesNotMatch(JSON.stringify(asked[4].system), /run inside a sandbox on this computer/);
+  // The command refused by the walls came back to the model as a failure.
+  const results = JSON.stringify(asked[1].messages.at(-1));
+  assert.match(results, /Operation not permitted|Read-only file system|Permission denied/);
 });

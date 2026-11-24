@@ -311,7 +311,7 @@ function changeApprovals(/** @type {(all: ReturnType<typeof readApprovals>) => v
 /**
  * The servers of one session: read from the files at every look, started
  * only with a yes, kept until the session ends.
- * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any> }} o
+ * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, unwalled?: () => boolean }} o
  */
 export function mcpManager(o) {
   /** @type {Map<string, { hash: string, conn: any, tools: any[], said: string, cut: string[] }>} */
@@ -333,7 +333,7 @@ export function mcpManager(o) {
         continue;
       }
       named.add(s.name);
-      const r = resolveServer(s, o.dir, o.env());
+      const r = resolved(s);
       const running = live.get(s.name);
       if ("problem" in r) {
         if (running) await stop(s.name);
@@ -367,6 +367,18 @@ export function mcpManager(o) {
   };
 
   /**
+   * An entry as it would run now. A program started with the sandbox off
+   * runs as the person: that is another thing to say yes to than the same
+   * program inside the walls, so it has a fingerprint of its own (Codex).
+   */
+  const resolved = (/** @type {any} */ entry) => {
+    /** @type {any} */
+    const r = resolveServer(entry, o.dir, o.env());
+    if (!("problem" in r) && r.spec.type === "stdio" && o.unwalled?.() === true) return { ...r, hash: sha(`${r.hash}\nno-sandbox`), shown: { ...r.shown, unwalled: true } };
+    return r;
+  };
+  const resolvedNow = resolved;
+  /**
    * Start one server. The entry is read again here, and it starts only if
    * the person's yes is to exactly what it is at this moment — never on the
    * strength of a row read earlier (Codex). Its tools never claim to be
@@ -375,14 +387,19 @@ export function mcpManager(o) {
   const start = async (/** @type {string} */ name, /** @type {AbortSignal} */ signal) => {
     const entry = readMcpConfig(o.dir).servers.find((x) => x.name === name && !x.hiddenBy);
     if (!entry) return "it is no longer named in the file";
-    const resolved = resolveServer(entry, o.dir, o.env());
+    const resolved = resolvedNow(entry);
     if ("problem" in resolved) return resolved.problem;
     if (!readApprovals()[resolved.hash]) return `it changed since you were shown it — /mcp on ${name} shows it as it is now`;
     const row = { name, resolved };
     const key = `${row.name}\n${row.resolved.hash}`;
     failed.delete(key);
     try {
-      const conn = await o.connect({ [row.name]: row.resolved.spec }, { env: {}, toolEnv: baseEnv(o.env()), cwd: o.dir, signal, killOnClose: true, maxTools: MCP_TOOLS_MAX });
+      // A program the session starts runs inside the session's sandbox, put
+      // up first; one that cannot be had starts nothing. A server at a web
+      // address is reached by foldrun itself, with the person's yes to it.
+      const walls = row.resolved.spec.type === "stdio" && o.sandbox ? await o.sandbox() : null;
+      if (walls && "refused" in walls) return `the sandbox could not start (${walls.refused}) — /sandbox`;
+      const conn = await o.connect({ [row.name]: row.resolved.spec }, { env: {}, toolEnv: baseEnv(o.env()), cwd: o.dir, signal, killOnClose: true, maxTools: MCP_TOOLS_MAX, ...(walls ? { sandbox: walls } : {}) });
       const cut = [];
       const tools = [];
       for (const t of conn.tools) {

@@ -305,3 +305,18 @@ test("/add-dir: a folder for reading — never the disk, the home folder, or any
   assert.match((addableFolder(d, "creds") as { problem: string }).problem, /where keys are kept/);
   for (const n of [".ssh", ".aws", ".config"]) if (fs.existsSync(path.join(os.homedir(), n))) assert.ok("problem" in addableFolder(d, path.join(os.homedir(), n)), n);
 });
+
+test("a site for the sandbox: a name or a *.name, never an address, a path or a whole ending", async () => {
+  const { siteOf } = await import("../src/code-sandbox.mjs");
+  assert.equal(siteOf("api.example.com"), "api.example.com");
+  assert.equal(siteOf("https://API.Example.com/v1/x?y=1"), "api.example.com");
+  assert.equal(siteOf("*.example.com"), "*.example.com");
+  for (const bad of ["", "*", "*.com", "localhost", "10.0.0.1", "exa mple.com", "example", "-a.example.com", "a..b.com", "*.*.example.com"]) assert.equal(siteOf(bad), null, bad);
+});
+
+test("what a command inside the sandbox starts with: the person's environment less what holds a key", async () => {
+  const { sandboxEnv } = await import("../src/code-sandbox.mjs");
+  const got = sandboxEnv({ PATH: "/usr/bin", HOME: "/h", JAVA_HOME: "/j", EDITOR: "vi", GH_TOKEN: "x", AWS_SECRET_ACCESS_KEY: "y", NPM_CONFIG_REGISTRY: "https://registry.npmjs.org", DATABASE_URL: "postgres://u:pw@db/x", SSH_AUTH_SOCK: "/tmp/agent", HARMLESS: "sk-live-looks-like-a-key", GONE: undefined });
+  assert.deepEqual(Object.keys(got.env).sort(), ["EDITOR", "HOME", "JAVA_HOME", "NPM_CONFIG_REGISTRY", "PATH"]);
+  assert.deepEqual(got.kept, ["AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "GH_TOKEN", "HARMLESS", "SSH_AUTH_SOCK"]);
+});

@@ -44,6 +44,7 @@ export const CODE_COMMANDS = [
   ["/send <conversation> <text>", "message another session — the agent can too, when you ask it"],
   ["/messages", "what other sessions sent this one"],
   ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
+  ["/sandbox", "the sandbox the agent's commands run in on this computer: what it lets through · allow <site> · deny <site> · off · on"],
 ];
 
 /** Names that work and are not listed on their own line. */
@@ -302,7 +303,7 @@ const VERBS = /** @type {Record<string, string>} */ ({
   Bash: "Run", bash: "Run", Read: "Read", Edit: "Edit", MultiEdit: "Edit", Write: "Write", NotebookEdit: "Edit",
   Grep: "Search", Glob: "Find", LS: "List", WebFetch: "Fetch", WebSearch: "Search the web", web: "Web",
   Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you", cloud_agents: "Cloud agents", foldrun_docs: "Read foldrun docs", session_send: "Message a session",
-  agent: "Sub-agent", todo_write: "Todos", todo_read: "Todos",
+  agent: "Sub-agent", todo_write: "Todos", todo_read: "Todos", bash_outside: "Run outside the sandbox",
 });
 
 /** A tool's name as a verb a person reads; unknown ones as they are. */
