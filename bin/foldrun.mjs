@@ -186,6 +186,7 @@ const HELP = `foldrun — agents are just folders
   foldrun agent run <name> --snapshot [dir|id]  …on a folder: sent first (what git would commit, checked for secrets), the agent works on it in snapshot/, and the patch of its changes is on the run (foldrun report <run-id> patch)
   foldrun code [dir] --local | --cloud  where the session works: on this computer, or in the cloud (asked at a terminal when neither is given). On this computer the agent may also start cloud jobs, each asked first (/cloud-jobs on|off, kept for the folder). --local-only is --local with cloud jobs off
   koder [dir]               the short name for foldrun code: the same flags, the same session
+  foldrun code [dir] -p "<task>"  a script's one turn in the cloud (the short form of --task); --output-format text | json (one result object) | stream-json (one JSON event per line: system, message, tool_call, tool_result, error, result), --input-format stream-json (turns from stdin, one {"type":"user","text":"…"} per line); stdout holds only JSON, what a person reads goes to stderr; --yes applies the patch
   foldrun code [dir]        code with an agent on the platform: each message sends the folder (a snapshot), the agent works on it in its own sandbox, and you apply the patch it hands back after git apply --check (--to — made, with its coder agent, after a yes when it does not exist; --agent <name> (default coder, added on first use with a yes), --task "…" one turn and exit, --yes send the folder and apply without asking, --test, --context <id>, --continue the last conversation of this folder, --verbose the platform's notes on each step too, --no-beep no bell when a long turn ends, --include-messages with --task: include the session messages waiting for the conversation)
   foldrun agent run <name> --no-task  run it with no instruction, on its own prompt alone — the dashboard's Run (--to, --wait, --test)
   foldrun agent link <agent>  add to its team, in its frontmatter: --subagent <worker> (--isolated: sandbox: own on the worker), --consult <agent> or --can-ask (--description for a worker with none)
@@ -632,6 +633,11 @@ const positional = [];
 for (let i = 0; i < rest.length; i++) {
   if (rest[i] === "-o" && rest[i + 1] !== undefined && textVerb()) {
     flags.out = rest[++i];
+    continue;
+  }
+  // `foldrun code -p "…"`: a script's one turn, as \`claude -p\` (FOL-223) — the short form of --task.
+  if (rest[i] === "-p" && command === "code" && rest[i + 1] !== undefined) {
+    flags.task = rest[++i];
     continue;
   }
   if (!rest[i].startsWith("--")) {

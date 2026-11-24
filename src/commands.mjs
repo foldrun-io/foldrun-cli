@@ -3310,6 +3310,29 @@ function eventLine(e, rawAgent, open) {
  * tool call is two events — one line per call, printed when it completes.
  * `open` carries the calls still in flight across polls and reconnects.
  */
+/** `foldrun code --task … --output-format stream-json` (FOL-223): told every new event of a run, once. */
+/** @type {((e: any, step: any) => void) | null} */
+let runEventSink = null;
+
+/**
+ * One run event as a line of `--output-format stream-json` (schema 1; fields
+ * are only ever added). Null for what is not shown (the platform's notes).
+ * @param {any} e @param {any} step
+ */
+export function streamEvent(e, step) {
+  const agent = String(step?.agent ?? "");
+  const sub = step?.subagentOf != null && step.subagentOf !== false;
+  const base = { agent, ...(sub ? { subagent: true } : {}), ...(e?.t ? { t: String(e.t) } : {}) };
+  if (e?.type === "text") return { type: "message", ...base, text: String(e.text ?? "") };
+  if (e?.type === "error") return { type: "error", ...base, text: String(e.text ?? "") };
+  if (e?.type === "tool") {
+    const tool = String(e.text ?? "");
+    if (e.ms == null) return { type: "tool_call", ...base, ...(e.call != null ? { call: String(e.call) } : {}), tool, ...(e.io?.input !== undefined ? { input: e.io.input } : {}) };
+    return { type: "tool_result", ...base, ...(e.call != null ? { call: String(e.call) } : {}), tool, ms: Number(e.ms) || 0, ...(e.error ? { error: true } : {}), ...(e.io?.output !== undefined ? { output: e.io.output } : {}) };
+  }
+  return null;
+}
+
 export function printNew(run, seen, open = new Map(), { skipResult = false, quiet = false } = {}) {
   // skipResult: the caller prints the last top-level step's reply in full
   // afterwards (foldrun code), so that one step's reply line is not printed
@@ -3354,6 +3377,7 @@ export function printNew(run, seen, open = new Map(), { skipResult = false, quie
   });
   if (fresh.every((x) => x.e.t)) fresh.sort((a, b) => (String(a.e.t) < String(b.e.t) ? -1 : String(a.e.t) > String(b.e.t) ? 1 : 0));
   for (const { i, step, e } of fresh) {
+    runEventSink?.(e, step);
     const note = e.type === "info";
     if (note && quiet && !REFUSED_NOTE.test(String(e.text ?? ""))) continue;
     if (step === replying && e.type === "text") {
@@ -18248,7 +18272,16 @@ async function codeCmd(positional, flags, layout) {
   const agent = typeof flags.agent === "string" ? flags.agent : "coder";
   // Usage first: a call that cannot run must not add an agent on its way out (Codex).
   if (typeof flags.task === "string" && !flags.task.trim()) throw new Error('--task needs the instruction, e.g. --task "add a test for the parser"');
-  if (typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with --task "…" (and --yes to apply the patch)');
+  const outFormat = flags["output-format"] === undefined ? "text" : String(flags["output-format"]);
+  if (!["text", "json", "stream-json"].includes(outFormat)) throw new Error(`--output-format is text, json or stream-json, not ${JSON.stringify(flags["output-format"])}`);
+  const inFormat = flags["input-format"] === undefined ? "text" : String(flags["input-format"]);
+  if (!["text", "stream-json"].includes(inFormat)) throw new Error(`--input-format is text or stream-json, not ${JSON.stringify(flags["input-format"])}`);
+  if (inFormat === "stream-json" && typeof flags.task === "string") throw new Error("--input-format stream-json reads the messages from stdin — leave out --task (-p)");
+  if (inFormat === "stream-json" && process.stdin.isTTY) throw new Error("--input-format stream-json reads one JSON message per line from stdin — pipe them in");
+  if (outFormat !== "text" && typeof flags.task !== "string" && inFormat !== "stream-json") throw new Error(`--output-format ${outFormat} is for a script's turn — give it with -p "…" (or --task), or messages on stdin with --input-format stream-json`);
+  // Messages from stdin are turns of one session, as -p is one (FOL-223).
+  if (inFormat === "stream-json") flags = { ...flags, task: "\u0000stdin" };
+  if (typeof flags.task !== "string" && !process.stdin.isTTY) throw new Error('foldrun code is a conversation — in a script, give one turn with -p "…" (or --task; and --yes to apply the patch)');
   // --local-only: on this computer, and the agent gets no cloud agents (24 Nov 2026). --local keeps what it always meant.
   const onlyHere = flags["local-only"] === true;
   if ([flags.local === true, onlyHere, flags.cloud === true].filter(Boolean).length > 1) throw new Error("--local-only, --local or --cloud — one of them");
@@ -18445,23 +18478,99 @@ async function codeCmd(positional, flags, layout) {
   // Which account this session runs as (FOL-260): read now, never kept from an earlier session.
   /** @type {any} */ (s).account = sessionAccount(flags);
   if (typeof flags.task === "string") {
-    console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
-    // A script's turn is part of the session too: the cloud is told what the
-    // folder holds, and a later /local hears what this turn did (Codex).
-    s.cloudBriefDue = s.cloudBriefed !== s.context;
-    const patches = s.applied?.length ?? 0;
-    const before = s.turns ?? 0;
-    // No one to ask here: a turn on this computer that used an MCP server or
-    // an added folder goes along only if the person already said yes to it (Codex).
-    const carry = carryNote(s.transcript.filter((/** @type {any} */ e, /** @type {number} */ i) => i < s.told.cloud || !(e.private === true && e.share !== true)), "cloud", s.told.cloud);
-    const status = await codeTurn(s, [carry, flags.task.trim()].filter(Boolean).join("\n\n"), await messagesForTurn(s, false));
-    if ((s.turns ?? 0) > before) s.cloudBriefed = s.context;
-    if ((s.turns ?? 0) > before) {
-      s.transcript.push({ where: "cloud", you: flags.task.trim(), agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(s.turnPart ? { part: s.turnPart } : {}), applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) });
-      s.told.cloud = s.transcript.length;
+    // json / stream-json (FOL-223): stdout holds only JSON, one object per line;
+    // what a person would read goes to stderr. Schema 1: fields are only added.
+    const toStdout = process.stdout.write.bind(process.stdout);
+    const emit = (/** @type {any} */ o) => toStdout(`${JSON.stringify(o)}\n`);
+    const machine = outFormat !== "text";
+    const saved = { log: console.log, write: process.stdout.write };
+    if (machine) {
+      console.log = (...a) => console.error(...a);
+      process.stdout.write = /** @type {any} */ ((/** @type {any} */ chunk, /** @type {any[]} */ ...rest) => process.stderr.write(chunk, ...rest));
+      if (outFormat === "stream-json") {
+        emit({ type: "system", subtype: "init", schema: 1, session_id: s.context, project: ws, agent, folder: dir, where: "cloud", version: CLI_VERSION });
+        runEventSink = (e, step) => {
+          const line = streamEvent(e, step);
+          if (line) emit(line);
+        };
+      }
     }
-    remember();
-    return status === "completed" ? 0 : status === "cancelled" ? 130 : 1;
+    let code = 0;
+    try {
+      /** @type {string[]} */
+      let tasks = [flags.task.trim()];
+      if (flags.task === "\u0000stdin") {
+        tasks = [];
+        const text = await new Promise((resolve) => {
+          let buf = "";
+          process.stdin.setEncoding("utf8");
+          process.stdin.on("data", (d) => (buf += d));
+          process.stdin.on("end", () => resolve(buf));
+        });
+        for (const [n, line] of String(text).split("\n").entries()) {
+          if (!line.trim()) continue;
+          let m;
+          try {
+            m = JSON.parse(line);
+          } catch {
+            throw new Error(`stdin line ${n + 1} is not JSON — one message per line: {"type":"user","text":"…"}`);
+          }
+          const said = typeof m?.text === "string" ? m.text : typeof m?.message === "string" ? m.message : typeof m?.message?.content === "string" ? m.message.content : null;
+          if (m?.type !== "user" || !said?.trim()) throw new Error(`stdin line ${n + 1}: a message is {"type":"user","text":"…"}`);
+          tasks.push(said.trim());
+        }
+        if (!tasks.length) throw new Error("no messages on stdin — one per line: {\"type\":\"user\",\"text\":\"…\"}");
+      }
+      console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
+      for (const task of tasks) {
+        // A script's turn is part of the session too: the cloud is told what the
+        // folder holds, and a later /local hears what this turn did (Codex).
+        s.cloudBriefDue = s.cloudBriefed !== s.context;
+        const patches = s.applied?.length ?? 0;
+        const before = s.turns ?? 0;
+        const costBefore = s.costUsd ?? 0;
+        // No one to ask here: a turn on this computer that used an MCP server or
+        // an added folder goes along only if the person already said yes to it (Codex).
+        const carry = carryNote(s.transcript.filter((/** @type {any} */ e, /** @type {number} */ i) => i < s.told.cloud || !(e.private === true && e.share !== true)), "cloud", s.told.cloud);
+        delete s.turnReply;
+        const status = await codeTurn(s, [carry, task].filter(Boolean).join("\n\n"), await messagesForTurn(s, false));
+        if ((s.turns ?? 0) > before) s.cloudBriefed = s.context;
+        const applied = (s.applied?.length ?? 0) > patches;
+        if ((s.turns ?? 0) > before) {
+          s.transcript.push({ where: "cloud", you: task, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(s.turnPart ? { part: s.turnPart } : {}), applied, ...(s.lastRun ? { run: String(s.lastRun) } : {}) });
+          s.told.cloud = s.transcript.length;
+        }
+        remember();
+        if (machine) {
+          emit({
+            type: "result",
+            schema: 1,
+            status: String(status ?? "failed"),
+            is_error: status !== "completed",
+            result: typeof s.turnReply === "string" ? s.turnReply : "",
+            session_id: s.context,
+            ...(s.lastRun ? { run_id: String(s.lastRun) } : {}),
+            cost_usd: Math.max(0, (s.costUsd ?? 0) - costBefore),
+            applied,
+            where: "cloud",
+          });
+        }
+        code = status === "completed" ? 0 : status === "cancelled" ? 130 : 1;
+        if (code !== 0) break;
+      }
+    } catch (err) {
+      // A script reading JSON gets the failure as JSON too, not only on stderr.
+      if (machine) {
+        emit({ type: "result", schema: 1, status: "failed", is_error: true, error: plainText(explain(err)), session_id: s.context, where: "cloud" });
+        console.error(`  ${c.red("✗")} ${plainText(explain(err))}`);
+        code = 1;
+      } else throw err;
+    } finally {
+      runEventSink = null;
+      console.log = saved.log;
+      process.stdout.write = saved.write;
+    }
+    return code;
   }
   codeInteractive = true;
   const host = (() => {

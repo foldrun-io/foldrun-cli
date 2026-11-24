@@ -794,6 +794,42 @@ for the sandbox, `runtime:` for what the project needs installed, `hooks:`
 at every tool call, `limits:`, `network:`, `budget:`. Edit it, deploy, and
 the next turn runs the new one.
 
+### From a script, CI or another agent
+
+`-p "<task>"` (the short form of `--task`) runs one turn in the cloud and
+exits, asking nothing. `--yes` applies the patch; without it the patch is
+kept and its path is said.
+
+```sh
+foldrun code -p "fix the failing test" --output-format json --yes   # koder -p … is the same
+```
+
+- `--output-format text` (the default) prints what a person reads.
+- `--output-format json` prints one object when the turn ends:
+  `{"type":"result","schema":1,"status":"completed","is_error":false,"result":"…","session_id":"code-…","run_id":"…","cost_usd":0.02,"applied":true,"where":"cloud"}`.
+- `--output-format stream-json` prints one JSON object per line as the turn
+  goes: `system` (subtype `init`, with the session id), `message` (the
+  agent's words), `tool_call` and `tool_result` (with `call`, `tool`,
+  `input` / `output`, `ms`), `error`, then `result`. A sub-agent's lines
+  carry `"subagent": true`.
+- `--input-format stream-json` reads the turns from stdin, one
+  `{"type":"user","text":"…"}` per line, as turns of one session.
+
+With either JSON format stdout holds only JSON; what a person would read
+goes to stderr. A failure is a `result` with `"is_error": true` and an
+`error`, and a non-zero exit. The shape has a `schema` number, and fields are
+only ever added to it. A script's turn runs in the cloud; on this computer the
+agent asks before each change, so it needs a terminal.
+
+In CI:
+
+```yaml
+- run: npm i -g foldrun
+- run: foldrun code -p "update the changelog for this release" --to my-project --output-format json --yes > turn.json
+  env:
+    FOLDRUN_TOKEN: ${{ secrets.FOLDRUN_TOKEN }}
+```
+
 ### In the session
 
 The header names the account the session runs as (`<profile> · <email> ·
