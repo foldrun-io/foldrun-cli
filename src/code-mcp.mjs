@@ -321,8 +321,9 @@ function changeApprovals(/** @type {(all: ReturnType<typeof readApprovals>) => v
  * cut, a name another server already offers left out, never "read-only".
  * A program starts inside the session's sandbox, put up first; one that
  * cannot be had starts nothing. A server at a web address is reached by
- * foldrun itself, with the person's yes to it.
- * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any> }} o
+ * foldrun itself, with the person's yes to it, through the sandbox's site
+ * proxy when the sandbox is on (its site allowed for the session).
+ * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, allowSite?: (host: string) => void }} o
  * @param {string} name
  * @param {{ spec: Record<string, any>, hash: string }} resolved
  * @param {AbortSignal} signal
@@ -330,8 +331,20 @@ function changeApprovals(/** @type {(all: ReturnType<typeof readApprovals>) => v
  * @returns {Promise<{ conn: any, tools: any[], said: string, cut: string[] } | { why: string }>}
  */
 export async function connectServer(o, name, resolved, signal, taken) {
-  const walls = resolved.spec.type === "stdio" && o.sandbox ? await o.sandbox() : null;
+  // A server at a web address is reached through the sandbox's site list too
+  // (FOL-222), as in the cloud, where a step's remote MCP servers are sites it
+  // declares: the person's yes to the server allows its own site for the session.
+  const remote = resolved.spec.type === "http" || resolved.spec.type === "sse";
+  if (remote && o.allowSite) {
+    try {
+      o.allowSite(new URL(resolved.spec.url).hostname);
+    } catch {
+      return { why: `its address is not one foldrun can reach (${String(resolved.spec.url)})` };
+    }
+  }
+  const walls = (resolved.spec.type === "stdio" || remote) && o.sandbox ? await o.sandbox() : null;
   if (walls && "refused" in walls) return { why: `the sandbox could not start (${walls.refused}) — /permissions sandbox` };
+  if (remote && walls && typeof walls.fetch !== "function") return { why: "this foldrun's sandbox cannot reach a server at a web address — update foldrun (npm i -g foldrun@latest), or turn the sandbox off for this session (/permissions sandbox off)" };
   const conn = await o.connect({ [name]: resolved.spec }, { env: {}, toolEnv: baseEnv(o.env()), cwd: o.dir, signal, killOnClose: true, maxTools: MCP_TOOLS_MAX, ...(walls ? { sandbox: walls } : {}) });
   const cut = [];
   const tools = [];
@@ -407,7 +420,7 @@ export function forgetServersNamed(/** @type {string} */ name, /** @type {string
 /**
  * The servers of one session: read from the files at every look, started
  * only with a yes, kept until the session ends.
- * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, unwalled?: () => boolean }} o
+ * @param {{ dir: string, env: () => Record<string, string | undefined>, connect: (servers: Record<string, any>, ctx: Record<string, any>) => Promise<any>, sandbox?: () => Promise<any>, allowSite?: (host: string) => void, unwalled?: () => boolean }} o
  */
 export function mcpManager(o) {
   /** @type {Map<string, { hash: string, conn: any, tools: any[], said: string, cut: string[] }>} */
@@ -508,6 +521,18 @@ export function mcpManager(o) {
     async startReady(/** @type {AbortSignal} */ signal) {
       const { rows } = await look();
       const out = [];
+      // Every remote server's site first, so the walls are put up once with all of them —
+      // never reopened under a program server already running (FOL-222).
+      for (const row of rows) {
+        const spec = row.state === "ready" ? row.resolved?.spec : null;
+        if (spec && (spec.type === "http" || spec.type === "sse") && o.allowSite) {
+          try {
+            o.allowSite(new URL(spec.url).hostname);
+          } catch {
+            /* refused when it starts */
+          }
+        }
+      }
       for (const row of rows) {
         if (row.state !== "ready") continue;
         const why = await start(row.name, signal);

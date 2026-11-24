@@ -14802,6 +14802,14 @@ function readableBy(/** @type {any} */ s, /** @type {unknown} */ p) {
  * The session's MCP servers (code-mcp.mjs), or null when this install's
  * @foldrun/core cannot connect any. Made once; ended with the process.
  */
+/** A site allowed in the session's sandbox for this session only (a remote MCP server the person said yes to — FOL-222). */
+function allowSiteFor(/** @type {any} */ s) {
+  return (/** @type {string} */ host) => {
+    const sites = (s.sandboxSites ??= []);
+    if (!sites.includes(host)) sites.push(host);
+  };
+}
+
 /** The session's sandbox holder (code-sandbox.mjs): made once, opened at the first turn on this computer. */
 function boxOf(/** @type {any} */ s) {
   // Where this CLI keeps the sign-in and the computer's model key, wherever FOLDRUN_HOME puts it: never readable inside (Codex).
@@ -14885,7 +14893,7 @@ async function mcpOf(/** @type {any} */ s) {
   if (s.mcp !== undefined) return s.mcp;
   // Reading which servers are named and which have a yes needs no engine;
   // connecting one does, and loads it then.
-  s.mcp = mcpManager({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), unwalled: () => s.sandboxOff === true, connect: mcpConnect });
+  s.mcp = mcpManager({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), allowSite: allowSiteFor(s), unwalled: () => s.sandboxOff === true, connect: mcpConnect });
   process.on("exit", () => s.mcp.killAll());
   return s.mcp;
 }
@@ -17908,7 +17916,7 @@ async function codeLocalTurn(s, text) {
             /** @type {any} */
             let got;
             try {
-              got = await connectServer({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), connect: mcpConnect }, server.name, resolved, AbortSignal.any([signal, AbortSignal.timeout(90_000)]), (tool) => (ownTools.some((x) => x.name === tool) ? "another of its servers" : null));
+              got = await connectServer({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), allowSite: allowSiteFor(s), connect: mcpConnect }, server.name, resolved, AbortSignal.any([signal, AbortSignal.timeout(90_000)]), (tool) => (ownTools.some((x) => x.name === tool) ? "another of its servers" : null));
             } catch (err) {
               got = { why: (err instanceof Error ? err.message : String(err)).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 400) };
             }

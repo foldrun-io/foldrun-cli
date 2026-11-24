@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readMcpConfig, resolveServer, resolveAgentServer, approveServer, forgetServer, forgetServersNamed, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX } from "../src/code-mcp.mjs";
+import { readMcpConfig, resolveServer, resolveAgentServer, approveServer, forgetServer, forgetServersNamed, baseEnv, mcpManager, parseMcpAdd, editMcpFile, readApprovals, MCP_TOOLS_MAX, connectServer } from "../src/code-mcp.mjs";
 import { SERVER } from "./mcp-server.ts";
 import { readAgents, agentMcpServers, AGENT_MCP_MAX, agentActs, agentTool, agentJob, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder, TODOS_MAX } from "../src/code-agents.mjs";
 
@@ -428,4 +428,33 @@ test("FOL-265: a session's start does not load core's MCP engine or the MCP libr
   assert.equal(calls.length, 1, "mcpEngine is called in one place only");
   const connectAt = src.indexOf("async function mcpConnect(");
   assert.ok(calls[0]! > connectAt && calls[0]! < src.indexOf("\n}\n", connectAt), "that place is mcpConnect");
+});
+
+test("a server at a web address goes through the sandbox (FOL-222): its site is allowed for the session, the walls are handed to the engine; a sandbox without a proxied fetch refuses it", async () => {
+  const resolved = { spec: { type: "http", url: "https://mcp.example.com/mcp" }, hash: "h" };
+  const allowed: string[] = [];
+  const handed: any[] = [];
+  const walls = { launch: async () => ({ line: "x", env: {} }), fetch: (async () => new Response("")) as typeof fetch };
+  const o = {
+    dir: os.tmpdir(),
+    env: () => ({}),
+    sandbox: async () => walls,
+    allowSite: (h: string) => allowed.push(h),
+    connect: async (_servers: any, ctx: any) => {
+      handed.push(ctx.sandbox);
+      return { tools: [], close: async () => {} };
+    },
+  };
+  const got: any = await connectServer(o, "far", resolved, new AbortController().signal);
+  assert.ok(!("why" in got), JSON.stringify(got));
+  assert.deepEqual(allowed, ["mcp.example.com"]);
+  assert.equal(handed[0], walls, "the engine gets the walls, and reaches the server through their proxy");
+  // An older sandbox with no proxied fetch: refused, never connected directly.
+  const older: any = await connectServer({ ...o, sandbox: async () => ({ launch: walls.launch }) }, "far", resolved, new AbortController().signal);
+  assert.match(older.why, /cannot reach a server at a web address/);
+  assert.equal(handed.length, 1);
+  // The sandbox off (no walls): connected as the person, directly.
+  const off: any = await connectServer({ ...o, sandbox: async () => null }, "far", resolved, new AbortController().signal);
+  assert.ok(!("why" in off));
+  assert.equal(handed[1], undefined);
 });
