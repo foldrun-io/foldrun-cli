@@ -12,6 +12,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
+import { readCodePrefs, writeCodePrefs, thinkingLines } from "./code-session.mjs";
+import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
 import { helpText, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID } from "./code-context.mjs";
 import { createRequire } from "node:module";
@@ -16237,7 +16239,13 @@ async function codeLocalTurn(s, text) {
   let lastSteer = null;
   // Enter sends only to an engine that takes messages mid-turn: an older
   // @foldrun/core would leave them queued while saying they were sent (Codex).
-  const steers = /** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.steer === true;
+  const engineOwn = /** @type {any} */ (await import("@foldrun/core/engine-loop"));
+  const steers = engineOwn.ENGINE_FEATURES?.steer === true;
+  // Not while /compact writes its summary: only the summary is wanted there.
+  const showThinking = readCodePrefs().thinking === true && engineOwn.ENGINE_FEATURES?.thinking === true && !s.noSteer;
+  /** The thinking the model summarised this turn, in order. */
+  /** @type {string[]} */
+  const thought = [];
   const onSendNow = (/** @type {string} */ t) => {
     pending.push({ t, sent: true, n: typedSeq++ });
     // The ticker clears its own line before anything is printed, so it is
@@ -16404,7 +16412,14 @@ async function codeLocalTurn(s, text) {
       const allowed = scope === "changes" || scope === "cloud" || scope === "cloud-changes" ? allow.kinds.has(scope) : scope === "command" ? allow.commands.has(/** @type {string} */ (command)) : false;
       // An "always" was given to the session's own agent: it does not reach
       // into a sub-agent, whose every change and command is asked (Codex).
-      const allowedNow = !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub")));
+      // What the person allowed for good in this folder ("always in this
+      // folder"): read each time, so one removed stops at once. Not under
+      // /permissions strict, and never for a sub-agent.
+      // The target as it was written: bothInside reads it both ways (a link then "..", ".." then a link).
+      const inFolder = (/** @type {string} */ f) => bothInside(s.dir, f);
+      // Never for a command sent outside the sandbox: that one is asked every time.
+      const byRule = !child && s.strict !== true && command !== null && scope === "command" && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout") && rulesAllow(command, folderRules(s.dir), s.dir, inFolder);
+      const allowedNow = byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub")));
       if (allowedNow) {
         if (cloud) grantTicket(input, signal);
         if (scope === "changes") changed.add(localCallSummary("Write", { file_path: file }, s.dir));
@@ -16501,7 +16516,10 @@ async function codeLocalTurn(s, text) {
         }
         const alwaysFor = scope === "mcp" ? "]lways for this tool, this session · [" : scope === "cloud-sub" ? "]lways for cloud sub-agents this session · [" : scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud agents this session · [" : scope === "cloud-changes" ? "]lways for cloud agents' changes this session · [" : null;
         const always = child ? "" : alwaysFor;
-        const ask = `    ${c.bold("allow?")} ${c.grey("[")}${c.green("y")}${c.grey("]es · [")}${always ? `${c.cyan("a")}${c.grey(always)}` : ""}${c.red("n")}${c.grey("]o")}${isApply ? c.grey(" · [d]iff") : ""} `;
+        // "always in this folder": kept for every later session here. Only
+        // for a command that rules can match at all, and not under strict.
+        const forFolder = !child && s.strict !== true && command !== null && scope === "command" && !("never" in commandParts(command, s.dir, inFolder));
+        const ask = `    ${c.bold("allow?")} ${c.grey("[")}${c.green("y")}${c.grey("]es · [")}${always ? `${c.cyan("a")}${c.grey(always)}` : ""}${forFolder ? `${c.cyan("f")}${c.grey("] always in this folder · [")}` : ""}${c.red("n")}${c.grey("]o")}${isApply ? c.grey(" · [d]iff") : ""} `;
         // The SDK taking the request back closes the question too (Codex).
         const settle = () => {
           for (const f of cancel.onAsk) f();
@@ -16514,10 +16532,38 @@ async function codeLocalTurn(s, text) {
         }
         let answer = "";
         let words = "";
+        // "always in this folder", once the person has said which rule: the
+        // exact command, or what starts like it.
+        /** @type {"exact" | "prefix" | ""} */
+        let folderKind = "";
+        const folderStart = forFolder ? prefixFor(/** @type {string} */ (command), s.dir) : null;
         try {
           for (;;) {
             words = ((await cancellablePrompt(ask, cancel)) ?? "").trim();
             answer = words.toLowerCase();
+            if (forFolder && (answer === "f" || answer === "folder") && !cancel.asked && !signal?.aborted) {
+              // Said in full before it is kept. Anything but a clear choice
+              // keeps nothing and runs nothing: the first question is asked
+              // again (Codex — a closed keyboard must never be a yes).
+              const where = "";
+              if (folderStart) {
+                console.log(`      ${c.grey(`kept for this folder, in every later session, ${where}without a question:`)}`);
+                const pick = ((await cancellablePrompt(`      ${c.grey("[")}${c.cyan("e")}${c.grey("] exactly this command · [")}${c.cyan("p")}${c.grey(`] every command that starts with `)}${c.white(plainText(folderStart))}${c.grey(" · [")}${c.red("n")}${c.grey("]either ")}`, cancel)) ?? "").trim().toLowerCase();
+                folderKind = pick === "e" || pick === "exact" ? "exact" : pick === "p" || pick === "prefix" ? "prefix" : "";
+              } else {
+                const pick = ((await cancellablePrompt(`      ${c.grey(`run exactly this in this folder, in every later session, ${where}without a question? [y/N] `)}`, cancel)) ?? "").trim().toLowerCase();
+                folderKind = pick === "y" || pick === "yes" ? "exact" : "";
+              }
+              if (folderKind || cancel.asked || signal?.aborted) break;
+              console.log(`      ${c.dim("no rule kept")}`);
+              // A keyboard that is closed answers nothing, ever: that is a no.
+              if (!process.stdin.readable || process.stdin.destroyed) {
+                answer = "";
+                words = "";
+                break;
+              }
+              continue;
+            }
             // d: the whole patch, as git will apply it, then the question again.
             if (!(isApply && (answer === "d" || answer === "diff") && !cancel.asked && !signal?.aborted)) break;
             console.log(`\n${colorPatch(plainText(String(input.patch ?? "")), c).split("\n").map((l) => `    ${l}`).join("\n")}\n`);
@@ -16526,6 +16572,11 @@ async function codeLocalTurn(s, text) {
           signal?.removeEventListener("abort", settle);
         }
         if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
+        if (folderKind) {
+          const kept = addFolderRule(s.dir, { kind: folderKind, text: folderKind === "prefix" ? /** @type {string} */ (folderStart) : /** @type {string} */ (command) });
+          console.log(kept.ok ? `      ${c.green("✓")} ${c.dim("kept for this folder — /permissions lists it, /permissions rm <n> removes it")}` : `      ${c.amber("!")} ${c.grey(`${plainText(kept.why)} — it runs this once`)}`);
+          return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+        }
         if (answer === "y" || answer === "yes" || (always && (answer === "a" || answer === "always"))) {
           if (cloud) grantTicket(input, signal);
           if (answer.startsWith("a")) {
@@ -16858,6 +16909,8 @@ async function codeLocalTurn(s, text) {
             // Not while /compact writes its summary: a message taken then
             // would be answered, and that answer kept as the summary (Codex).
             ...(s.noSteer ? {} : { steer: takeSent }),
+            // /thinking on: the model's own summary of its thinking, on the models that give one.
+            ...(showThinking ? { thinkingDisplay: "summarized" } : {}),
           },
         });
     for await (const m of /** @type {AsyncIterable<any>} */ (q)) {
@@ -16887,6 +16940,18 @@ async function codeLocalTurn(s, text) {
         else turn.push({ role: "assistant", content });
         const words = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
         const calls = content.filter((b) => b.type === "tool_use");
+        if (showThinking) {
+          const summary = content.filter((b) => b.type === "thinking").map((b) => plainText(String(b.thinking ?? "")).trim()).filter(Boolean).join("\n\n");
+          if (summary) {
+            thought.push(summary);
+            const { lines, more } = thinkingLines(summary);
+            stopTicker();
+            console.log(`  ${c.dim("✻ thinking")}`);
+            for (const l of lines) console.log(`    ${c.dim(l)}`);
+            if (more) console.log(`    ${c.dim(`… ${more} more line${more === 1 ? "" : "s"} (/export --thinking writes all of it)`)}`);
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
+          }
+        }
         if (calls.length) {
           stopTicker();
           if (words) console.log(`  ${c.violet("▸")} ${c.grey(clipLine(words))}`);
@@ -16992,6 +17057,18 @@ async function codeLocalTurn(s, text) {
   }
   if (!result && !cancel.asked) return;
   s.turnReply = reply ? plainText(reply) : "";
+  // Kept beside the reply, for /export --thinking alone; never sent anywhere.
+  if (thought.length) {
+    const all = thought.join("\n\n");
+    // A cap that says so: an export never passes a cut summary off as whole (Codex).
+    s.turnThinking = all.length > 200_000 ? `${all.slice(0, 200_000)}\n[cut here: the summaries of this turn were ${all.length} characters]` : all;
+  }
+  else delete s.turnThinking;
+  if (showThinking && ok && !thought.length && !s.thinkingNoneSaid) {
+    s.thinkingNoneSaid = true;
+    const gives = typeof engineOwn.showsThinking === "function" ? engineOwn.showsThinking(String(s.model ?? "")) : true;
+    console.log(`  ${c.dim(gives ? "(/thinking is on: the model did not think aloud on this one — a short task often needs none)" : `(/thinking is on, but ${plainText(String(s.model ?? "this model"))} returns no summary of its thinking)`)}`);
+  }
   if (reply) console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}`);
   const secs = (Date.now() - started) / 1000;
   s.turns = (s.turns ?? 0) + 1;
@@ -17301,7 +17378,8 @@ async function codeCmd(positional, flags, layout) {
         // What was typed, never what a command file expands to: that text was
         // checked for this side only, and the record crosses to the other (Codex).
         const steered = Array.isArray(s.turnSteer) && s.turnSteer.length ? `\n(sent while the agent worked: ${s.turnSteer.join(" · ")})` : "";
-        s.transcript.push({ where, you: `${typed}${steered}`, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(where === "cloud" ? { applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) } : {}), ...(where === "local" && s.privateSeen === true ? { private: true } : {}) });
+        s.transcript.push({ where, you: `${typed}${steered}`, agent: typeof s.turnReply === "string" ? s.turnReply : "", ...(where === "cloud" ? { applied: (s.applied?.length ?? 0) > patches, ...(s.lastRun ? { run: String(s.lastRun) } : {}) } : {}), ...(where === "local" && s.privateSeen === true ? { private: true } : {}), ...(where === "local" && typeof s.turnThinking === "string" ? { thinking: s.turnThinking } : {}) });
+        delete s.turnThinking;
         s.here[where]++;
         // Where this conversation was last worked on: /resume goes back there.
         s.lastWhere = where;
@@ -17779,6 +17857,17 @@ async function codeCmd(positional, flags, layout) {
       console.log(`${todoLines(clean.todos).join("\n") || `    ${c.grey("(the todo list is empty)")}`}\n`);
       continue;
     }
+    if (name === "/thinking") {
+      const prefs = readCodePrefs();
+      if (rest === "on" || rest === "off") {
+        if (!writeCodePrefs({ ...prefs, thinking: rest === "on" })) say("that could not be saved — ~/.foldrun is not writable");
+        else if (rest === "off") say("thinking is not shown");
+        else if (/** @type {any} */ (await import("@foldrun/core/engine-loop")).ENGINE_FEATURES?.thinking !== true) say("saved — but this foldrun's engine cannot ask for it yet: update foldrun (`foldrun update`) and it shows");
+        else say(`a summary of the model's thinking is shown above its reply, dimmed — for you, in every folder, from the next message. It costs nothing more: the model thinks the same either way${s.mode === "cloud" ? ". A turn in the cloud does not return it: it shows on this computer (/local)" : ""}`);
+      } else if (rest) say("/thinking · /thinking on · /thinking off");
+      else say(`thinking is ${prefs.thinking === true ? "shown: a summary, dimmed, above the reply (on this computer; a turn in the cloud does not return it)" : "not shown"} · /thinking ${prefs.thinking === true ? "off" : "on"}`);
+      continue;
+    }
     if (name === "/queue") {
       const list = /** @type {string[]} */ (s.queue ??= []);
       const [verb = "", n = ""] = rest.split(/\s+/);
@@ -18124,7 +18213,22 @@ async function codeCmd(positional, flags, layout) {
       if (rest === "reset") {
         delete s.localAllow;
         s.uploadAgreed?.delete(dir);
-        say("forgotten — every change, command and send is asked again");
+        const kept = folderRules(dir).length;
+        say(`forgotten — every change, command and send is asked again${kept ? ` (the ${kept} rule${kept === 1 ? "" : "s"} kept for this folder stay${kept === 1 ? "s" : ""}: /permissions rm <n>)` : ""}`);
+        continue;
+      }
+      const rm = /^rm(?:\s+(\S+))?$/.exec(rest);
+      if (rm) {
+        const n = Number(rm[1]);
+        // The rule the person was shown: a list another session changed since is shown again, not guessed at.
+        const gone = removeFolderRule(dir, n, Array.isArray(s.rulesShown) ? s.rulesShown : undefined);
+        delete s.rulesShown;
+        const left = folderRules(dir).length;
+        if (gone === "changed") {
+          say("the rules changed since they were listed (another session) — /permissions shows them as they are now; nothing was removed");
+          continue;
+        }
+        say(gone ? `removed: ${gone.kind === "prefix" ? "commands that start with" : "the command"}  ${clipLine(plainText(gone.text))} — it is asked again` : left ? `/permissions rm <1–${left}> — /permissions lists them` : "this folder has no kept rules");
         continue;
       }
       if (rest === "strict" || rest === "relaxed") {
@@ -18138,6 +18242,17 @@ async function codeCmd(positional, flags, layout) {
       for (const cmd of s.localAllow?.commands ?? []) rows.push(`the command  ${clipLine(plainText(String(cmd)))}`);
       for (const tool of s.localAllow?.mcp?.values() ?? []) rows.push(`the MCP tool  ${plainText(String(tool))}`);
       if (s.uploadAgreed?.get(dir)) rows.push("sending this folder's files to the cloud (the ones you were shown)");
+      const keptRules = folderRules(dir);
+      s.rulesShown = keptRules;
+      if (keptRules.length) {
+        console.log(`  ${c.dim(`kept for this folder, every session${s.strict === true ? " — not used while /permissions strict is on" : ""}:`)}`);
+        keptRules.forEach((r, i) => console.log(`  ${c.dim(String(i + 1).padStart(2))} ${c.white(`${r.kind === "prefix" ? "commands that start with" : "the command"}  ${clipLine(plainText(r.text))}`)}`));
+        console.log(`  ${c.dim("/permissions rm <n> removes one · a joined command (&&, ||, ;, |) runs unasked only when every part is allowed")}`);
+      }
+      if (!rows.length && keptRules.length) {
+        console.log();
+        continue;
+      }
       if (!rows.length) say(`nothing ${s.strict !== true ? "else " : ""}allowed ahead — the agent asks before every change and every ${s.strict !== true ? "other " : ""}command (a = always, at a question)`);
       else {
         console.log(rows.map((r) => `  ${c.green("✓")} ${c.white(r)}`).join("\n"));
@@ -18159,10 +18274,12 @@ async function codeCmd(positional, flags, layout) {
         say("nothing to write yet — the session has no finished turn");
         continue;
       }
-      const to = path.resolve(dir, rest || path.join(os.tmpdir(), `foldrun-${s.context}.md`));
+      const withThinking = /^--thinking(\s|$)/.test(rest);
+      const named = withThinking ? rest.replace(/^--thinking\s*/, "") : rest;
+      const to = path.resolve(dir, named || path.join(os.tmpdir(), `foldrun-${s.context}.md`));
       try {
         // Never over a file that is there: a name is given, not a target to replace.
-        fs.writeFileSync(to, exportTranscript(s.transcript, { ws, context: s.context, dir: homeTilde(dir) }), { mode: 0o600, flag: "wx" });
+        fs.writeFileSync(to, exportTranscript(s.transcript, { ws, context: s.context, dir: homeTilde(dir), thinking: withThinking }), { mode: 0o600, flag: "wx" });
         console.log(`  ${c.green("✓")} ${c.white(plainText(homeTilde(to)))} ${c.dim(`— ${s.transcript.length} turn${s.transcript.length === 1 ? "" : "s"}`)}\n`);
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(/** @type {NodeJS.ErrnoException} */ (err).code === "EEXIST" ? `${homeTilde(to)} is already there — name another file` : explain(err))}\n`);

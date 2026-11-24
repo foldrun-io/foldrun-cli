@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { credentialsDir } from "./credentials.mjs";
 
 /** Every slash command, with what it does — /help prints this list. */
 export const CODE_COMMANDS = [
@@ -34,9 +35,9 @@ export const CODE_COMMANDS = [
   ["/cloud [task]", "work in the cloud from here on; with a task, send just that one to the cloud and stay where you are"],
   ["/skills", "the skills this folder holds — /<skill> [what to do] uses one"],
   ["/memory", "the instruction files the agent reads here (AGENTS.md, CLAUDE.md)"],
-  ["/permissions", "what runs without a question — /permissions reset asks again, /permissions strict asks for read-only commands too"],
+  ["/permissions [rm <n>]", "what runs without a question, and the commands kept for this folder (f at a question: always in this folder) — rm <n> removes one, /permissions reset asks again, /permissions strict asks for read-only commands too"],
   ["/copy", "copy the agent's last reply"],
-  ["/export [file]", "write this session's messages and replies to a file"],
+  ["/export [--thinking] [file]", "write this session's messages and replies to a file (--thinking: with the thinking summaries /thinking showed)"],
   ["/clear", "a fresh conversation — the agent forgets the earlier turns (/new too)"],
   ["/resume [number]", "go back to an earlier conversation of this folder — /clear keeps the one you leave"],
   ["/doctor", "check what a session needs: node, git, the folder, your sign-in, the project and its agent"],
@@ -45,6 +46,7 @@ export const CODE_COMMANDS = [
   ["/messages", "what other sessions sent this one"],
   ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
   ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
+  ["/thinking [on|off]", "show a summary of the model's thinking above its reply, dimmed — off by default, remembered for you on this computer; /export --thinking writes it too"],
   ["/cloud-agents [on|off]", "whether the agent on this computer may hand work to agents in the cloud (off: it sends no copy of this folder and cannot message other sessions; what you send yourself still goes)"],
   ["/sandbox", "the sandbox the agent's commands run in on this computer: what it lets through · allow <site> · deny <site> · off · on"],
 ];
@@ -815,4 +817,45 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
   }
   const rel = path.relative(root, cur);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+// ------------------------------------------------ what a person set for themselves
+
+const prefsFile = () => path.join(credentialsDir(), "code-prefs.json");
+
+/**
+ * What the person chose for `foldrun code` on this computer, whichever
+ * folder they are in: today, whether the model's thinking is shown.
+ * @returns {{ thinking?: boolean }}
+ */
+export function readCodePrefs() {
+  try {
+    const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}) } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** @param {{ thinking?: boolean }} prefs @returns {boolean} whether it was kept */
+export function writeCodePrefs(prefs) {
+  try {
+    fs.mkdirSync(credentialsDir(), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}) }, null, 2)}\n`, { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A summary of thinking as the terminal shows it: plain lines, at most
+ * `max`, the rest counted.
+ * @param {string} text @param {number} [max]
+ * @returns {{ lines: string[], more: number }}
+ */
+export function thinkingLines(text, max = 30) {
+  const all = String(text ?? "").split(/\r?\n/).map((l) => l.trimEnd()).filter((l, i, a) => l || (i > 0 && a[i - 1]));
+  while (all.length && !all[all.length - 1]) all.pop();
+  return { lines: all.slice(0, max), more: Math.max(0, all.length - max) };
 }

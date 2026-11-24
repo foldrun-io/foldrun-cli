@@ -739,13 +739,17 @@ test("local mode helpers: names, tiers, call summaries, inside the folder, the f
 });
 
 /** One scripted model turn as the Messages API streams it. */
-function sse(content: Array<{ type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string) {
+function sse(content: Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string } | { type: "tool_use"; id: string; name: string; input: unknown }>, stop?: string) {
   const ev = (e: Record<string, unknown>) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
   let out = ev({ type: "message_start", message: { id: "m", model: "claude-sonnet-test", usage: { input_tokens: 100, output_tokens: 1 } } });
   content.forEach((b, index) => {
     if (b.type === "text") {
       out += ev({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
       out += ev({ type: "content_block_delta", index, delta: { type: "text_delta", text: b.text } });
+    } else if (b.type === "thinking") {
+      out += ev({ type: "content_block_start", index, content_block: { type: "thinking", thinking: "", signature: "" } });
+      if (b.thinking) out += ev({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: b.thinking } });
+      out += ev({ type: "content_block_delta", index, delta: { type: "signature_delta", signature: "sig" } });
     } else {
       out += ev({ type: "content_block_start", index, content_block: { type: "tool_use", id: b.id, name: b.name, input: {} } });
       out += ev({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(b.input) } });
@@ -2302,6 +2306,178 @@ test("a message queued with Tab while a turn runs is sent when that turn has fin
     assert.match(lastSaid(5), /never sent$/);
     t.send("/queue\r");
     at = await t.until(/nothing is queued/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("/thinking on shows the model's summary of its thinking above the reply, remembered for the person; off by default; /export --thinking writes it", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "thinking", thinking: "" }, { type: "text", text: "plain answer" }]),
+    () => sse([{ type: "thinking", thinking: "Weighing two ways.\nThe second is shorter." }, { type: "text", text: "shown answer" }]),
+    () => sse([{ type: "thinking", thinking: "" }, { type: "text", text: "quiet answer" }]),
+    () => sse([{ type: "text", text: "last answer" }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-th/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const args = ["code", d, "--local", "--to", "desk", "--context", "code-th", "--url", s.url, "--token", "k"];
+  const out = path.join(home, "out.md");
+  let t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/thinking\r");
+    at = await t.until(/thinking is not shown · \/thinking on/, at);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/plain answer/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal("thinking" in asked[0], false, "off by default: the request is as it was");
+    t.send("/thinking on\r");
+    at = await t.until(/a summary of the model's thinking is shown above its reply/, at);
+    t.send("two\r");
+    at = await t.until(/✻ thinking[\s\S]*Weighing two ways\.[\s\S]*The second is shorter\.[\s\S]*shown answer/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.deepEqual(asked[1].thinking, { type: "adaptive", display: "summarized" });
+    // The thinking block goes back to the model as it came.
+    t.send("three\r");
+    at = await t.until(/the model did not think aloud on this one[\s\S]*quiet answer/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    const before = asked[2].messages.find((m: any) => m.role === "assistant" && m.content.some((b: any) => b.type === "thinking" && b.thinking));
+    assert.equal(before.content.find((b: any) => b.type === "thinking").signature, "sig");
+    t.send(`/export --thinking ${out}\r`);
+    at = await t.until(/out\.md — 3 turns/, at);
+    const written = fs.readFileSync(out, "utf8");
+    assert.match(written, /### Thinking \(the model's summary\)\n\n> Weighing two ways\.\n> The second is shorter\./);
+    t.send(`/export ${out}.plain\r`);
+    at = await t.until(/out\.md\.plain — 3 turns/, at);
+    assert.doesNotMatch(fs.readFileSync(`${out}.plain`, "utf8"), /Weighing/);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    // Remembered for the person: a new session asks for it without being told.
+    t.child.kill();
+    t = onTerminal(args, home, { TERM: "dumb", COLUMNS: "200" });
+    at = await t.until(/\w ❯ /);
+    t.send("/thinking\r");
+    at = await t.until(/thinking is shown/, at);
+    t.send("four\r");
+    at = await t.until(/last answer/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.deepEqual(asked[3].thinking, { type: "adaptive", display: "summarized" });
+    t.send("/thinking off\r");
+    at = await t.until(/thinking is not shown/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("f at a command's question keeps a rule for the folder: later sessions run what it covers unasked, a joined command only when every part is covered; /permissions lists and removes; strict ignores", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const bash = (id: string, command: string) => () => sse([{ type: "tool_use", id, name: "Bash", input: { command } }]);
+  const say = (text: string) => () => sse([{ type: "text", text }]);
+  const turns = [
+    bash("r1", "touch made-one.txt"), say("one done"),
+    bash("r2", "touch made-two.txt"), say("two done"),
+    bash("r3", "touch made-three.txt && rm made-one.txt"), say("three done"),
+    bash("r4", "touch made-four.txt"), say("four done"),
+    bash("r5", "touch made-five.txt"), say("five done"),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-ru/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/sessions/code-rv/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? say("(no more)"))();
+    },
+  });
+  const args = (context: string) => ["code", d, "--local", "--to", "desk", "--context", context, "--url", s.url, "--token", "k"];
+  let t = onTerminal(args("code-ru"), home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/touch made-one\.txt[\s\S]*allow\? \[y\]es · \[a\]lways for this command · \[f\] always in this folder · \[n\]o/, at, 30_000);
+    t.send("f\r");
+    at = await t.until(/\[e\] exactly this command · \[p\] every command that starts with touch · \[n\]either/, at);
+    t.send("p\r");
+    at = await t.until(/kept for this folder/, at);
+    at = await t.until(/one done/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.ok(fs.existsSync(path.join(d, "made-one.txt")));
+    assert.equal(fs.existsSync(path.join(d, ".foldrun")), false);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    t.child.kill();
+    // Another session in the same folder: what the rule covers is not asked.
+    t = onTerminal(args("code-rv"), home, { TERM: "dumb", COLUMNS: "200" });
+    at = await t.until(/\w ❯ /);
+    t.send("two\r");
+    at = await t.until(/two done/, at, 30_000);
+    assert.doesNotMatch(t.out(), /made-two\.txt[\s\S]*allow\?/);
+    assert.ok(fs.existsSync(path.join(d, "made-two.txt")));
+    at = await t.until(/\w ❯ /, at);
+    // A joined command with a part no rule covers is asked.
+    t.send("three\r");
+    at = await t.until(/touch made-three\.txt && rm made-one\.txt[\s\S]*allow\? \[y\]es/, at, 30_000);
+    t.send("n\r");
+    at = await t.until(/three done/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.ok(fs.existsSync(path.join(d, "made-one.txt")), "the refused command did not run");
+    t.send("/permissions\r");
+    at = await t.until(/kept for this folder, every session:[\s\S]* 1 commands that start with  touch/, at);
+    at = await t.until(/\w ❯ /, at);
+    // Strict: the rule is not used.
+    t.send("/permissions strict\r");
+    at = await t.until(/asked too/, at);
+    t.send("four\r");
+    at = await t.until(/touch made-four\.txt[\s\S]*allow\? \[y\]es · \[a\]lways for this command · \[n\]o/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/four done/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/permissions relaxed\r");
+    at = await t.until(/run without a question/, at);
+    t.send("/permissions\r");
+    at = await t.until(/ 1 commands that start with  touch/, at);
+    t.send("/permissions rm 1\r");
+    at = await t.until(/removed: commands that start with  touch — it is asked again/, at);
+    t.send("five\r");
+    at = await t.until(/touch made-five\.txt[\s\S]*allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/five done/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
     assert.equal(await t.done, 0);

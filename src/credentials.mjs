@@ -115,9 +115,18 @@ function ownerGone(content, lockPath) {
     return err?.code === "ESRCH";
   }
 }
-function locked(fn) {
+/**
+ * `fn` with the lock of another file kept under ~/.foldrun (the folder
+ * permission rules): the same protocol as the credentials file's.
+ * @template T @param {string} target @param {() => T} fn @returns {T}
+ */
+export function withFileLock(target, fn) {
+  return locked(fn, target);
+}
+
+function locked(fn, target = file()) {
   fs.mkdirSync(credentialsDir(), { recursive: true, mode: 0o700 });
-  const lock = `${file()}.lock`;
+  const lock = `${target}.lock`;
   const token = `${process.pid}:${crypto.randomBytes(8).toString("hex")}`;
   const until = Date.now() + LOCK_WAIT_MS;
   sweepClaims(lock);
