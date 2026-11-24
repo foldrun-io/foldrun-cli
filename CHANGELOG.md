@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [30.7.0] — 2026-11-24
+
+- feat(code): a local sub-agent's own MCP servers, by the cloud's mcpServers: field (FOL-253) ([9232f14](https://github.com/foldrun-io/foldrun-cli/commit/9232f14))
+- feat(code): wait in the open session and carry on when the allowance resets (FOL-252) ([8a7347d](https://github.com/foldrun-io/foldrun-cli/commit/8a7347d))
+
 ## [30.6.0] — 2026-11-24
 
 ### New in the public API
