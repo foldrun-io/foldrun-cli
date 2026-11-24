@@ -12,6 +12,49 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.1.0] — 2026-11-24
+
+### New in the public API
+
+- the `koder` program
+- `foldrun sessions`
+- the `--output-format` flag
+- the `--input-format` flag
+
+- fix(code): messages are held right before the model call, after the MCP servers start, and no text stands in for them; a capped turn count shows N+ (FOL-236, Codex round 12) ([f2fa554](https://github.com/foldrun-io/foldrun-cli/commit/f2fa554))
+- fix(code): messages are held just before the turn is sent, read is a call's start, and settling never blocks the reply (FOL-236, Codex round 11) ([529f32b](https://github.com/foldrun-io/foldrun-cli/commit/529f32b))
+- fix(code): messages are used the moment the model reads the turn; a renamed project is the session's from then on; /resume <n> picks from the list shown (FOL-236, FOL-264, Codex round 10) ([2aad44b](https://github.com/foldrun-io/foldrun-cli/commit/2aad44b))
+- feat(code): one /rename — this conversation (here and on the platform) or this project; /resume lists the project's cloud conversations too (FOL-264) ([12fac98](https://github.com/foldrun-io/foldrun-cli/commit/12fac98))
+- fix(code): messages a local turn carries are held, then used only once the model read it; MCP site rules with the sandbox off and mid-turn (FOL-236, FOL-222, Codex round 9) ([4fe61c9](https://github.com/foldrun-io/foldrun-cli/commit/4fe61c9))
+- feat(sessions): foldrun sessions lists the project's conversations; a turn on this computer marks the messages it carried used once it was sent (FOL-236) ([49c2b6b](https://github.com/foldrun-io/foldrun-cli/commit/49c2b6b))
+- fix(code): a remote MCP server adds one literal site, never back one the person took away, and before the turn's walls go up (FOL-222) ([7357512](https://github.com/foldrun-io/foldrun-cli/commit/7357512))
+- feat(code): a server at a web address goes through the sandbox's site list, its site allowed by the person's yes (FOL-222) ([bbdefed](https://github.com/foldrun-io/foldrun-cli/commit/bbdefed))
+- test(code): the leftover-job test finds and ends only its own job, by an id in its command line ([c9a679f](https://github.com/foldrun-io/foldrun-cli/commit/c9a679f))
+- fix(code): git's top folder keeps a trailing \r; the light test cleans up only its own job; a test follows -p's new where-message ([c4350ea](https://github.com/foldrun-io/foldrun-cli/commit/c4350ea))
+- test(code): a ceiling on what an idle session and a turn load, and nothing left running after a turn or /quit (FOL-273) ([933f5ee](https://github.com/foldrun-io/foldrun-cli/commit/933f5ee))
+- fix(code): -p — an early Ctrl-C stops the turn before the model and refuses every tool call; applied reads git's config at the repo's top ([978fa74](https://github.com/foldrun-io/foldrun-cli/commit/978fa74))
+- fix(code): -p's applied runs git only as the looks-only commands do, from the repo's top; no saved rule under -p; any Ctrl-C is cancelled ([9f34810](https://github.com/foldrun-io/foldrun-cli/commit/9f34810))
+- fix(code): -p on this computer — commands need --yes too; applied from git; asks nothing at setup; Ctrl-C is cancelled; the sandbox is closed ([2fa540f](https://github.com/foldrun-io/foldrun-cli/commit/2fa540f))
+- feat(code): -p on this computer — no questions; file changes only with --yes, commands in the sandbox (FOL-223) ([8fd0025](https://github.com/foldrun-io/foldrun-cli/commit/8fd0025))
+- fix(code): JSON mode holds from the start and to the last byte; stdin messages taken as they come; a failed run says why (FOL-223, FOL-266, Codex) ([9daa284](https://github.com/foldrun-io/foldrun-cli/commit/9daa284))
+- test(code): the no-terminal message names -p first (FOL-223) ([fd72d3e](https://github.com/foldrun-io/foldrun-cli/commit/fd72d3e))
+- feat(code): -p and JSON output for a script's turn (FOL-223, cloud) ([32258d3](https://github.com/foldrun-io/foldrun-cli/commit/32258d3))
+- fix(code): npm install works in the local sandbox; /status says where spent comes from; one session id (FOL-272) ([6bdd260](https://github.com/foldrun-io/foldrun-cli/commit/6bdd260))
+- feat(code): koder, the short name for foldrun code; the sandbox said in plain words (FOL-266, FOL-271) ([b0bc8b0](https://github.com/foldrun-io/foldrun-cli/commit/b0bc8b0))
+
+### deps
+
+- @foldrun/core ^27.5.0 (proxy fetch, conversation list and names, hold/use/free); docs synced ([1c9fd8d](https://github.com/foldrun-io/foldrun-cli/commit/1c9fd8d))
+
+### docs
+
+- sync agents.md (FOL-275 reply language) ([b2ba99f](https://github.com/foldrun-io/foldrun-cli/commit/b2ba99f))
+
+### test
+
+- the e2e file has its own script and is not in npm test ([2ca2c9b](https://github.com/foldrun-io/foldrun-cli/commit/2ca2c9b))
+- npm test runs every test file; eight were never run, one failing since workspace became project ([902e4c5](https://github.com/foldrun-io/foldrun-cli/commit/902e4c5))
+
 ## [32.0.0] — 2026-11-24
 
 ### Breaking changes
