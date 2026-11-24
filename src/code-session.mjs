@@ -34,7 +34,7 @@ export const CODE_GROUPS = [
   ] },
   { group: "Conversations", commands: [
     ["/resume [number|all|new|find <words>]", "go back to an earlier conversation of this folder, by its name and date (this one is kept in its place); new starts a fresh one — the agent forgets the earlier turns; find <words> searches what was said in them"],
-    ["/rename <name>", "name this conversation: /resume shows the name in place of its first message"],
+    ["/rename <name>", "name this conversation, here and in the cloud: /resume shows the name in place of its first message; /rename alone also renames the project"],
     ["/compact [what to keep]", "shorten the conversation to the agent's own summary, so a long session stays fast (this computer)"],
     ["/export [copy|--thinking] [file]", "copy puts the agent's last reply on the clipboard; otherwise this session's messages and replies go to a file (--thinking: with the thinking summaries /model thinking showed)"],
     ["/todos [add|done|rm|clear]", "the todo list of this session — the agent keeps it, here and in the cloud"],
@@ -292,7 +292,7 @@ export function commandMenu(name, st) {
           { v: "/resume new", name: "New conversation", note: "the agent forgets the earlier turns" },
           { v: "/resume find ", name: "Find one…", note: "by what was said in it", ask: "the words" },
           { v: "/resume ", name: "List them", note: "the twenty newest, numbered" },
-          ...past.map((e, i) => ({ v: `/resume ${i + 1}`, name: `${i + 1}. ${clip(e.said)}`, note: String(e.at ?? "").slice(0, 16).replace("T", " ") })),
+          ...past.map((e, i) => ({ v: `/resume ${i + 1}`, name: `${i + 1}. ${clip(e.said)}`, note: `${String(e.at ?? "").slice(0, 16).replace("T", " ")}${e.onlyThere ? " · in the cloud" : ""}` })),
         ],
         tick: null,
         start: "/resume ",

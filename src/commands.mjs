@@ -16921,6 +16921,71 @@ async function settleLocalMessages(/** @type {any} */ s) {
   if (!reached) for (const id of held.ids) s.shownMessages?.delete(id);
 }
 
+/**
+ * The project's conversations on the platform that this folder does not
+ * keep (FOL-264): what /resume lists after its own, each by the name a
+ * person gave it, else its last summary. None for a session on this
+ * computer only, or when the platform cannot be asked.
+ * @returns {Promise<any[]>}
+ */
+async function cloudConversations(/** @type {any} */ s) {
+  if (s.localOnly === true) return [];
+  try {
+    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/sessions?limit=50`);
+    const here = new Set([s.context, ...(Array.isArray(s.past) ? s.past.map((/** @type {any} */ e) => e.context) : [])]);
+    return (Array.isArray(got?.sessions) ? got.sessions : [])
+      .filter((/** @type {any} */ x) => typeof x?.context === "string" && !here.has(x.context))
+      .map((/** @type {any} */ x) => ({
+        context: x.context,
+        said: plainText(String(x.name ?? x.lastSummary ?? x.context)).replace(/\s+/g, " ").trim().slice(0, 80) || x.context,
+        at: String(x.lastAt ?? ""),
+        mode: "cloud",
+        onlyThere: true,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The conversation's name on the platform (FOL-264), so the cloud, the
+ * dashboard and another computer show it. Returns a note when it could not
+ * be kept there; null when it was.
+ */
+async function nameOnPlatform(/** @type {any} */ s, /** @type {string} */ name) {
+  try {
+    await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/sessions/${enc(s.context)}`, { method: "PATCH", body: JSON.stringify({ name }) });
+    return null;
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return "kept on this computer (this platform keeps no conversation names yet)";
+    return `kept on this computer; the platform did not take it (${plainText(explain(err))})`;
+  }
+}
+
+/**
+ * Rename the project from inside a session (FOL-264), with the warning
+ * `foldrun workspace set name` gives: every webhook URL changes. The session
+ * goes on under the new name.
+ */
+async function renameProjectFromSession(/** @type {any} */ s, /** @type {string} */ to) {
+  console.log(`\n  ${c.yellow("!")} renaming ${c.bold(plainText(s.ws))} to ${c.bold(plainText(to))} changes every webhook URL it has — anything posting to the old ones is refused`);
+  const yes = /^y(es)?$/i.test((await promptVisible("  Rename it? [y/N] ")).trim());
+  if (!yes) {
+    console.log(`  ${c.dim("nothing renamed")}\n`);
+    return;
+  }
+  try {
+    const r = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}`, { method: "PATCH", body: JSON.stringify({ name: to }) });
+    const now = typeof r?.name === "string" ? r.name : to;
+    s.ws = now;
+    console.log(`  ${c.green("✓")} ${c.dim(`the project is now ${plainText(now)} — this session goes on there`)}`);
+    if (Array.isArray(r?.brokeWebhooks) && r.brokeWebhooks.length) console.log(`  ${c.amber("!")} webhook URLs changed for ${r.brokeWebhooks.map((x) => plainText(String(x))).join(", ")} — copy the new ones from each flow`);
+    console.log();
+  } catch (err) {
+    console.log(`  ${c.red("✗")} not renamed: ${plainText(explain(err))}\n`);
+  }
+}
+
 /** foldrun's docs as a tool of the local agent (24 Nov 2026): it knows the platform from the pages, not from a guess. */
 const FOLDRUN_DOCS_TOOL = "foldrun_docs";
 const FOLDRUN_DOCS_DESCRIPTION = "Read foldrun's own documentation (the pages this CLI carries, offline). With no page: the list of pages. With a page: its text. Read the page before you answer how foldrun does something or write a flow, agent, tool, skill or hook file — e.g. flows, agents, scheduling, deploying, tools, secrets, cli, coding-agents.";
@@ -19310,7 +19375,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     /** What a command's list needs to know now (FOL-259): read only for the command typed. */
     const menuState = async (/** @type {string} */ cmd) => {
       if (cmd === "/model") return { thinking: readCodePrefs().thinking === true, effort: typeof s.effort === "string" ? s.effort : undefined };
-      if (cmd === "/resume") return { past: Array.isArray(s.past) ? s.past : [] };
+      // This folder's, then the project's in the cloud that it does not keep (FOL-264): numbered as /resume <n> reads them.
+      if (cmd === "/resume") return { past: [...(Array.isArray(s.past) ? s.past : []), ...(await cloudConversations(s))] };
       if (cmd === "/undo") {
         const last = s.applied?.at(-1);
         return { turns: rewindTurns(rewindOf(s)), patch: last ? `${last.files?.length ?? "its"} file${last.files?.length === 1 ? "" : "s"}${last.runId ? ` · run ${String(last.runId)}` : ""}` : undefined };
@@ -19717,16 +19783,47 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       continue;
     }
     if (name === "/rename") {
-      const to = plainText(rest).replace(/\s+/g, " ").trim().slice(0, 80);
-      if (!to || hasControl(to)) {
-        say(`${typeof s.label === "string" && s.label ? `this conversation is called: ${plainText(s.label)} · ` : ""}/rename <name> names it — /resume and /resume find show the name`);
+      // One rename (owner, 24 Nov 2026, FOL-264): this conversation — on this computer and in the cloud alike —
+      // or this project. Typed alone it opens the list; `/rename <name>` names the conversation at once.
+      let to = plainText(rest).replace(/\s+/g, " ").trim();
+      let what = to ? "conversation" : null;
+      if (!what && codeInteractive && process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+        what = await pickOne({
+          title: "Rename",
+          subtitle: "Esc keeps both names",
+          choices: [
+            { v: "conversation", name: "This conversation…", note: typeof s.label === "string" && s.label ? `now: ${plainText(s.label)}` : "no name yet — /resume shows its first message" },
+            ...(s.localOnly === true ? [] : [{ v: "project", name: "This project…", note: `${plainText(s.ws)} — every webhook URL it has changes` }]),
+          ],
+          tick: "conversation",
+        });
+        if (!what) {
+          say("nothing renamed");
+          continue;
+        }
+        to = plainText(await promptVisible(`  ${what === "project" ? "the project's new name" : "this conversation's name"}: `)).replace(/\s+/g, " ").trim();
+      }
+      if (!what || !to) {
+        say(`${typeof s.label === "string" && s.label ? `this conversation is called: ${plainText(s.label)} · ` : ""}/rename <name> names it — /resume and /resume find show the name; /rename alone also renames the project`);
+        continue;
+      }
+      if (what === "project") {
+        await renameProjectFromSession(s, to);
+        remember();
+        continue;
+      }
+      to = to.slice(0, 80);
+      if (hasControl(to)) {
+        say("a conversation's name is plain words — no control characters");
         continue;
       }
       s.label = to;
       remember();
       // The list /search reads has the name at once, where the conversation is kept on this computer.
       await relist(s);
-      console.log(`  ${c.green("✓")} ${c.dim(`this conversation is now called: ${to}`)}\n`);
+      // And on the platform, so the cloud, the dashboard and another computer show the same name.
+      const kept = s.localOnly === true ? null : await nameOnPlatform(s, to);
+      console.log(`  ${c.green("✓")} ${c.dim(`this conversation is now called: ${to}${kept ? ` — ${kept}` : ""}`)}\n`);
       continue;
     }
     if (name === "#search") {
@@ -19789,7 +19886,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       continue;
     }
     if (name === "/resume") {
-      const past = Array.isArray(s.past) ? s.past : [];
+      // This folder's conversations kept here, then the project's in the cloud that are not (FOL-264): one list.
+      const past = [...(Array.isArray(s.past) ? s.past : []), ...(await cloudConversations(s))];
       if (!past.length) {
         say("no earlier conversation of this folder is kept — /resume new starts a new one and keeps the one you leave");
         continue;
@@ -19798,7 +19896,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       if (!rest || !Number.isInteger(n) || n < 1 || n > past.length) {
         // The twenty newest; `/resume all` for every one kept. The numbers are the same either way.
         const shown = rest === "all" ? past : past.slice(0, 20);
-        shown.forEach((/** @type {any} */ e, /** @type {number} */ i) => console.log(`  ${c.cyan(String(i + 1).padStart(2))}  ${c.white(plainText(e.said))} ${c.dim(`· ${String(e.at).slice(0, 16).replace("T", " ")} · ${e.mode === "local" ? "on this computer" : "in the cloud"}`)}`));
+        shown.forEach((/** @type {any} */ e, /** @type {number} */ i) => console.log(`  ${c.cyan(String(i + 1).padStart(2))}  ${c.white(plainText(e.said))} ${c.dim(`· ${String(e.at).slice(0, 16).replace("T", " ")} · ${e.mode === "local" ? "on this computer" : "in the cloud"}${e.onlyThere ? " · not kept on this computer: the agent reads its turns from the platform" : ""}`)}`));
         say(`/resume <number> goes back to one — this conversation is kept in its place${past.length > shown.length ? ` · ${past.length - shown.length} older: /resume all` : ""} · /resume find <words> finds one by what was said in it`);
         continue;
       }

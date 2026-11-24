@@ -3667,3 +3667,63 @@ test("a turn on this computer that never reached the model frees what it held, a
     s.close();
   }
 });
+
+test("/rename and /resume (FOL-264): a name kept on the platform too; /resume lists the project's cloud conversations; /rename alone renames the project after the webhook warning, and the session goes on there", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const named: any[] = [];
+  const renamed: any[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-rn/messages`]: () => ({ messages: [] }),
+    [`PATCH ${WS}/sessions/code-rn`]: (b) => {
+      named.push(JSON.parse(String(b)));
+      return { context: "code-rn", name: JSON.parse(String(b)).name };
+    },
+    [`GET ${WS}/sessions`]: () => ({ sessions: [
+      { context: "code-rn", name: null, turns: 1, agent: "coder", lastAt: "2026-11-24T09:00:00.000Z", lastStatus: "completed", lastRun: "r0", startedBy: null, lastSummary: null },
+      { context: "code-far", name: "the billing fix", turns: 4, agent: "coder", lastAt: "2026-11-24T08:00:00.000Z", lastStatus: "completed", lastRun: "r9", startedBy: null, lastSummary: "x" },
+    ] }),
+    [`PATCH ${WS}`]: (b) => {
+      renamed.push(JSON.parse(String(b)));
+      return { name: "desk2", renamed: true, brokeWebhooks: ["intake"] };
+    },
+    [`GET /v1/workspaces/desk2/sessions`]: () => ({ sessions: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-rn", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/rename tidy imports\r");
+    at = await t.until(/this conversation is now called: tidy imports/, at);
+    assert.deepEqual(named, [{ name: "tidy imports" }], "kept on the platform too");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/resume\r");
+    at = await t.until(/1\. the billing fix\s+2026-11-24 08:00 · in the cloud/, at);
+    t.send("\u001b");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/resume all\r");
+    at = await t.until(/the billing fix .*in the cloud · not kept on this computer/, at);
+    assert.doesNotMatch(t.out().slice(at - 2000, at), /1 +code-rn|tidy imports ·/, "the conversation in hand is not offered");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/rename\r");
+    at = await t.until(/This project…/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\u001b[B");
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\r");
+    at = await t.until(/the project's new name: /, at);
+    t.send("desk2\r");
+    at = await t.until(/changes every webhook URL it has[\s\S]*Rename it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/the project is now desk2 — this session goes on there/, at);
+    at = await t.until(/webhook URLs changed for intake/, at);
+    assert.deepEqual(renamed, [{ name: "desk2" }]);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
