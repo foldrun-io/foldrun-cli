@@ -9529,7 +9529,7 @@ async function sessionsCmd(positional, flags, layout) {
   console.log();
   for (const x of list) {
     const when = typeof x.lastAt === "string" ? x.lastAt.replace("T", " ").slice(0, 16) : "";
-    console.log(`  ${c.white(plainText(String(x.context)))} ${c.dim(`· ${x.turns} turn${x.turns === 1 ? "" : "s"} · ${plainText(String(x.agent ?? "—"))} · ${plainText(String(x.lastStatus ?? ""))} · ${when}`)}`);
+    console.log(`  ${c.white(plainText(String(x.context)))} ${c.dim(`· ${x.turns}${x.turnsMore ? "+" : ""} turn${x.turns === 1 && !x.turnsMore ? "" : "s"} · ${plainText(String(x.agent ?? "—"))} · ${plainText(String(x.lastStatus ?? ""))} · ${when}`)}`);
     if (x.lastSummary) console.log(`    ${c.grey(noBidi(plainText(String(x.lastSummary))).replace(/\s+/g, " ").slice(0, 120))}`);
   }
   console.log(`\n  ${c.dim("foldrun code --context <id> carries one on · foldrun sessions messages <id> what it was sent")}\n`);
@@ -16874,24 +16874,22 @@ async function localMessagesBlock(/** @type {any} */ s) {
   }
   // Held only when the turn is about to be sent (heldMessagesText), after any prompt the turn asks first
   // (a model key): a hold made here could lapse while that prompt waits, and be delivered elsewhere (Codex).
+  // Nothing in the text marks them: no words a person could type stand in for them (Codex).
   s.turnPending = fresh;
-  return TURN_MESSAGES;
+  return "";
 }
 
-/** Where the turn's messages go in its text until they are held, just before it is sent. */
-const TURN_MESSAGES = "\u0000foldrun-turn-messages\u0000";
-
-/** The turn's text with its messages in it: held now, those another turn took meanwhile left out. */
+/** The turn's text with its messages ahead of it: held now, those another turn took meanwhile left out. */
 async function withHeldMessages(/** @type {any} */ s, /** @type {string} */ text) {
-  if (!text.includes(TURN_MESSAGES)) return text;
   const fresh = Array.isArray(s.turnPending) ? s.turnPending : [];
   delete s.turnPending;
+  if (!fresh.length) return text;
   const { taken, hold } = fresh.length ? await holdLocalMessages(s, fresh) : { taken: [], hold: null };
   if (hold) s.turnHold = { hold, ids: taken.map((/** @type {any} */ m) => m.id) };
   // The ones this turn was to carry: a turn refused before it was sent asks about them again when it is sent (FOL-252).
   else if (taken.length) s.turnShown = taken.map((/** @type {any} */ m) => m.id);
   const block = taken.length ? messagesBlockText(taken) : "";
-  return text.split(`\n\n${TURN_MESSAGES}`).join(block ? `\n\n${block}` : "").split(`${TURN_MESSAGES}\n\n`).join(block ? `${block}\n\n` : "").split(TURN_MESSAGES).join(block);
+  return block ? `${block}\n\n${text}` : text;
 }
 
 function messagesBlockText(/** @type {any[]} */ taken) {
@@ -17483,9 +17481,6 @@ async function codeLocalTurn(s, text) {
     s.engineKeyKind = engineKey.kind;
     s.engineKeyMade = true;
     await foldrunPlanLabel(s);
-    // Messages from other sessions are held now, with nothing left to ask before the turn is sent.
-    text = await withHeldMessages(s, text);
-    if (cancel.asked) return;
     typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
@@ -18195,6 +18190,10 @@ async function codeLocalTurn(s, text) {
       if (!ok) return { text: `The sub-agent did not finish${Array.isArray(res?.errors) && res.errors[0] ? ` (${plainText(String(res.errors[0]))})` : ""}.${answer ? ` What it had said:\n\n${answer.slice(0, AGENT_ANSWER_MAX)}` : ""}`, isError: true };
       return { text: `${(answer || "(it gave no answer)").slice(0, AGENT_ANSWER_MAX)}${answer.length > AGENT_ANSWER_MAX ? "\n[cut: the answer was longer]" : ""}`, isError: false };
     };
+    // Messages from other sessions are held now, with the turn about to be sent: after every prompt and
+    // every MCP server's start, so a hold cannot lapse before the model reads them (Codex).
+    text = await withHeldMessages(s, text);
+    turn[0].content[0].text = text;
     const q = engine.foldrunQuery({
           prompt: text,
           options: {
