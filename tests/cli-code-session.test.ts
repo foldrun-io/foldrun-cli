@@ -873,8 +873,8 @@ test("local mode helpers: names, tiers, call summaries, inside the folder, the f
   assert.equal(folderChoice(path.join(home, "s.json"), d)?.localOnly, true);
   rememberSession(path.join(home, "s.json"), d, { context: "c", ws: "desk", agent: "coder", mode: "cloud", localOnly: true });
   assert.equal(folderChoice(path.join(home, "s.json"), d)?.localOnly, true, "kept while the session works in the cloud: /local finds it again");
-  assert.match(localPrompt(d), /cloud_agents tool/);
-  assert.doesNotMatch(localPrompt(d, "", false), /cloud_agents|agents in the cloud/);
+  assert.match(localPrompt(d), /cloud_jobs tool/);
+  assert.doesNotMatch(localPrompt(d, "", false), /cloud_jobs|agents in the cloud/);
   rememberSession(path.join(home, "s.json"), d, { context: "c", ws: "desk", agent: "coder", mode: "local", engine: "foldrun" });
   assert.equal(folderChoice(path.join(home, "s.json"), d)?.engine, "foldrun");
   assert.equal(folderChoice(path.join(home, "s.json"), "/elsewhere"), null);
@@ -1310,14 +1310,14 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
   }
 });
 
-test("--local, cloud_agents: sending the folder is asked (no sends nothing); after a yes the run's patch is asked again and put into the folder; the agent hears what became of it", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("--local, cloud_jobs: sending the folder is asked (no sends nothing); after a yes the run's patch is asked again and put into the folder; the agent hears what became of it", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
   const turns = [
-    () => sse([{ type: "tool_use", id: "c1", name: "cloud_agents", input: { tasks: ["add b"] } }]),
+    () => sse([{ type: "tool_use", id: "c1", name: "cloud_jobs", input: { tasks: ["add b"] } }]),
     () => sse([{ type: "text", text: "Fine, not then." }]),
-    () => sse([{ type: "tool_use", id: "c2", name: "cloud_agents", input: { tasks: ["add b to a.txt\nthen run the tests"] } }]),
+    () => sse([{ type: "tool_use", id: "c2", name: "cloud_jobs", input: { tasks: ["add b to a.txt\nthen run the tests"] } }]),
     () => sse([{ type: "text", text: "The cloud agent added b." }]),
   ];
   const s = await serve({
@@ -1369,7 +1369,7 @@ test("--local, cloud_agents: sending the folder is asked (no sends nothing); aft
       t.child.kill();
     }
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
-    assert.ok(asked[0].tools.some((x: any) => x.name === "cloud_agents"), "the model is offered the tool");
+    assert.ok(asked[0].tools.some((x: any) => x.name === "cloud_jobs"), "the model is offered the tool");
     assert.match(JSON.stringify(asked[1].messages), /person said no/);
     const result = JSON.stringify(asked[3].messages.at(-1));
     assert.match(result, /Cloud agent 1 \(run run-sess-1\): completed/);
@@ -1437,7 +1437,7 @@ test("--local: a reply cut off at the output limit says so, is shown, and the ne
   }
 });
 
-test("--local, cloud_agents: Ctrl-C while they work stops every run on the platform and applies nothing", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("--local, cloud_jobs: Ctrl-C while they work stops every run on the platform and applies nothing", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   let n = 0;
@@ -1453,7 +1453,7 @@ test("--local, cloud_agents: Ctrl-C while they work stops every run on the platf
     [`GET ${WS}/runs/run-c-2`]: () => ({ timedOut: true }),
     [`POST ${WS}/runs/run-c-1/stop`]: () => ({ ok: true }),
     [`POST ${WS}/runs/run-c-2/stop`]: () => ({ ok: true }),
-    "POST /v1/messages": () => sse([{ type: "tool_use", id: "c1", name: "cloud_agents", input: { tasks: ["one", "two"] } }]),
+    "POST /v1/messages": () => sse([{ type: "tool_use", id: "c1", name: "cloud_jobs", input: { tasks: ["one", "two"] } }]),
   });
   try {
     const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
@@ -2631,7 +2631,7 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     // the sub-agent's own two model calls
     () => sse([{ type: "tool_use", id: "c1", name: "Read", input: { file_path: path.join(d, "a.txt") } }, { type: "tool_use", id: "c2", name: "Read", input: { file_path: "/etc/hosts" } }]),
     () => sse([{ type: "text", text: "a.txt holds one line." }]),
-    () => sse([{ type: "tool_use", id: "a2", name: "agent", input: { where: "cloud", description: "the answer", prompt: "What is six times seven?" } }]),
+    () => sse([{ type: "tool_use", id: "a2", name: "cloud_jobs", input: { folder: false, description: "the answer", tasks: ["What is six times seven?"] } }]),
     () => sse([{ type: "text", text: "All done: 42." }]),
     // the added folder
     () => sse([{ type: "tool_use", id: "r9", name: "Read", input: { file_path: path.join(other, "notes.txt") } }]),
@@ -2682,7 +2682,7 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     at = await t.until(/sub-agent explore · read a\.txt/, at);
     at = await t.until(/sub-agent explore answered/, at);
     // The cloud sub-agent: asked, with exactly what is sent.
-    at = await t.until(/runs in desk on [^\n]* as its agent coder[^\n]*Only this text is sent; no file of this folder[\s\S]*What is six times seven\?[\s\S]*allow\?[^\n]*lways for cloud sub-agents this session/, at);
+    at = await t.until(/runs in desk on [^\n]* as its agent coder[^\n]*Only this text is sent; no file of this folder[\s\S]*What is six times seven\?[\s\S]*allow\?[^\n]*lways for cloud jobs without the folder, this session/, at);
     t.send("y\r");
     at = await t.until(/cloud sub-agent coder · run-sub-1/, at);
     at = await t.until(/✓ cloud sub-agent coder · completed/, at);
@@ -2842,7 +2842,7 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
   assert.match(results, /Operation not permitted|Read-only file system|Permission denied/);
 });
 
-test("three places to work: this computer only gives the agent no cloud agents; /cloud-agents on gives them back; the answer is kept; --local-only and --continue do not ask", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("two places to work (FOL-258): this computer or the cloud; /cloud-jobs off takes the agent's cloud tool away and on gives it back, kept for the folder; /cloud-agents is the old name; --local-only and --continue do not ask", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -2865,26 +2865,31 @@ test("three places to work: this computer only gives the agent no cloud agents; 
   const kept = () => JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"))[d];
   const t = onTerminal(["code", d, "--url", s.url, "--token", "k"], home, { TERM: "xterm", COLUMNS: "200" });
   try {
-    // Three answers, in the order of how much leaves; a new folder has the middle one ticked.
-    let at = await t.until(/Where should this session work\?[\s\S]*On this computer only[\s\S]*On this computer, with cloud agents[\s\S]*In the cloud[\s\S]*Esc to cancel/);
+    // Two answers; a new folder has this computer ticked, cloud jobs on.
+    let at = await t.until(/Where should this session work\?[\s\S]*❯ 1\. On this computer [^\n]*cloud jobs on[\s\S]*2\. In the cloud[\s\S]*Esc to cancel/);
+    assert.doesNotMatch(t.out(), /On this computer only|with cloud agents/);
     await new Promise((r) => setTimeout(r, 100));
-    t.send("\x1b[A\r");
-    at = await t.until(/works\s+on this computer only/, at);
+    t.send("\r");
+    at = await t.until(/works\s+on this computer/, at);
     at = await t.until(/Which project\?/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\r");
-    at = await t.until(/this computer only: no cloud agents \(\/cloud-agents on\)/, at);
+    at = await t.until(/works\s+on this computer · cloud jobs on[\s\S]*the agent may start cloud jobs, each asked first \(\/cloud-jobs off\)/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/cloud-jobs off\r");
+    at = await t.until(/cloud jobs off — the agent on this computer starts no cloud job/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("hello\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
     at = await t.until(/answer 1/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
-    t.send("/cloud-agents\r");
-    at = await t.until(/off — this computer only: the agent has no cloud agents/, at);
+    t.send("/cloud-jobs\r");
+    at = await t.until(/cloud jobs off — the agent starts none/, at);
     at = await t.until(/\w ❯ /, at);
+    // The old name still answers.
     t.send("/cloud-agents on\r");
-    at = await t.until(/on — the agent on this computer may hand work to cloud agents/, at);
+    at = await t.until(/on — the agent on this computer may/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("again\r");
     at = await t.until(/answer 2/, at, 30_000);
@@ -2895,26 +2900,29 @@ test("three places to work: this computer only gives the agent no cloud agents; 
     t.child.kill();
   }
   // Only: no way to send the folder or a job to the cloud, and not told of one. On: both back.
-  assert.ok(!names(0).includes("cloud_agents"));
+  assert.ok(!names(0).includes("cloud_jobs"));
   assert.ok(!names(0).includes("session_send"));
   assert.ok(names(1).includes("session_send"));
-  assert.doesNotMatch(JSON.stringify(asked[0].system), /cloud_agents tool/);
-  assert.doesNotMatch(JSON.stringify(asked[0].tools.find((x: any) => x.name === "agent")), /cloud_agent/);
-  assert.ok(names(1).includes("cloud_agents"));
-  assert.match(JSON.stringify(asked[1].system), /cloud_agents tool/);
+  assert.doesNotMatch(JSON.stringify(asked[0].system), /cloud_jobs tool/);
+  // The agent tool is for sub-agents here alone: the cloud is cloud_jobs (folder: false for a job without the folder).
+  assert.doesNotMatch(JSON.stringify(asked[0].tools.find((x: any) => x.name === "agent")), /cloud/);
+  assert.doesNotMatch(JSON.stringify(asked[1].tools.find((x: any) => x.name === "agent")), /cloud/);
+  assert.match(JSON.stringify(asked[1].tools.find((x: any) => x.name === "cloud_jobs")), /"folder"/);
+  assert.ok(names(1).includes("cloud_jobs"));
+  assert.match(JSON.stringify(asked[1].system), /cloud_jobs tool/);
   assert.equal(kept().mode, "local");
-  assert.equal(kept().localOnly, undefined, "turned on mid-session: kept as with cloud agents");
+  assert.equal(kept().localOnly, undefined, "turned on mid-session: kept with cloud jobs on");
   // The next session is asked again, with what the last one ended on ticked.
   const again = onTerminal(["code", d, "--url", s.url, "--token", "k"], home, { TERM: "xterm", COLUMNS: "200" });
   try {
-    await again.until(/Enter keeps this computer, with cloud agents, as last time/);
+    await again.until(/Enter keeps this computer, as last time/);
     again.send("\x1b");
     await again.done;
   } finally {
     again.child.kill();
   }
   // The flag answers ahead and is kept; --continue goes on as its conversation was, asking nothing.
-  for (const [extra, said] of [[["--local-only"], /this computer only: no cloud agents/], [["--continue"], /this computer only: no cloud agents/], [["--local"], /with cloud agents, each asked first/]] as const) {
+  for (const [extra, said] of [[["--local-only"], /cloud jobs off: the agent starts no cloud job/], [["--continue"], /cloud jobs off: the agent starts no cloud job/], [["--local"], /cloud jobs off: the agent starts no cloud job/]] as const) {
     const third = onTerminal(["code", d, ...extra, "--url", s.url, "--token", "k"], home, { TERM: "xterm", COLUMNS: "200" });
     try {
       const at = await third.until(said);
@@ -2925,7 +2933,8 @@ test("three places to work: this computer only gives the agent no cloud agents; 
     } finally {
       third.child.kill();
     }
-    assert.equal(kept().localOnly, extra[0] === "--local" ? undefined : true, extra.join(" "));
+    // --local is the place only: the folder's cloud jobs stay off, as --local-only left them.
+    assert.equal(kept().localOnly, true, extra.join(" "));
   }
   s.close();
 });

@@ -19,12 +19,12 @@ export const CODE_COMMANDS = [
   ["/diff", "what is changed in the folder now (git diff)"],
   ["/undo", "take back the last patch this session applied"],
   ["/mcp [on|off|tools|add|rm …]", "MCP servers: the ones this folder and you name, started only with your yes to each; every tool call is asked"],
-  ["/agents", "the sub-agents the agent can hand a job to — on this computer, or run in your project's cloud sandbox"],
+  ["/agents", "the sub-agents the agent can hand a job to on this computer, and your project's agents a cloud job can run as"],
   ["/todos [add|done|rm|clear]", "the todo list of this session — the agent keeps it, here and in the cloud"],
   ["/add-dir [path]", "another folder the agent may read without asking (changes there are still asked each time)"],
   ["/rewind [turn]", "take back what the agent's Write and Edit changed on this computer, from a turn onward — every file or none"],
   ["/status", "this session: turns, cost, model, conversation"],
-  ["/cost [explain]", "what this session has spent — explain: where it went, row by row (turns, sub-agents, cloud agents): model calls, tokens read, how much came from the cache, cost, who paid, and the biggest cause"],
+  ["/cost [explain]", "what this session has spent — explain: where it went, row by row (turns, sub-agents, cloud jobs): model calls, tokens read, how much came from the cache, cost, who paid, and the biggest cause"],
   ["/usage", "your foldrun plan and the credit left on it"],
   ["/context", "what fills the agent's context: instructions, skills, the conversation, the last turn"],
   ["/compact [what to keep]", "shorten the conversation to the agent's own summary, so a long session stays fast (this computer)"],
@@ -33,7 +33,7 @@ export const CODE_COMMANDS = [
   ["/model", "choose the model: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away)"],
   ["/effort [level]", "how hard the model thinks: low, medium, high, xhigh, max, or default (the model's own) — the effort: line of the agent's file, here and in the cloud (/effort high sets it straight away)"],
   ["/local", "work on this computer from here on — the same session; the agent is told what was done in the cloud"],
-  ["/cloud [task]", "work in the cloud from here on; with a task, send just that one to the cloud and stay where you are"],
+  ["/cloud [task]", "alone: move this session to the cloud — each message from here on works on a copy of your folder there (/local comes back). With a task: one cloud job — that task runs on a copy in the cloud, its changes come back for you to apply, and you stay where you are"],
   ["/skills", "the skills this folder holds — /<skill> [what to do] uses one"],
   ["/memory", "the instruction files the agent reads here (AGENTS.md, CLAUDE.md)"],
   ["/permissions [rm <n>]", "what runs without a question, and the commands kept for this folder (f at a question: always in this folder) — rm <n> removes one, /permissions reset asks again, /permissions strict asks for read-only commands too"],
@@ -50,7 +50,7 @@ export const CODE_COMMANDS = [
   ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
   ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
   ["/thinking [on|off]", "show a summary of the model's thinking above its reply, dimmed — off by default, remembered for you on this computer; /export --thinking writes it too. How hard it thinks is /effort (/thinking high is /effort high)"],
-  ["/cloud-agents [on|off]", "whether the agent on this computer may hand work to agents in the cloud (off: it sends no copy of this folder and cannot message other sessions; what you send yourself still goes)"],
+  ["/cloud-jobs [on|off]", "whether the agent on this computer may start cloud jobs, each asked first (off: it sends nothing of this folder to the cloud and cannot message other sessions; what you send yourself still goes). /cloud-agents is the old name"],
   ["/sandbox", "the sandbox the agent's commands run in on this computer: what it lets through · allow <site> · deny <site> · off · on"],
 ];
 
@@ -309,7 +309,7 @@ export function rememberSession(file, dir, entry) {
 const VERBS = /** @type {Record<string, string>} */ ({
   Bash: "Run", bash: "Run", Read: "Read", Edit: "Edit", MultiEdit: "Edit", Write: "Write", NotebookEdit: "Edit",
   Grep: "Search", Glob: "Find", LS: "List", WebFetch: "Fetch", WebSearch: "Search the web", web: "Web",
-  Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you", cloud_agents: "Cloud agents", foldrun_docs: "Read foldrun docs", session_send: "Message a session",
+  Task: "Delegate", Agent: "Delegate", TodoWrite: "Plan", install: "Install", ask: "Ask you", cloud_jobs: "Cloud jobs", foldrun_docs: "Read foldrun docs", session_send: "Message a session",
   agent: "Sub-agent", todo_write: "Todos", todo_read: "Todos", bash_outside: "Run outside the sandbox",
 });
 
@@ -738,7 +738,7 @@ export function localPrompt(/** @type {string} */ dir, /** @type {string} */ abo
     "Work in that folder. Read before you change; make the smallest change that does the job; run the project's own checks (tests, a build, a quick run) when there are any, and say what you ran and what it showed.",
     "Every change and command is shown to the person and may need their yes; if they say no, do not try the same thing another way — say what you wanted and why.",
     "Never read or print secrets (.env files, keys, tokens), and do not run commands that delete outside the folder, push, deploy or publish unless the person asked for exactly that.",
-    ...(cloudAgents ? ["For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can hand it to agents in the cloud with the cloud_agents tool: each works on a copy of this folder, and its changes come back for the person to accept. Give each a complete task; it does not see this conversation."] : []),
+    ...(cloudAgents ? ["For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can start cloud jobs with the cloud_jobs tool: each works on a copy of this folder, and its changes come back for the person to accept (folder: false runs a task as one of the project's agents, with its own tools, without the folder). Give each a complete task; it does not see this conversation."] : []),
     "When you finish, say in a few plain sentences what you changed and how they can see it. Name files by their path inside the folder.",
     "Answer in the language the person wrote their message in — English to an English message — whatever language the folder's own instructions and files are written in. Only a person asking for another language changes that.",
     ...(about ? ["", about] : []),
@@ -764,7 +764,8 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "NotebookEdit") return rel(input.notebook_path);
   if (name === "foldrun_docs") return `${String(input.page ?? "the list of pages")}${input.find ? ` · ${String(input.find)}` : ""}`;
   if (name === "session_send") return String(input.to ?? "");
-  if (name === "cloud_agents") {
+  if (name === "cloud_jobs") {
+    if (input.folder === false) return `cloud · ${String(input.agent ?? "")} · ${String(input.description ?? "")}`.replace(/ ·  · /, " · ");
     const n = Array.isArray(input.tasks) ? input.tasks.length : 0;
     return `${n} task${n === 1 ? "" : "s"} in the cloud`;
   }

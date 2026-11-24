@@ -15033,7 +15033,8 @@ function statusBlock(s, url) {
     s.model ? row("model", shortModel(plainText(s.model))) : null,
     typeof s.effort === "string" ? row("effort", `${s.effort === "default" ? "the model's default" : s.effort} (/effort changes it)`) : null,
     s.contextTokens !== undefined ? row("last turn", `${readTokens(s)}${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
-    row("works", s.mode === "local" ? (s.localOnly === true ? "on this computer only" : "on this computer, with cloud agents") : "in the cloud"),
+    row("works", s.mode === "local" ? "on this computer" : "in the cloud"),
+    row("cloud jobs", `${s.localOnly === true ? "off — the agent starts none" : "on — the agent may start them, each asked first"} (/cloud-jobs)`),
     typeof s.goal === "string" ? row("goal", `${plainText(s.goal)} (/goal clear drops it)`) : null,
     row("agent", `${s.agent} in project ${s.ws}`),
     row("platform", url),
@@ -16531,21 +16532,52 @@ const FILE_CHANGES = new Set(["Write", "Edit"]);
  * is each agent's report and what became of its changes. Running it at all
  * is asked like a command: it sends the code away and costs credits.
  */
-const CLOUD_AGENTS_TOOL = "cloud_agents";
+/** One kind of cloud work, a "cloud job" (FOL-258): with the folder (a copy, its changes back as a patch), or without it (a project agent's own tools, only the task sent). */
+const CLOUD_AGENTS_TOOL = "cloud_jobs";
 const CLOUD_AGENTS_MAX = 4;
 const CLOUD_TASK_CHARS = 20_000;
-const CLOUD_AGENTS_DESCRIPTION = [
-  `Run up to ${CLOUD_AGENTS_MAX} agents at once on the foldrun platform, each in its own cloud sandbox with a copy of this folder as it is now (what git would commit; ignored files never go, and a folder holding a secret is refused).`,
-  "Use it for long or heavy work that can be done on its own: a refactor across many files, a dependency upgrade, running and fixing a slow test suite, two approaches tried side by side.",
-  "Each task must stand alone: the cloud agent sees the folder, not this conversation. Say what to change, how to check it, and what to report.",
-  "When they finish you get each agent's report and the files it changed. Its changes are put into the folder only if the person says yes; read changed files again before you edit them.",
-  "It costs foldrun credits and takes minutes. Make small changes yourself.",
-].join(" ");
-const CLOUD_AGENTS_SCHEMA = {
-  type: "object",
-  properties: { tasks: { type: "array", minItems: 1, maxItems: CLOUD_AGENTS_MAX, items: { type: "string", description: "One complete, self-contained instruction" } } },
-  required: ["tasks"],
-};
+/**
+ * The one cloud tool the agent on this computer has (FOL-258: it was two —
+ * cloud_agents, and the agent tool's where: "cloud"). `cloud` names the
+ * project's agents a job without the folder can run as.
+ * @param {{ agents: string[], own: string, project: string } | null} cloud
+ */
+function cloudJobsTool(cloud) {
+  return {
+    description: [
+      `Run work on the foldrun platform as cloud jobs, each in its own cloud sandbox. Up to ${CLOUD_AGENTS_MAX} at once.`,
+      "With the folder (folder: true, the default): each job gets a copy of this folder as it is now (what git would commit; ignored files never go, and a folder holding a secret is refused). For long or heavy work that can be done on its own: a refactor across many files, a dependency upgrade, running and fixing a slow test suite, two approaches side by side. When they finish you get each job's report and the files it changed; its changes are put into the folder only if the person says yes — read changed files again before you edit them.",
+      cloud
+        ? `Without the folder (folder: false, one task per call): the task runs as one of the project ${cloud.project}'s agents (agent: ${cloud.agents.join(", ")}; default ${cloud.own}), with that agent's own tools — the web, the MCP servers and APIs its definition names. Nothing of this folder is sent, only the task; only its answer comes back.`
+        : "Without the folder (folder: false) is not available: the project has no agents yet.",
+      "Each task must stand alone: a cloud job does not see this conversation. Say what to do, how to check it, and what to report. It costs foldrun credits and takes minutes; make small changes yourself. Every call is asked of the person first.",
+    ].join(" "),
+    schema: {
+      type: "object",
+      properties: {
+        tasks: { type: "array", minItems: 1, maxItems: CLOUD_AGENTS_MAX, items: { type: "string", description: "One complete, self-contained instruction" } },
+        folder: { type: "boolean", description: "true (default): each job works on a copy of this folder and its changes come back as a patch. false: one task, run as a project agent, no folder sent." },
+        ...(cloud ? { agent: { type: "string", enum: cloud.agents, description: `For folder: false — which agent of the project. Default: ${cloud.own}.` } } : {}),
+        description: { type: "string", description: "For folder: false — the job in three to six words, shown to the person." },
+      },
+      required: ["tasks"],
+      additionalProperties: false,
+    },
+  };
+}
+
+/**
+ * A cloud job without the folder, as the agent tool's cloud path reads it;
+ * or why it cannot be one.
+ * @returns {{ where: "cloud", cloud_agent?: unknown, description: string, prompt: string } | { problem: string }}
+ */
+export function cloudJobWithoutFolder(/** @type {unknown} */ input) {
+  const i = /** @type {any} */ (input ?? {});
+  const tasks = Array.isArray(i.tasks) ? i.tasks : [];
+  if (tasks.length !== 1 || typeof tasks[0] !== "string" || !tasks[0].trim()) return { problem: "cloud_jobs with folder: false takes one task per call — call it again for another" };
+  return { where: "cloud", ...(i.agent === undefined ? {} : { cloud_agent: i.agent }), description: typeof i.description === "string" ? i.description : "", prompt: tasks[0] };
+}
+
 /** Whether a tool call is cloud_agents. */
 /** One session's agent messages another session (owner, 24 Nov 2026: "sessions should be able to talk to each other"). */
 const SESSION_SEND_TOOL = "session_send";
@@ -16653,7 +16685,7 @@ const RUN_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export function cloudTasks(/** @type {unknown} */ input) {
   const raw = /** @type {{ tasks?: unknown }} */ (input ?? {}).tasks;
   const tasks = Array.isArray(raw) ? raw.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
-  if (!tasks.length || tasks.length > CLOUD_AGENTS_MAX || (Array.isArray(raw) && tasks.length !== raw.length)) return { error: `cloud_agents needs tasks: 1 to ${CLOUD_AGENTS_MAX} instructions, none empty` };
+  if (!tasks.length || tasks.length > CLOUD_AGENTS_MAX || (Array.isArray(raw) && tasks.length !== raw.length)) return { error: `cloud_jobs needs tasks: 1 to ${CLOUD_AGENTS_MAX} instructions, none empty` };
   if (tasks.some((t) => t.length > CLOUD_TASK_CHARS)) return { error: `each task must be under ${CLOUD_TASK_CHARS} characters` };
   return { tasks };
 }
@@ -16864,7 +16896,7 @@ async function runCloudAgents(s, input, signal, h) {
   } catch (err) {
     const failed = await stopAll();
     if (signal.aborted) return stoppedText(failed);
-    return { text: `cloud_agents failed: ${plainText(explain(err))}${failed.length ? ` The platform did not confirm the stop for ${failed.join(", ")}.` : ""}${unsure ? ` A run may have started anyway: foldrun runs --to ${ws} shows it.` : ""}`, isError: true };
+    return { text: `cloud_jobs failed: ${plainText(explain(err))}${failed.length ? ` The platform did not confirm the stop for ${failed.join(", ")}.` : ""}${unsure ? ` A run may have started anyway: foldrun runs --to ${ws} shows it.` : ""}`, isError: true };
   } finally {
     closed = true;
     tick();
@@ -17255,7 +17287,7 @@ async function codeLocalTurn(s, text) {
           const shown = plainText(JSON.stringify(input)).slice(0, 400);
           console.log(`      ${c.grey(clipCells(shown, width))}`);
         }
-        const alwaysFor = scope === "mcp" ? "]lways for this tool, this session · [" : scope === "cloud-sub" ? "]lways for cloud sub-agents this session · [" : scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud agents this session · [" : scope === "cloud-changes" ? "]lways for cloud agents' changes this session · [" : null;
+        const alwaysFor = scope === "mcp" ? "]lways for this tool, this session · [" : scope === "cloud-sub" ? "]lways for cloud jobs without the folder, this session · [" : scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud agents this session · [" : scope === "cloud-changes" ? "]lways for cloud agents' changes this session · [" : null;
         const always = name === MCP_START ? "]lways for this server of this sub-agent · [" : child ? "" : alwaysFor;
         // "always in this folder": kept for every later session here. Only
         // for a command that rules can match at all, and not under strict.
@@ -17398,6 +17430,16 @@ async function codeLocalTurn(s, text) {
           if (!bothInside(s.dir, name === "Read" ? input.file_path : (input.path ?? s.dir))) s.privateSeen = true;
           return Promise.resolve({ behavior: /** @type {const} */ ("allow"), updatedInput: input });
         }
+      }
+      // FOL-258: the cloud is reached by cloud_jobs only; a job without the folder is asked as a cloud job of a project agent.
+      if (!child && name === AGENT_TOOL && input?.where === "cloud") return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "A job in the cloud is a cloud job: call cloud_jobs with folder: false." });
+      if (!child && name === CLOUD_AGENTS_TOOL && input?.folder !== undefined && typeof input.folder !== "boolean") return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "folder must be true or false (true: a copy of the folder goes; false: only the task)" });
+      if (!child && name === CLOUD_AGENTS_TOOL && input?.folder === false) {
+        const job = cloudJobWithoutFolder(input);
+        if ("problem" in job) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: job.problem });
+        const asked = gate.then(() => decide(AGENT_TOOL, job, opts?.signal, child)).then((r) => (r.behavior === "allow" ? { behavior: /** @type {const} */ ("allow"), updatedInput: input } : r));
+        gate = asked.then(() => undefined, () => undefined);
+        return asked;
       }
       // A sub-agent that only reads never asks: what is not plainly inside is refused (Codex).
       if (readsOnly) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "That is outside the folders you may read, or a pattern that could reach outside them. Stay inside the person's folder, with a plain pattern." });
@@ -17543,7 +17585,9 @@ async function codeLocalTurn(s, text) {
       turnCloud = names.length && s.localOnly !== true ? { agents: names, own: names[0], project: String(s.ws) } : null;
     }
     if (cancel.asked) return;
-    const sub = agentTool(turnAgents, turnCloud);
+    // The agent tool is for sub-agents on this computer; a job in the cloud is a cloud job (cloud_jobs, folder: false).
+    const sub = agentTool(turnAgents, null);
+    const cloudTool = cloudJobsTool(turnCloud);
     let agentCalls = 0;
     let agentTurns = 0;
     /** One `agent` call: a second conversation, here or in the cloud; its last answer is the result. */
@@ -17766,7 +17810,13 @@ async function codeLocalTurn(s, text) {
               // The one way out of the sandbox: a command as the person, asked every time.
               ...(walls ? [{ name: OUTSIDE_TOOL, description: OUTSIDE_DESCRIPTION, input_schema: OUTSIDE_SCHEMA, readOnly: false, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => runOutside(String(input?.command ?? ""), { dir: s.dir, env: own, signal: ctx.signal, timeout: input?.timeout }) }] : []),
               // On this computer only: the agent has no way to send the folder, or a job, to the cloud.
-              ...(s.localOnly === true ? [] : [{ name: CLOUD_AGENTS_TOOL, description: CLOUD_AGENTS_DESCRIPTION, input_schema: CLOUD_AGENTS_SCHEMA, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => cloudCall(input, ctx.signal) }]),
+              // Cloud jobs: with the folder (a copy, a patch back) or without it (a project agent); off with /cloud-jobs off.
+              ...(s.localOnly === true ? [] : [{ name: CLOUD_AGENTS_TOOL, description: cloudTool.description, input_schema: cloudTool.schema, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {
+                if (input?.folder !== undefined && typeof input.folder !== "boolean") return Promise.resolve({ text: "folder must be true or false", isError: true });
+                if (input?.folder !== false) return cloudCall(input, ctx.signal);
+                const job = cloudJobWithoutFolder(input);
+                return "problem" in job ? Promise.resolve({ text: job.problem, isError: true }) : agentCall(job, ctx.signal);
+              } }]),
               // foldrun's own docs, from the pages this CLI carries: text that
               // shipped with it, read with no command and so no question.
               { name: FOLDRUN_DOCS_TOOL, description: FOLDRUN_DOCS_DESCRIPTION, input_schema: FOLDRUN_DOCS_SCHEMA, run: async (/** @type {unknown} */ input) => foldrunDocsCall(input) },
@@ -18045,30 +18095,29 @@ async function codeCmd(positional, flags, layout) {
   /** @type {"local" | "cloud" | null} */
   let mode = flags.local === true || onlyHere ? "local" : flags.cloud === true ? "cloud" : chosen?.mode ?? null;
   // A flag answers; else what this folder had (asked again below, at a terminal).
-  let localOnly = onlyHere ? true : flags.local === true ? false : chosen?.localOnly === true;
+  // --local is a place, not a setting (FOL-258): the folder's cloud jobs stay as they were; --local-only turns them off.
+  let localOnly = onlyHere ? true : chosen?.localOnly === true;
   // A script's turn runs in the cloud: never for a folder that chose this
   // computer, unless --cloud says so (Codex: no silent upload).
   if (typeof flags.task === "string" && mode === "local") throw new Error("this folder works on this computer, which needs you at a terminal — --cloud --task sends it to the cloud for this one turn");
   if (asking && flags.local !== true && !onlyHere && flags.cloud !== true && !(flags.continue === true && mode)) {
     console.log(`\n  ${c.bold(c.sweep("◆ foldrun code"))}\n`);
     const before = mode;
-    const was = before === "local" ? (localOnly ? "local-only" : "local") : before;
-    const said = { "local-only": "this computer only", local: "this computer, with cloud agents", cloud: "the cloud" };
-    // In the order of how much leaves this computer (owner asked for three, 24 Nov 2026).
-    const answer = /** @type {"local-only" | "local" | "cloud" | null} */ (await pickOne({
+    const said = { local: "this computer", cloud: "the cloud" };
+    // Two answers (owner, 24 Nov 2026: the three overlapped — FOL-258). Whether the agent here may start cloud jobs is
+    // its own setting, /cloud-jobs, kept for this folder (a folder that answered "this computer only" keeps it off).
+    const answer = /** @type {"local" | "cloud" | null} */ (await pickOne({
       title: "Where should this session work?",
-      subtitle: was ? `Enter keeps ${said[was]}, as last time — --local-only, --local or --cloud answers ahead` : "--local-only, --local or --cloud answers ahead",
+      subtitle: before ? `Enter keeps ${said[before]}, as last time — --local or --cloud answers ahead` : "--local or --cloud answers ahead",
       choices: [
-        { v: "local-only", name: "On this computer only", note: "the agent cannot send your folder anywhere: no cloud agents, no copies" },
-        { v: "local", name: "On this computer, with cloud agents", note: "works here; may send a copy to cloud agents after your yes (credits)" },
-        { v: "cloud", name: "In the cloud", note: "works on a copy on foldrun credits; you apply what comes back" },
+        { v: "local", name: "On this computer", note: `cloud jobs ${localOnly ? "off" : "on"} · in your folder, asks before changes` },
+        { v: "cloud", name: "In the cloud", note: "on a copy, on foldrun credits; you apply what comes back" },
       ],
-      tick: was ?? "local",
+      tick: before ?? "local",
     }));
     if (!answer) throw new Error("nothing started");
-    mode = answer === "cloud" ? "cloud" : "local";
-    localOnly = answer === "local-only";
-    console.log(`  ${c.dim("works")}  ${answer === "cloud" ? c.cyan("in the cloud") : c.green(`on ${said[answer]}`)}\n`);
+    mode = answer;
+    console.log(`  ${c.dim("works")}  ${answer === "cloud" ? c.cyan("in the cloud") : c.green("on this computer")}\n`);
   }
   mode ??= "cloud";
   if (flags.engine !== undefined && mode !== "local") throw new Error("--engine is for work on this computer (--local); in the cloud the platform runs the agent");
@@ -18226,10 +18275,10 @@ async function codeCmd(positional, flags, layout) {
     ["project", c.cyan(plainText(ws)), plainText(ws)],
     ["server", c.white(plainText(host)), plainText(host)],
     ["folder", c.white(plainText(homeTilde(dir))), plainText(homeTilde(dir))],
-    ["works", mode === "local" ? c.green(/** @type {any} */ (s).localOnly === true ? "on this computer only" : "on this computer, with cloud agents") : c.cyan("in the cloud"), mode === "local" ? (/** @type {any} */ (s).localOnly === true ? "on this computer only" : "on this computer, with cloud agents") : "in the cloud"],
+    ["works", mode === "local" ? c.green(`on this computer · cloud jobs ${/** @type {any} */ (s).localOnly === true ? "off" : "on"}`) : c.cyan("in the cloud"), mode === "local" ? `on this computer · cloud jobs ${/** @type {any} */ (s).localOnly === true ? "off" : "on"}` : "in the cloud"],
     ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
   ])}`);
-  const cloudNote = /** @type {any} */ (s).localOnly === true ? " · this computer only: no cloud agents (/cloud-agents on)" : " · with cloud agents, each asked first (/cloud-agents off)";
+  const cloudNote = /** @type {any} */ (s).localOnly === true ? " · cloud jobs off: the agent starts no cloud job and sends no copy of the folder (/cloud-jobs on)" : " · the agent may start cloud jobs, each asked first (/cloud-jobs off)";
   console.log(`    ${c.grey(mode === "local" ? `${/** @type {any} */ (s).sandboxOff === true ? "the agent works in this folder on your foldrun plan, with no sandbox (--no-sandbox); it asks before every change and command" : "the agent works in this folder on your foldrun plan; its commands run in a sandbox (/sandbox), and it asks before every change to a file"}${cloudNote}` : "each message takes your folder to the agent; you apply what comes back")}`);
   console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
@@ -19094,7 +19143,7 @@ async function codeCmd(positional, flags, layout) {
       queuedNow = list.length;
       continue;
     }
-    if (name === "/cloud-agents") {
+    if (name === "/cloud-jobs" || name === "/cloud-agents") {
       const verb = rest.toLowerCase();
       if (verb === "on" || verb === "off") {
         if (verb === "off") s.localOnly = true;
@@ -19103,9 +19152,9 @@ async function codeCmd(positional, flags, layout) {
         // The command `foldrun sessions search` prints to open this conversation again follows the choice.
         await relist(s);
         const stillCloud = s.mode === "cloud" ? " — this session is working in the cloud now, where every message sends the folder: /local first, for this to matter" : "";
-        say(verb === "off" ? `off — on this computer the agent has no cloud agents and cannot message other sessions: it sends no copy of this folder. What you send yourself still goes (/cloud <task>, /send, an MCP server you said yes to)${stillCloud}` : `on — the agent on this computer may hand work to cloud agents; each time it is shown and asked first, and costs foldrun credits${stillCloud}`);
-      } else if (verb) say("/cloud-agents on · off");
-      else say(`${s.localOnly === true ? "off — this computer only: the agent has no cloud agents" : "on — the agent may hand work to cloud agents, asked first each time"}${s.mode === "cloud" ? " (the session is working in the cloud now; this is about turns on this computer)" : ""} · /cloud-agents ${s.localOnly === true ? "on" : "off"}`);
+        say(verb === "off" ? `cloud jobs off — the agent on this computer starts no cloud job and cannot message other sessions: it sends no copy of this folder. What you send yourself still goes (/cloud <task>, /send, an MCP server you said yes to)${stillCloud}` : `on — the agent on this computer may hand work to cloud agents; each time it is shown and asked first, and costs foldrun credits${stillCloud}`);
+      } else if (verb) say("/cloud-jobs on · off");
+      else say(`${s.localOnly === true ? "cloud jobs off — the agent starts none" : "cloud jobs on — the agent may start them, asked first each time"}${s.mode === "cloud" ? " (the session is working in the cloud now; this is about turns on this computer)" : ""} · /cloud-agents ${s.localOnly === true ? "on" : "off"}`);
       continue;
     }
     if (name === "/sandbox") {
@@ -19222,7 +19271,7 @@ async function codeCmd(positional, flags, layout) {
       for (const a of agents) console.log(`  ${c.cyan(plainText(a.name).padEnd(14))} ${c.white(clipLine(plainText(a.description)))}\n  ${" ".repeat(14)} ${c.dim(`${a.source}${a.file ? ` · ${plainText(homeTilde(a.file))}` : ""} · ${a.tools.join(", ")}${a.mcp?.length ? ` · its own MCP server${a.mcp.length === 1 ? "" : "s"} ${a.mcp.map((m) => plainText(m.name)).join(", ")} (mcpServers: — started for its job only, with your yes)` : ""}${agentActs(a) ? " · asked at every call, and for each change and command" : " · reads only, never asked"}`)}`);
       for (const x of problems) console.log(`  ${c.amber("!")} ${c.dim(`${plainText(homeTilde(x.file))}: ${plainText(x.why)}`)}`);
       if (s.localOnly === true) {
-        console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim("— off: this session works on this computer only, so the agent has no cloud agents (/cloud-agents on)")}\n`);
+        console.log(`\n  ${c.bold(c.white("in the cloud"))} ${c.dim("— cloud jobs are off: the agent starts none (/cloud-jobs on)")}\n`);
         continue;
       }
       const names = await cloudAgentNames(s);
@@ -19452,7 +19501,7 @@ async function codeCmd(positional, flags, layout) {
       }
       if (s.strict !== true) console.log(`  ${c.green("✓")} ${c.white(`commands that only look: ${READ_ONLY_SAID}`)} ${c.dim("— plain forms, inside this folder; /permissions strict asks for these too")}`);
       const rows = [];
-      for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "sending this folder to cloud agents" : k === "cloud-changes" ? "putting a cloud agent's changes into this folder" : String(k));
+      for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "sending this folder to cloud jobs" : k === "cloud-changes" ? "putting a cloud job's changes into this folder" : String(k));
       for (const cmd of s.localAllow?.commands ?? []) rows.push(`the command  ${clipLine(plainText(String(cmd)))}`);
       for (const tool of s.localAllow?.mcp?.values() ?? []) rows.push(`the MCP tool  ${plainText(String(tool))}`);
       if (s.uploadAgreed?.get(dir)) rows.push("sending this folder's files to the cloud (the ones you were shown)");
