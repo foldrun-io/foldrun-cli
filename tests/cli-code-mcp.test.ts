@@ -395,3 +395,37 @@ test("a sub-agent's own MCP servers (FOL-253): mcpServers: in its definition, th
   // The same strict reading as a session's server: a secret only by name, in env or headers.
   assert.match((resolveAgentServer(lookup, { name: "kit", raw: { command: "node", args: ["--token=${MY_TOKEN}"] } }, d, ENV, false) as any).problem, /a secret goes in "env" or "headers"/);
 });
+
+test("FOL-265: listing servers and starting none never loads the MCP engine; only a start does", async () => {
+  const d = folder({ ".mcp.json": JSON.stringify({ mcpServers: { kit: { command: "node", args: ["srv.mjs"] } } }) });
+  let loads = 0;
+  const m = mcpManager({ dir: d, env: () => ENV, connect: (async () => { loads++; throw new Error("engine loaded"); }) as never });
+  const { rows } = await m.look();
+  assert.equal(rows[0]!.state, "waiting", "the server is listed without the engine");
+  assert.deepEqual(await m.startReady(new AbortController().signal), [], "nothing with a yes, nothing started");
+  assert.equal(loads, 0, "the engine is not touched by looking or by a turn with no server to start");
+});
+
+test("FOL-265: a session's start does not load core's MCP engine or the MCP library — only connecting a server does", () => {
+  for (const f of fs.readdirSync(new URL("../src/", import.meta.url))) {
+    const text = fs.readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    assert.doesNotMatch(text, /^import [^;]*["'](@foldrun\/core\/engine-mcp|@modelcontextprotocol\/sdk[^"']*)["']/m, `${f} loads the MCP engine at start`);
+    if (f === "commands.mjs") continue;
+    assert.doesNotMatch(text, /import\(["']@foldrun\/core\/engine-mcp["']\)|mcpEngine\(/, `${f} loads the MCP engine`);
+  }
+  const src = fs.readFileSync(new URL("../src/commands.mjs", import.meta.url), "utf8");
+  const body = (name: string) => {
+    const at = src.indexOf(`async function ${name}(`);
+    assert.ok(at >= 0, `${name} is there`);
+    return src.slice(at, src.indexOf("\n}\n", at));
+  };
+  // The engine is imported in one place, mcpEngine, and mcpEngine is called in one place, mcpConnect: so it loads
+  // only when a server (the session's or a sub-agent's) is connected, never at a start, a /help or a turn with none.
+  const imports = [...src.matchAll(/import\(["']@foldrun\/core\/engine-mcp["']\)/g)].map((m) => m.index!);
+  assert.equal(imports.length, 1, "core's MCP engine is imported in one place only");
+  assert.ok(body("mcpEngine").includes('import("@foldrun/core/engine-mcp")'), "that place is mcpEngine");
+  const calls = [...src.matchAll(/(?<!function )mcpEngine\(\)/g)].map((m) => m.index!);
+  assert.equal(calls.length, 1, "mcpEngine is called in one place only");
+  const connectAt = src.indexOf("async function mcpConnect(");
+  assert.ok(calls[0]! > connectAt && calls[0]! < src.indexOf("\n}\n", connectAt), "that place is mcpConnect");
+});

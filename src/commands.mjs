@@ -80,6 +80,9 @@ const c = {
 // installed a CLI that could not find its own runtime. Imported lazily so
 // `--help` and argument errors never pay for loading it.
 const core = async () => import("@foldrun/core");
+// The model and effort words alone (FOL-265): a few functions, where
+// core() loads all of core — about 67 MB — on every turn of a session.
+const modelNames = async () => import("@foldrun/core/model-names");
 
 // ---------------------------------------------------------------- init
 
@@ -14792,8 +14795,15 @@ function showMcpServer(row, s, forAgent) {
   }
 }
 
-async function mcpOf(/** @type {any} */ s) {
-  if (s.mcp !== undefined) return s.mcp;
+/**
+ * core's MCP engine, loaded the first time a server is started, never at a
+ * session's start: it brings the MCP library with zod and ajv, about 22 MB
+ * of a session that has no server (measured 24 Nov 2026, FOL-265). Null
+ * when this core cannot be trusted with a server: only an engine that ends a
+ * server's whole tree, stops an endless tool list and refuses a redirect
+ * (Codex).
+ */
+async function mcpEngine() {
   /** @type {any} */
   let mod = null;
   try {
@@ -14801,10 +14811,25 @@ async function mcpOf(/** @type {any} */ s) {
   } catch {
     /* an older core */
   }
-  // Only an engine that ends a server's whole tree, stops an endless tool list and refuses a redirect (Codex).
   const fit = mod?.ENGINE_MCP_FEATURES;
-  s.mcp = typeof mod?.connectMcp === "function" && fit?.killOnClose === true && fit?.maxTools === true && fit?.redirectError === true && fit?.kill === true ? mcpManager({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), unwalled: () => s.sandboxOff === true, connect: mod.connectMcp }) : null;
-  if (s.mcp) process.on("exit", () => s.mcp.killAll());
+  return typeof mod?.connectMcp === "function" && fit?.killOnClose === true && fit?.maxTools === true && fit?.redirectError === true && fit?.kill === true ? mod : null;
+}
+
+/** Connects MCP servers through core's engine, loaded on the first connect
+ *  and refused when it lacks the features above — for the session's servers
+ *  and a sub-agent's alike (Codex). */
+async function mcpConnect(/** @type {Record<string, any>} */ servers, /** @type {Record<string, any>} */ ctx) {
+  const engine = await mcpEngine();
+  if (!engine) throw new Error("this foldrun's engine cannot connect MCP servers — update foldrun (npm i -g foldrun@latest)");
+  return engine.connectMcp(servers, ctx);
+}
+
+async function mcpOf(/** @type {any} */ s) {
+  if (s.mcp !== undefined) return s.mcp;
+  // Reading which servers are named and which have a yes needs no engine;
+  // connecting one does, and loads it then.
+  s.mcp = mcpManager({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), unwalled: () => s.sandboxOff === true, connect: mcpConnect });
+  process.on("exit", () => s.mcp.killAll());
   return s.mcp;
 }
 
@@ -15429,7 +15454,7 @@ async function codeModel(url, flags, ws, agent, want, s) {
   // runner reads (`cheap`, `MAX`) passes as written — unless the agent runs
   // on a provider: block of its own in the cloud (Codex review).
   if (s?.mode !== "local" && cat && (await ownProviderBlock(url, flags, ws, raw))) cat = null;
-  resolveTierFn ??= (await core()).resolveTier;
+  resolveTierFn ??= (await modelNames()).resolveTier;
   // `foldrun/fast` is the gateway's spelling; the file keeps the tier word
   // the runner reads everywhere (Codex review, round 2).
   if (isTierWord(want)) want = /^foldrun\//i.test(want) ? /** @type {string} */ (tierOf(want)) : want;
@@ -15623,7 +15648,7 @@ export function frontmatterEffort(text, resolve) {
 async function agentEffort(/** @type {any} */ url, /** @type {any} */ flags, /** @type {string} */ ws, /** @type {string} */ agent) {
   try {
     const cur = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/source?path=${enc(`agents/${agent}/agent.md`)}`);
-    return frontmatterEffort(String(cur?.content ?? ""), (await core()).resolveEffort) ?? "default";
+    return frontmatterEffort(String(cur?.content ?? ""), (await modelNames()).resolveEffort) ?? "default";
   } catch {
     return null;
   }
@@ -15679,7 +15704,7 @@ async function codeEffort(url, flags, ws, agent, want, s) {
     throw err;
   }
   const raw = String(cur.content ?? "");
-  const now = frontmatterEffort(raw, (await core()).resolveEffort) ?? "default";
+  const now = frontmatterEffort(raw, (await modelNames()).resolveEffort) ?? "default";
   s.effort = now;
   if (!want && codeInteractive && process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
     const picked = await pickOne({ title: "How hard the model thinks", subtitle: "from your next message on, here and in the cloud; kept in the agent's file (effort:)", choices: EFFORT_CHOICES, tick: now });
@@ -17192,7 +17217,7 @@ async function codeLocalTurn(s, text) {
     try {
       const cur = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${enc(`agents/${s.agent}/agent.md`)}`);
       model = frontmatterModel(String(cur?.content ?? "")) ?? "default";
-      effort = frontmatterEffort(String(cur?.content ?? ""), (await core()).resolveEffort);
+      effort = frontmatterEffort(String(cur?.content ?? ""), (await modelNames()).resolveEffort);
     } catch {
       /* the default tier */
     }
@@ -17211,7 +17236,7 @@ async function codeLocalTurn(s, text) {
     if (cancel.asked) return;
     // One spelling of the tier for the plan check and for the model sent:
     // `FAST`, `cheap` or `foldrun/fast` is fast (Codex review).
-    resolveTierFn ??= (await core()).resolveTier;
+    resolveTierFn ??= (await modelNames()).resolveTier;
     model = tierOf(model) ?? model;
     if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
     engineKey = await localKeyFor(s, cancel);
@@ -17739,7 +17764,6 @@ async function codeLocalTurn(s, text) {
         if (s.planOnly) return notStarted("this is a plan-only turn, and it has MCP servers of its own, which a plan does not start.");
         const m = await mcpOf(s);
         if (!m) return notStarted("its definition names MCP servers, and this foldrun's engine cannot connect them (the person can update foldrun).");
-        const engineMcp = /** @type {any} */ (await import("@foldrun/core/engine-mcp"));
         try {
           /** The server as the definition names it NOW (the file is read again): what a start, kept yes or not, is held to. */
           const asNow = (/** @type {string} */ serverName) => {
@@ -17780,7 +17804,7 @@ async function codeLocalTurn(s, text) {
             /** @type {any} */
             let got;
             try {
-              got = await connectServer({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), connect: engineMcp.connectMcp }, server.name, resolved, AbortSignal.any([signal, AbortSignal.timeout(90_000)]), (tool) => (ownTools.some((x) => x.name === tool) ? "another of its servers" : null));
+              got = await connectServer({ dir: s.dir, env: () => localEnv(), sandbox: () => wallsOf(s), connect: mcpConnect }, server.name, resolved, AbortSignal.any([signal, AbortSignal.timeout(90_000)]), (tool) => (ownTools.some((x) => x.name === tool) ? "another of its servers" : null));
             } catch (err) {
               got = { why: (err instanceof Error ? err.message : String(err)).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 400) };
             }
