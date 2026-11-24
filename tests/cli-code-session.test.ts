@@ -2202,3 +2202,111 @@ test("--local-only with --local or --cloud is refused before anything is asked",
     assert.match(r.stdout + r.stderr, /--local-only, --local or --cloud — one of them/);
   }
 });
+
+test("a message queued with Tab while a turn runs is sent when that turn has finished, in order; a stopped turn sends none and puts it back on the line", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "q1", name: "Bash", input: { command: "sleep 3" } }]),
+    () => sse([{ type: "text", text: "first done" }]),
+    () => sse([{ type: "text", text: "second done" }]),
+    () => sse([{ type: "text", text: "third done" }]),
+    () => sse([{ type: "tool_use", id: "q2", name: "Bash", input: { command: "sleep 20" } }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-qu/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const lastSaid = (i: number) => {
+    const m = asked[i].messages.filter((x: any) => x.role === "user").at(-1);
+    return typeof m.content === "string" ? m.content : m.content.map((x: any) => x.text ?? "").join("");
+  };
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-qu", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("first\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/sleep 3[\s\S]*allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    await new Promise((r) => setTimeout(r, 400));
+    // Two messages for after the turn; a third typed, queued, and taken back.
+    t.send("second");
+    await new Promise((r) => setTimeout(r, 60));
+    t.send("\t");
+    at = await t.until(/⏭ second · queued for after this turn \(1\)/, at);
+    t.send("third");
+    await new Promise((r) => setTimeout(r, 60));
+    t.send("\t");
+    at = await t.until(/⏭ third · queued for after this turn \(2\)/, at);
+    t.send("oops");
+    await new Promise((r) => setTimeout(r, 60));
+    t.send("\t");
+    at = await t.until(/⏭ oops · queued for after this turn \(3\)/, at);
+    t.send("\t");
+    at = await t.until(/taken back from the queue \(2 left\)/, at);
+    for (let i = 0; i < 4; i++) t.send("\x7f");
+    await new Promise((r) => setTimeout(r, 60));
+    // A tab inside pasted text is not a request to queue; the queue's own command acts at once.
+    t.send("\x1b[200~a\tb\x1b[201~");
+    await new Promise((r) => setTimeout(r, 60));
+    for (let i = 0; i < 3; i++) t.send("\x7f");
+    await new Promise((r) => setTimeout(r, 60));
+    t.send("drop me");
+    await new Promise((r) => setTimeout(r, 60));
+    t.send("\t");
+    at = await t.until(/⏭ drop me · queued for after this turn \(3\)/, at);
+    t.send("/queue rm 3");
+    await new Promise((r) => setTimeout(r, 60));
+    t.send("\t");
+    at = await t.until(/dropped: drop me/, at);
+    at = await t.until(/first done/, at, 30_000);
+    at = await t.until(/❯ second · from the queue \(1 more\)/, at);
+    at = await t.until(/second done/, at, 30_000);
+    at = await t.until(/❯ third · from the queue/, at);
+    at = await t.until(/third done/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(asked.length, 4);
+    assert.match(lastSaid(2), /second$/);
+    assert.match(lastSaid(3), /third$/);
+    // A turn that is stopped sends nothing after it.
+    t.send("long one\r");
+    at = await t.until(/sleep 20[\s\S]*allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    await new Promise((r) => setTimeout(r, 400));
+    t.send("never sent");
+    await new Promise((r) => setTimeout(r, 60));
+    t.send("\t");
+    at = await t.until(/⏭ never sent · queued for after this turn \(1\)/, at);
+    t.send("\x03");
+    at = await t.until(/the turn did not finish, so the queued message was not sent — it is on your line/, at, 30_000);
+    at = await t.until(/\w ❯ never sent/, at);
+    assert.equal(asked.length, 5, "nothing was sent after the stop");
+    // It is the person's to send now: Enter does.
+    t.send("\r");
+    at = await t.until(/\(no more\)/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(asked.length, 6);
+    assert.match(lastSaid(5), /never sent$/);
+    t.send("/queue\r");
+    at = await t.until(/nothing is queued/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});

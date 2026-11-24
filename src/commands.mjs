@@ -13924,7 +13924,7 @@ async function codeTurn(s, task, include = []) {
   // From the first moment of the turn the keyboard is read here: nothing
   // typed while the folder packs, uploads or runs waits in the terminal for
   // a prompt to read later (Codex).
-  let typeAhead = startTypeAhead(onInt);
+  let typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
   /** Hands the keyboard back, keys already pressed taken in first. */
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
@@ -13950,7 +13950,7 @@ async function codeTurn(s, task, include = []) {
       try {
         return await cancellablePrompt(q, cancel);
       } finally {
-        if (!cancel.asked) typeAhead = startTypeAhead(onInt);
+        if (!cancel.asked) typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
       }
     }, () => cancel.asked);
     if (cancel.asked) return "cancelled";
@@ -13965,7 +13965,7 @@ async function codeTurn(s, task, include = []) {
       try {
         answer = await cancellablePrompt(`    ${plainText(extra.file)} is not part of the folder's upload — send its text (${extra.lines} line${extra.lines === 1 ? "" : "s"}) to the cloud with this message? [y/N] `, cancel);
       } finally {
-        if (!cancel.asked) typeAhead = startTypeAhead(onInt);
+        if (!cancel.asked) typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
       }
       if (cancel.asked) return "cancelled";
       if (!/^y(es)?$/i.test(String(answer ?? "").trim())) {
@@ -14596,10 +14596,14 @@ const TYPE_AHEAD_MAX = 4000;
  * when the turn takes messages (onSend, foldrun's own loop: FOL-213);
  * otherwise nothing is sent mid-turn and Enter is a space. stop() hands
  * the terminal back and returns what was typed and not sent.
+ * Tab puts what is typed in the session's queue — sent as a message of its
+ * own once this turn has finished (24 Nov 2026); on an empty line it takes
+ * the last queued one back to edit.
  * @param {() => void} onInt
  * @param {(text: string) => void} [onSend]
+ * @param {{ add: (text: string) => boolean, back: () => string | null }} [queue] add: false when it was not taken (it stays on the line)
  */
-function startTypeAhead(onInt, onSend) {
+function startTypeAhead(onInt, onSend, queue) {
   if (!codeInteractive || !process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") return { text: () => "", stop: async () => "" };
   const decoder = new StringDecoder("utf8");
   let text = "";
@@ -14617,6 +14621,7 @@ function startTypeAhead(onInt, onSend) {
     // Enter sends only as a key pressed on its own — a read that is that
     // key and nothing else, outside the terminal's paste marks (Codex).
     const alone = !pasting && /^(\r\n?|\n)$/.test(raw);
+    const tabAlone = !pasting && raw === "\t";
     /** @type {Array<{ k: string, pasted: boolean }>} */
     const keys = [];
     for (const part of raw.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b)/)) {
@@ -14624,8 +14629,15 @@ function startTypeAhead(onInt, onSend) {
       else if (part === "\x1b[201~") pasting = false;
       else if (!part.startsWith("\x1b")) for (const k of part) keys.push({ k, pasted: pasting });
     }
-    for (const { k } of keys) {
+    for (const { k, pasted } of keys) {
       if (k === "\x03") onInt();
+      // Tab queues only as a key pressed on its own, like Enter: a tab
+      // inside pasted text (a table, code) is never a request (Codex).
+      else if (k === "\t" && queue && !pasted && tabAlone) {
+        const t = text.trim();
+        if (!t) text = queue.back() ?? "";
+        else if (queue.add(t)) text = "";
+      } else if (k === "\t") text = text && !text.endsWith(" ") ? `${text} ` : text;
       else if (k === "\x7f" || k === "\b") text = [...text].slice(0, -1).join("");
       else if ((k === "\r" || k === "\n") && onSend && alone && text.trim()) {
         const t = text.trim();
@@ -14638,7 +14650,7 @@ function startTypeAhead(onInt, onSend) {
   process.stdin.setRawMode(true);
   // Paste marks on, so a paste is told from typing (the prompt turns them
   // off when it hands the terminal back).
-  if (onSend) writeControl("\x1b[?2004h");
+  if (onSend || queue) writeControl("\x1b[?2004h");
   process.stdin.on("data", onData);
   process.stdin.resume();
   let stopped = false;
@@ -14652,11 +14664,51 @@ function startTypeAhead(onInt, onSend) {
       await new Promise((r) => setImmediate(r));
       await new Promise((r) => setTimeout(r, 15));
       process.stdin.off("data", onData);
-      if (onSend) writeControl("\x1b[?2004l");
+      if (onSend || queue) writeControl("\x1b[?2004l");
       process.stdin.setRawMode(false);
       process.stdin.pause();
       const t = text.trim();
       text = "";
+      return t;
+    },
+  };
+}
+
+/** How many messages wait for the turn to end: the working line says so. */
+let queuedNow = 0;
+
+/**
+ * The session's queue of messages for after the turn, as the keys use it.
+ * The same on this computer and in the cloud.
+ */
+function queueOf(/** @type {any} */ s) {
+  const list = /** @type {string[]} */ (s.queue ??= []);
+  return {
+    add(/** @type {string} */ t) {
+      // The queue's own commands act now: queued behind what they are meant to cancel, they would be too late (Codex).
+      const own = /^\/queue(?:\s+(clear|rm\s+(\d+)))?\s*$/.exec(t);
+      if (own) {
+        if (own[1] === "clear") console.log(`  ${c.grey("⏮")} ${c.dim(`dropped ${list.splice(0).length} queued`)}`);
+        else if (own[2]) {
+          const i = Number(own[2]) - 1;
+          console.log(`  ${c.grey("⏮")} ${c.dim(i >= 0 && i < list.length ? `dropped: ${clipLine(plainText(list.splice(i, 1)[0] ?? ""))}` : `nothing at ${own[2]} — ${list.length} queued`)}`);
+        } else console.log(list.length ? list.map((x, i) => `  ${c.dim(String(i + 1).padStart(2))} ${c.grey(clipLine(plainText(x)))}`).join("\n") : `  ${c.dim("nothing is queued")}`);
+        queuedNow = list.length;
+        return true;
+      }
+      if (list.length >= 20) {
+        console.log(`  ${c.amber("!")} ${c.grey("20 messages are queued already — this one stays on your line")}`);
+        return false;
+      }
+      list.push(t);
+      queuedNow = list.length;
+      console.log(`  ${c.cyan("⏭")} ${c.grey(clipLine(t))} ${c.dim(`· queued for after this turn (${list.length}) — Tab on an empty line takes it back`)}`);
+      return true;
+    },
+    back() {
+      const t = list.pop() ?? null;
+      queuedNow = list.length;
+      if (t !== null) console.log(`  ${c.grey("⏮")} ${c.dim(`taken back from the queue${list.length ? ` (${list.length} left)` : ""} — it is on your line again`)}`);
       return t;
     },
   };
@@ -14690,9 +14742,11 @@ function startTicker(since, typed = () => "") {
     const head = `  ${c.sweep(frames[frame % frames.length], HUE.violet, HUE.cyan, (frame % 10) / 5)} ${c.cyan("working")} ${bar ? `${bar} ` : ""}${c.grey(`${secs}${doing}`)}`;
     // What is being typed for the next message, its end, on the same row.
     const t = typed();
+    const waiting = queuedNow ? ` · ${queuedNow} queued` : "";
+    left -= displayWidth(waiting);
     const room = left - displayWidth(" · next: ");
     const shownText = t && room > 8 ? clipCellsEnd(t, room) : "";
-    process.stdout.write(shownText ? `${head}${c.dim(" · next: ")}${shownText}` : head);
+    process.stdout.write(`${head}${waiting ? c.cyan(waiting) : ""}${shownText ? `${c.dim(" · next: ")}${shownText}` : ""}`);
     shown = true;
   };
   const clear = () => {
@@ -16191,7 +16245,7 @@ async function codeLocalTurn(s, text) {
     console.log(`  ${c.violet("↳")} ${c.grey(clipLine(t))} ${c.dim("· the agent reads it after what it is doing now")}`);
   };
   const onSend = steers ? onSendNow : undefined;
-  let typeAhead = startTypeAhead(onInt, onSend);
+  let typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
     if (t) pending.push({ t, sent: false, n: typedSeq++ });
@@ -16291,7 +16345,7 @@ async function codeLocalTurn(s, text) {
     s.engineKeyInUse = engineKey.key;
     s.engineKeyKind = engineKey.kind;
     await foldrunPlanLabel(s);
-    typeAhead = startTypeAhead(onInt, onSend);
+    typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
@@ -16487,7 +16541,7 @@ async function codeLocalTurn(s, text) {
         return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
       } finally {
         if (!cancel.asked) {
-          typeAhead = startTypeAhead(onInt, onSend);
+          typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
           stopTicker = startTicker(started);
         }
       }
@@ -16591,7 +16645,7 @@ async function codeLocalTurn(s, text) {
               try {
                 return await cancellablePrompt(q, cancel);
               } finally {
-                if (!cancel.asked) typeAhead = startTypeAhead(onInt, onSend);
+                if (!cancel.asked) typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
               }
             }, () => cancel.asked),
           );
@@ -17310,6 +17364,8 @@ async function codeCmd(positional, flags, layout) {
     let checking = false;
     while (typeof s.goal === "string") {
       if (s.turnOk !== true) return;
+      // What the person queued comes before a turn the session would send by itself (Codex): it may be "/goal clear".
+      if (Array.isArray(s.queue) && s.queue.length) return;
       const verdict = goalVerdict(typeof s.turnReply === "string" ? s.turnReply : "");
       if (verdict === "met" && typeof s.goalCheck === "string") {
         // The person's check decides, not the agent's word.
@@ -17378,7 +17434,23 @@ async function codeCmd(positional, flags, layout) {
     }
   }
   for (;;) {
-    const line = await readCodeMessage(prompt, completer, s);
+    /** @type {string | null} */
+    let fromQueue = null;
+    if (Array.isArray(s.queue) && s.queue.length) {
+      if (s.turnOk === true) {
+        fromQueue = /** @type {string} */ (s.queue.shift());
+        queuedNow = s.queue.length;
+        console.log(`${c.bold(c.cyan(clipCells(plainText(s.ws), 24)))} ${c.violet("❯")} ${plainText(fromQueue)} ${c.dim(`· from the queue${s.queue.length ? ` (${s.queue.length} more)` : ""}`)}`);
+      } else {
+        // A turn that was stopped or failed sends nothing after it: what
+        // waited is on the line again, to send, change or drop.
+        const kept = s.queue.splice(0);
+        queuedNow = 0;
+        s.typeAhead = [s.typeAhead, ...kept].filter(Boolean).join(" ");
+        console.log(`  ${c.amber("!")} ${c.grey(`the turn did not finish${s.mode === "cloud" ? " (or its patch was not put in the folder)" : ""}, so ${kept.length === 1 ? "the queued message was" : `the ${kept.length} queued messages were`} not sent — ${kept.length === 1 ? "it is" : "they are"} on your line`)}`);
+      }
+    }
+    const line = fromQueue ?? (await readCodeMessage(prompt, completer, s));
     if (isLeave(line)) {
       await s.mcp?.closeAll?.().catch(() => undefined);
       await s.box?.close?.().catch(() => undefined);
@@ -17705,6 +17777,22 @@ async function codeCmd(positional, flags, layout) {
       s.notes.push("[The person changed the session's todo list themselves — read it as it stands (todo_read, where you have it) before you go on.]");
       remember();
       console.log(`${todoLines(clean.todos).join("\n") || `    ${c.grey("(the todo list is empty)")}`}\n`);
+      continue;
+    }
+    if (name === "/queue") {
+      const list = /** @type {string[]} */ (s.queue ??= []);
+      const [verb = "", n = ""] = rest.split(/\s+/);
+      if (verb === "clear") {
+        const had = list.splice(0).length;
+        say(had ? `dropped ${had} queued message${had === 1 ? "" : "s"}` : "nothing is queued");
+      } else if (verb === "rm") {
+        const i = Number(n) - 1;
+        if (!Number.isInteger(i) || i < 0 || i >= list.length) say(list.length ? `/queue rm <1–${list.length}>` : "nothing is queued");
+        else say(`dropped: ${clipLine(plainText(list.splice(i, 1)[0] ?? ""))}`);
+      } else if (verb) say("/queue · /queue rm <n> · /queue clear");
+      else if (!list.length) say("nothing is queued — while a turn runs, type a message and press Tab: it is sent when that turn has finished (Enter sends into the running turn on this computer)");
+      else console.log(`${list.map((x, i) => `  ${c.dim(String(i + 1).padStart(2))} ${c.white(clipLine(plainText(x)))}`).join("\n")}\n  ${c.dim("sent in this order, each after the turn before it finished · /queue rm <n> · clear")}\n`);
+      queuedNow = list.length;
       continue;
     }
     if (name === "/cloud-agents") {

@@ -44,6 +44,7 @@ export const CODE_COMMANDS = [
   ["/send <conversation> <text>", "message another session — the agent can too, when you ask it"],
   ["/messages", "what other sessions sent this one"],
   ["/quit", "leave — exit, quit or /exit too (Ctrl-D too)"],
+  ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
   ["/cloud-agents [on|off]", "whether the agent on this computer may hand work to agents in the cloud (off: it sends no copy of this folder and cannot message other sessions; what you send yourself still goes)"],
   ["/sandbox", "the sandbox the agent's commands run in on this computer: what it lets through · allow <site> · deny <site> · off · on"],
 ];
@@ -81,14 +82,14 @@ export const CODE_TIPS = [
   "\\ at the end of a line goes on to the next; a paste of many lines is one message",
   "↑ ↓         what you typed before, in this folder and others",
   "Ctrl-R      search what you typed before (Ctrl-R again: older; Enter: put it on the line)",
-  "typing while a turn runs keeps it for your next message (never sent mid-turn)",
+  "typing while a turn runs keeps it for your next message (never sent mid-turn); Tab queues it to be sent when the turn has finished (/queue)",
 ];
 
 /** @param {{ steers?: boolean, extra?: Array<{ name: string, hint?: string, desc: string }> }} [o] steers: Enter sends into a running turn (foldrun's own loop, FOL-213); extra: the folder's own commands and skills. */
 export function helpText({ steers = false, extra = [] } = {}) {
   const own = extra.map((x) => [`${x.name}${x.hint ? ` ${x.hint}` : ""}`, x.desc]);
   const w = Math.min(30, Math.max(...[...CODE_COMMANDS, ...own].map(([c]) => c.length)));
-  const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now" : t)) : CODE_TIPS;
+  const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now; Tab queues it as a message of its own for after the turn (/queue)" : t)) : CODE_TIPS;
   const rows = (/** @type {string[][]} */ list) => list.map(([c, d]) => `${c.padEnd(w)}  ${d}`);
   return [...rows(CODE_COMMANDS), ...(own.length ? ["", "this folder's own:", ...rows(own)] : []), "", ...tips].join("\n");
 }
