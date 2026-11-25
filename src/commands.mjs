@@ -9921,6 +9921,78 @@ async function localBrowseDefaults(s) {
 }
 
 /**
+ * What this computer allows foldrun to use (FOL-240): FOLDRUN_CODE_RESOURCES, else the answer kept for this computer,
+ * else — at a terminal, once per computer — one question; a script with neither runs as before, with no limit.
+ * null on a core without the module. Throws on a FOLDRUN_CODE_RESOURCES it cannot read.
+ * @param {boolean} asking
+ */
+async function computerBudget(asking) {
+  // Named at run time: a core from before FOL-240 has no such module, and the session then runs as before.
+  const spec = "@foldrun/core/local-resources";
+  const R = /** @type {any} */ (await import(spec).catch(() => null));
+  if (!R?.detectComputer) return null;
+  const computer = R.detectComputer();
+  const env = process.env.FOLDRUN_CODE_RESOURCES;
+  if (typeof env === "string" && env.trim()) {
+    const got = R.parseBudget(env, computer);
+    if ("problem" in got) throw new Error(`FOLDRUN_CODE_RESOURCES: ${got.problem}`);
+    return { R, computer, budget: got.budget, source: "FOLDRUN_CODE_RESOURCES" };
+  }
+  const saved = readCodePrefs().resources;
+  if (saved) {
+    const got = R.parseBudget(saved, computer);
+    if (!("problem" in got)) return { R, computer, budget: got.budget, source: "kept for this computer" };
+  }
+  if (!asking) return { R, computer, budget: { cpu: null, memoryMi: null }, source: "no limit (a script, nothing kept)" };
+  const figure = (/** @type {string} */ ch) => {
+    const b = R.budgetFor(ch, computer);
+    return b.cpu === null ? "as today: foldrun may use all of it" : `${R.formatCpu(b.cpu)}, ${R.formatMi(b.memoryMi)}`;
+  };
+  const answer = await pickOne({
+    title: "How much of this computer may foldrun use?",
+    subtitle: `this computer: ${R.formatCpu(computer.cores)}, ${R.formatMi(computer.memoryMi)} — for every session, its agents and their commands · asked once · /permissions resources changes it`,
+    choices: [
+      { v: "light", name: "Light", note: figure("light") },
+      { v: "balanced", name: "Balanced", note: figure("balanced") },
+      { v: "most", name: "Most", note: figure("most") },
+      { v: "none", name: "No limit", note: figure("none") },
+    ],
+    tick: "balanced",
+  });
+  // Esc: nothing kept, no limit this time, asked again next time.
+  if (!answer) return { R, computer, budget: { cpu: null, memoryMi: null }, source: "no limit (not answered)" };
+  writeCodePrefs({ ...readCodePrefs(), resources: String(answer) });
+  return { R, computer, budget: R.budgetFor(answer, computer), source: "kept for this computer" };
+}
+
+/** The resources report: this computer, the budget, what the agent asks, what is in force and how it is held. @param {any} s */
+async function resourcesReport(s) {
+  const r = s.resources;
+  if (!r) return [`limits on this computer need a newer foldrun — \`foldrun update\``];
+  const { R, computer, budget } = r;
+  let front = {};
+  try {
+    front = await projectFront(s, `agents/${s.agent}/agent.md`);
+  } catch {
+    /* the agent's file could not be read: what it asks is not known */
+  }
+  const asked = await R.agentAsks(front);
+  const rows = R.resolveLocal({ budget, session: s.resCeiling ?? null, ask: asked.ask });
+  const fig = (/** @type {string} */ k, /** @type {number | null} */ v) => (v === null ? "no limit" : k === "cpu" ? R.formatCpu(v) : R.formatMi(v));
+  const others = R.readHolds(path.join(configDir(), "resources")).filter((/** @type {any} */ h) => h.pid !== process.pid);
+  const out = [
+    `this computer  ${R.formatCpu(computer.cores)}, ${R.formatMi(computer.memoryMi)}`,
+    `allowed        ${fig("cpu", budget.cpu)}, ${fig("memory", budget.memoryMi)} (${r.source})${s.resCeiling ? ` · this session: ${fig("cpu", s.resCeiling.cpu)}, ${fig("memory", s.resCeiling.memoryMi)}` : ""}`,
+    `${s.agent} asks${" ".repeat(Math.max(1, 11 - String(s.agent).length))}${asked.ask ? `${fig("cpu", asked.ask.cpu)}, ${fig("memory", asked.ask.memoryMi)} (its size:/resources:)` : "nothing (no size: or resources:)"}${asked.problems.length ? ` — ${asked.problems.join("; ")}` : ""}`,
+    ...rows.map((/** @type {any} */ x) => `${x.resource === "cpu" ? "cpu in force  " : "memory in force"} ${fig(x.resource, x.inForce)}${x.over ? ` — it asks ${fig(x.resource, x.asked)}, more than allowed here` : ""} · ${x.held}`),
+    `other sessions ${others.length ? `${others.length} open on this computer, drawing on the same budget` : "none open"}`,
+  ];
+  if (rows.some((/** @type {any} */ x) => x.held === "not yet held")) out.push("not yet held: these figures are recorded and shown; holding them comes next (a sampled watchdog on macOS, a cgroup on Linux)");
+  out.push("what you run yourself (!cmd) is never limited");
+  return out;
+}
+
+/**
  * The server tools a local turn offers (FOL-304): web search and fetch, run by the gateway itself — never on a
  * session that keeps everything here, never before the gateway said it runs them (an older one could pass them to
  * the model's provider), and only what the agent's web grant and web.actions allow. [] when not.
@@ -9937,8 +10009,13 @@ async function localServerTools(s, gateway = /** @type {{ url: string, key: stri
   // Not yet heard from this gateway: asked once, so a session's first turn (and a -p turn) knows too (Codex).
   if (!Array.isArray(s.gatewayRuns) && gateway && !s.gatewayAsked) {
     s.gatewayAsked = true;
+    // Only an engine that can send server tools needs to know (a core from before FOL-304 has no serverToolsOf).
+    const spec = "@foldrun/core/engine-common";
+    const common = /** @type {any} */ (await import(spec).catch(() => null));
+    if (typeof common?.serverToolsOf !== "function") return [];
     try {
-      const res = await fetch(`${gateway.url.replace(/\/+$/, "")}/v1/models`, { headers: { "x-api-key": gateway.key, "user-agent": USER_AGENT }, redirect: "error", signal: AbortSignal.timeout(5000) });
+      // The key as the engine sends it (ANTHROPIC_AUTH_TOKEN): one way of signing in to the gateway, not two.
+      const res = await fetch(`${gateway.url.replace(/\/+$/, "")}/v1/models`, { headers: { authorization: `Bearer ${gateway.key}`, "user-agent": USER_AGENT }, redirect: "error", signal: AbortSignal.timeout(5000) });
       const said = res.headers.get("foldrun-server-tools");
       void res.body?.cancel();
       if (said !== null) s.gatewayRuns = said.split(",").map((x) => x.trim()).filter((x) => /^[a-z_]+_\d{8}$/.test(x));
@@ -19838,6 +19915,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     }
   }
   if (asking && flags.local !== true && !onlyHere && flags.cloud !== true && !(flags.continue === true && chosen?.mode)) console.log(`  ${c.dim("works")}  ${mode === "cloud" ? c.cyan("in the cloud") : localOnly ? c.green("on this computer only") : c.green("on this computer, agents in the cloud")}\n`);
+  // CPU and memory on this computer (FOL-240): what it allows foldrun, asked once per computer at a terminal.
+  const resources = mode === "local" ? await computerBudget(asking) : null;
   const engine = "foldrun";
   const guess = (() => {
     try {
@@ -19867,6 +19946,22 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   const resumed = last && (last.url === undefined || last.url === url) && (last.agent === undefined || last.agent === agent) && (last.mode ?? "cloud") === mode && (mode !== "local" || last.engine === engine) ? last : null;
   if (flags.continue === true && !resumed && typeof flags.context !== "string") console.log(`  ${c.dim("no earlier conversation of this folder to continue — starting a fresh one")}`);
   const s = { url, flags, ws, agent, dir, mode, context: typeof flags.context === "string" ? flags.context : resumed?.context ?? newContext(), notes: /** @type {string[]} */ ([]), engine: mode === "local" ? engine : undefined };
+  // This computer's budget (FOL-240), and this session's record of what it holds, so every open session draws on one.
+  /** @type {any} */ (s).resources = resources;
+  const holdNow = () => {
+    const r = /** @type {any} */ (s).resources;
+    if (!r) return;
+    /** @type {any} */ (s).releaseHold?.();
+    const c = /** @type {any} */ (s).resCeiling;
+    const low = (/** @type {number | null} */ a, /** @type {number | null | undefined} */ b) => (a === null ? (b ?? null) : b === null || b === undefined ? a : Math.min(a, b));
+    try {
+      /** @type {any} */ (s).releaseHold = r.R.recordHold(path.join(configDir(), "resources"), { folder: dir, cpu: low(r.budget.cpu, c?.cpu), memoryMi: low(r.budget.memoryMi, c?.memoryMi) });
+    } catch {
+      /* a record that cannot be written is not a reason to stop: /permissions resources shows it */
+    }
+  };
+  holdNow();
+  process.once("exit", () => /** @type {any} */ (s).releaseHold?.());
   // For turns on this computer, whatever the session is doing now: a cloud session that moves to /local keeps it.
   if (flags.continue === true && !onlyHere && flags.local !== true ? resumed?.localOnly === true || localOnly : localOnly) /** @type {any} */ (s).localOnly = true;
   // Off only by the person's own word: the flag, or their environment (never a file of the folder).
@@ -20294,6 +20389,12 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     }
   };
   const runTurnOnce = async (/** @type {"local" | "cloud"} */ where, /** @type {string} */ said, /** @type {string} */ typed = said) => {
+    // Work here draws on this computer's budget (FOL-240), however the session came to work here — a start, /where,
+    // /resume, a one-off turn: taken up, and recorded, before the turn (Codex).
+    if (where === "local") {
+      if (!(/** @type {any} */ (s).resources)) /** @type {any} */ (s).resources = await computerBudget(Boolean(process.stdin.isTTY && process.stdout.isTTY) && typeof flags.task !== "string");
+      if (!(/** @type {any} */ (s).releaseHold)) holdNow();
+    }
     const started = Date.now();
     // A turn started only to take messages in (FOL-305): with none in it at the end, nothing is sent (Codex).
     const forMessages = s.turnForMessages === true;
@@ -21667,10 +21768,28 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         continue;
       }
       const moving = to !== s.mode;
+      // This computer's budget is taken up before moving here: one that cannot be read keeps the session where it is,
+      // as a start here would refuse it (Codex, FOL-240).
+      if (moving && to === "local" && !s.resources) {
+        try {
+          s.resources = await computerBudget(Boolean(process.stdin.isTTY && process.stdout.isTTY));
+        } catch (err) {
+          if (jobsBefore) s.localOnly = true;
+          else delete s.localOnly;
+          say(`staying where you are — ${plainText(explain(err)).split("\n")[0]}`);
+          continue;
+        }
+      }
       if (moving) {
         if (Number(s.turns) > 0) await hint("place");
         s.mode = to;
         if (to === "local") s.engine = "foldrun";
+        // This computer's budget goes with work here (FOL-240): taken up on the way in, its record dropped on the way out (Codex).
+        if (to === "local") holdNow();
+        else {
+          s.releaseHold?.();
+          delete s.releaseHold;
+        }
       }
       remember();
       // The command `foldrun sessions search` prints to open this conversation again follows the choice.
@@ -21699,6 +21818,62 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         console.log(files.map((f) => `  ${c.cyan(plainText(f.path))} ${c.dim(`${formatTokens(Math.round(f.chars / 4))} tokens${f.cut ? " · cut to fit — the agent reads the rest when it needs it" : ""}`)}`).join("\n"));
         say(`${s.mode === "local" ? "read at the start of every turn on this computer" : "in the cloud the agent is pointed at them and reads them from its copy"} — edit them like any file; /init brings AGENTS.md up to date`);
       }
+      continue;
+    }
+    if (name === "/permissions" && /^resources\b/i.test(rest)) {
+      // CPU and memory on this computer (FOL-240; owner, 25 Nov 2026: under /permissions, no new command).
+      const r = /** @type {any} */ (s).resources;
+      const sub = rest.replace(/^resources\s*/i, "").trim();
+      if (!sub) {
+        for (const l of await resourcesReport(s)) console.log(`  ${c.dim(plainText(l))}`);
+        say("/permissions resources memory 4Gi · cpu 2 · off · save");
+        continue;
+      }
+      if (!r) {
+        say(s.mode === "local" ? "limits on this computer need a newer foldrun — `foldrun update`" : "limits are for work on this computer — in the cloud the agent's size: and resources: are held by its sandbox");
+        continue;
+      }
+      const m = /^(memory|cpu)\s+(\S+)$|^(off|save)$/i.exec(sub);
+      if (!m) {
+        say("/permissions resources memory 4Gi · cpu 2 · off · save");
+        continue;
+      }
+      if (m[3]?.toLowerCase() === "off") {
+        delete /** @type {any} */ (s).resCeiling;
+        holdNow();
+        say("this session's own ceiling is gone — this computer's budget stays (/permissions resources)");
+        continue;
+      }
+      if (m[3]?.toLowerCase() === "save") {
+        // The environment decides while it is set: a kept answer would not apply, so none is written (Codex).
+        if (r.source === "FOLDRUN_CODE_RESOURCES") {
+          say("not kept — FOLDRUN_CODE_RESOURCES sets this computer's budget for this session; unset it to keep one");
+          continue;
+        }
+        const c0 = /** @type {any} */ (s).resCeiling ?? {};
+        const cpu = c0.cpu ?? r.budget.cpu;
+        const mi = c0.memoryMi ?? r.budget.memoryMi;
+        const spelled = cpu === null && mi === null ? "off" : [cpu !== null ? `cpu=${cpu}` : "", mi !== null ? `memory=${Math.round(mi)}Mi` : ""].filter(Boolean).join(",");
+        const got = r.R.parseBudget(spelled, r.computer);
+        if ("problem" in got) {
+          say(`not kept — ${got.problem}`);
+          continue;
+        }
+        writeCodePrefs({ ...readCodePrefs(), resources: spelled });
+        /** @type {any} */ (s).resources = { ...r, budget: got.budget, source: "kept for this computer" };
+        delete /** @type {any} */ (s).resCeiling;
+        holdNow();
+        say(`kept as this computer's budget: ${spelled === "off" ? "no limit" : spelled.replace(",", ", ")}`);
+        continue;
+      }
+      const got = r.R.parseBudget(`${m[1].toLowerCase()}=${m[2]}`, r.computer);
+      if ("problem" in got) {
+        say(got.problem);
+        continue;
+      }
+      /** @type {any} */ (s).resCeiling = { ...(/** @type {any} */ (s).resCeiling ?? {}), ...(m[1].toLowerCase() === "cpu" ? { cpu: got.budget.cpu } : { memoryMi: got.budget.memoryMi }) };
+      holdNow();
+      say(`this session: ${m[1].toLowerCase()} ${m[2]} — /permissions resources shows it in force; save keeps it for this computer`);
       continue;
     }
     if (name === "/permissions") {

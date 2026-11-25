@@ -69,7 +69,7 @@ async function alone(t: { send: (x: string) => unknown, until: (re: RegExp, from
 function onTerminal(args: string[], home: string, extraEnv: Record<string, string> = {}) {
   const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
   const child = spawn("python3", ["-c", "import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)", process.execPath, cli, ...args], {
-    env: { ...outerEnv(), FOLDRUN_CODE_SANDBOX: "off", FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", ...extraEnv },
+    env: { ...outerEnv(), FOLDRUN_CODE_SANDBOX: "off", FOLDRUN_CODE_RESOURCES: process.env.FOLDRUN_TEST_RESOURCES ?? "off", FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", ...extraEnv },
   });
   let out = "";
   child.stdout.on("data", (x) => (out += x));
@@ -5084,13 +5084,48 @@ test("search and fetch on foldrun's servers in a local turn (FOL-304): offered o
     await t.until(/Second answer\./, at, 30_000);
     const types = (n: number) => (asked[n].tools ?? []).filter((x: any) => x.type).map((x: any) => `${x.type}:${x.name}`);
     // The gateway was asked once before the first turn (its models answer carries the header).
-    assert.ok((s as any).seen.some((x: any) => x.url === "/v1/models" && x.headers["x-api-key"] === "fr_gw_test"), "asked with the session's key");
+    assert.ok((s as any).seen.some((x: any) => x.url === "/v1/models" && x.headers.authorization === "Bearer fr_gw_test"), "asked with the session's key, as the engine sends it");
     assert.deepEqual(types(0), ["web_search_20250305:web_search"], "search only: the agent's web.actions do not hold fetch");
     assert.deepEqual(types(1), ["web_search_20250305:web_search"]);
     t.send("/where local\r");
     at = await t.until(/This computer only/, 0, 15_000);
     t.send("/quit\r");
     await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+// FOL-240's core module ships in a newer core than the one installed until the CLI's range moves.
+const coreResources = await import("@foldrun/core/local-resources" as string).then(() => true, () => false);
+test("CPU and memory on this computer (FOL-240): asked once at the start, shown and changed under /permissions resources, kept for the computer", { skip: coreResources ? false : "needs a core with local-resources (FOL-240)" }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-r240/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\nsize: heavy\n---\nYou code.\n" } : { content: "" }),
+    "GET /v1/account/agents-md": () => ({ content: "" }),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-r240", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_RESOURCES: "" });
+  try {
+    let at = await t.until(/How much of this computer may foldrun use\?[\s\S]*Light[\s\S]*Balanced[\s\S]*Most[\s\S]*No limit/);
+    t.send("\r");
+    at = await t.until(/\w ❯ /, at, 30_000);
+    t.send("/permissions resources\r");
+    at = await t.until(/allowed .*\(kept for this computer\)[\s\S]*coder asks +4 cores, 8 GiB \(its size:\/resources:\)[\s\S]*not yet held/, at);
+    t.send("/permissions resources memory 1Gi\r");
+    at = await t.until(/this session: memory 1Gi/, at);
+    t.send("/permissions resources\r");
+    at = await t.until(/memory in force 1 GiB/, at);
+    t.send("/permissions resources save\r");
+    at = await t.until(/kept as this computer's budget: cpu=[\d.]+, memory=1024Mi/, at);
+    t.send("/quit\r");
+    await t.done;
+    const prefs = execFileSync("grep", ["-rl", "memory=1024Mi", home], { encoding: "utf8" }).trim();
+    assert.ok(prefs, "kept in this computer's prefs");
   } finally {
     t.child.kill();
     s.close();

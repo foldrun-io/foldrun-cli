@@ -25,7 +25,7 @@ export const CODE_GROUPS = [
     ["/init", "have the agent write (or bring up to date) this folder's AGENTS.md: what it is, how to build, test and run it"],
   ] },
   { group: "What it can use", commands: [
-    ["/permissions [strict|relaxed|sandbox …|rm <n>|reset]", "what the agent may do without asking: strict asks for every command, relaxed lets the ones that only look run; sandbox [on|off|allow <site>|deny <site>]: the walls its commands run in on this computer; the rules kept for this folder (rm <n>; reset asks everything again)"],
+    ["/permissions [strict|relaxed|sandbox …|resources …|rm <n>|reset]", "what the agent may do without asking (and resources: the CPU and memory this computer allows foldrun): strict asks for every command, relaxed lets the ones that only look run; sandbox [on|off|allow <site>|deny <site>]: the walls its commands run in on this computer; the rules kept for this folder (rm <n>; reset asks everything again)"],
     ["/setup [instructions|skills|agents|mcp …|dirs [path]|check]", "what the agent reads and reaches here — instructions: the files it reads (AGENTS.md, CLAUDE.md); skills: the ones this folder holds (/<skill> [what to do] uses one); agents: the sub-agents it can hand a job to, and your project's agents a cloud job can run as; mcp [on|off|tools|add|rm …]: MCP servers, each started only with your yes, every tool call asked; dirs [path]: another folder it may read without asking; check: what a session needs (node, git, the folder, your sign-in, the project and its agent)"],
   ] },
   { group: "Changes", commands: [
@@ -195,7 +195,7 @@ export function commandMenu(name, st) {
     case "/permissions":
       return {
         title: "What the agent may do without asking",
-        subtitle: "/permissions strict · relaxed · bypass · sandbox on|off · rm <n> · reset types it straight away",
+        subtitle: "/permissions strict · relaxed · bypass · sandbox on|off · resources · rm <n> · reset types it straight away",
         choices: [
           { v: "/permissions ", name: "Show them", note: "what is allowed ahead, and the rules kept for this folder" },
           { v: "/permissions relaxed", name: "Relaxed", note: "commands that only look are not asked" },
@@ -207,6 +207,8 @@ export function commandMenu(name, st) {
           // The sandbox is one of the things the agent may or may not do (FOL-263: /sandbox went into /permissions).
           { v: "/permissions sandbox", name: "The sandbox", note: "what it holds and the sites its commands may reach" },
           { v: st.sandboxOff === true ? "/permissions sandbox on" : "/permissions sandbox off", name: st.sandboxOff === true ? "Sandbox on" : "Sandbox off", note: st.sandboxOff === true ? "commands run inside it again" : "commands run as you; each asked first" },
+          // CPU and memory on this computer (FOL-240; owner, 25 Nov 2026: here, not a new command).
+          { v: "/permissions resources", name: "CPU and memory", note: "what this computer allows foldrun, and what is in force" },
           { v: "/permissions sandbox allow ", name: "Allow a site…", note: "for this session", ask: "the site (example.com)" },
           { v: "/permissions sandbox deny ", name: "Take a site away…", note: "for this session", ask: "the site" },
         ],
@@ -1273,7 +1275,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
@@ -1293,7 +1295,7 @@ function filesPref(v) {
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...filesPref(doc.files) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
@@ -1303,7 +1305,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;

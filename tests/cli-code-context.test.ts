@@ -316,7 +316,7 @@ function onTerminal(args: string[], home: string, extraEnv: Record<string, strin
   delete env.ENV;
   // A terminal 100 wide: the list's rows are clipped to it.
   const child = spawn("python3", ["-c", "import pty,sys,os,fcntl,struct,termios\npid,fd=pty.fork()\nif pid==0: os.execvp(sys.argv[1],sys.argv[1:])\nfcntl.ioctl(fd,termios.TIOCSWINSZ,struct.pack('HHHH',40,100,0,0))\nimport select\nwhile True:\n  r,_,_=select.select([fd,0],[],[])\n  try:\n    if fd in r:\n      d=os.read(fd,65536)\n      if not d: break\n      os.write(1,d)\n    if 0 in r:\n      d=os.read(0,65536)\n      if not d: break\n      os.write(fd,d)\n  except OSError: break\n_,st=os.waitpid(pid,0)\nsys.exit(st>>8)", process.execPath, cli, ...args], {
-    env: { ...env, FOLDRUN_CODE_SANDBOX: "off", FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "xterm", ...extraEnv },
+    env: { ...env, FOLDRUN_CODE_SANDBOX: "off", FOLDRUN_CODE_RESOURCES: process.env.FOLDRUN_TEST_RESOURCES ?? "off", FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "xterm", ...extraEnv },
   });
   let out = "";
   child.stdout.on("data", (x) => (out += x));

@@ -55,7 +55,7 @@ function onTerminal(args: string[], home: string, out: string) {
   delete env.BASH_ENV;
   delete env.ENV;
   const child = spawn("python3", ["-c", "import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)", process.execPath, "--import", PROBE, CLI, ...args], {
-    env: { ...env, FOLDRUN_CODE_SANDBOX: "off", FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", FOLDRUN_NO_AUTO_UPDATE: "1", FOLDRUN_WEIGHT_OUT: out },
+    env: { ...env, FOLDRUN_CODE_SANDBOX: "off", FOLDRUN_CODE_RESOURCES: process.env.FOLDRUN_TEST_RESOURCES ?? "off", FOLDRUN_HOME: home, FOLDRUN_URL: "", FOLDRUN_TOKEN: "", NO_COLOR: "1", SHELL: "/bin/sh", TERM: "dumb", FOLDRUN_NO_AUTO_UPDATE: "1", FOLDRUN_WEIGHT_OUT: out },
   });
   let screen = "";
   child.stdout.on("data", (x) => (screen += x));
