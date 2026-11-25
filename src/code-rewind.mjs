@@ -315,6 +315,9 @@ function expected(/** @type {string} */ tool, /** @type {any} */ input, /** @typ
       if (typeof f !== "string" || typeof t !== "string" || !f || f === t) return null;
       const at = text.indexOf(f);
       if (at < 0) return null;
+      // The bound core holds the change to (EDIT_TEXT_MAX), measured before it is built (Codex).
+      const n = e.replace_all === true ? text.split(f).length - 1 : 1;
+      if (text.length + n * (t.length - f.length) > 16 * 1024 * 1024) return null;
       text = e.replace_all === true ? text.split(f).join(t) : text.slice(0, at) + t + text.slice(at + f.length);
     }
     return { hash: sha(Buffer.from(text, "utf8")), mode: written(before.mode) };

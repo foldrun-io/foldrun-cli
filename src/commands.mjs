@@ -9767,7 +9767,8 @@ function editParts(/** @type {string} */ name, /** @type {any} */ input, /** @ty
     } catch {
       /* missing: core refuses it */
     }
-    const part = by.get(key) ?? { file: e.file_path, edits: /** @type {any[]} */ ([]) };
+    // Kept under the real file: the copy /undo puts back is the file core wrote (Codex).
+    const part = by.get(key) ?? { file: key, edits: /** @type {any[]} */ ([]) };
     part.edits.push(e);
     by.set(key, part);
   }
