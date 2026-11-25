@@ -286,6 +286,53 @@ credential only when a person wrote that credential. Search, fetch and the
 model all run on foldrun's own accounts; to use your own search or scraping
 service, give an agent its API (`apis:`, `mcpServers:`, `tools/`).
 
+### Server tool: a page in a cloud browser
+
+`foldrun_web_browse_20251125` (`web_browse`) is foldrun's own: it opens a page
+in a real browser (JavaScript runs), takes up to five `steps` on it first, and
+reads it back as `markdown` (the default) or `text`, or as a `screenshot` (a
+PNG, at most 1 MiB, which the model looks at).
+
+```sh
+curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model": "claude-sonnet-4-5", "max_tokens": 1000,
+       "tools": [{"type": "foldrun_web_browse_20251125", "name": "web_browse", "max_uses": 2}],
+       "messages": [{"role": "user", "content": "What is on page 2 of https://example.com/list ?"}]}'
+```
+
+A step is one object from a fixed list: `click`, `dblclick`, `hover`, `fill`
+(with `text`), `type`, `press` (with `key`), `select`, `check`, `uncheck`,
+`wait` (milliseconds, or a selector), `scroll`, `goto`, `back`, `forward`,
+`reload`, `focus`, `clear`. Nothing that runs code, reads or writes files, or
+branches. The page opened is held to the same rule as fetch (a URL already in
+the conversation), and `allowed_domains` / `blocked_domains` (a domain covers
+its sub-domains) hold on every connection the browser makes, redirects and a
+page's own requests included, on ports 80 and 443 only. One call takes at
+most 45 seconds.
+
+The result block is `foldrun_web_browse_tool_result`, with content
+`{type: "foldrun_web_browse_result", url, text}` (or `screenshot: {media_type,
+data}`), or `{type: "foldrun_web_browse_tool_result_error", error_code}`; the
+stock Anthropic SDKs keep it and send it back as it is. `usage.server_tool_use`
+adds `foldrun_web_browse_requests`. **`outcome_unknown`** means the browser
+may already have acted (a step ran, then something failed or was cut off):
+the call is never repeated for you, and should not be repeated without
+looking at the page first. A resent request runs the model again, so its
+browses are new calls. One browse runs at a time per key and two per
+account (`too_many_requests` past that). It is charged per call, and only
+when the page came back.
+
+The same browser call without a model: `POST $GATEWAY/v1/foldrun/browse` with
+`{url, steps?, mode?, allowed_domains?, blocked_domains?}` answers `{url,
+text}` or `{url, screenshot}` (what `foldrun code`'s cloud browser uses).
+Errors are the same codes, as `400` (`invalid_tool_input`), `429`, `502`
+(`outcome_unknown`, `url_not_accessible`), `504` (`timeout`). Send an
+`Idempotency-Key` header to make a retry safe: the same key (from the same
+API key and end customer) answers the first call's result with
+`idempotent-replayed: true`, never a second browser and never a second
+charge; the same key with a different input is a `400`.
+
 Any other server tool (`code_execution`, an MCP toolset, `mcp_servers`, a
 tool added mid-conversation) is refused with a `400`
 (`server_tool_not_offered`): it is never passed on to the provider.
