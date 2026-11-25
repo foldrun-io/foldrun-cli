@@ -908,7 +908,7 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
     // Mid-turn: a "y" and Enter (which once answered the apply prompt), more
     // words, a Backspace, an arrow — all for the next message.
     t.send("y\rthen add cx\x7f\x1b[A");
-    at = await t.until(/next: y then add c/, at);
+    at = await t.until(/❯ y then add c/, at);
     at = await t.until(/apply it to/, at);
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n", "nothing applied by what was typed during the turn");
@@ -917,6 +917,27 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
     t.send("\r");
     at = await t.until(/apply it to/, at);
     assert.deepEqual(posts, ["add b", "y then add c"], "the typed text was on the line, and Enter sent it");
+    t.send("n\r");
+    at = await t.until(/\w ❯ /, at);
+    // FOL-325: the input line is there from the start of a cloud turn, its
+    // hint saying what Enter does; Enter pressed alone queues the line for
+    // after the turn (it once only added a space), and it is sent then.
+    t.send("third\r");
+    at = await t.until(/the agent is on it/, at);
+    at = await t.until(/❯ Enter or Tab: queue it for after the turn \(\/queue\)/, at, 5_000);
+    t.send("fourth");
+    await new Promise((r) => setTimeout(r, 200));
+    t.send("\r");
+    at = await t.until(/1 queued/, at, 5_000);
+    at = await t.until(/apply it to/, at);
+    // Its patch declined: the queued line is not sent, it is put back on the
+    // line (the cloud's rule before FOL-325), and Enter sends it.
+    t.send("n\r");
+    at = await t.until(/the queued message was not sent — it is on your line/, at, 5_000);
+    at = await t.until(/\w ❯ (?:\x1b\[\d+G)?fourth/, at);
+    t.send("\r");
+    at = await t.until(/apply it to/, at, 15_000);
+    assert.deepEqual(posts.slice(-2), ["third", "fourth"], "the queued line was kept, and sent with Enter");
     t.send("n\r");
     at = await t.until(/\w ❯ /, at);
     // Ctrl-C mid-turn, with the keyboard in raw mode: still the turn's stop.
@@ -3746,10 +3767,13 @@ test("on a turn on this computer what is typed shows on the working line — aft
     t.send("y\r");
     at = await t.until(/sleep 4; echo slept[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
-    // The command runs: what is typed now is shown as it is typed.
-    await new Promise((r) => setTimeout(r, 600));
+    // The command runs: the input line is there before a key is pressed,
+    // its hint saying Enter reaches the agent (FOL-325); what is typed now
+    // is shown on it as it is typed.
+    at = await t.until(/❯ Enter: tell the agent now · Tab: queue it for after the turn/, at, 5_000);
+    await new Promise((r) => setTimeout(r, 300));
     t.send("also check the readme");
-    at = await t.until(/next: also check the readme/, at, 5_000);
+    at = await t.until(/❯ also check the readme/, at, 5_000);
     t.send("\r");
     at = await t.until(/Finished\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
@@ -3830,13 +3854,13 @@ test("a line being typed when a permission prompt comes is drawn again after it,
     t.send("y\r");
     await new Promise((r) => setTimeout(r, 500));
     t.send("draft ");
-    at = await t.until(/next: draft/, at, 5_000);
+    at = await t.until(/❯ draft/, at, 5_000);
     at = await t.until(/sleep 3; echo second[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     // The second command runs: the draft is on the working line again, its space kept (Codex).
     await new Promise((r) => setTimeout(r, 400));
     t.send("words");
-    at = await t.until(/next: draft words/, at, 5_000);
+    at = await t.until(/❯ draft words/, at, 5_000);
     at = await t.until(/Both ran\./, at, 30_000);
     // And it starts the next message.
     at = await t.until(/\w ❯ draft words/, at, 5_000);

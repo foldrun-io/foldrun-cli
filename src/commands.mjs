@@ -15311,7 +15311,7 @@ async function codeTurn(s, task, include = []) {
     const view = { skipResult: true, quiet: flags.verbose !== true };
     codeView = { agent };
     bareRow = null;
-    stopTicker = startTicker(Date.now(), () => typeAhead.text());
+    stopTicker = startTicker(Date.now(), () => typeAhead.text(), typeAhead.running() ? QUEUE_HINT : "");
     printNew(run, seen, open, view);
     // A question the cloud agent asks (tools: [ask], FOL-298): put here, as a local one is, and the answer sent to
     // the run, which waits for it. In a script's turn it is said on stderr with the command that answers it.
@@ -15352,7 +15352,7 @@ async function codeTurn(s, task, include = []) {
         live = null;
         if (!cancel.asked) {
           typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
-          stopTicker = startTicker(Date.now(), () => typeAhead.text());
+          stopTicker = startTicker(Date.now(), () => typeAhead.text(), typeAhead.running() ? QUEUE_HINT : "");
         }
       }
       if (cancel.asked) return;
@@ -15867,7 +15867,7 @@ async function cloudAgentNames(/** @type {any} */ s) {
  * @param {any} s
  * @param {{ agent: string, prompt: string, description: string }} job
  * @param {AbortSignal} signal
- * @param {{ pause: () => void, resume: () => void, typed?: () => string }} h
+ * @param {{ pause: () => void, resume: () => void, typed?: () => string, hint?: () => string }} h
  */
 async function runCloudSub(s, job, signal, h) {
   const { url, flags, ws } = s;
@@ -15909,7 +15909,7 @@ async function runCloudSub(s, job, signal, h) {
     }
     console.log(`  ${c.violet("☁")} ${c.white(`cloud sub-agent ${plainText(job.agent)}`)} ${c.grey(`· ${id} ·`)} ${c.grey(clipLine(plainText(job.description)))}`);
     const t0 = Date.now();
-    tick = startTicker(t0, h.typed);
+    tick = startTicker(t0, h.typed, h.hint?.() ?? "");
     let faults = 0;
     while (!signal.aborted) {
       try {
@@ -16204,12 +16204,18 @@ function turnLine(s, run, cost, stopped) {
 /** The longest a message typed during a turn may grow. */
 const TYPE_AHEAD_MAX = 4000;
 
+/** The input line's hint during a turn (FOL-325). */
+// Both keys within 80 columns (Codex): the row has 75 cells there.
+const STEER_HINT = "Enter: tell the agent now · Tab: queue it for after the turn";
+const QUEUE_HINT = "Enter or Tab: queue it for after the turn (/queue)";
+
 /**
  * While a turn runs in an interactive session: the keyboard read here, in
  * raw mode — Ctrl-C goes to the turn's own handler, printable keys and
  * Backspace build the next message. Enter sends it into the running turn
  * when the turn takes messages (onSend, foldrun's own loop: FOL-213);
- * otherwise nothing is sent mid-turn and Enter is a space. stop() hands
+ * otherwise Enter pressed on its own queues it, as Tab does (FOL-325) — a
+ * line break inside a paste stays a space. stop() hands
  * the terminal back and returns what was typed and not sent.
  * Tab puts what is typed in the session's queue — sent as a message of its
  * own once this turn has finished (24 Nov 2026); on an empty line it takes
@@ -16264,6 +16270,10 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
         const t = text.trim();
         text = "";
         onSend(t);
+      } else if ((k === "\r" || k === "\n") && queue && alone && text.trim()) {
+        // No way into the running turn (a cloud turn): Enter queues it for
+        // after the turn, as Tab does — never a space added (FOL-325).
+        if (queue.add(text.trim())) text = "";
       } else if (k === "\r" || k === "\n") text = text && !text.endsWith(" ") ? `${text} ` : text;
       else if (!/[\x00-\x1f\x7f-\x9f]/.test(k) && text.length < TYPE_AHEAD_MAX) text += k;
     }
@@ -16370,7 +16380,15 @@ function holdReadyTicker() {
   stop?.();
 }
 
-function startTicker(since, typed = () => "") {
+/**
+ * @param {number} since
+ * @param {() => string} [typed] what is being typed for the next message
+ * @param {string} [hint] when given, the turn takes typing: an input line is
+ *   drawn under the working row from the start, as in Claude Code — this hint
+ *   (dim) while it is empty, the text as it is typed (FOL-325, owner 25 Nov
+ *   2026: "allow us to still write and go to queue like claude code does").
+ */
+function startTicker(since, typed = () => "", hint = "") {
   // The turn's own ticker takes over from the getting-ready one, its clock with it.
   if (readyTicker && readySince !== null) since = Math.min(since, readySince);
   holdReadyTicker();
@@ -16378,11 +16396,17 @@ function startTicker(since, typed = () => "") {
   const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
   const log = console.log;
   let shown = false;
+  /** The cells of each line drawn last time (the working row, and the input
+   *  line when there is one): a terminal made narrower since may have wrapped
+   *  them, so clear() counts their rows at the width there is now (Codex). */
+  /** @type {number[]} */
+  let drawn = [];
   let i = 0;
   const draw = () => {
     // The guard on stdout strips every control but colours: the CLI's own
     // line-clear goes past it, the text through it.
-    writeControl("\r\x1b[2K");
+    if (shown) clear();
+    else writeControl("\r\x1b[2K");
     const cols = (process.stdout.columns || 80) - 1;
     const secs = formatSecs((Date.now() - since) / 1000);
     // Everything on one row, measured (Codex): spinner, word, time first;
@@ -16399,17 +16423,35 @@ function startTicker(since, typed = () => "") {
     const bar = colour && left >= rail + 1 + 12 ? [...Array(rail)].map((_, k) => (Math.abs(k - pos) <= 1 ? c.sweep("━", HUE.violet, HUE.cyan, (k / rail)) : c.grey("─"))).join("") : "";
     if (bar) left -= rail + 1;
     const head = `  ${c.sweep(frames[frame % frames.length], HUE.violet, HUE.cyan, (frame % 10) / 5)} ${c.cyan("working")} ${bar ? `${bar} ` : ""}${c.grey(`${secs}${doing}`)}`;
-    // What is being typed for the next message, its end, on the same row.
     const t = typed();
     const waiting = queuedNow ? ` · ${queuedNow} queued` : "";
+    if (hint) {
+      // Two rows: the working row, then the input line — what is typed, its
+      // end in view, or the hint while it is empty; each clipped to one row
+      // so neither wraps (the clear below goes up exactly one).
+      const room = cols - displayWidth(`  ❯ ${waiting}`);
+      const input = t ? clipCellsEnd(t, Math.max(1, room)) : c.dim(clipCells(hint, Math.max(1, room)));
+      const second = `  ❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hint, Math.max(1, room))}${waiting}`;
+      process.stdout.write(`${head}\n  ${c.violet("❯")} ${input}${waiting ? c.cyan(waiting) : ""}`);
+      drawn = [displayWidth(plainText(head)), displayWidth(second)];
+      shown = true;
+      return;
+    }
+    // What is being typed for the next message, its end, on the same row.
     left -= displayWidth(waiting);
     const room = left - displayWidth(" · next: ");
     const shownText = t && room > 8 ? clipCellsEnd(t, room) : "";
     process.stdout.write(`${head}${waiting ? c.cyan(waiting) : ""}${shownText ? `${c.dim(" · next: ")}${shownText}` : ""}`);
+    drawn = [displayWidth(plainText(`${head}${waiting}${shownText ? ` · next: ${shownText}` : ""}`))];
     shown = true;
   };
   const clear = () => {
-    if (shown) writeControl("\r\x1b[2K");
+    if (shown) {
+      const cols = Math.max(1, process.stdout.columns || 80);
+      const up = drawn.reduce((n, w) => n + Math.max(1, Math.ceil(w / cols)), 0) - 1;
+      // Back to the first row drawn, then everything below it cleared.
+      writeControl(up > 0 ? `\r\x1b[${up}A\x1b[J` : "\r\x1b[J");
+    }
     shown = false;
   };
   console.log = (...args) => {
@@ -18049,7 +18091,7 @@ export function cloudTasks(/** @type {unknown} */ input) {
  * @param {any} s
  * @param {unknown} input
  * @param {AbortSignal} signal
- * @param {{ pause: () => void, resume: () => void, typed?: () => string, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
+ * @param {{ pause: () => void, resume: () => void, typed?: () => string, hint?: () => string, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
  * @returns {Promise<{ text: string, isError?: boolean }>}
  */
 async function runCloudAgents(s, input, signal, h) {
@@ -18159,7 +18201,7 @@ async function runCloudAgents(s, input, signal, h) {
     }
     if (signal.aborted) return stoppedText(await stopAll());
     const t0 = Date.now();
-    tick = startTicker(t0, h.typed);
+    tick = startTicker(t0, h.typed, h.hint?.() ?? "");
     /** Wait for one run, in short pieces as `agent run --wait` does; a few network faults in a row are retried. */
     const waitOne = async (/** @type {typeof runs[number]} */ r) => {
       let faults = 0;
@@ -18186,7 +18228,7 @@ async function runCloudAgents(s, input, signal, h) {
       tick();
       const ok = r.run.status === "completed";
       console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.white(`cloud agent ${r.n}`)} ${c.grey(`· ${plainText(String(r.run.status))} · ${formatSecs((Date.now() - t0) / 1000)} · ${formatCost(cost)}`)}`);
-      tick = startTicker(t0, h.typed);
+      tick = startTicker(t0, h.typed, h.hint?.() ?? "");
     };
     const aborted = new Promise((res) => {
       if (signal.aborted) res("stopped");
@@ -18326,8 +18368,11 @@ async function codeLocalTurn(s, text) {
     // left as it is: restarting it here could start a second (Codex).
     console.log(`  ${c.violet("↳")} ${c.grey(clipLine(t))} ${c.dim("· the agent reads it after what it is doing now")}`);
   };
-  const onSend = steers ? onSendNow : undefined;
+  // Not during /compact (s.noSteer): that turn takes no message, so Enter queues (Codex).
+  const onSend = steers && !s.noSteer ? onSendNow : undefined;
   let typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
+  // The input line's hint, when the keyboard is read for this turn (FOL-325).
+  const inputHint = () => (typeAhead.running() ? (onSend ? STEER_HINT : QUEUE_HINT) : "");
   // What is typed shows on the working line as it is typed, on every turn on this computer (FOL-306).
   const typedNow = () => typeAhead.text();
   // The unfinished line a prompt interrupted: given back to the keyboard after it, not moved aside (FOL-306, Codex).
@@ -18494,7 +18539,7 @@ async function codeLocalTurn(s, text) {
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
-    stopTicker = startTicker(started, typedNow);
+    stopTicker = startTicker(started, typedNow, inputHint());
     /** This turn's MCP tools by name, its sub-agents, and the project's agents a job may be run as in the cloud. */
     /** @type {Map<string, any>} */
     let turnMcp = new Map();
@@ -18528,7 +18573,7 @@ async function codeLocalTurn(s, text) {
           return { behavior: /** @type {const} */ ("allow"), updatedInput: { question: q.question, options: q.options, answer: answer ?? "", answeredBy: ASK_MARK } };
         } finally {
           keyboardOn();
-          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
+          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
         }
       }
       // A sub-agent that only reads, on this computer, reads what the agent
@@ -18855,7 +18900,7 @@ async function codeLocalTurn(s, text) {
         return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
       } finally {
         keyboardOn();
-        if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
+        if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
       }
     };
     // This conversation's /rewind journal; a turn's number is one past the last recorded.
@@ -18966,10 +19011,11 @@ async function codeLocalTurn(s, text) {
       }
       return runCloudAgents(s, input, signal, {
         typed: typedNow,
+        hint: inputHint,
         pause: () => stopTicker(),
         resume: () => {
           stopTicker();
-          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
+          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
         },
         approveApply: (n, lines, patch) => {
           // The patch's own bytes go with it: taken file by file, it is cut and joined as bytes.
@@ -19086,7 +19132,7 @@ async function codeLocalTurn(s, text) {
     const said = (/** @type {() => void} */ print) => {
       stopTicker();
       print();
-      if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
+      if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
     };
     // The sites of the remote MCP servers this turn will start are added
     // first, so the walls are put up once — never reopened (and the handle
@@ -19148,10 +19194,11 @@ async function codeLocalTurn(s, text) {
         if (typeof s.turnCeilingUsd === "number") return { text: "This turn has a spend ceiling the person set, and a cloud agent's cost is not counted in it — so no cloud agent is started in this turn. Do the work here, or tell the person what is left for a cloud agent.", isError: true };
         return runCloudSub(s, { agent: job.cloudAgent, prompt: job.prompt, description: job.description }, signal, {
           typed: typedNow,
+          hint: inputHint,
           pause: () => stopTicker(),
           resume: () => {
             stopTicker();
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
           },
         });
       }
@@ -19512,7 +19559,7 @@ async function codeLocalTurn(s, text) {
         lastSteer = null;
         stopTicker();
         console.log(`  ${c.dim("⋯ the conversation was getting long: its older part was summarised")}`);
-        stopTicker = startTicker(started, typedNow);
+        stopTicker = startTicker(started, typedNow, inputHint());
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) {
         // The model is answering: what was sent into the turn reached it.
@@ -19532,7 +19579,7 @@ async function codeLocalTurn(s, text) {
           const q = /** @type {any} */ (b).input ?? {};
           const what = typeof q.query === "string" ? q.query : typeof q.url === "string" ? q.url : "";
           console.log(`  ${c.cyan("●")} ${c.bold(c.white(String(/** @type {any} */ (b).name) === "web_fetch" ? "Fetch" : String(/** @type {any} */ (b).name) === "web_browse" ? "Browse" : "Search"))}${what ? ` ${c.grey(clipLine(plainText(what)))}` : ""} ${c.dim("· on foldrun's servers")}`);
-          stopTicker = startTicker(started, typedNow);
+          stopTicker = startTicker(started, typedNow, inputHint());
         }
         if (showThinking) {
           const summary = content.filter((b) => b.type === "thinking").map((b) => plainText(String(b.thinking ?? "")).trim()).filter(Boolean).join("\n\n");
@@ -19543,7 +19590,7 @@ async function codeLocalTurn(s, text) {
             console.log(`\n  ${c.dim("✻ thinking")}`);
             for (const l of lines) console.log(`    ${c.dim(l)}`);
             if (more) console.log(`    ${c.dim(`… ${more} more line${more === 1 ? "" : "s"} (/export --thinking writes all of it)`)}`);
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
           }
         }
         if (calls.length) {
@@ -19554,7 +19601,7 @@ async function codeLocalTurn(s, text) {
             const what = localCallSummary(String(b.name), /** @type {Record<string, unknown>} */ (b.input ?? {}), s.dir);
             console.log(`  ${toolHue(label)("●")} ${c.bold(c.white(clipLine(label)))}${what ? ` ${c.grey(clipLine(what))}` : ""}`);
           }
-          stopTicker = startTicker(started, typedNow);
+          stopTicker = startTicker(started, typedNow, inputHint());
         } else if (words) reply = words;
       }
       if (m.type === "user" && !m.parent_tool_use_id) {
@@ -19569,7 +19616,7 @@ async function codeLocalTurn(s, text) {
           stopTicker();
           console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}\n`);
           reply = "";
-          stopTicker = startTicker(started, typedNow);
+          stopTicker = startTicker(started, typedNow, inputHint());
         }
         for (const b of /** @type {any[]} */ (content)) {
           const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");

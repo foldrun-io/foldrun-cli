@@ -88,7 +88,7 @@ export const CODE_TIPS = [
   "\\ at the end of a line goes on to the next; a paste of many lines is one message",
   "↑ ↓         what you typed before, in this folder and others",
   "Ctrl-R      search what you typed before (Ctrl-R again: older; Enter: put it on the line)",
-  "typing while a turn runs keeps it for your next message (never sent mid-turn); Tab queues it to be sent when the turn has finished (/queue)",
+  "typing while a turn runs: the line under \"working\" shows it; Enter or Tab queues it to be sent when the turn has finished (/queue)",
 ];
 
 /**
