@@ -5958,6 +5958,7 @@ async function doctor(flags) {
  *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
  *   keys create <label> --gateway --account --daily <usd> [--wallet <usd>]  the foldrun plan first, then bought credits up to --wallet (0, the default: the plan only)
  *   keys set <id> --wallet <usd>     an account key's wallet budget (or an API key's, with model access)
+ *   keys set <id> --media text|as-is  text: images and PDFs in its model calls read into text first (FOL-268)
  *   keys create <label> --model-access --daily <usd> [--cap <usd>] [--wallet <usd>]  one API key for the platform AND
  *                                    foldrun's models (CI, `foldrun code` with FOLDRUN_TOKEN): the plan first, then
  *                                    bought credits up to --wallet (0, the default); admin of every project only
@@ -6114,6 +6115,18 @@ async function keysCmd(positional, flags) {
     return 0;
   }
   // One change a command: a second flag is refused before anything is sent (Codex review).
+  if (verb === "set" && flags.media !== undefined) {
+    // `keys set <id> --media text|as-is` (FOL-268): `text` has images and PDFs in this key's model calls read
+    // into text by foldrun before the call (no image or document tokens); `as-is`, the default, sends them on.
+    if (!arg) throw new Error("which key? foldrun keys set <id> --media text|as-is");
+    if (["opus", "sonnet", "haiku", "customer", "wallet"].some((t) => flags[t] !== undefined) || flags.clear === true) throw new Error("set --media on its own: keys set <id> --media text|as-is");
+    if (flags.media !== "text" && flags.media !== "as-is") throw new Error("--media is text (images and PDFs read into text before the call) or as-is (sent to the model as they are, the default)");
+    const want = flags.media === "text";
+    const r = await remoteCall(url, flags, `/v1/keys/${encodeURIComponent(arg)}`, { method: "PATCH", body: JSON.stringify({ mediaToText: want }) });
+    if (r?.mediaToText !== want) throw new Error("the platform did not confirm the change — it may not offer it yet");
+    console.log(`\n  ${c.green("✓")} ${arg}: ${want ? "images and PDFs in its calls are read into text by foldrun first — no image or document tokens" : "images and PDFs in its calls go to the model as they are"}\n`);
+    return 0;
+  }
   if (verb === "set" && flags.wallet !== undefined && (flags.customer !== undefined || ["opus", "sonnet", "haiku"].some((t) => flags[t] !== undefined) || flags.clear === true)) {
     throw new Error("set the wallet budget on its own: keys set <id> --wallet <usd>");
   }

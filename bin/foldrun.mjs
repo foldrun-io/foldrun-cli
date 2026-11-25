@@ -397,6 +397,7 @@ Signing in
   foldrun keys create laptop --gateway --cap 20 --claude-code   the same, and Claude Code is set up on this machine: the URL and key go into its settings, and its status line shows the key's spend
   foldrun keys create laptop --gateway --account --daily 50 [--wallet 20]   a key the foldrun plan pays for first; bought credits only up to --wallet (0, the default: the plan alone)
   foldrun keys set <id> --wallet <usd>          an account key's wallet budget: the most bought credits may pay for its calls (0: the plan only)
+  foldrun keys set <id> --media text|as-is      text: images and PDFs in its model calls are read into text by foldrun first (no image tokens); as-is (default) sends them on
   foldrun keys create ci --model-access --daily 50 [--cap <usd>] [--wallet 5]   ONE key for the platform API and foldrun's models (/v1/messages, foldrun code with FOLDRUN_TOKEN): its role and projects as any API key, model calls within these limits, the plan first; an admin of every project
   foldrun gateway status-line   one line for Claude Code's status line: what the gateway key in ANTHROPIC_AUTH_TOKEN has spent, of its limits (asks the gateway; kept 10 s, --cache <s>)
   foldrun text <file>       a local file as text: uploads it to the platform, which reads it — a PDF or scan (OCR in Persian or English), a Word, sheet or slide file, a recording — and prints the text (--lang fa|en|auto, --ocr auto|always|never, --engine docling, --out <path> or -o <path>, --json, --wait <s>); a long job is polled until it ends
