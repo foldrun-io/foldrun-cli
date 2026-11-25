@@ -596,8 +596,12 @@ includes it in a turn.
   `foldrun sessions send <conversation> "<text>" --to <project>`. Whoever
   may start runs in the project may send, the same right that already lets
   them join the conversation by its id.
-- **Read and include:** before each turn `foldrun code` shows what is
-  waiting and asks whether to include it; only an explicit `y` does. A turn
+- **Read and include:** a `foldrun code` session waiting at its prompt
+  looks for new messages every few seconds and says each one once, above
+  the prompt, with who sent it — what you have typed stays on the line.
+  Enter on an empty line shows each in full and asks whether to take it into
+  a turn; a no starts nothing. Before any other turn it also shows what is
+  waiting and asks; only an explicit `y` includes it. A turn
   includes messages by id (`messages` on `POST …/agents/<agent>/run`): if
   one is no longer waiting, none is taken (409, `refused`); each is taken by
   one turn only. Those that do not fit in one turn's block (about 16,000
