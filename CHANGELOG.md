@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.5.0] — 2026-11-25
+
+- fix(code): messages_gone passes through codeLocalTurn's own catch (FOL-305, Codex) ([bc10919](https://github.com/foldrun-io/foldrun-cli/commit/bc10919))
+- fix(code): a message taken between list and hold is a skipped turn with its notes kept (FOL-305, Codex) ([8dff20c](https://github.com/foldrun-io/foldrun-cli/commit/8dff20c))
+- fix(code): a messages-only turn that sends nothing keeps its notes, stops a goal, and is still messages-only on the allowance retry (FOL-305, Codex) ([2435f9a](https://github.com/foldrun-io/foldrun-cli/commit/2435f9a))
+- fix(code): a yes at the prompt is taken by the next turn whatever happens; a turn for messages with none left sends nothing (FOL-305, Codex) ([e34bef8](https://github.com/foldrun-io/foldrun-cli/commit/e34bef8))
+- feat(code): a message from another session shows at an idle prompt; Enter on an empty line shows it whole and asks once (FOL-305) ([05787ad](https://github.com/foldrun-io/foldrun-cli/commit/05787ad))
+
+### docs
+
+- sync (FOL-305) ([9668d71](https://github.com/foldrun-io/foldrun-cli/commit/9668d71))
+
 ## [32.4.0] — 2026-11-25
 
 - fix(code): marginLines counts widths once, linear in the text (FOL-311, Codex) ([a5ac813](https://github.com/foldrun-io/foldrun-cli/commit/a5ac813))
