@@ -92,7 +92,7 @@ the point of the week; a step that weighs two arguments and picks one is not.
 | `skills` | an allowlist. **Absent inherits every skill in scope**; `[]` withholds all of them. The platform's [gallery skills](tools#the-gallery--platform-maintained-tools-and-skills) (`modern-website`, `motion-video`) come only by name |
 | `agents` | colleagues it may consult mid-run — an answer, no tools |
 | `subagents` | colleagues it may delegate a whole job to — own context, own tools, never more than its own ([below](#delegating-to-a-sub-agent)) |
-| `sandbox` | `own` \| `parent` (default) — delegated to as a sub-agent, run each job in a sandbox of its own, with its own tools, secrets and network ([below](#isolated-sub-agents-sandbox-own)) |
+| `sandbox` | `own` \| `parent` (default) — delegated to as a sub-agent, run each job in a sandbox of its own, with its own tools, secrets and network ([below](#isolated-sub-agents-sandbox-own)). In a `.claude/agents/<name>.md` that is a sub-agent of a `foldrun code` session on your computer it means the same: its own sandbox on a private copy of the folder, its changes back as one patch you are asked about ([CLI](cli), `/setup agents`) |
 | `scripts` | programs in `scripts/`, each becoming a callable tool |
 | `hooks` | your own code at every tool call, step start and step end — refuse, rewrite, add context — the same on every model ([Hooks](hooks)). Also in a project's or the account's `AGENTS.md` for every agent under it |
 | `apis` | an HTTP API declared inline, as one tool |
@@ -420,7 +420,11 @@ What holds:
   nothing can start a job from inside a step (an install without the egress
   proxy), or nothing can stop one job's sandbox on its own (the local docker
   executor), the tool is not offered and the step says so: a job whose parent
-  stopped waiting must not run on.
+  stopped waiting must not run on. A sub-agent of `foldrun code` on your
+  computer is the exception: there `sandbox: own` gets walls of its own on a
+  private copy of the folder, which cannot read the folder itself, and its
+  changes come back as a patch you are asked about once nothing it started
+  is left running ([CLI](cli), `/setup agents`).
 
 `foldrun agent link <parent> --subagent <reader> --isolated` writes
 `sandbox: own` on the reader along with the link.
