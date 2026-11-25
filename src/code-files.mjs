@@ -17,6 +17,12 @@ const KIND_BY_EXT = {
   pdf: "document", docx: "document", doc: "document", pptx: "document", xlsx: "document", odt: "document", odp: "document", ods: "document", rtf: "document", epub: "document",
 };
 
+/** Which file this is and as it was: device, inode, size and change times — an inode number freed and reused at
+ *  once (CI's filesystem did) is not taken for the same file. @param {fs.Stats} st */
+function fileIdentity(st) {
+  return `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+}
+
 /** @typedef {{ raw: string, file: string, real: string, link: boolean, inside: boolean, id: string, kind: FileKind, bytes: number, typed: boolean }} FoundFile */
 
 /** At most this many files are taken from one message. */
@@ -39,7 +45,7 @@ export function fileKindOf(file) {
  * `real` is where its bytes are (a link followed); `typed` is true for an `@path` inside the folder — the only
  * kind a choice kept "every time" may answer for, so a path in pasted text is always asked about (Codex).
  * `link` is true when the named file is itself a link; `inside` when its bytes are inside the folder; `id` is
- * the file's device and inode, so what is read after the person chose is the file they chose (Codex).
+ * the file's identity as found, so what is read after the person chose is the file they chose (Codex).
  * @returns {Array<FoundFile>}
  */
 export function filesIn(line, dir) {
@@ -80,7 +86,7 @@ export function filesIn(line, dir) {
     const inside = rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
     // A hidden file or folder (.env.pdf, .secrets/x.pdf) is always asked about, whatever was kept (Codex).
     const hidden = rel.split(path.sep).some((part) => part.startsWith("."));
-    out.push({ raw: `${m[2]}${m[3] !== undefined ? `"${m[3]}"` : m[4] !== undefined ? `'${m[4]}'` : m[5]}`, file, real, link, inside, id: `${st.dev}:${st.ino}`, kind, bytes: st.size, typed: at && inside && !link && !hidden });
+    out.push({ raw: `${m[2]}${m[3] !== undefined ? `"${m[3]}"` : m[4] !== undefined ? `'${m[4]}'` : m[5]}`, file, real, link, inside, id: fileIdentity(st), kind, bytes: st.size, typed: at && inside && !link && !hidden });
     if (out.length >= FILES_MAX) break;
   }
   return out;
@@ -172,7 +178,7 @@ export function chosenBytes(f) {
   const fd = fs.openSync(f.real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const st = fs.fstatSync(fd);
-    if (`${st.dev}:${st.ino}` !== f.id || !st.isFile()) throw new Error("the file changed after you chose — not sent; name it again");
+    if (fileIdentity(st) !== f.id || !st.isFile()) throw new Error("the file changed after you chose — not sent; name it again");
     if (st.size > FILE_BYTES_MAX) throw new Error("the file grew larger than foldrun reads (200 MB) — not sent");
     return fs.readFileSync(fd);
   } finally {

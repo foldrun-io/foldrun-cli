@@ -56,9 +56,14 @@ test("a hidden file is always asked about; the bytes read are the file chosen, a
   fs.writeFileSync(swap, "first");
   const [f] = filesIn("@swap.pdf", dir);
   assert.equal(chosenBytes(f!).toString(), "first");
-  fs.rmSync(swap);
-  fs.writeFileSync(swap, "second");
+  // Replaced by a rename while the old file is still held, as an editor saves.
+  fs.writeFileSync(`${swap}.new`, "second");
+  fs.renameSync(`${swap}.new`, swap);
   assert.throws(() => chosenBytes(f!), /changed after you chose/);
+  // Rewritten in place, its inode the same: changed too.
+  const [g] = filesIn("@swap.pdf", dir);
+  fs.writeFileSync(swap, "third!");
+  assert.throws(() => chosenBytes(g!), /changed after you chose/);
   fs.rmSync(swap);
   fs.symlinkSync(path.join(dir, "scan.pdf"), swap);
   assert.throws(() => chosenBytes(f!), /ELOOP|changed after you chose/, "a link put in its place is not followed");
