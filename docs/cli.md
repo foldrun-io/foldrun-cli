@@ -1004,7 +1004,9 @@ next prompt to edit or send — and nothing typed then can answer the apply
 prompt, which only reads keys pressed after it asks. On this computer
 (`--local`), Enter sends it into the running turn instead: the agent reads
 it after the calls it is making, or, about to finish, reads it and goes on;
-one it did not get to is on the line at the next prompt. Ctrl-C still stops the
+one it did not get to is on the line at the next prompt. What you are typing
+stays on the working line through a permission question and comes back after
+it, and keys typed before a question is shown never answer it. Ctrl-C still stops the
 turn. At the apply prompt `d` shows the whole diff before you answer. A turn you
 stop with Ctrl-C, or one that fails, still offers what it had changed. ↑ and
 ↓ bring back what you typed before (kept in `~/.foldrun/code-history`), and
