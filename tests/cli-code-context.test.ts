@@ -127,6 +127,20 @@ test("what the agent knows of foldrun: automation is a scheduled flow, the docs 
   const cloud = foldrunKnowledge({ ws: "desk", url: "https://api.example", mode: "cloud" });
   assert.doesNotMatch(cloud, /foldrun_docs|session_send/, "tools only the local agent has are not promised in the cloud");
   assert.match(localPrompt("/x", local), /About foldrun/);
+  // This computer only: no session_send, so the agent is told the person answers (FOL-309).
+  const only = foldrunKnowledge({ ws: "desk", url: "https://api.example", mode: "local", canSend: false });
+  assert.doesNotMatch(only, /session_send/);
+  assert.match(only, /\/sessions send <session id> <text>/);
+});
+
+test("the messages block names session_send only where the agent has it (FOL-309)", async () => {
+  const { messagesBlockText } = await import("../src/commands.mjs");
+  const m = [{ from: "ana", fromContext: "code-1", text: "hi" }];
+  assert.match(messagesBlockText(m), /use session_send with the id/);
+  const only = messagesBlockText(m, false);
+  assert.doesNotMatch(only, /session_send/);
+  assert.match(only, /\/sessions send <session id> <text>/);
+  assert.match(only, /--- from ana \(session code-1\):\nhi/);
 });
 
 test("deploying (FOL-270): the agent suggests cloudhost.ir when the person wants it online, reads the built-in deploy page, deploys nothing before a yes", () => {
