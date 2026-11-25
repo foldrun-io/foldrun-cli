@@ -84,7 +84,14 @@ function onTerminal(args: string[], home: string, extraEnv: Record<string, strin
     }
     throw new Error(`waited for ${re} — the screen:\n${out}`);
   };
-  return { send: (t: string) => child.stdin.write(t), until, done, out: () => out, child };
+  // The CLI's end, bounded: one that does not end is killed and fails with the screen,
+  // rather than holding the test file open until CI's job limit (FOL-298 hung there twice, 25 Nov 2026).
+  const ended = async (ms = 15_000) => {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, no) => (timer = setTimeout(() => { child.kill("SIGKILL"); no(new Error(`the CLI did not end within ${ms} ms — the screen:\n${out}`)); }, ms)));
+    try { return await Promise.race([done, late]); } finally { clearTimeout(timer); }
+  };
+  return { send: (t: string) => child.stdin.write(t), until, done, ended, out: () => out, child };
 }
 
 test("a session on a terminal: /help, !command sent with the next message, a pasted message is one turn, d shows the diff, /undo, /quit, then --continue", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
@@ -4953,8 +4960,9 @@ test("a cloud agent's question in a cloud turn (FOL-298): shown as a list here, 
     at = await t.until(/answered: SQLite/, at, 15_000);
     at = await t.until(/Using SQLite\./, at, 30_000);
     assert.deepEqual(answered, { question: "q-1", answer: "SQLite" });
+    at = await t.until(/\w ❯ /, at, 30_000); // the turn is over: /quit is a command, not a line typed into it
     t.send("/quit\r");
-    await t.done;
+    await t.ended();
   } finally {
     t.child.kill();
     s.close();
@@ -5002,7 +5010,7 @@ test("a cloud agent's question answered elsewhere (FOL-298): the one on the scre
     at = await t.until(/\w ❯ /, at, 30_000);
     assert.equal(posted, false, "nothing sent for a question already answered");
     t.send("/quit\r");
-    await t.done;
+    await t.ended();
   } finally {
     t.child.kill();
     s.close();

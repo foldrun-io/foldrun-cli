@@ -116,6 +116,8 @@ jobs:
         if: steps.what.outputs.go == 'true'
       - run: npm test
         if: steps.what.outputs.go == 'true'
+        # A hung test once held the release lock for three hours (25 Nov 2026): a limit, before publish.
+        timeout-minutes: 25
 
       # Trusted publishing needs npm 11.5.1 or newer; the one bundled with
       # Node 22 is older than that.

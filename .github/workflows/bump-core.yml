@@ -31,6 +31,8 @@ concurrency:
 jobs:
   bump:
     runs-on: ubuntu-latest
+    # A hung test once held this for hours (25 Nov 2026): the bump is minutes when it works.
+    timeout-minutes: 30
     steps:
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app
