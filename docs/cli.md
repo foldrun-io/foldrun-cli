@@ -1036,6 +1036,11 @@ A table is drawn as columns, each cell wrapped in its own column. When the
 screen is too narrow for the columns, each row becomes a block that names
 every value by its header. Fenced code is shown as written.
 
+Every part of a turn is its own block with its own margin: the model's
+thinking (`/model thinking on`), each tool line, a message from another
+session, the reply and the done line. Text that wraps stays under its
+block's margin, and a message keeps its own line breaks and is shown whole.
+
 #### Edits that would not parse
 
 The agent's `Edit` and `Write` parse what a change would leave before they
