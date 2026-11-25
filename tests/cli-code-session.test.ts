@@ -981,6 +981,17 @@ test("a markdown table is drawn as columns, wrapped to the screen; too narrow, o
   const narrow = formatReply(table, 30, c).split("\n");
   for (const l of narrow) assert.ok(plainOf(l).length <= 28, `within the screen: ${l}`);
   assert.ok(narrow.some((l) => l.startsWith("  <b>Source: </b>")), narrow.join("\n"));
+  // Odd input never crashes, hangs or runs past the screen (Codex).
+  const { displayWidth } = await import("../src/code-session.mjs");
+  const big = "x".repeat(1000);
+  const odd: [string[], number][] = [
+    [[`| ${big} | a | b |`, "|---|---|---|", `| ${big} | thirteen char | thirteen char |`], 42],
+    [[`| ${big} | b |`, "|---|---|", "| 漢字漢字漢字 | 漢字漢字漢字漢字漢字漢字漢字 |"], 27],
+    [["| a | b | c |", "|---|---|---|", "| x |"], 50],
+  ];
+  for (const [l, w] of odd) for (const line of drawTable(l, w, c)!) assert.ok(displayWidth(plainOf(line)) <= w + 2, `${w}: ${plainOf(line)}`);
+  assert.ok(drawTable(["| a | b |", "|---|---|", "| x | end\\| |"], 80, c)!.some((l) => plainOf(l).includes("end|")), "a trailing escaped bar is kept");
+  formatReply(`| ${Array(140000).fill("h").join(" | ")} |\n|${Array(140000).fill("---").join("|")}|\n| v |`, 80, c);
   // Not a table (no rule row): kept as written.
   assert.equal(drawTable(["| a |", "| b |"], 80, c), null);
   assert.ok(formatReply("| just | bars |", 80, c).includes("| just | bars |"));

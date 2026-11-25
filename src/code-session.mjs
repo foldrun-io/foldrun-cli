@@ -734,7 +734,7 @@ export function formatReply(text, columns, c) {
       while (j < all.length && /^\s*\|/.test(/** @type {string} */ (all[j]))) j++;
       const block = all.slice(i, j);
       const drawn = drawTable(block, width, c);
-      out.push(...(drawn ?? block.map((l) => `  ${l}`)));
+      for (const l of drawn ?? block.map((b) => `  ${b}`)) out.push(l);
       i = j - 1;
       continue;
     }
@@ -782,7 +782,7 @@ export function formatReply(text, columns, c) {
 
 /** A table row's cells: the outer bars gone, split at bars outside `code` and not escaped. */
 function tableCells(/** @type {string} */ line) {
-  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const t = line.trim().replace(/^\|/, "").replace(/(^|[^\\])\|$/, "$1");
   const cells = [];
   let cur = "";
   let code = false;
@@ -805,6 +805,8 @@ function tableCells(/** @type {string} */ line) {
 
 /** A row of words wrapped to `room` cells; a word longer than a row is cut. @param {Piece[][]} words @returns {Piece[][][]} */
 function wrapWords(words, room) {
+  // Room for the widest character at least: a cut that takes nothing would never end (Codex).
+  room = Math.max(2, room);
   /** @type {Piece[][][]} */
   const lines = [];
   /** @type {Piece[][]} */
@@ -827,7 +829,7 @@ function wrapWords(words, room) {
       for (const x of w) {
         if (n >= room) rest.push(x);
         else {
-          const take = clipTo(x.t, room - n);
+          const take = clipTo(x.t, room - n) || (n === 0 ? [...x.t][0] ?? "" : "");
           if (take) head.push({ ...x, t: take });
           if (take.length < x.t.length) rest.push({ ...x, t: x.t.slice(take.length) });
           n += displayWidth(take);
@@ -903,28 +905,25 @@ export function drawTable(lines, width, c) {
     if (out.at(-1) === "") out.pop();
     return out;
   } else {
-    // Short columns keep their width; the long ones share what is left.
-    cols = natural.slice();
-    let left = room;
-    const fixed = new Set();
-    for (let changed = true; changed; ) {
-      changed = false;
-      const open = cols.map((_, k) => k).filter((k) => !fixed.has(k));
-      const share = Math.floor((room - [...fixed].reduce((a, k) => a + /** @type {number} */ (natural[k]), 0)) / Math.max(1, open.length));
-      for (const k of open) if (/** @type {number} */ (natural[k]) <= share) {
-        fixed.add(k);
-        changed = true;
+    // Short columns keep their width; the long ones share what is left: the
+    // largest cap that fits, never under MIN (n * MIN <= room here), the rest
+    // of the room to the widest (Codex: no column is ever given less).
+    let lo = MIN;
+    let hi = Math.max(...natural);
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (natural.reduce((a, w) => a + Math.max(MIN, Math.min(w, mid)), 0) <= room) lo = mid;
+      else hi = mid - 1;
+    }
+    cols = natural.map((w) => Math.max(MIN, Math.min(w, lo)));
+    let spare = room - cols.reduce((a, b) => a + b, 0);
+    for (let k = 0; spare > 0 && k < n; k++) {
+      const more = Math.min(spare, /** @type {number} */ (natural[k]) - /** @type {number} */ (cols[k]));
+      if (more > 0) {
+        cols[k] = /** @type {number} */ (cols[k]) + more;
+        spare -= more;
       }
     }
-    left = room - [...fixed].reduce((a, k) => a + /** @type {number} */ (natural[k]), 0);
-    const open = cols.map((_, k) => k).filter((k) => !fixed.has(k));
-    const openSum = open.reduce((a, k) => a + /** @type {number} */ (natural[k]), 0);
-    let given = 0;
-    open.forEach((k, i) => {
-      const w = i === open.length - 1 ? left - given : Math.max(MIN, Math.floor((left * /** @type {number} */ (natural[k])) / openSum));
-      cols[k] = w;
-      given += w;
-    });
   }
   const drawRow = (/** @type {string[]} */ cells, /** @type {boolean} */ bold) => {
     const wrapped = cells.map((cell, k) => wrapWords(words(cell), /** @type {number} */ (cols[k])));
