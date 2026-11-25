@@ -3683,6 +3683,72 @@ test("a line being typed when a permission prompt comes is drawn again after it,
   }
 });
 
+test("a named file is read into text on foldrun's servers: into text for the agent, or just the text with no model call, kept every time and listed in /permissions (FOL-268)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  fs.writeFileSync(path.join(d, "note.m4a"), "fake audio bytes");
+  fs.writeFileSync(path.join(d, "scan.pdf"), "%PDF fake");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const extracts: { name: string | null; bytes: number }[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-f268/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/extract": (b, q) => {
+      extracts.push({ name: q.get("name"), bytes: Buffer.byteLength(String(b)) });
+      return q.get("name") === "note.m4a" ? { kind: "audio", text: "Meet at nine on Friday.", seconds: 4 } : { kind: "document", text: "Invoice 42\nTotal: 10 USD", pages: 1 };
+    },
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return sse([{ type: "text", text: "Friday at nine." }]);
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-f268", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "120" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("when is the meeting? @note.m4a\r");
+    at = await t.until(/note\.m4a — audio[\s\S]*Into text for the agent[\s\S]*Just the text/, at);
+    t.send("\r");
+    at = await t.until(/✓ note\.m4a read into text \(4 s · 23 characters\) — the agent is given the text, not the file/, at, 30_000);
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Friday at nine\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    const sent = JSON.stringify(asked[0]?.messages ?? []);
+    assert.match(sent, /when is the meeting\? @note\.m4a/);
+    assert.match(sent, /\[The audio note\.m4a, transcribed on foldrun's servers — you are given its text, not the file:\]\\nMeet at nine on Friday\./);
+    // Just the text, every time for documents: no model call, and kept.
+    t.send("@scan.pdf\r");
+    at = await t.until(/scan\.pdf — document/, at);
+    t.send("4");
+    at = await t.until(/scan\.pdf · 1 page · 24 characters · read on foldrun's servers, no model call[\s\S]*Invoice 42[\s\S]*Total: 10 USD[\s\S]*nothing was sent to the model/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/permissions\r");
+    at = await t.until(/Show them/, at);
+    t.send("\r");
+    at = await t.until(/documents you name: just give me the text \(kept for every folder\)/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("again @scan.pdf\r");
+    at = await t.until(/Invoice 42[\s\S]*nothing was sent to the model/, at, 30_000);
+    assert.doesNotMatch(t.out().slice(at - 400), /scan\.pdf — document/, "a kept choice is not asked again");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    assert.equal(asked.length, 1, "just the text makes no model call");
+    assert.deepEqual(extracts.map((e) => e.name), ["note.m4a", "scan.pdf", "scan.pdf"]);
+    assert.equal(extracts[0]!.bytes, "fake audio bytes".length, "the file's bytes went to the platform");
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("a message the agent sends shows in this session's transcript as a line of the thread (FOL-307)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

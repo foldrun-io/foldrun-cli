@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
+import { filesIn, fileTextBlock, FILE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
@@ -7965,6 +7966,16 @@ async function textCmd(positional, flags) {
   const opts = extractOptions(flags);
   const url = platformFor(flags, "text");
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`${file} is not a file here`);
+  printExtracted(await extractLocalFile(url, flags, file, opts), flags);
+  return 0;
+}
+
+/**
+ * A file on this machine read into text by the platform: POST /v1/extract with its bytes, the job
+ * followed when it answers 202. `foldrun text` and files named in a foldrun code message (FOL-268).
+ * @param {string} url @param {Record<string, any>} flags @param {string} file @param {Record<string, any>} [opts]
+ */
+async function extractLocalFile(url, flags, file, opts = {}) {
   const bytes = fs.readFileSync(file);
   if (!bytes.length) throw new Error(`${file} is empty`);
   const q = new URLSearchParams({ name: path.basename(file) });
@@ -7974,9 +7985,7 @@ async function textCmd(positional, flags) {
   const token = await renewedToken(url, flags);
   const apiPath = `/v1/extract?${q}`;
   const res = await remoteFetch(url, apiPath, { method: "POST", body: bytes, headers: { "content-type": "application/octet-stream" } }, { token, seconds });
-  const result = await followExtract(url, flags, await extractAnswer(res, url, flags, apiPath), path.basename(file));
-  printExtracted(result, flags);
-  return 0;
+  return followExtract(url, flags, await extractAnswer(res, url, flags, apiPath), path.basename(file));
 }
 
 /**
@@ -9574,6 +9583,83 @@ async function sessionsCmd(positional, flags, layout) {
 const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "");
 
 /** One session message, for the terminal: who, when, whether used, what. */
+/**
+ * Files named in a message (FOL-268): each read into text on foldrun's servers, so the model is sent its
+ * words and no vision or audio tokens are spent. Asked once per file as a list, unless a choice for its kind
+ * was kept ("every time"): into text for the agent, or just the text here with no model call. Answers the
+ * message to send — the line, then each file's text — or null when nothing is left to send.
+ * @param {any} s @param {string} line @param {string} dir @returns {Promise<string | null>}
+ */
+async function filesForTurn(s, line, dir) {
+  const found = filesIn(line, dir);
+  if (!found.length) return line;
+  const say = (/** @type {string} */ t) => console.log(`  ${c.dim(t)}`);
+  /** @type {string[]} */
+  const blocks = [];
+  let only = 0;
+  for (const f of found) {
+    const name = path.basename(f.file);
+    if (!f.bytes || f.bytes > FILE_BYTES_MAX) {
+      say(`${plainText(name)} is ${f.bytes ? "larger than foldrun reads (200 MB)" : "empty"} — left in your message as a path`);
+      continue;
+    }
+    const kept = readCodePrefs().files?.[f.kind];
+    /** @type {string | null} */
+    let how = kept === "text" || kept === "only" ? kept : null;
+    if (!how) {
+      const plural = KIND_PLURAL[f.kind];
+      // No terminal to ask on: into text, the default, which spends no model tokens on the file.
+      const v = process.stdin.isTTY
+        ? await pickOne({
+            title: `${plainText(name)} — ${f.kind}, ${formatBytes(f.bytes)}`,
+            subtitle: "read on foldrun's servers — no model tokens are spent reading it",
+            choices: [
+              { v: "text", name: "Into text for the agent", note: "only its text goes to the model" },
+              { v: "only", name: "Just the text", note: "shown here, no model call · /export copy takes it" },
+              { v: "text!", name: `Into text, every time for ${plural}`, note: "kept · /permissions lists it" },
+              { v: "only!", name: `Just the text, every time for ${plural}`, note: "kept · /permissions lists it" },
+            ],
+            start: "text",
+          })
+        : "text";
+      if (v === null) {
+        say(`${plainText(name)} left as a path in your message — the agent is not given its text`);
+        continue;
+      }
+      how = v.replace("!", "");
+      if (v.endsWith("!")) {
+        const prefs = readCodePrefs();
+        writeCodePrefs({ ...prefs, files: { ...(prefs.files ?? {}), [f.kind]: how } });
+      }
+    }
+    /** @type {any} */
+    let result;
+    try {
+      result = await extractLocalFile(s.url, s.flags, f.file);
+    } catch (err) {
+      console.log(`  ${c.red("✗")} ${plainText(name)}: ${plainText(explain(err))} ${c.dim("— left as a path in your message")}`);
+      continue;
+    }
+    const text = typeof result?.text === "string" ? result.text : "";
+    const what = `${result?.pages ? `${result.pages} page${result.pages === 1 ? "" : "s"} · ` : ""}${result?.seconds ? `${result.seconds} s · ` : ""}${text.length.toLocaleString("en")} characters`;
+    if (how === "only") {
+      only += 1;
+      console.log(`\n  ${c.white(plainText(name))} ${c.dim(`· ${what} · read on foldrun's servers, no model call`)}`);
+      console.log(marginLines(plainText(noBidi(text.trim() || "(no text was found in it)")), (process.stdout.columns || 80) - 6).map((l) => (l ? `    ${l}` : "")).join("\n"));
+      if (result?.truncated) say("the text was cut at the platform's limit");
+      s.lastReply = text;
+      continue;
+    }
+    blocks.push(fileTextBlock(name, f.kind, text, { truncated: result?.truncated === true }));
+    console.log(`  ${c.green("✓")} ${c.dim(`${plainText(name)} read into text (${what}) — the agent is given the text, not the file`)}`);
+  }
+  if (only && !blocks.length) {
+    console.log(`\n  ${c.dim("nothing was sent to the model · /export copy takes the text")}\n`);
+    return null;
+  }
+  return blocks.length ? `${line}\n\n${blocks.join("\n\n")}` : line;
+}
+
 /**
  * One message of a thread between two conversations (FOL-307): which way it went, when, and where it stands —
  * read in a turn, or still waiting; its text whole, under its margin.
@@ -20787,6 +20873,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         delete s.bypass;
         delete s.siteYes;
         s.uploadAgreed?.delete(dir);
+        // What named files become (FOL-268) is asked again too.
+        if (readCodePrefs().files) {
+          const { files: _gone, ...prefs } = readCodePrefs();
+          writeCodePrefs(prefs);
+        }
         const kept = folderRules(dir).length;
         say(`forgotten — every change, command and send is asked again${kept ? ` (the ${kept} rule${kept === 1 ? "" : "s"} kept for this folder stay${kept === 1 ? "s" : ""}: /permissions rm <n>)` : ""}`);
         continue;
@@ -20836,6 +20927,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         keptRules.forEach((r, i) => console.log(`  ${c.dim(String(i + 1).padStart(2))} ${c.white(`${r.kind === "prefix" ? "commands that start with" : "the command"}  ${clipLine(plainText(r.text))}`)}`));
         console.log(`  ${c.dim("/permissions rm <n> removes one · a joined command (&&, ||, ;, |) runs unasked only when every part is allowed")}`);
       }
+      // What a named file becomes, kept with "every time" (FOL-268): in every folder, until reset.
+      for (const [kind, how] of Object.entries(readCodePrefs().files ?? {})) if (how === "text" || how === "only") rows.push(`${KIND_PLURAL[/** @type {keyof typeof KIND_PLURAL} */ (kind)] ?? kind} you name: ${FILE_CHOICES[how]} (kept for every folder)`);
       if (!rows.length && keptRules.length) {
         console.log();
         continue;
@@ -20933,7 +21026,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       continue;
     }
     // \/etc/hosts … : a message that starts with a slash.
-    await towardGoal(line.startsWith("\\/") ? line.slice(1) : line);
+    const typedLine = line.startsWith("\\/") ? line.slice(1) : line;
+    // Files named in it (FOL-268): read into text on foldrun's servers first, as the person chooses.
+    const withFiles = await filesForTurn(s, typedLine, dir);
+    if (withFiles === null) continue;
+    await towardGoal(withFiles, typedLine);
   }
 }
 

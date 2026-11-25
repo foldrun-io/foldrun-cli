@@ -84,6 +84,10 @@ foldrun storage text inbox/letter.pdf --to sales   # a stored file: writes inbox
 both; `storage text --no-write` prints the text without writing the `.txt`.
 Either waits for a long recording until it is done ([cli](cli.md)).
 
+In `foldrun code`, a file named in a message (`@scan.pdf`, or one dropped on
+the terminal) is read the same way, and the agent is given its text — or you
+are, with no model call ([cli](cli.md#files-in-a-message)).
+
 ## For an agent
 
 `tools: [text]` gives an agent `extract_text(path, lang?, ocr?)`: the text of

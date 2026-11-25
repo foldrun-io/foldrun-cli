@@ -1260,25 +1260,37 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only">> }} CodePrefs */
+
+/** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
+function filesPref(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const [k, how] of Object.entries(v)) if (["image", "audio", "video", "document"].includes(k) && (how === "text" || how === "only")) out[k] = how;
+  return Object.keys(out).length ? { files: out } : {};
+}
+
 /**
  * What the person chose for `foldrun code` on this computer, whichever
- * folder they are in: whether the model's thinking is shown, and whether token hints are (FOL-262: off only when said).
- * @returns {{ thinking?: boolean, tips?: boolean, statusLine?: boolean }}
+ * folder they are in: whether the model's thinking is shown, and whether token hints are (FOL-262: off only when said);
+ * what a named file becomes, by kind, when kept "every time" (FOL-268).
+ * @returns {CodePrefs}
  */
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
 }
 
-/** @param {{ thinking?: boolean, tips?: boolean, statusLine?: boolean }} prefs @returns {boolean} whether it was kept */
+/** @param {CodePrefs} prefs @returns {boolean} whether it was kept */
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;

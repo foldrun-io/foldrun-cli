@@ -1031,6 +1031,26 @@ A snapshot needs an install that runs steps in sandboxes
 (`FOLDRUN_RUN_ISOLATION=k8s`); one that does not refuses the run and runs
 nothing.
 
+#### Files in a message
+
+Name an image, a recording, a video or a document in a message — `@note.m4a`,
+`@"My Scan.pdf"`, or drop the file on the terminal, which pastes its path —
+and foldrun reads it on its own servers before the model sees anything
+([Files to text](extract.md)): no model tokens are spent on transcribing or
+reading it. For each file a list asks:
+
+- **Into text for the agent** — only its text goes to the model, marked as a
+  reading of the file, not the file.
+- **Just the text** — shown in the terminal, with no model call at all;
+  `/export copy` takes it.
+- **…every time for images / recordings / videos / documents** — the choice is
+  kept for every folder; `/permissions` lists it and `/permissions reset`
+  forgets it.
+
+Text files (`@src/app.ts`) are not read this way: the agent opens those
+itself. Esc leaves the file as a path in the message. At most five files are
+read from one message, each at most 200 MB.
+
 #### How a reply is drawn
 
 The agent writes markdown, and the terminal draws it: headings, **bold**,
