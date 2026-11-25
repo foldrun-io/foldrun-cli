@@ -2837,6 +2837,60 @@ test("one change across two files (FOL-294): asked once with every change shown,
   }
 });
 
+test("a patch that was refused is not reported as a change (FOL-294): a file changed after it was read leaves both files as they were and no 'changed' line", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-stale-"));
+  fs.writeFileSync(path.join(d, "a.txt"), "alpha\n");
+  fs.writeFileSync(path.join(d, "b.txt"), "beta\n");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: path.join(d, "a.txt") } }, { type: "tool_use", id: "r2", name: "Read", input: { file_path: path.join(d, "b.txt") } }]),
+    () => {
+      // Someone else changes a.txt after the agent read it: the patch below is stale.
+      fs.writeFileSync(path.join(d, "a.txt"), "alpha CHANGED OUTSIDE\n");
+      return sse([{ type: "tool_use", id: "e1", name: "Edit", input: { edits: [
+        { file_path: path.join(d, "a.txt"), old_string: "alpha\n", new_string: "A1\n" },
+        { file_path: path.join(d, "b.txt"), old_string: "beta", new_string: "B1" },
+      ] } }]);
+    },
+    () => sse([{ type: "text", text: "It was refused." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-m294s/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local-only", "--to", "desk", "--context", "code-m294s", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("change both\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/2 changes in 2 files — all applied, or none[\s\S]*allow\?/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/It was refused\.[\s\S]*\w ❯ /, at, 30_000);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "alpha CHANGED OUTSIDE\n", "the stale patch changed nothing");
+    assert.equal(fs.readFileSync(path.join(d, "b.txt"), "utf8"), "beta\n", "all or none: b.txt is as it was");
+    assert.doesNotMatch(t.out().slice(at - 1500), /changed a\.txt|\/diff shows it/, "no line says a file changed");
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("no git needed on this computer (FOL-274): a folder without git starts, the agent edits a file, /undo takes it back; picking the cloud offers git init and no stays here", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-nogit-"));
   fs.writeFileSync(path.join(d, "a.txt"), "first\n");

@@ -18400,6 +18400,8 @@ async function codeLocalTurn(s, text) {
     draft = "";
   };
   const changed = new Set();
+  /** Files a call was let change, held until its result says it did (FOL-294): a refused patch changed nothing. */
+  const changedPending = new Map();
   /** @type {any} */
   let result = null;
   // What the turn's model calls used, counted as they are answered (/cost explain).
@@ -18562,7 +18564,7 @@ async function codeLocalTurn(s, text) {
     /** @type {{ agents: string[], own: string, project: string } | null} */
     let turnCloud = null;
     /** @param {string} name @param {Record<string, unknown>} input @param {AbortSignal} [signal] @param {string} [child] a sub-agent's name, when it is the one asking */
-    const decide = async (name, input, signal, child) => {
+    const decide = async (name, input, signal, child, toolUseID = /** @type {string | undefined} */ (undefined)) => {
       if (cancel.asked || signal?.aborted || s.headless?.stopped === true) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
       // foldrun's own docs pages: text this CLI shipped with, nothing of the
       // person's read and nothing run — never asked.
@@ -18607,7 +18609,10 @@ async function codeLocalTurn(s, text) {
       const file = many ? (many.find((f) => !bothInside(s.dir, f)) ?? many[0]) : input.file_path ?? input.notebook_path ?? input.path;
       const inside = file !== undefined && bothInside(s.dir, file);
       const noteChanged = () => {
-        for (const f of many ?? (file !== undefined ? [file] : [])) changed.add(localCallSummary("Write", { file_path: f }, s.dir));
+        const names = (many ?? (file !== undefined ? [file] : [])).map((f) => localCallSummary("Write", { file_path: f }, s.dir));
+        // The session's own call waits for its result; a sub-agent's result does not come this way, so it counts now.
+        if (!child && typeof toolUseID === "string") changedPending.set(toolUseID, names);
+        else for (const n of names) changed.add(n);
       };
       const outside = name === OUTSIDE_TOOL;
       // A background job (FOL-293): reading what it printed, waiting for it or stopping it touches only a command
@@ -18966,7 +18971,7 @@ async function codeLocalTurn(s, text) {
       // A sub-agent that only reads never asks: what is not plainly inside is refused (Codex).
       if (readsOnly) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "That is outside the folders you may read, or a pattern that could reach outside them. Stay inside the person's folder, with a plain pattern." });
       // One question at a time, in the order they came (Codex).
-      const next = gate.then(() => decide(name, input, opts?.signal, child)).then((r) => {
+      const next = gate.then(() => decide(name, input, opts?.signal, child, /** @type {any} */ (opts)?.toolUseID)).then((r) => {
         // An allowed Write or Edit: the file as it is now is kept first
         // (/rewind). The engine decides each call just before it runs.
         if (r.behavior === "allow" && FILE_CHANGES.has(name) && typeof (/** @type {any} */ (opts))?.toolUseID === "string") {
@@ -19800,6 +19805,12 @@ async function codeLocalTurn(s, text) {
         }
         for (const b of /** @type {any[]} */ (content)) {
           const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");
+          // A change counts once its call came back without an error: a patch that was refused changed nothing.
+          const held = typeof b.tool_use_id === "string" ? changedPending.get(b.tool_use_id) : undefined;
+          if (held) {
+            changedPending.delete(b.tool_use_id);
+            if (b.type === "tool_result" && !b.is_error) for (const n of held) changed.add(n);
+          }
           if (b.type === "tool_result" && b.is_error && !/person said no|person stopped|user doesn't want/i.test(said)) console.log(`    ${c.red("✗")} ${c.grey(clipLine(plainText(said)))}`);
         }
       }
