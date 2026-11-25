@@ -9,6 +9,9 @@
 
 import { displayWidth, clipCells } from "./code-session.mjs";
 
+/** The status line's word while /permissions bypass is on. */
+export const BYPASS_FIELD = "BYPASS: nothing is asked";
+
 /** "5.4k" for 5_412. */
 const k = (/** @type {number} */ n) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k` : String(Math.round(n)));
 
@@ -24,6 +27,8 @@ export function statusFields(s, o) {
   const m = s.measure?.[side];
   /** @type {(string | null)[]} */
   const f = [
+    // /permissions bypass (FOL-308): first, so it is never the field left off — painted red by the caller.
+    s.bypass === true ? BYPASS_FIELD : null,
     typeof s.label === "string" && s.label ? s.label : "new conversation",
     typeof s.context === "string" ? s.context : null,
     // After /model the last model and its cache no longer stand for the next turn (Codex).

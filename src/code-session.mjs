@@ -192,11 +192,13 @@ export function commandMenu(name, st) {
     case "/permissions":
       return {
         title: "What the agent may do without asking",
-        subtitle: "/permissions strict · relaxed · sandbox on|off · rm <n> · reset types it straight away",
+        subtitle: "/permissions strict · relaxed · bypass · sandbox on|off · rm <n> · reset types it straight away",
         choices: [
           { v: "/permissions ", name: "Show them", note: "what is allowed ahead, and the rules kept for this folder" },
           { v: "/permissions relaxed", name: "Relaxed", note: "commands that only look are not asked" },
           { v: "/permissions strict", name: "Strict", note: "every command is asked, even one that only looks" },
+          // Owner, 25 Nov 2026 (FOL-308): nothing asked, for this session only.
+          { v: "/permissions bypass", name: "Bypass", note: "nothing is asked this session, outside the sandbox too" },
           { v: "/permissions rm ", name: "Remove a rule…", note: "by its number in the list", ask: "the rule's number" },
           { v: "/permissions reset", name: "Forget this session's yeses", note: "every change, command and send is asked again" },
           // The sandbox is one of the things the agent may or may not do (FOL-263: /sandbox went into /permissions).
@@ -205,7 +207,7 @@ export function commandMenu(name, st) {
           { v: "/permissions sandbox allow ", name: "Allow a site…", note: "for this session", ask: "the site (example.com)" },
           { v: "/permissions sandbox deny ", name: "Take a site away…", note: "for this session", ask: "the site" },
         ],
-        tick: st.strict === true ? "/permissions strict" : "/permissions relaxed",
+        tick: st.bypass === true ? "/permissions bypass" : st.strict === true ? "/permissions strict" : "/permissions relaxed",
         start: "/permissions ",
       };
     case "/status":

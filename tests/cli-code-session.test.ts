@@ -3087,6 +3087,61 @@ const canSandbox = (() => {
   }
 })();
 
+test("/permissions bypass (FOL-308): nothing is asked for the session, outside the sandbox and edits too; the status line says so in red; relaxed asks again", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
+  const d = repo();
+  const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-")));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "o1", name: "bash_outside", input: { command: `echo unasked > ${path.join(other, "bypass.txt")}`, reason: "outside the folder" } }, { type: "tool_use", id: "w1", name: "Write", input: { file_path: path.join(d, "made.txt"), content: "made\n" } }]),
+    () => sse([{ type: "text", text: "Both done." }]),
+    () => sse([{ type: "tool_use", id: "o2", name: "bash_outside", input: { command: `echo again > ${path.join(other, "asked.txt")}`, reason: "again" } }]),
+    () => sse([{ type: "text", text: "Asked this time." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-bp/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-bp", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/permissions bypass\r");
+    at = await t.until(/bypass on — for this session nothing is asked/, at);
+    t.send("do it\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Both done\./, at, 60_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.doesNotMatch(t.out(), /allow\?/, "nothing was asked");
+    assert.equal(fs.readFileSync(path.join(other, "bypass.txt"), "utf8"), "unasked\n");
+    assert.equal(fs.readFileSync(path.join(d, "made.txt"), "utf8"), "made\n");
+    t.send("/permissions relaxed\r");
+    at = await t.until(/bypass off/, at);
+    t.send("again\r");
+    at = await t.until(/OUTSIDE the sandbox[\s\S]*asked\.txt[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
+    t.send("n\r");
+    at = await t.until(/Asked this time\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(fs.existsSync(path.join(other, "asked.txt")), false);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("the sandbox on this computer: a command inside it runs unasked and cannot write outside the folder; bash_outside is asked every time; /permissions sandbox off goes back to asking each command", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
   const d = repo();
   const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-")));

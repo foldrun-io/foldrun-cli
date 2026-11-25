@@ -18,7 +18,7 @@ import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs"
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
 import { giveHint, hintLine, CACHE_TTL_MS } from "./code-hints.mjs";
 import { DEPLOY_PAGE, DEPLOY_TITLE, DEPLOY_GUIDE } from "./code-deploy.mjs";
-import { statusFields, wrapFields } from "./code-statusline.mjs";
+import { statusFields, wrapFields, BYPASS_FIELD } from "./code-statusline.mjs";
 import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED_OVER } from "./self-update.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
@@ -17635,7 +17635,9 @@ async function codeLocalTurn(s, text) {
       const byRule = !child && s.strict !== true && command !== null && scope === "command" && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout") && rulesAllow(command, folderRules(s.dir), s.dir, inFolder);
       // A script's turn takes no earlier yes: a folder rule ("always npm test") would run past --yes (Codex).
       const allowedNow = !s.headless && (byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
-      if (allowedNow) {
+      // /permissions bypass (owner, 25 Nov 2026, FOL-308): nothing is asked for this session — not outside the sandbox,
+      // not a sub-agent's. Never a script's turn (-p has its own --yes), and never a /plan turn (refused above).
+      if (allowedNow || (s.bypass === true && !s.headless)) {
         if (cloud) grantTicket(input, signal);
         if (scope === "changes") changed.add(localCallSummary("Write", { file_path: file }, s.dir));
         return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
@@ -20539,11 +20541,24 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         say(gone ? `removed: ${gone.kind === "prefix" ? "commands that start with" : "the command"}  ${clipLine(plainText(gone.text))} — it is asked again` : left ? `/permissions rm <1–${left}> — /permissions lists them` : "this folder has no kept rules");
         continue;
       }
+      if (rest === "bypass") {
+        s.bypass = true;
+        s.strict = false;
+        say(`${c.red("bypass on")} — for this session nothing is asked: changes, commands, and commands outside the sandbox run as you, with your full access. The sandbox stays ${s.sandboxOff === true ? "off" : "on"} for commands that use it. /permissions relaxed or strict turns it off; a new session starts without it`);
+        continue;
+      }
       if (rest === "strict" || rest === "relaxed") {
+        const was = s.bypass === true;
+        delete s.bypass;
+        if (was && rest === "relaxed") {
+          say("bypass off — changes and commands outside the sandbox are asked again");
+          continue;
+        }
         s.strict = rest === "strict";
         say(s.strict ? `the commands that only look are asked too${s.localAllow?.commands?.size || s.localAllow?.kinds?.size ? " — what you allowed with \"always\" stays allowed (/permissions reset asks again)" : ""}` : `commands that only look run without a question: ${READ_ONLY_SAID}`);
         continue;
       }
+      if (s.bypass === true) console.log(`  ${c.red("!")} ${c.white("bypass: nothing is asked this session, outside the sandbox too")} ${c.dim("— /permissions relaxed turns it off")}`);
       if (s.strict !== true) console.log(`  ${c.green("✓")} ${c.white(`commands that only look: ${READ_ONLY_SAID}`)} ${c.dim("— plain forms, inside this folder; /permissions strict asks for these too")}`);
       const rows = [];
       for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "sending this folder to cloud jobs" : k === "cloud-changes" ? "putting a cloud job's changes into this folder" : String(k));
@@ -21034,7 +21049,7 @@ async function readCodeMessage(state, completer, s) {
     // Rows that fit the screen as it is, after their indent; none on a screen too narrow for them (Codex).
     const statusRows = () => {
       const w = (process.stdout.columns || 80) - 3;
-      return lineOn && s && w >= 20 ? wrapFields(statusFields(s, { ttlMs: ttl, model: (m) => shortModel(plainText(m)), cost: formatCost }), w).map((r) => `  ${c.grey(r)}`) : [];
+      return lineOn && s && w >= 20 ? wrapFields(statusFields(s, { ttlMs: ttl, model: (m) => shortModel(plainText(m)), cost: formatCost }), w).map((r) => (r.startsWith(BYPASS_FIELD) ? `  ${c.red(BYPASS_FIELD)}${c.grey(r.slice(BYPASS_FIELD.length))}` : `  ${c.grey(r)}`)) : [];
     };
     const menu = tty && process.stdout.isTTY && process.env.TERM !== "dumb" && Array.isArray(state.slash) ? slashMenu(rl, () => state.slash, () => displayWidth(`${promptLead(s)} ❯ `), statusRows, () => search?.searching === true) : null;
     // The cache's minutes stay true while the prompt waits (Codex): redrawn once a minute.

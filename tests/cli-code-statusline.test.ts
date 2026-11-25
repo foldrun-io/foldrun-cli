@@ -29,3 +29,10 @@ test("wrapFields: one row when it fits; else broken between fields, never inside
   assert.equal(wrapFields(f, 12).length, 3, "three rows at most");
   assert.ok(wrapFields(["a-very-long-conversation-name"], 10)[0].length <= 10);
 });
+
+test("/permissions bypass is the first field, never the one left off (FOL-308)", async () => {
+  const { BYPASS_FIELD } = await import("../src/code-statusline.mjs");
+  const f = statusFields({ bypass: true, label: "x", context: "code-1", mode: "local" }, { ttlMs: 3_600_000 });
+  assert.equal(f[0], BYPASS_FIELD);
+  assert.ok(!statusFields({ label: "x", mode: "local" }, { ttlMs: 3_600_000 }).includes(BYPASS_FIELD));
+});
