@@ -14414,6 +14414,7 @@ async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
  */
 async function messagesForTurn(s, interactive) {
   const { url, flags, ws } = s;
+  const pre = takeMessagesYes(s);
   let waiting = [];
   try {
     const got = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
@@ -14423,7 +14424,6 @@ async function messagesForTurn(s, interactive) {
   }
   if (!waiting.length) return [];
   const shown = waiting.slice(0, 20);
-  const pre = takeMessagesYes(s);
   if (interactive && shown.every((m) => pre.has(String(m.id)))) return shown.map((m) => String(m.id));
   console.log(`\n  ${c.amber(`${waiting.length} message${waiting.length === 1 ? "" : "s"} from other sessions`)}${waiting.length > 20 ? c.dim(" (the first 20 can go in this turn)") : ""}`);
   for (const m of shown) console.log(sessionMessageLine(m));
@@ -16977,6 +16977,8 @@ async function sessionSendCall(/** @type {any} */ s, /** @type {unknown} */ inpu
  * @returns {Promise<string>} the block that goes ahead of the message, or ""
  */
 async function localMessagesBlock(/** @type {any} */ s) {
+  // Taken first, whatever happens next: a yes never waits for a later turn (Codex).
+  const pre = takeMessagesYes(s);
   let waiting = [];
   try {
     const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
@@ -16988,7 +16990,6 @@ async function localMessagesBlock(/** @type {any} */ s) {
   const fresh = waiting.filter((/** @type {any} */ m) => typeof m?.id === "string" && !s.shownMessages.has(m.id)).slice(0, 20);
   if (!fresh.length) return "";
   // Said yes to at the prompt, after each was shown whole (FOL-305): not shown or asked again.
-  const pre = takeMessagesYes(s);
   const answer = fresh.every((/** @type {any} */ m) => pre.has(m.id)) ? "y" : await (async () => {
     console.log(`\n  ${c.amber(`${fresh.length} message${fresh.length === 1 ? "" : "s"} from other sessions`)}`);
     for (const m of fresh) console.log(sessionMessageLine(m));
@@ -18344,7 +18345,12 @@ async function codeLocalTurn(s, text) {
     };
     // Messages from other sessions are held now, with the turn about to be sent: after every prompt and
     // every MCP server's start, so a hold cannot lapse before the model reads them (Codex).
+    const only = s.turnOnlyMessages === true;
+    delete s.turnOnlyMessages;
+    const before = text;
     text = await withHeldMessages(s, text);
+    // Started only to take them in, and another turn took them all meanwhile: nothing to send (Codex).
+    if (only && text === before) throw new Error("the message was taken by another turn meanwhile — nothing sent");
     turn[0].content[0].text = text;
     const q = engine.foldrunQuery({
           prompt: text,
@@ -19284,6 +19290,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   };
   const runTurnOnce = async (/** @type {"local" | "cloud"} */ where, /** @type {string} */ said, /** @type {string} */ typed = said) => {
     const started = Date.now();
+    // A turn started only to take messages in (FOL-305): with none in it at the end, nothing is sent (Codex).
+    const forMessages = s.turnForMessages === true;
+    delete s.turnForMessages;
+    const noneLeft = () => console.log(`  ${c.dim("the message is no longer waiting, or was left out — nothing sent")}\n`);
     const home = s.mode;
     try {
       const notes = s.notes;
@@ -19306,6 +19316,12 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       s.cloudBriefDue = where === "cloud" && s.cloudBriefed !== s.context;
       if (where !== "cloud") delete s.cloudExtra;
       const sent = where === "local" ? await localMessagesBlock(s) : "";
+      if (forMessages && where === "local" && !(Array.isArray(s.turnPending) && s.turnPending.length)) {
+        s.turnOk = true;
+        noneLeft();
+        return;
+      }
+      s.turnOnlyMessages = forMessages && where === "local";
       // What the cloud agent is still owed (a patch of its own taken only in part): with this message, when it goes to the cloud.
       /** @type {string[]} */
       const owed = where === "cloud" && Array.isArray(s.cloudOwed) ? s.cloudOwed.slice() : [];
@@ -19328,13 +19344,20 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           // Stopped before it was sent: its messages were never held, and are offered again.
           if (Array.isArray(s.turnPending)) for (const m of s.turnPending) s.shownMessages?.delete(m.id);
           delete s.turnPending;
+          delete s.turnOnlyMessages;
           await settleLocalMessages(s);
         }
       } else {
         // Whether a goal may go on is known only after the patch is handled:
         // a Ctrl-C there, a patch that could not be had, or one the person
         // did not apply all hand back (Codex).
-        const status = await codeTurn(s, message, await messagesForTurn(s, true));
+        const ids = await messagesForTurn(s, true);
+        if (forMessages && !ids.length) {
+          s.turnOk = true;
+          noneLeft();
+          return;
+        }
+        const status = await codeTurn(s, message, ids);
         s.turnOk = status === "completed" && s.patchHandled === true;
       }
       if ((s.turns ?? 0) > before) {
@@ -19566,6 +19589,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       s.messagesWaiting = 0;
       if (!(await messagesAtPrompt(s))) continue;
       forMessages = true;
+      s.turnForMessages = true;
       line = "Read the message from the other session and answer it.";
     }
     if (!line) continue;

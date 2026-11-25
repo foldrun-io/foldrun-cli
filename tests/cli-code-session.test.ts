@@ -3628,6 +3628,38 @@ test("on a real terminal what is typed stays on the line when a message is said 
   }
 });
 
+test("a yes at the prompt to a message that is gone by the turn sends nothing (FOL-305, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let calls = 0;
+  let gone = false;
+  const msg = { id: "m1", from: "ana", fromContext: "code-other", text: "Do the thing." };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-mg/messages`]: () => ({ messages: gone ? [] : [msg] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/messages": () => (calls++, sse([{ type: "text", text: "should not run" }])),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-mg", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "120", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    at = await t.until(/✉ a message from code-other/, at, 10_000);
+    t.send("\r");
+    at = await t.until(/take it into a turn now\? \[y\/N\]/, at, 10_000);
+    gone = true;
+    t.send("y\r");
+    at = await t.until(/no longer waiting[\s\S]*nothing sent/, at, 20_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(calls, 0);
+});
+
 test("an empty Enter with a message waiting and a no starts nothing (FOL-305)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
@@ -3675,9 +3707,11 @@ for (const cols of [200, 80]) test(`the transcript reads as separate blocks with
     },
     "POST /v1/messages": () => sse([{ type: "thinking", thinking: `${long}\nThen answer.` }, { type: "text", text: "The answer.\n\nA second paragraph." }]),
   });
-  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-fm", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: String(cols) });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-fm", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: String(cols), FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
   try {
     let at = await t.until(/\w ❯ /);
+    // Said at the prompt first (FOL-305), the prompt drawn again under it.
+    at = await t.until(/✉ a message from code-other[\s\S]*\w ❯ /, at, 10_000);
     t.send("/model thinking on\r");
     at = await t.until(/\w ❯ /, at);
     const from = at;
