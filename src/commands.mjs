@@ -18591,7 +18591,9 @@ async function codeLocalTurn(s, text) {
     // what was sent and not taken (the turn ended first, or failed): not
     // lost — it starts the next message, before what was typed after it.
     // The same handing back a prompt may be waiting on (Codex): whichever took the text, it is counted once.
-    const typed = `${draft}${await typeAhead.stop(true)}`.trim();
+    // Awaited first: a prompt's keyboardBack may fill the draft while this waits (Codex).
+    const last = await typeAhead.stop(true);
+    const typed = `${draft}${last}`.trim();
     draft = "";
     if (pending.some((e) => e.sent)) console.log(`  ${c.dim("the agent did not get to your message: it is on the next line, to send")}`);
     s.typeAhead = [s.typeAhead, ...pending.splice(0).map((e) => e.t), typed].filter(Boolean).join(" ");
