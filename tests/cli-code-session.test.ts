@@ -3765,6 +3765,8 @@ test("an image sent to the model as it is: the token estimate shown, the image b
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/sessions/code-i268/messages`]: () => ({ messages: [] }),
+    // The agent says media: as-is, so the list starts at "as it is" (FOL-268).
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\nmedia: as-is\n---\nYou code.\n", sha256: "x" } : { files: [] }),
     "GET /v1/me": () => ({ account: "acme" }),
     "POST /v1/extract": () => {
       extracted += 1;
@@ -3784,8 +3786,8 @@ test("an image sent to the model as it is: the token estimate shown, the image b
   try {
     let at = await t.until(/\w ❯ /);
     t.send("what is wrong here? @shot.png\r");
-    at = await t.until(/shot\.png — image[\s\S]*3\. Send it to the model as it is\s+about 410 input tokens/, at);
-    t.send("3");
+    at = await t.until(/shot\.png — image[\s\S]*❯ 3\. Send it to the model as it is\s+about 410 input tokens/, at);
+    t.send("\r");
     at = await t.until(/✓ shot\.png goes to the model as it is — about 410 input tokens/, at, 30_000);
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");

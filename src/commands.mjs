@@ -9593,6 +9593,25 @@ const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/
  * message to send — the line, then each file's text — or null when nothing is left to send.
  * @param {any} s @param {string} line @param {string} dir @returns {Promise<string | null>}
  */
+/**
+ * The agent's `media:` (FOL-268): what an image handed to it becomes — `as-is` starts a named image's list at
+ * "as it is", the same meaning as in the cloud. Read once a session from the project; text when unknown.
+ * @param {any} s @returns {Promise<"text" | "as-is">}
+ */
+async function agentMedia(s) {
+  if (s.agentMedia === "text" || s.agentMedia === "as-is") return s.agentMedia;
+  let media = /** @type {"text" | "as-is"} */ ("text");
+  try {
+    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${encodeURIComponent(`agents/${s.agent}/agent.md`)}`);
+    const front = typeof got?.content === "string" ? /^---\r?\n([\s\S]*?)\r?\n---/.exec(got.content)?.[1] ?? "" : "";
+    if (/^media:\s*["']?as-is["']?\s*(#.*)?$/m.test(front)) media = "as-is";
+  } catch {
+    /* text, the default */
+  }
+  s.agentMedia = media;
+  return media;
+}
+
 async function filesForTurn(s, line, dir) {
   delete s.turnImages;
   const found = filesIn(line, dir);
@@ -9645,7 +9664,7 @@ async function filesForTurn(s, line, dir) {
               { v: "only!", name: `Just the text, every time for ${plural}`, note: "kept · /permissions lists it" },
               ...(showable ? [{ v: "show!", name: "As it is, every time for images", note: "kept · /permissions lists it" }] : []),
             ],
-            start: "text",
+            start: showable && (await agentMedia(s)) === "as-is" ? "show" : "text",
           })
         : null;
       if (v === null) {
