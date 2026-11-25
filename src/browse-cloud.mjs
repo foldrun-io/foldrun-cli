@@ -117,11 +117,13 @@ export async function cloudBrowse(o, body, signal) {
         ...(o.userAgent ? { "user-agent": o.userAgent } : {}),
       },
       body: JSON.stringify(body),
+      // The key never follows a redirect to another host (Codex).
+      redirect: "error",
       signal: both,
     });
   } catch (err) {
     clearTimeout(t);
-    if (signal?.aborted) return { text: "stopped", isError: true };
+    if (signal?.aborted) return { text: "stopped — if the request had already left, the page may have been opened and paid for", isError: true };
     // Sent, maybe run: said so, and not repeated.
     return { text: `the cloud browser's answer did not arrive (${err instanceof Error ? err.message : String(err)}) — the call may have run and cost; it was not repeated`, isError: true };
   }
