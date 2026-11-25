@@ -632,7 +632,14 @@ ticked so Enter keeps it, and the first time in a folder which project:
 
    On this computer, either way: foldrun's own agent works directly in your
      folder, with Read, Write, Edit, Glob, Grep and Bash (Read shows it a
-     screenshot or a design as the image itself). Its model calls are
+     screenshot or a design as the image itself), and, while the sandbox is
+     on, Symbols: where a name is defined and everywhere it is used, answered
+     by a language server — TypeScript and JavaScript (TypeScript 7's own),
+     Python (pyright) and Go (gopls, for Go 1.25 or newer). foldrun's own
+     pinned servers only, never a copy the project ships; the first call for
+     a language installs its server once into the project's package cache
+     (some seconds; gopls is built, about half a minute), and it runs inside
+     the sandbox, so it is asked exactly when a command there would be. Its model calls are
      paid by your foldrun plan's allowance while it has room. **One key:**
      when your sign-in has model access — ticked on the approval page of
      `foldrun login` (an admin of every project; the page shows the limits:
