@@ -18350,7 +18350,7 @@ async function codeLocalTurn(s, text) {
     const before = text;
     text = await withHeldMessages(s, text);
     // Started only to take them in, and another turn took them all meanwhile: nothing to send (Codex).
-    if (only && text === before) throw new Error("the message was taken by another turn meanwhile — nothing sent");
+    if (only && text === before) throw Object.assign(new Error("the message was taken by another turn meanwhile — nothing sent"), { code: "messages_gone" });
     turn[0].content[0].text = text;
     const q = engine.foldrunQuery({
           prompt: text,
@@ -19349,6 +19349,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         delete s.turnRead;
         try {
           await codeLocalTurn(s, message);
+        } catch (err) {
+          // Taken by another turn between the list and the hold: the same as none left, notes kept (Codex).
+          if (/** @type {any} */ (err)?.code !== "messages_gone") throw err;
+          noneLeft(notes);
+          return;
         } finally {
           // Stopped before it was sent: its messages were never held, and are offered again.
           if (Array.isArray(s.turnPending)) for (const m of s.turnPending) s.shownMessages?.delete(m.id);
