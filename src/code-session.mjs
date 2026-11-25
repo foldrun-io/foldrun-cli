@@ -1185,6 +1185,10 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
     const r = path.relative(dir, abs);
     return r && !r.startsWith("..") && !path.isAbsolute(r) ? r : abs;
   };
+  if (name === "Edit" && Array.isArray(input.edits)) {
+    const files = [...new Set(input.edits.map((/** @type {any} */ e) => (typeof e?.file_path === "string" ? rel(e.file_path) : "?")))];
+    return `${files.length} file${files.length === 1 ? "" : "s"}: ${files.slice(0, 4).join(", ")}${files.length > 4 ? `, +${files.length - 4}` : ""}`;
+  }
   if (name === "Read" || name === "Write" || name === "Edit") return rel(input.file_path);
   if (name === "Glob") return String(input.pattern ?? "");
   if (name === "Grep") return `${String(input.pattern ?? "")}${input.path ? ` in ${rel(input.path)}` : ""}`;

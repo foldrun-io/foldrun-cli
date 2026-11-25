@@ -9745,6 +9745,29 @@ const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/
  * "as it is", the same meaning as in the cloud. Read once a session from the project; text when unknown.
  * @param {any} s @returns {Promise<"text" | "as-is">}
  */
+/** The files an Edit's `edits` list names (FOL-294), or null for any other call. @param {string} name @param {any} input */
+function editFiles(name, input) {
+  if (name !== "Edit" || !Array.isArray(input?.edits)) return null;
+  const files = input.edits.map((/** @type {any} */ e) => e?.file_path).filter((/** @type {unknown} */ f) => typeof f === "string" && f);
+  return files.length ? files : null;
+}
+
+/** Edit's `edits` grouped by file, in the order first named, each file's changes in order: what /undo keeps per file. */
+function editParts(/** @type {string} */ name, /** @type {any} */ input) {
+  const files = editFiles(name, input);
+  if (!files) return null;
+  /** @type {Map<string, { file: string, edits: any[] }>} */
+  const by = new Map();
+  for (const e of input.edits) {
+    if (typeof e?.file_path !== "string" || !e.file_path) continue;
+    const key = path.resolve(e.file_path);
+    const part = by.get(key) ?? { file: e.file_path, edits: /** @type {any[]} */ ([]) };
+    part.edits.push(e);
+    by.set(key, part);
+  }
+  return [...by.values()];
+}
+
 async function agentMedia(s) {
   if (s.agentMedia === "text" || s.agentMedia === "as-is") return s.agentMedia;
   let media = /** @type {"text" | "as-is"} */ ("text");
@@ -18178,8 +18201,13 @@ async function codeLocalTurn(s, text) {
       // folder, run a command or leave this computer is refused unasked —
       // an earlier "always" does not reach into a plan.
       if (s.planOnly) return { behavior: /** @type {const} */ ("deny"), message: "This is a plan-only turn: nothing is changed, run or sent. Read what you need with Read, Glob and Grep, then give the plan — the files you would change and how, the commands you would run, and what could go wrong. The person runs it by answering." };
-      const file = input.file_path ?? input.notebook_path ?? input.path;
+      // Edit's edits (FOL-294): every file it names; the call is "inside" only when all of them are.
+      const many = editFiles(name, input);
+      const file = many ? (many.find((f) => !bothInside(s.dir, f)) ?? many[0]) : input.file_path ?? input.notebook_path ?? input.path;
       const inside = file !== undefined && bothInside(s.dir, file);
+      const noteChanged = () => {
+        for (const f of many ?? (file !== undefined ? [file] : [])) changed.add(localCallSummary("Write", { file_path: f }, s.dir));
+      };
       const outside = name === OUTSIDE_TOOL;
       // A background job (FOL-293): reading what it printed, waiting for it or stopping it touches only a command
       // the person already let run, so it is not asked; text written to its input is a command of its own — shown
@@ -18229,7 +18257,7 @@ async function codeLocalTurn(s, text) {
       // not a sub-agent's. Never a script's turn (-p has its own --yes), and never a /plan turn (refused above).
       if (allowedNow || (s.bypass === true && !s.headless)) {
         if (cloud) grantTicket(input, signal);
-        if (scope === "changes") changed.add(localCallSummary("Write", { file_path: file }, s.dir));
+        if (scope === "changes") noteChanged();
         return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       }
       // A script's turn (-p, FOL-223): no one is there to ask. A file change
@@ -18237,10 +18265,12 @@ async function codeLocalTurn(s, text) {
       // would be asked is refused, and the agent is told why.
       if (s.headless) {
         if (scope === "changes" && !child && s.headless.yes === true) {
-          changed.add(localCallSummary("Write", { file_path: file }, s.dir));
-          // What the file holds now, so "applied" says whether it really changed (a call may still fail).
-          const abs = path.resolve(s.dir, String(file));
-          if (!s.headless.before.has(abs)) s.headless.before.set(abs, fileDigest(abs));
+          noteChanged();
+          // What each file holds now, so "applied" says whether it really changed (a call may still fail).
+          for (const f of many ?? [file]) {
+            const abs = path.resolve(s.dir, String(f));
+            if (!s.headless.before.has(abs)) s.headless.before.set(abs, fileDigest(abs));
+          }
           return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
         }
         return {
@@ -18278,7 +18308,15 @@ async function codeLocalTurn(s, text) {
         } else if (name === "Edit") {
           const show = (/** @type {unknown} */ t, /** @type {string} */ sign, /** @type {(x: string) => string} */ paint) =>
             String(t ?? "").split("\n").slice(0, 6).map((l) => `      ${paint(`${sign} ${clipCells(plainText(l), width)}`)}`).join("\n");
-          console.log(`${show(input.old_string, "-", c.red)}\n${show(input.new_string, "+", c.green)}`);
+          if (many) {
+            // Every change of the list, under its file: all of them are applied, or none (FOL-294).
+            const list = /** @type {any[]} */ (input.edits);
+            console.log(`      ${c.white(`${list.length} change${list.length === 1 ? "" : "s"} in ${new Set(many).size} file${new Set(many).size === 1 ? "" : "s"} — all applied, or none`)}`);
+            for (const e of list) {
+              console.log(`      ${c.grey(`${clipCells(plainText(localCallSummary("Write", { file_path: e?.file_path }, s.dir)), width)}${e?.replace_all === true ? " · every occurrence" : ""}`)}`);
+              console.log(`${show(e?.old_string, "-", c.red)}\n${show(e?.new_string, "+", c.green)}`);
+            }
+          } else console.log(`${show(input.old_string, "-", c.red)}\n${show(input.new_string, "+", c.green)}`);
         } else if (name === "Write") {
           const body = String(input.content ?? "");
           const lines = body ? body.replace(/\n$/, "").split("\n").length : 0;
@@ -18456,7 +18494,7 @@ async function codeLocalTurn(s, text) {
             else if (scope === "command") allow.commands.add(/** @type {string} */ (command));
             else if (scope === "mcp") (allow.mcp ??= new Map()).set(/** @type {any} */ (mcpTool).key, `${/** @type {any} */ (mcpTool).server} · ${/** @type {any} */ (mcpTool).short}`);
           }
-          if (FILE_CHANGES.has(name) && file !== undefined) changed.add(localCallSummary("Write", { file_path: file }, s.dir));
+          if (FILE_CHANGES.has(name) && file !== undefined) noteChanged();
           return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
         }
         // More than a no: what they wrote is what the model hears (Codex).
@@ -18520,7 +18558,10 @@ async function codeLocalTurn(s, text) {
         // (/rewind). The engine decides each call just before it runs.
         if (r.behavior === "allow" && FILE_CHANGES.has(name) && typeof (/** @type {any} */ (opts))?.toolUseID === "string") {
           const now = r.updatedInput ?? input;
-          rewindCapture(rewindJournal, { turn: rewindTurn, label: rewindLabel, id: /** @type {any} */ (opts).toolUseID, tool: name, file: now.file_path, input: now });
+          // Edit's edits: a copy of each file, each settled on its own (FOL-294).
+          const parts = editParts(name, now);
+          if (parts) parts.forEach((p, i) => rewindCapture(rewindJournal, { turn: rewindTurn, label: rewindLabel, id: `${/** @type {any} */ (opts).toolUseID}#${i}`, tool: name, file: p.file, input: { edits: p.edits } }));
+          else rewindCapture(rewindJournal, { turn: rewindTurn, label: rewindLabel, id: /** @type {any} */ (opts).toolUseID, tool: name, file: now.file_path, input: now });
           if (rewindJournal.off && !s.rewindOffSaid) {
             s.rewindOffSaid = true;
             console.log(`    ${c.amber("!")} ${c.dim(`this change cannot be taken back with /undo: ${plainText(String(rewindJournal.off))}`)}`);
@@ -18631,7 +18672,10 @@ async function codeLocalTurn(s, text) {
     // Edit left on disk settles its /rewind record. A sub-agent's too.
     const afterTool = async (/** @type {any} */ payload, /** @type {string} */ id) => {
       // Only a call a copy was kept for: a read never touches the journal.
-      if (FILE_CHANGES.has(String(payload?.tool_name))) rewindSettle(rewindJournal, id);
+      const parts = editParts(String(payload?.tool_name), payload?.tool_input);
+      if (parts) parts.forEach((_p, i) => rewindSettle(rewindJournal, `${id}#${i}`));
+      else if (FILE_CHANGES.has(String(payload?.tool_name))) rewindSettle(rewindJournal, id);
+      if (parts && typeof s.goal === "string") for (const p of parts) (s.goalFiles ??= new Set()).add(path.relative(s.dir, path.resolve(s.dir, p.file)) || p.file);
       // For a goal's check: every file Write or Edit was used on, taken back or not.
       const used = payload?.tool_input?.file_path;
       if (typeof s.goal === "string" && FILE_CHANGES.has(String(payload?.tool_name)) && typeof used === "string") (s.goalFiles ??= new Set()).add(path.relative(s.dir, path.resolve(s.dir, used)) || used);

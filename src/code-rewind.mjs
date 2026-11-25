@@ -306,6 +306,19 @@ function expected(/** @type {string} */ tool, /** @type {any} */ input, /** @typ
     return { hash: sha(Buffer.from(input.content, "utf8")), mode: before.absent ? null : written(before.mode) };
   }
   if (tool !== "Edit" || before.absent) return null;
+  // One file's part of an Edit `edits` list (FOL-294): its changes in order, each against what the last left.
+  if (Array.isArray(input?.edits)) {
+    let text = before.bytes.toString("utf8");
+    for (const e of input.edits) {
+      const f = e?.old_string;
+      const t = e?.new_string;
+      if (typeof f !== "string" || typeof t !== "string" || !f || f === t) return null;
+      const at = text.indexOf(f);
+      if (at < 0) return null;
+      text = e.replace_all === true ? text.split(f).join(t) : text.slice(0, at) + t + text.slice(at + f.length);
+    }
+    return { hash: sha(Buffer.from(text, "utf8")), mode: written(before.mode) };
+  }
   const from = input?.old_string;
   const to = input?.new_string;
   if (typeof from !== "string" || typeof to !== "string" || !from || from === to) return null;

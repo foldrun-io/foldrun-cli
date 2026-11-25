@@ -2754,6 +2754,61 @@ test("the session names its account (FOL-260): a box row and /status for the def
   }
 });
 
+test("one change across two files (FOL-294): asked once with every change shown, applied together, /undo takes both back", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-many-"));
+  fs.writeFileSync(path.join(d, "a.txt"), "old name here\n");
+  fs.writeFileSync(path.join(d, "b.txt"), "calls old name\n");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: path.join(d, "a.txt") } }, { type: "tool_use", id: "r2", name: "Read", input: { file_path: path.join(d, "b.txt") } }]),
+    () => sse([{ type: "tool_use", id: "e1", name: "Edit", input: { edits: [
+      { file_path: path.join(d, "a.txt"), old_string: "old name", new_string: "new name" },
+      { file_path: path.join(d, "b.txt"), old_string: "old name", new_string: "new name" },
+    ] } }]),
+    () => sse([{ type: "text", text: "Renamed in both." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: fast\n---\nYou code.\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-m294/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local-only", "--to", "desk", "--context", "code-m294", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("rename it\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/2 changes in 2 files — all applied, or none[\s\S]*a\.txt[\s\S]*- old name[\s\S]*\+ new name[\s\S]*b\.txt[\s\S]*- old name[\s\S]*allow\?/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Renamed in both\.[\s\S]*\w ❯ /, at, 30_000);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "new name here\n", t.out().slice(-2500));
+    assert.equal(fs.readFileSync(path.join(d, "b.txt"), "utf8"), "calls new name\n");
+    t.send("/undo 1\r");
+    at = await t.until(/a\.txt — put back as it was before[\s\S]*b\.txt — put back as it was before[\s\S]*\[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/\w ❯ /, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "old name here\n");
+    assert.equal(fs.readFileSync(path.join(d, "b.txt"), "utf8"), "calls old name\n");
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("no git needed on this computer (FOL-274): a folder without git starts, the agent edits a file, /undo takes it back; picking the cloud offers git init and no stays here", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-nogit-"));
   fs.writeFileSync(path.join(d, "a.txt"), "first\n");
