@@ -86,7 +86,31 @@ export function agentMcpServers(/** @type {string} */ text) {
   return servers.length ? { servers } : null;
 }
 
-/** @typedef {{ name: string, description: string, tools: string[], prompt: string, source: "built in" | "yours" | "project", file?: string, mcp?: { name: string, raw: unknown }[] }} AgentDef
+/**
+ * `sandbox:` of a definition (FOL-244), as YAML — the cloud reads the same
+ * field, at the top or in a `guardrail:` block. null: not written.
+ * @returns {"own" | "parent" | null | { problem: string }}
+ */
+export function agentSandbox(/** @type {string} */ text) {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
+  // Parsed whatever the text looks like: a quoted key ("sandbox": own) is the same field (Codex).
+  if (block === undefined) return null;
+  /** @type {any} */
+  let data;
+  try {
+    data = createRequire(import.meta.url)("gray-matter")(`---\n${block}\n---\n`, {}).data;
+  } catch (err) {
+    return { problem: `its frontmatter is not YAML that can be read, so its sandbox: could not be (${err instanceof Error ? err.message.split("\n")[0] : String(err)})` };
+  }
+  const guard = data?.guardrail && typeof data.guardrail === "object" && !Array.isArray(data.guardrail) ? data.guardrail : null;
+  if (data?.sandbox !== undefined && guard?.sandbox !== undefined) return { problem: "sandbox: is written both at the top and in guardrail: — write it once" };
+  const v = data?.sandbox ?? guard?.sandbox;
+  if (v === undefined || v === null) return null;
+  if (v !== "own" && v !== "parent") return { problem: `sandbox: is own or parent, not ${JSON.stringify(v)}` };
+  return v;
+}
+
+/** @typedef {{ name: string, description: string, tools: string[], prompt: string, source: "built in" | "yours" | "project", file?: string, mcp?: { name: string, raw: unknown }[], own?: boolean }} AgentDef
  * `mcp`: the MCP servers its definition names (mcpServers:), started for its job alone. */
 
 /** @type {AgentDef[]} */
@@ -153,7 +177,9 @@ export function readAgents(/** @type {string} */ dir) {
       try {
         const st = fs.lstatSync(file);
         if (!st.isFile() || st.size > DEF_MAX) throw new Error(`not a plain file under ${DEF_MAX / 1000}k characters`);
-        const fm = frontmatter(fs.readFileSync(file, "utf8"));
+        // Read once: every field below comes from these same bytes (Codex).
+        const text = fs.readFileSync(file, "utf8");
+        const fm = frontmatter(text);
         if (!fm) throw new Error("no frontmatter (--- name, description ---) at the top");
         const name = String(fm.fields.name ?? f.replace(/\.md$/, ""));
         if (!AGENT_NAME.test(name)) throw new Error(`the name ${JSON.stringify(name)} is not lower-case letters, digits and -`);
@@ -163,13 +189,17 @@ export function readAgents(/** @type {string} */ dir) {
         const unknown = asked.filter((t) => !SIX.includes(t));
         const tools = SIX.filter((t) => asked.includes(t));
         // Its own MCP servers, by the field a cloud agent's file uses. One that cannot be read leaves the agent out: it would not be the agent the file describes.
-        const mcp = agentMcpServers(fs.readFileSync(file, "utf8"));
+        const mcp = agentMcpServers(text);
         if (mcp && "problem" in mcp) throw new Error(mcp.problem);
         // With servers of its own it may have none of the six: an agent that only calls its server.
         if (!tools.length && !mcp) throw new Error(`none of its tools is one a sub-agent here has (${SIX.join(", ")})`);
         const description = String(Array.isArray(fm.fields.description) ? fm.fields.description.join(" ") : (fm.fields.description ?? "")).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().slice(0, 400);
         if (!description) throw new Error("no description: — the agent that hands jobs out reads it to choose");
-        agents.push({ name, description, tools, prompt: fm.body, source, file, ...(mcp ? { mcp: mcp.servers } : {}) });
+        // sandbox: own (FOL-244), the cloud's field, at the top or in a guardrail: block: its own sandbox and a
+        // private copy of the folder, its changes back as one patch (code-worker.mjs). parent: the default here.
+        const sandbox = agentSandbox(text);
+        if (sandbox && typeof sandbox === "object") throw new Error(sandbox.problem);
+        agents.push({ name, description, tools, prompt: fm.body, source, file, ...(mcp ? { mcp: mcp.servers } : {}), ...(sandbox === "own" ? { own: true } : {}) });
         if (unknown.length) problems.push({ file, why: `not given (a sub-agent here has only ${SIX.join(", ")}): ${unknown.join(", ")}` });
       } catch (err) {
         problems.push({ file, why: err instanceof Error ? err.message : String(err) });
@@ -193,7 +223,7 @@ export function agentTool(agents, cloud) {
     description: [
       "Hand one self-contained job to a sub-agent. It starts with an empty context — it has not seen this conversation — so the prompt must hold everything it needs: what to do, where, and what to report. Only its final answer comes back to you; what it read does not fill your context. Good for looking into a large area, or a side job you can describe fully. Not for a quick look you can do in one or two calls yourself.",
       "On this computer (where: \"here\", the default) — it works in the person's folder:",
-      ...agents.map((a) => `- ${a.name}: ${a.description} (tools: ${[...a.tools, ...(a.mcp?.length ? ["MCP servers of its own"] : [])].join(", ")})`),
+      ...agents.map((a) => `- ${a.name}: ${a.description} (tools: ${[...a.tools, ...(a.mcp?.length ? ["MCP servers of its own"] : [])].join(", ")})${a.own ? " — in a sandbox of its own, on a private copy of the folder: its changes come back as one patch the person is asked about, so read the files again after it" : ""}`),
       ...(cloud
         ? [
             `In the cloud (where: "cloud") — the job runs in a sandbox of the person's foldrun project ${cloud.project}, as one of its agents, with that agent's own tools (the web, the MCP servers and APIs its definition names). It does NOT see this folder or this computer: nothing is sent but your prompt, so quote in it what it must know. Use it for work that needs no local files — research on the web, a long computation, something that agent's tools can reach — or to keep heavy work off this computer. It costs the person foldrun credits and is asked first. To have cloud agents change a copy of this folder instead, use cloud_agents.`,

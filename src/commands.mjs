@@ -18588,6 +18588,10 @@ async function codeLocalTurn(s, text) {
       // answered by the tool (its own message), not asked about.
       const job = name === AGENT_TOOL ? agentJob(input, turnAgents, turnCloud) : null;
       if (job && ("problem" in job || (job.where === "here" && !agentActs(job.def)))) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      // sandbox: own (FOL-244): it changes only its private copy, inside walls of its own, and what it hands back is
+      // asked about (or, in a script's turn, put in only with --yes) — so starting it is not asked, as a command
+      // inside the walls is not. Without walls it is refused where it starts, never run.
+      if (job && !("problem" in job) && job.where === "here" && job.def.own === true && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current()) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       // A sub-agent's call is to its own servers' tools; the session's are the session agent's.
       const mcpTool = (child ? subMcp.get(`${child}\n${name}`) : turnMcp.get(name)) ?? null;
       // /plan: the turn reads and proposes. Whatever would change the
@@ -18639,7 +18643,7 @@ async function codeLocalTurn(s, text) {
       // asked every time.
       // A cloud agent's patch has its own "always": a yes to the agent's own
       // edits is not a yes to what comes back from the cloud (Codex).
-      const scope = mcpTool ? "mcp" : job && !("problem" in job) && job.where === "cloud" ? "cloud-sub" : isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : outside ? "outside" : jobInput ? "job-input" : command !== null ? "command" : null;
+      const scope = mcpTool ? "mcp" : job && !("problem" in job) && job.where === "cloud" ? "cloud-sub" : isApply && typeof input?.who === "string" ? "worker-changes" : isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : outside ? "outside" : jobInput ? "job-input" : command !== null ? "command" : null;
       const allowed = scope === "changes" || scope === "cloud" || scope === "cloud-changes" ? allow.kinds.has(scope) : scope === "command" ? allow.commands.has(/** @type {string} */ (command)) : false;
       // An "always" was given to the session's own agent: it does not reach
       // into a sub-agent, whose every change and command is asked (Codex).
@@ -18703,7 +18707,7 @@ async function codeLocalTurn(s, text) {
             if (lines.length > 12) console.log(`         ${c.grey(`… ${lines.length - 12} more line${lines.length - 12 === 1 ? "" : "s"}`)}`);
           });
         } else if (isApply) {
-          console.log(`      ${c.white(`cloud agent ${Number(input.n) || "?"}'s changes, into this folder:`)}`);
+          console.log(`      ${c.white(typeof input.who === "string" ? `sub-agent ${plainText(input.who)}'s changes (made in its own sandbox), into this folder:` : `cloud agent ${Number(input.n) || "?"}'s changes, into this folder:`)}`);
           const stat = /** @type {string[]} */ (Array.isArray(input.lines) ? input.lines : []);
           for (const l of stat.slice(0, 40)) console.log(`    ${l}`);
           if (stat.length > 40) console.log(`      ${c.grey(`… ${stat.length - 40} more lines — d shows the whole diff`)}`);
@@ -19194,6 +19198,166 @@ async function codeLocalTurn(s, text) {
     const cloudTool = cloudJobsTool(turnCloud);
     let agentCalls = 0;
     let agentTurns = 0;
+    /**
+     * A sub-agent whose definition says `sandbox: own` (FOL-244, code-worker.mjs): a worker process with walls on
+     * a private copy of the folder, one of the computer's two worker slots, its changes back as one patch the
+     * person is asked about. Refused before it starts where that cannot be had — never run with less.
+     * @param {any} def @param {any} job @param {AbortSignal} signal @param {number} left the turn's model turns left
+     */
+    const ownWorker = async (def, job, signal, left) => {
+      const notStarted = (/** @type {string} */ why) => {
+        said(() => console.log(`  ${c.red("✗")} ${c.grey(`sub-agent ${plainText(def.name)} (own sandbox) not started: ${plainText(why)}`)}`));
+        return { text: `The sub-agent ${def.name} was not started: ${why} Do the job another way, or tell the person.`, isError: true };
+      };
+      if (s.planOnly) return notStarted("this is a plan-only turn, and it works on a copy of the folder whose changes come back to be put in.");
+      if (!walls) return notStarted("it says sandbox: own, and the sandbox on this computer is off (/permissions sandbox) — it is never run without one.");
+      if (def.mcp?.length) return notStarted("it says sandbox: own and names MCP servers of its own, which do not run in its sandbox yet.");
+      const worker = await import("./code-worker.mjs");
+      said(() => console.log(`  ${c.violet("◆")} ${c.white(`sub-agent ${plainText(def.name)}`)} ${c.grey(`· own sandbox · ${clipLine(plainText(job.description))}`)}`));
+      /** @type {Awaited<ReturnType<typeof worker.takeSlot>>} */
+      let slot;
+      try {
+        slot = await worker.takeSlot({
+          signal,
+          onWait: (holders) => said(() => console.log(`    ${c.grey(`waiting for a worker slot — the ${worker.WORKER_SLOTS} on this computer are busy (process${holders.length === 1 ? "" : "es"} ${holders.join(", ")})`)}`)),
+        });
+      } catch (err) {
+        return notStarted(`${plainText(err instanceof Error ? err.message : String(err))}.`);
+      }
+      if (!slot) return { text: "Stopped by the person.", isError: true };
+      /** @type {{ copy: string, base: string, source: string } | null} */
+      let made = null;
+      /** @type {string} */
+      let copy = "";
+      let held = false;
+      try {
+        // The baseline goes in foldrun's cache folder, which the worker's walls cannot read or write.
+        const got = worker.captureFolder(s.dir, { baselines: path.join(cacheDir(), "worker-baselines") });
+        if ("problem" in got) return notStarted(`${got.problem}.`);
+        made = got;
+        copy = got.copy;
+        said(() => console.log(`    ${c.grey(`its copy: ${got.files} file${got.files === 1 ? "" : "s"}${got.left.length ? ` · left out: ${clipLine(got.left.slice(0, 5).map(plainText).join(", "))}${got.left.length > 5 ? ` and ${got.left.length - 5} more` : ""}` : ""}`)}`));
+        const used = meter();
+        turnMeters.push(used);
+        /** @type {any} */
+        let res = null;
+        let ran;
+        try {
+          ran = await worker.runWorker({
+            signal,
+            copy,
+            // Written before its job is sent: if this session dies, the slot and the copy stay held while the worker lives.
+            onSpawn: async (p) => {
+              await slot.worker(p, copy);
+              worker.noteOwner(/** @type {any} */ (made).base, { worker: [p], copy });
+            },
+            // A short list of plain variables from the person's environment (as before the session's walls narrowed this process's PATH): never a key or a loader setting.
+            env: worker.workerEnv(hostEnv()),
+            job: {
+              copy,
+              prompt: job.prompt,
+              env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
+              shellEnv: shellOwn,
+              userAgent: USER_AGENT,
+              model: localModelOf(model),
+              ...(effort && /** @type {any} */ (engine).ENGINE_FEATURES?.effort === true ? { effort } : {}),
+              systemPrompt: [def.prompt, "You work on a private copy of the person's folder, in a sandbox of your own: what you change there comes back as one patch the person is asked about, and nothing else you do reaches their computer. Your commands are not asked. Sites off the sandbox's list are refused (there is no one to ask).", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
+              tools: def.tools,
+              maxTurns: Math.min(AGENT_TURNS_EACH, left),
+              sites: Array.isArray(s.sandboxSites) ? s.sandboxSites : [],
+              // foldrun's own folders, and the person's folder itself: it works on its copy alone.
+              denyRead: [...new Set([credentialsDir(), configDir(), cacheDir(), fs.realpathSync(s.dir)])],
+            },
+            onMessage: (m) => {
+              used.note(m);
+              if (m.type === "assistant") {
+                checkCeiling();
+                for (const b of Array.isArray(m.message?.content) ? m.message.content : []) {
+                  if (b.type !== "tool_use") continue;
+                  const label = friendlyTool(String(b.name));
+                  const what = localCallSummary(String(b.name), /** @type {Record<string, unknown>} */ (b.input ?? {}), /** @type {string} */ (copy));
+                  said(() => console.log(`    ${c.grey("↳")} ${toolHue(label)(clipLine(label))}${what ? ` ${c.grey(clipLine(what))}` : ""}`));
+                }
+              }
+              if (m.type === "result") res = m;
+            },
+          });
+        } finally {
+          for (const row of meteredRows(used, { kind: "sub-agent", turn: costTurn(s), label: String(def.name), paidBy: localPayer(s) })) costNote(s, row);
+        }
+        agentTurns += Number(res?.num_turns ?? 0) || 1;
+        // Something it started would not die: the slot stays held while it lives, and nothing of its copy is taken.
+        if (ran.left.length || ran.unchecked) {
+          held = true;
+          // The copy goes with it: once its leftovers are gone, the copy is checked for anything else holding it before the slot or the copy is reused.
+          await slot.hold(ran.left, copy);
+          // The copy is kept with them (its owner note says so), swept once they are gone.
+          worker.noteOwner(/** @type {any} */ (made).base, { held: true, left: ran.left, copy, ...(ran.unchecked ? { unchecked: true } : {}) });
+          said(() => console.log(`    ${c.red("✗")} ${c.grey(ran.left.length ? `processes the worker started would not stop (${ran.left.map((p) => p.pid).join(", ")}) — its slot stays held until they are gone; nothing it changed was taken` : "whether everything the worker started has stopped could not be checked — its slot stays held until it can be; nothing it changed was taken")}`));
+          return { text: "The sub-agent's processes could not all be stopped, so nothing it changed was taken. Tell the person.", isError: true };
+        }
+        if (signal.aborted) return { text: "Stopped by the person.", isError: true };
+        if (ran.error) return { text: `The sub-agent could not start: ${plainText(ran.error)}`, isError: true };
+        if (!ran.result) return { text: `The sub-agent failed to run in its sandbox${ran.stderr ? `: ${plainText(ran.stderr.trim().split("\n").at(-1) ?? "")}` : ""}.`, isError: true };
+        if (ran.result.error) return { text: `The sub-agent did not run: ${plainText(String(ran.result.error))}`, isError: true };
+        const ok = ran.result.ok === true;
+        const answer = plainText(String(res?.result ?? "")).trim().slice(0, AGENT_ANSWER_MAX);
+        said(() => console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.grey(`sub-agent ${plainText(def.name)} ${ok ? "answered" : "did not finish"} · ${Number(res?.num_turns ?? 0)} model call${Number(res?.num_turns ?? 0) === 1 ? "" : "s"}`)}`));
+        // What it changed, as one patch against its copy; asked about whether or not it finished.
+        // Only now, with nothing of it left running: the copy no longer changes while it is read.
+        const back = worker.workerPatch(/** @type {{ copy: string, base: string, source: string }} */ (made));
+        const leftOut = back.left.length ? ` Not handed back: ${back.left.map(plainText).join(", ")}.` : "";
+        let changes = "It changed no files.";
+        if (back.patch.length) {
+          const named = back.files.slice(0, 30).map((f) => oneLine(plainText(f))).join(", ") + (back.files.length > 30 ? ` and ${back.files.length - 30} more` : "");
+          const label = `worker-${def.name}`;
+          const preview = patchPreview(s.dir, back.patch);
+          if ("error" in preview) changes = `It changed ${named}, but its patch does not apply to the folder as it is now (another change touched the same lines): ${preview.error}. The patch is kept at ${keepPatch(back.patch, label)}.`;
+          else if (s.headless && s.headless.yes !== true) changes = `It changed ${named}. Not put into the folder: this turn runs from a script with no one to ask, and it was not started with --yes. The patch is kept at ${keepPatch(back.patch, label)}.`;
+          else {
+            // A script's turn with --yes puts it in, as it does the agent's own file changes; otherwise the person is asked.
+            const next = s.headless ? Promise.resolve({ behavior: "allow" }) : gate.then(() => decide("cloud_apply", { who: def.name, lines: preview.stat, patch: String(back.patch), patchBytes: back.patch }, signal));
+            gate = next.then(() => undefined, () => undefined);
+            const d = /** @type {any} */ (await next);
+            stopTicker();
+            const picked = d.behavior === "allow" ? /** @type {any} */ (d).updatedInput?.picked : null;
+            if (signal.aborted) changes = `It changed ${named}. Not put into the folder: the person stopped the turn. The patch is kept at ${keepPatch(back.patch, label)}.`;
+            else if (d.behavior !== "allow") changes = `It changed ${named}. Not put into the folder: the person said no. The patch is kept at ${keepPatch(back.patch, label)}.`;
+            else {
+              const patch = picked && Buffer.isBuffer(picked.patch) ? picked.patch : back.patch;
+              try {
+                const applied = await applyPatch(s.dir, patch, { ...s.flags, yes: true }, label, { get asked() { return signal.aborted; }, onAsk: new Set() });
+                if (applied) {
+                  (s.applied ??= []).push({ patch: String(patch), runId: label });
+                  for (const f of picked ? picked.taken : back.files) changed.add(oneLine(f));
+                  changes = picked ? `It changed ${named}. ${partNote(picked.taken.map(oneLine), picked.refused.map(oneLine))} Read the files that went in again before you edit them.` : `It changed ${named}. Put into the folder — read these files again before you edit them.`;
+                } else changes = `It changed ${named}. Not put into the folder: the person stopped the turn.`;
+              } catch (err) {
+                changes = `It changed ${named}, but its patch did not go in: ${plainText(explain(err))}`;
+              }
+            }
+          }
+        }
+        const head = ok ? answer || "(it gave no answer)" : `It did not finish.${answer ? ` What it had said:\n\n${answer}` : ""}`;
+        return { text: `${head}\n\n${changes}${leftOut}`, isError: !ok };
+      } finally {
+        try {
+          // A folder the worker left read-only is still removed; its own package cache, made for its copy alone, too.
+          if (made && !held) worker.removeCopy(made.copy, made.base, packageCacheFor(made.copy, hostEnv()));
+        } catch (err) {
+          // Marked as only files now (its worker was reaped), so the next capture's sweep retries it while this session lives.
+          try {
+            if (made) worker.noteOwner(made.base, { cleanup: true });
+          } catch {
+            /* the note is gone too: swept after a day */
+          }
+          said(() => console.log(`    ${c.amber("!")} ${c.grey(`the worker's copy could not all be removed (${plainText(err instanceof Error ? err.message : String(err))}) — the next worker sweeps it`)}`));
+        } finally {
+          // Its own finally: a copy that would not go never keeps the slot.
+          if (!held) await slot.release();
+        }
+      }
+    };
     /** One `agent` call: a second conversation, here or in the cloud; its last answer is the result. */
     const agentCall = async (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ sig) => {
       const signal = sig ? AbortSignal.any([abort.signal, sig]) : abort.signal;
@@ -19215,6 +19379,8 @@ async function codeLocalTurn(s, text) {
       const left = AGENT_TURNS_A_TURN - agentTurns;
       if (left <= 0) return { text: "The sub-agents of this message have used all their model turns. Do the rest yourself, or tell the person what is left.", isError: true };
       const def = job.def;
+      // sandbox: own (FOL-244): its own sandbox and a private copy of the folder; one patch back, asked.
+      if (def.own) return ownWorker(def, job, signal, left);
       const acts = agentActs(def);
       const childAbort = new AbortController();
       const onStop = () => childAbort.abort();
