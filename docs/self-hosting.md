@@ -23,7 +23,7 @@ A self-hosted server has no billing: nothing is charged, and spend budgets
 
 ## Your own server
 
-One machine with Docker — Linux or macOS, Intel/AMD (amd64) or ARM (arm64);
+One machine with Docker 28 or later (a step held to its [network list](network#how-it-is-held) needs it) — Linux or macOS, Intel/AMD (amd64) or ARM (arm64);
 on Windows, inside WSL2 with Docker Desktop's WSL integration. One command:
 
 ```sh

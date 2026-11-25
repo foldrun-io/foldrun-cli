@@ -140,6 +140,19 @@ going round the list; it cannot reach the account's browser or search pods
 either, which are the world fetched on a run's behalf. Its web search goes
 through the proxy instead ([Search](#search), below).
 
+On one machine with Docker ([Self-hosting](self-hosting)) the same holds by
+another means. A step held to its list gets a network of its own for as long
+as it runs: it has **no route out**, no DNS, and no address of the host (so
+nothing listening on the server answers it). The only other thing on it is a
+small relay, `foldrun-egress-relay-…`, under the proxy's name
+(`host.docker.internal`), which passes each connection to the proxy and
+nowhere else, with a cap on connections per step. No two steps share a
+network. The step does not start when this cannot be made: Docker older than
+28 (it needs an isolated gateway), a proxy named anything but
+`host.docker.internal`, or an operator's own `FOLDRUN_RUNNER_NETWORK`, which
+foldrun cannot check is walled in. Open and report-only steps keep the shared
+bridge, as on a cluster.
+
 ### DNS
 
 A name is a message too: looking up `<anything>.example.net` reaches
@@ -260,9 +273,8 @@ that does not wall it).
 `foldrun run` on your own machine has no sandbox, and a compose install with
 no egress proxy (no `FOLDRUN_EGRESS_URL`) has no forward door: there,
 `network:` is checked and resolved but not enforced, and the trace says
-`not enforced here`. On the single-container tier the proxy variables are
-set and the proxy holds the list, but the container's network is not walled
-in, so a program that ignores the variables still goes direct.
+`not enforced here`. On the single-container tier (Docker) a held step's
+container is walled in too since 25 Nov 2026, as above.
 
 ### Browsing
 
