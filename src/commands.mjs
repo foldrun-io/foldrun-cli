@@ -19179,6 +19179,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         // and the other sessions' messages it was to include are asked about again, not dropped.
         s.notes = [...notes, ...(Array.isArray(s.notes) ? s.notes : [])];
         for (const id of shown) s.shownMessages?.delete(id);
+        if (s.turnWasForMessages === true) s.turnForMessages = true;
         await runTurnOnce(where, said, typed);
       }
     } finally {
@@ -19293,7 +19294,16 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     // A turn started only to take messages in (FOL-305): with none in it at the end, nothing is sent (Codex).
     const forMessages = s.turnForMessages === true;
     delete s.turnForMessages;
-    const noneLeft = () => console.log(`  ${c.dim("the message is no longer waiting, or was left out — nothing sent")}\n`);
+    // Kept for a retry at the allowance's reset, which sends this same turn again (Codex).
+    s.turnWasForMessages = forMessages;
+    delete s.turnSkipped;
+    /** Nothing sent: the notes it would have carried wait for the next turn, and no goal goes on from it (Codex). */
+    const noneLeft = (/** @type {string[]} */ notes) => {
+      s.notes = [...notes, ...(Array.isArray(s.notes) ? s.notes : [])];
+      s.turnOk = true;
+      s.turnSkipped = true;
+      console.log(`  ${c.dim("the message is no longer waiting, or was left out — nothing sent")}\n`);
+    };
     const home = s.mode;
     try {
       const notes = s.notes;
@@ -19317,8 +19327,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       if (where !== "cloud") delete s.cloudExtra;
       const sent = where === "local" ? await localMessagesBlock(s) : "";
       if (forMessages && where === "local" && !(Array.isArray(s.turnPending) && s.turnPending.length)) {
-        s.turnOk = true;
-        noneLeft();
+        noneLeft(notes);
         return;
       }
       s.turnOnlyMessages = forMessages && where === "local";
@@ -19353,8 +19362,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         // did not apply all hand back (Codex).
         const ids = await messagesForTurn(s, true);
         if (forMessages && !ids.length) {
-          s.turnOk = true;
-          noneLeft();
+          noneLeft(notes);
           return;
         }
         const status = await codeTurn(s, message, ids);
@@ -19480,7 +19488,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     let sent = 0;
     let checking = false;
     while (typeof s.goal === "string") {
-      if (s.turnOk !== true) return;
+      if (s.turnOk !== true || s.turnSkipped === true) return;
       // What the person queued comes before a turn the session would send by itself (Codex): it may be "/goal clear".
       if (Array.isArray(s.queue) && s.queue.length) return;
       const verdict = goalVerdict(typeof s.turnReply === "string" ? s.turnReply : "");
