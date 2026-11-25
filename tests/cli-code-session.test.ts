@@ -4886,3 +4886,101 @@ process.stdin.on("data", (d) => {
     fs.rmSync(path.join(os.homedir(), "foldrun-lsp-escape-test"), { force: true });
   }
 });
+
+test("a cloud agent's question in a cloud turn (FOL-298): shown as a list here, the answer sent to the run, which then finishes", { skip: hasPty ? false : "needs a pty" }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let answered: any = null;
+  let release: () => void = () => {};
+  const done = new Promise<void>((r) => (release = r));
+  const step = (status: string) => ({
+    agent: "coder", group: 1, status, attempts: 1, costUsd: 0.02,
+    events: [{ t: "2026-11-25T01:00:01.000Z", type: "info", text: "asked a person: Which database?" }, ...(answered ? [{ t: "2026-11-25T01:00:09.000Z", type: "text", text: `Using ${answered.answer}.` }] : [])],
+    questions: [{ id: "q-1", question: "Which database?", options: ["Postgres", "SQLite"], askedAt: "2026-11-25T01:00:01.000Z", ...(answered ? { answer: answered.answer } : {}) }],
+    ...(answered ? { result: `Using ${answered.answer}.` } : {}),
+  });
+  const record = () => ({ id: RUN, flow: "adhoc:coder", status: answered ? "completed" : "running", snapshot: { id: ID }, startedAt: "2026-11-25T01:00:00.000Z", ...(answered ? { finishedAt: "2026-11-25T01:00:10.000Z" } : {}), steps: [step(answered ? "completed" : "running")] });
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID, context: "code-me" }),
+    [`GET ${WS}/runs/${RUN}`]: () => record(),
+    [`GET ${WS}/runs/${RUN}/stream`]: async () => {
+      await done;
+      return raw(`event: run\ndata: ${JSON.stringify(record())}\n\nevent: done\ndata: {}\n\n`, "text/event-stream");
+    },
+    [`POST ${WS}/runs/${RUN}/answer`]: (b) => {
+      answered = JSON.parse(String(b));
+      release();
+      return { ok: true, answer: answered.answer };
+    },
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "unchanged", bytes: 0, modified: [], added: [], deleted: [] }), "application/json") : raw("", "text/x-diff")),
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("pick a database\r");
+    at = await t.until(/send it\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/coder \(in the cloud\) asks you:[\s\S]*Which database\?[\s\S]*1\. Postgres[\s\S]*2\. SQLite[\s\S]*type my own answer/, at, 30_000);
+    t.send("2");
+    at = await t.until(/answered: SQLite/, at, 15_000);
+    at = await t.until(/Using SQLite\./, at, 30_000);
+    assert.deepEqual(answered, { question: "q-1", answer: "SQLite" });
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("a cloud agent's question answered elsewhere (FOL-298): the one on the screen is taken back, nothing is sent", { skip: hasPty ? false : "needs a pty" }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let posted = false;
+  let elsewhere = false;
+  const record = () => ({
+    id: RUN, flow: "adhoc:coder", status: elsewhere ? "completed" : "running", snapshot: { id: ID }, startedAt: "2026-11-25T01:00:00.000Z", ...(elsewhere ? { finishedAt: "2026-11-25T01:00:10.000Z" } : {}),
+    steps: [{
+      agent: "coder", group: 1, status: elsewhere ? "completed" : "running", attempts: 1, costUsd: 0.02, events: [], ...(elsewhere ? { result: "Using Postgres." } : {}),
+      questions: [{ id: "q-1", question: "Which database?", options: ["Postgres", "SQLite"], askedAt: "2026-11-25T01:00:01.000Z", ...(elsewhere ? { answer: "Postgres", by: "dashboard" } : {}) }],
+    }],
+  });
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID, context: "code-me" }),
+    [`GET ${WS}/runs/${RUN}`]: () => record(),
+    [`GET ${WS}/runs/${RUN}/stream`]: async () => {
+      await new Promise((r) => setTimeout(r, 2500));
+      elsewhere = true;
+      return raw(`event: run\ndata: ${JSON.stringify(record())}\n\nevent: done\ndata: {}\n\n`, "text/event-stream");
+    },
+    [`POST ${WS}/runs/${RUN}/answer`]: () => {
+      posted = true;
+      return { ok: true };
+    },
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "unchanged", bytes: 0, modified: [], added: [], deleted: [] }), "application/json") : raw("", "text/x-diff")),
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("pick a database\r");
+    at = await t.until(/send it\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/coder \(in the cloud\) asks you:[\s\S]*type my own answer/, at, 30_000);
+    at = await t.until(/answered elsewhere, or no longer asked/, at, 30_000);
+    at = await t.until(/\w ❯ /, at, 30_000);
+    assert.equal(posted, false, "nothing sent for a question already answered");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});

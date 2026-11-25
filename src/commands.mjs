@@ -3712,6 +3712,8 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map(), print =
           try {
             last = JSON.parse(data);
             printNew(last, seen, open, print);
+            // The run as it now stands, to whoever follows it for more than its lines (a question it asks, FOL-298).
+            /** @type {any} */ (print).onRun?.(last);
           } catch {
             // a partial frame; the next one supersedes it
           }
@@ -3741,10 +3743,10 @@ async function streamOnce(url, flags, ws, runId, seen, open = new Map(), print =
  * from printing twice. It used to block `invoke --watch` and `logs
  * --follow` for as long as a stalled tunnel cared to keep the socket.
  */
-async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map(), { holdOpen = false, skipResult = false, quiet = false } = {}) {
+async function followRemote(url, flags, ws, runId, seen = new Map(), open = new Map(), { holdOpen = false, skipResult = false, quiet = false, onRun = /** @type {((run: any) => void) | undefined} */ (undefined) } = {}) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const run = await streamOnce(url, flags, ws, runId, seen, open, { skipResult, quiet });
+      const run = await streamOnce(url, flags, ws, runId, seen, open, { skipResult, quiet, onRun });
       // holdOpen: the caller reads the run once more when the stream ended
       // with it still live, and flushes after — a start flushed here would
       // print a second time when that read brings its completion (Codex).
@@ -9775,6 +9777,48 @@ function editParts(/** @type {string} */ name, /** @type {any} */ input, /** @ty
   return [...by.values()];
 }
 
+/**
+ * A question from the agent, at this keyboard (FOL-314, and a cloud agent's ask_person in a cloud turn, FOL-298):
+ * the question, then its choices as a list with "type my own answer…" last, or a line to type. The answer, "" for
+ * none, or null when the list was left (Esc) or the turn stopped.
+ * @param {{ question: string, options: string[], who?: string }} q
+ * @param {(text: string) => Promise<string | null | undefined>} prompt
+ * @param {AbortSignal | undefined} signal
+ * @returns {Promise<string | null>}
+ */
+async function askAtTerminal(q, prompt, signal) {
+  console.log(`  ${c.cyan("?")} ${c.bold(q.who ? `${plainText(q.who)} asks you:` : "the agent asks you:")}`);
+  const width = Math.max(20, (process.stdout.columns || 80) - 6);
+  for (const l of plainText(q.question).split("\n")) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`    ${c.white(l.slice(i, i + width))}`);
+  /** @type {string | null} */
+  let answer = null;
+  if (q.options.length) {
+    // A choice too long for its row is shown whole first, so two that start alike can be told apart (Codex).
+    // Measured in screen cells, as the list clips (Codex).
+    if (q.options.some((o) => displayWidth(o) + 8 > width)) q.options.forEach((o, i) => {
+      /** @type {string[]} */
+      const lines = [""];
+      for (const ch of o) {
+        if (displayWidth(/** @type {string} */ (lines.at(-1)) + ch) > width - 4) lines.push("");
+        lines[lines.length - 1] += ch;
+      }
+      lines.forEach((l, j) => console.log(`    ${c.white(j ? `   ${l}` : `${i + 1}. ${l}`)}`));
+    });
+    const OWN = "\u0000own";
+    const v = await pickOne({ signal, title: "your answer", choices: [...q.options.map((o, i) => ({ v: String(i), name: o, note: "" })), { v: OWN, name: "type my own answer…", note: "" }] });
+    if (v === OWN) {
+      // A closed keyboard (or the question taken back) is no answer at all, not an empty one (Codex).
+      const typed = await prompt(`    ${c.grey("your answer:")} `);
+      answer = typed === null || typed === undefined ? null : typed.trim();
+    } else if (v !== null) answer = /** @type {string} */ (q.options[Number(v)]);
+  } else {
+    const typed = await prompt(`    ${c.grey("your answer (Enter for none):")} `);
+    answer = typed === null || typed === undefined ? null : typed.trim();
+  }
+  if (answer) console.log(`    ${c.dim(`answered: ${clipCells(plainText(answer.replace(/\s+/g, " ")), width - 10)}`)}`);
+  return answer;
+}
+
 /** foldrun code's local ask (FOL-314): the platform's `ask_person`, by name and input, answered at this keyboard. */
 const ASK_TOOL_LOCAL = "ask_person";
 /** Marks an answer the person gave at this keyboard; never shown to the model. */
@@ -15110,7 +15154,75 @@ async function codeTurn(s, task, include = []) {
     bareRow = null;
     stopTicker = startTicker(Date.now(), () => typeAhead.text());
     printNew(run, seen, open, view);
-    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view })) ?? run;
+    // A question the cloud agent asks (tools: [ask], FOL-298): put here, as a local one is, and the answer sent to
+    // the run, which waits for it. In a script's turn it is said on stderr with the command that answers it.
+    /** @type {Set<string>} */
+    const asked = new Set();
+    let asking = Promise.resolve();
+    /** The question on the screen now, and how to take it back. @type {{ id: string, close: () => void } | null} */
+    let live = null;
+    const answerHere = async (/** @type {string} */ who, /** @type {any} */ q) => {
+      if (cancel.asked) return;
+      const options = Array.isArray(q.options) ? q.options.map((/** @type {unknown} */ o) => plainText(String(o)).replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean).slice(0, 10) : [];
+      const question = String(q.question ?? "").slice(0, 2000);
+      if (s.headless) {
+        process.stderr.write(`${who} asks: ${plainText(question)}${options.length ? `\n  choices: ${options.map((o, i) => `${i + 1}. ${o}`).join(" · ")}` : ""}\n  it waits for an answer: foldrun answer ${runId} --question ${plainText(String(q.id))} "…"${options.length ? " (or --option <n>)" : ""}\n`);
+        return;
+      }
+      stopTicker();
+      await keyboardBack();
+      /** @type {string | null} */
+      let answer = null;
+      // Taken back when it is answered elsewhere, given up on, or the run ends: no stale question is left to eat the
+      // keys meant for what comes next (Codex).
+      const gone = new AbortController();
+      live = { id: q.id, close: () => {
+        gone.abort();
+        for (const f of [...(cancel.onAsk ?? [])]) f();
+      } };
+      try {
+        answer = await askAtTerminal({ question, options, who }, (t) => cancellablePrompt(t, cancel), gone.signal);
+      } finally {
+        live = null;
+        if (!cancel.asked) {
+          typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
+          stopTicker = startTicker(Date.now(), () => typeAhead.text());
+        }
+      }
+      if (cancel.asked) return;
+      if (gone.signal.aborted) {
+        console.log(`    ${c.dim("answered elsewhere, or no longer asked")}`);
+        return;
+      }
+      if (answer === null) {
+        console.log(`    ${c.dim(`not answered — the agent waits for it; \`foldrun answer ${runId} "…"\` answers it from another terminal`)}`);
+        return;
+      }
+      await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}/answer`, {
+        method: "POST",
+        body: JSON.stringify({ question: q.id, answer: answer || "(no answer given — decide yourself if it is safe to, or say plainly what you need)" }),
+      });
+    };
+    const onRun = (/** @type {any} */ r) => {
+      // The question on the screen, answered elsewhere or given up on, or the run over: taken back.
+      if (live) {
+        const now = (Array.isArray(r?.steps) ? r.steps : []).flatMap((/** @type {any} */ st) => (Array.isArray(st?.questions) ? st.questions : [])).find((/** @type {any} */ x) => x?.id === live?.id);
+        if (!isLive(r) || !now || now.answer !== undefined || now.unanswered) live.close();
+      }
+      for (const st of Array.isArray(r?.steps) ? r.steps : []) {
+        for (const q of Array.isArray(st?.questions) ? st.questions : []) {
+          if (!q || typeof q.id !== "string" || q.answer !== undefined || q.unanswered || asked.has(q.id)) continue;
+          asked.add(q.id);
+          const who = `${plainText(String(st.agent ?? "the agent"))} (in the cloud)`;
+          asking = asking.then(() => answerHere(who, q)).catch((err) => console.log(`    ${c.amber("!")} ${c.dim(`the answer was not sent: ${plainText(explain(err))} — \`foldrun answer ${runId} "…"\``)}`));
+        }
+      }
+    };
+    onRun(run);
+    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view, onRun })) ?? run;
+    // The run is over: a question still on the screen is taken back, and what was being sent finishes first.
+    /** @type {any} */ (live)?.close();
+    await asking;
     if (isLive(run)) {
       run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`);
       printNew(run, seen, open, view);
@@ -18239,30 +18351,8 @@ async function codeLocalTurn(s, text) {
         stopTicker();
         await keyboardBack();
         try {
-          console.log(`  ${c.cyan("?")} ${c.bold("the agent asks you:")}`);
-          const width = Math.max(20, (process.stdout.columns || 80) - 6);
-          for (const l of q.question.split("\n")) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`    ${c.white(l.slice(i, i + width))}`);
-          /** @type {string | null} */
-          let answer = null;
-          if (q.options.length) {
-            // A choice too long for its row is shown whole first, so two that start alike can be told apart (Codex).
-            // Measured in screen cells, as the list clips (Codex).
-            if (q.options.some((o) => displayWidth(o) + 8 > width)) q.options.forEach((o, i) => {
-              /** @type {string[]} */
-              const lines = [""];
-              for (const ch of o) {
-                if (displayWidth(/** @type {string} */ (lines.at(-1)) + ch) > width - 4) lines.push("");
-                lines[lines.length - 1] += ch;
-              }
-              lines.forEach((l, j) => console.log(`    ${c.white(j ? `   ${l}` : `${i + 1}. ${l}`)}`));
-            });
-            const OWN = "\u0000own";
-            const v = await pickOne({ signal, title: "your answer", choices: [...q.options.map((o, i) => ({ v: String(i), name: o, note: "" })), { v: OWN, name: "type my own answer…", note: "" }] });
-            if (v === OWN) answer = ((await cancellablePrompt(`    ${c.grey("your answer:")} `, cancel)) ?? "").trim();
-            else if (v !== null) answer = /** @type {string} */ (q.options[Number(v)]);
-          } else answer = ((await cancellablePrompt(`    ${c.grey("your answer (Enter for none):")} `, cancel)) ?? "").trim();
+          const answer = (await askAtTerminal(q, (t) => cancellablePrompt(t, cancel), signal)) ?? "";
           if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
-          if (answer) console.log(`    ${c.dim(`answered: ${clipCells(plainText(answer.replace(/\s+/g, " ")), width - 10)}`)}`);
           return { behavior: /** @type {const} */ ("allow"), updatedInput: { question: q.question, options: q.options, answer: answer ?? "", answeredBy: ASK_MARK } };
         } finally {
           keyboardOn();
