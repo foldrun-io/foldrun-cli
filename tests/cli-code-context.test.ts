@@ -788,3 +788,30 @@ test("on a terminal, in the cloud: the session's todo list goes with the turn an
   const kept = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"))[d];
   assert.deepEqual(kept.todos, [{ content: "write b", status: "completed" }, { content: "tell the team", status: "pending" }]);
 });
+
+test("a site a sandboxed command reaches: plain names on the web ports are asked once at a time, remembered; nothing is asked with no one there (FOL-312)", async () => {
+  const { askSiteOf: ask } = await import("../src/commands.mjs");
+  const askSiteOf = async (st: any, h: string, p: number): Promise<any> => ask(st, h, p);
+  const s: any = { sandboxSites: [] };
+  assert.match((await askSiteOf(s, "example.org", 443)).reason, /\/permissions sandbox allow example\.org/, "between turns: refused, with how to allow it");
+  let calls = 0;
+  let release: (v: boolean) => void = () => undefined;
+  s.askSiteLive = () => (calls++, new Promise<boolean>((r) => (release = r)));
+  const a = askSiteOf(s, "Example.org.", 443);
+  const b = askSiteOf(s, "example.org", 80);
+  release(true);
+  assert.deepEqual([await a, await b], [true, true]);
+  assert.equal(calls, 1, "one question for both connections");
+  assert.deepEqual(s.sandboxSites, ["example.org"]);
+  assert.equal(await askSiteOf(s, "example.org", 443), true);
+  assert.equal(calls, 1, "remembered for the session");
+  s.askSiteLive = async () => (calls++, false);
+  assert.match((await askSiteOf(s, "example.net", 443)).reason, /said no/);
+  assert.match((await askSiteOf(s, "example.net", 443)).reason, /said no to example\.net this turn/);
+  assert.equal(calls, 2, "a no is not asked again in the turn");
+  for (const h of ["127.0.0.1", "localhost", "169.254.169.254", "10.0.0.1"]) assert.match((await askSiteOf(s, h, 443)).reason, /not asked about/, h);
+  assert.match((await askSiteOf(s, "db.example.com", 5432)).reason, /port 5432 is not asked about/);
+  s.sandboxDenied = new Set(["gone.example.com"]);
+  assert.match((await askSiteOf(s, "gone.example.com", 443)).reason, /took gone\.example\.com away/);
+  assert.equal(calls, 2);
+});

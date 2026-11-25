@@ -3128,6 +3128,66 @@ const canSandbox = (() => {
   }
 })();
 
+test("a site the sandbox does not list is asked about by name while the command runs; a yes keeps it for the session, a no is refused (FOL-312)", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 150_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const curl = (id: string, host: string) => () => sse([{ type: "tool_use", id, name: "Bash", input: { command: `curl -sS -m 20 -o /dev/null https://${host}/ ; echo reached-${host}` } }]);
+  const turns = [
+    curl("c1", "example.org"), () => sse([{ type: "text", text: "First done." }]),
+    curl("c2", "example.org"), () => sse([{ type: "text", text: "Second done." }]),
+    curl("c3", "example.net"), () => sse([{ type: "text", text: "Third done." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-st/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-st", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/a command inside the sandbox wants to reach example\.org[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
+    t.send("y\r");
+    at = await t.until(/First done\./, at, 60_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/permissions sandbox\r");
+    at = await t.until(/example\.org/, at);
+    at = await t.until(/\w ❯ /, at);
+    // The same site again: not asked.
+    const before = at;
+    t.send("two\r");
+    at = await t.until(/Second done\./, at, 60_000);
+    assert.doesNotMatch(t.out().slice(before), /wants to reach example\.org/);
+    at = await t.until(/\w ❯ /, at);
+    // Another site, refused: the command fails and the model is told the person said no.
+    t.send("three\r");
+    at = await t.until(/wants to reach example\.net[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
+    t.send("n\r");
+    at = await t.until(/Third done\./, at, 60_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  // The model is told a site is asked for, never to go outside the sandbox for one.
+  assert.match(JSON.stringify(asked[0].system), /any other site is asked of the person while the command runs/);
+});
+
 test("/permissions bypass (FOL-308): nothing is asked for the session, outside the sandbox and edits too; the status line says so in red; relaxed asks again", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
   const d = repo();
   const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-")));

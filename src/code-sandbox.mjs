@@ -40,7 +40,7 @@ export function packageCacheFor(dir, env = process.env, home = os.homedir()) {
 /** The tool that runs one command outside the walls. */
 export const OUTSIDE_TOOL = "bash_outside";
 export const OUTSIDE_DESCRIPTION =
-  "Run one shell command OUTSIDE the sandbox, as the person, with their full access. Only for a command that was refused inside it for a reason the task really needs — a write outside this folder, a site that is not allowed, a program that needs the person's own keys (git push, a deploy, docker). The person is shown the command and asked every time; say in `reason` why it cannot run inside. Never use it for a command that works in Bash. Inside the sandbox, files that hold keys (~/.npmrc, ~/.ssh, ~/.aws, …) cannot be read — npm may print an EPERM about ~/.npmrc, which is not a failure when the command's own result is fine — and package managers keep downloads in a cache the sandbox provides, so npm install, npx and pip install work inside.";
+  "Run one shell command OUTSIDE the sandbox, as the person, with their full access. Only for a command that was refused inside it for a reason the task really needs — a write outside this folder, a program that needs the person's own keys (git push, a deploy, docker). The person is shown the command and asked every time; say in `reason` why it cannot run inside. Never use it for a command that works in Bash. Inside the sandbox, files that hold keys (~/.npmrc, ~/.ssh, ~/.aws, …) cannot be read — npm may print an EPERM about ~/.npmrc, which is not a failure when the command's own result is fine — and package managers keep downloads in a cache the sandbox provides, so npm install, npx and pip install work inside.";
 export const OUTSIDE_SCHEMA = {
   type: "object",
   properties: {
@@ -53,7 +53,7 @@ export const OUTSIDE_SCHEMA = {
 
 /** What the agent is told when the walls are up. */
 export const SANDBOX_NOTE =
-  "Your Bash commands run inside a sandbox on this computer: they can write only inside this folder and $TMPDIR (never git's hooks or config), can read everything except the person's keys and credentials (the variables of their shell that hold keys are not set either), and reach the network only at common package and code sites. A command inside it runs without the person being asked, so prefer it. When a command is refused for one of those reasons and the task really needs it, use bash_outside, which asks the person first — do not try to get around the sandbox any other way.";
+  "Your Bash commands run inside a sandbox on this computer: they can write only inside this folder and $TMPDIR (never git's hooks or config), can read everything except the person's keys and credentials (the variables of their shell that hold keys are not set either), and reach the network at common package and code sites; any other site is asked of the person while the command runs (on a yes it goes through, inside the sandbox, and stays allowed this session — so just run the command; never send it outside the sandbox only to reach a site). A command inside it runs without the person being asked, so prefer it. When a command is refused for one of the other reasons and the task really needs it, use bash_outside, which asks the person first — do not try to get around the sandbox any other way.";
 
 /** A site as the sandbox takes it: `api.example.com` or `*.example.com`; else null. */
 export function siteOf(/** @type {string} */ typed) {
@@ -100,7 +100,7 @@ export const hostEnv = () => before ?? process.env;
 /**
  * The session's walls: opened at the first turn on this computer, the same
  * handle from then on.
- * @param {{ dir: string, sites: () => string[], denyRead?: () => string[] }} o
+ * @param {{ dir: string, sites: () => string[], denyRead?: () => string[], askSite?: (host: string, port: number) => Promise<boolean | { allow: false, reason: string }> }} o
  */
 export function sandboxFor(o) {
   /** @type {any} */
@@ -143,7 +143,7 @@ export function sandboxFor(o) {
       const saved = { ...process.env };
       let got;
       try {
-        got = await core.openLocalSandbox({ cwd: o.dir, sites: [...new Set([...trusted, ...sites])], denyRead: o.denyRead?.() ?? [], cache: packageCacheFor(o.dir, hostEnv()) });
+        got = await core.openLocalSandbox({ cwd: o.dir, sites: [...new Set([...trusted, ...sites])], denyRead: o.denyRead?.() ?? [], cache: packageCacheFor(o.dir, hostEnv()) }, o.askSite ? { askSite: o.askSite } : {});
       } catch (err) {
         got = { refused: `the sandbox did not start: ${err instanceof Error ? err.message : String(err)}` };
       }

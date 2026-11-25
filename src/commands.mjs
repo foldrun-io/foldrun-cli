@@ -31,7 +31,7 @@ import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
-import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX, allowSiteFor } from "./code-mcp.mjs";
+import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX, allowSiteFor, remoteSiteProblem } from "./code-mcp.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, configDir, cacheDir, setProfileWorkspace } from "./credentials.mjs";
@@ -14904,7 +14904,41 @@ function readableBy(/** @type {any} */ s, /** @type {unknown} */ p) {
 /** The session's sandbox holder (code-sandbox.mjs): made once, opened at the first turn on this computer. */
 function boxOf(/** @type {any} */ s) {
   // Where this CLI keeps the sign-in and the computer's model key, wherever FOLDRUN_HOME puts it: never readable inside (Codex).
-  return (s.box ??= sandboxFor({ dir: s.dir, sites: () => (Array.isArray(s.sandboxSites) ? s.sandboxSites : []), denyRead: () => [...new Set([credentialsDir(), configDir(), cacheDir()])] }));
+  return (s.box ??= sandboxFor({ dir: s.dir, sites: () => (Array.isArray(s.sandboxSites) ? s.sandboxSites : []), denyRead: () => [...new Set([credentialsDir(), configDir(), cacheDir()])], askSite: (host, port) => askSiteOf(s, host, port) }));
+}
+
+/** The question's own name for a site a command inside the sandbox reaches that is not on its list (FOL-312; never a tool the model calls). */
+const SITE_ASK = "sandbox_site";
+
+/**
+ * A command inside the sandbox reached a site not on its list (FOL-312): asked of the person while it runs, so one
+ * site never needs a command outside the sandbox. Called for every such connection, so answers are remembered: a yes
+ * stays for the session (the site joins /permissions sandbox's list), a no for the turn; one question per site at a
+ * time. Only a plain site name on the web ports is asked about; nothing is asked with no one there (a script's turn,
+ * between turns) — the refusal says how to allow it.
+ * @param {any} s @param {string} host @param {number} port
+ * @returns {Promise<boolean | { allow: false, reason: string }>}
+ */
+export async function askSiteOf(s, host, port) {
+  const h = String(host).toLowerCase().replace(/\.$/, "");
+  const sites = Array.isArray(s.sandboxSites) ? s.sandboxSites : [];
+  const problem = remoteSiteProblem(s, h);
+  if (problem) return { allow: false, reason: `not on the sandbox's list, and not asked about: ${problem}` };
+  if (port !== 443 && port !== 80) return { allow: false, reason: `port ${port} is not asked about (only 80 and 443) — the person can run it outside the sandbox` };
+  if (sites.includes(h)) return true;
+  if (s.siteNo instanceof Set && s.siteNo.has(h)) return { allow: false, reason: `the person said no to ${h} this turn` };
+  if (typeof s.askSiteLive !== "function") return { allow: false, reason: `${h} is not on the sandbox's list — the person can allow it with /permissions sandbox allow ${h}` };
+  const pending = (s.sitePending ??= new Map());
+  if (!pending.has(h)) {
+    const asked = Promise.resolve(s.askSiteLive(h, port)).then((yes) => {
+      if (yes) {
+        if (!sites.includes(h)) (s.sandboxSites ??= sites).push(h);
+      } else (s.siteNo ??= new Set()).add(h);
+      return yes;
+    }, () => false).finally(() => pending.delete(h));
+    pending.set(h, asked);
+  }
+  return (await pending.get(h)) ? true : { allow: false, reason: `the person said no to ${h}` };
 }
 
 /** The walls for this session now: the handle; null when the person turned them off; or why they cannot be had. */
@@ -17739,6 +17773,10 @@ async function codeLocalTurn(s, text) {
             lines.slice(0, 30).forEach((l) => console.log(`      ${c.white(clipCells(plainText(l), width))}`));
             if (lines.length > 30) console.log(`      ${c.grey(`… ${lines.length - 30} more line${lines.length - 30 === 1 ? "" : "s"}`)}`);
           }
+        } else if (name === SITE_ASK) {
+          const host = plainText(String(input.host ?? ""));
+          console.log(`      ${c.white(`a command inside the sandbox wants to reach ${host}`)}`);
+          console.log(`      ${c.grey(`a yes lets it through and keeps ${host} allowed this session — still inside the sandbox, not as you (/permissions sandbox deny ${host} takes it away)`)}`);
         } else if (name === SESSION_SEND_TOOL) {
           // The whole message, as it will be sent: it leaves this session.
           // Exactly what will be sent, to exactly where: checked by the same
@@ -17927,6 +17965,14 @@ async function codeLocalTurn(s, text) {
       });
       gate = next.then(() => undefined, () => undefined);
       return next;
+    };
+    // A site a command inside the sandbox reaches that is not on its list (FOL-312): asked in turn with the rest,
+    // while this turn runs. A no holds for this turn only.
+    delete s.siteNo;
+    s.askSiteLive = (/** @type {string} */ host, /** @type {number} */ port) => {
+      const next = gate.then(() => decide(SITE_ASK, { host, port }, abort.signal));
+      gate = next.then(() => undefined, () => undefined);
+      return next.then((r) => r.behavior === "allow", () => false);
     };
     /** One cloud_agents call, from either engine: the turn's Ctrl-C stops it too. */
     const cloudCall = (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ sig) => {
@@ -18474,6 +18520,8 @@ async function codeLocalTurn(s, text) {
     if (!cancel.asked) console.log(`  ${c.red("✗")} ${plainText(said ?? explain(err))}\n`);
   } finally {
     stopTicker();
+    // Between turns no one is asked about a site (FOL-312).
+    delete s.askSiteLive;
     // A cloud_agents call the turn's end cut off: its stops go out before the next prompt.
     // Still going when the turn ends (an engine error, a withdrawn call):
     // stopped, then waited for so its stops are sent (Codex).
