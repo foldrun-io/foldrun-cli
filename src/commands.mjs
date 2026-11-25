@@ -15161,8 +15161,15 @@ async function codeTurn(s, task, include = []) {
     let asking = Promise.resolve();
     /** The question on the screen now, and how to take it back. @type {{ id: string, close: () => void } | null} */
     let live = null;
+    /** The run as the stream last showed it; set once it is over, so nothing more is asked. */
+    /** @type {any} */
+    let latest = run;
+    let over = false;
     const answerHere = async (/** @type {string} */ who, /** @type {any} */ q) => {
-      if (cancel.asked) return;
+      // Waited behind another question: still asked? The run as last seen says (Codex).
+      if (cancel.asked || over) return;
+      const still = (Array.isArray(latest?.steps) ? latest.steps : []).flatMap((/** @type {any} */ st) => (Array.isArray(st?.questions) ? st.questions : [])).find((/** @type {any} */ x) => x?.id === q.id);
+      if (!isLive(latest) || !still || still.answer !== undefined || still.unanswered) return;
       const options = Array.isArray(q.options) ? q.options.map((/** @type {unknown} */ o) => plainText(String(o)).replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean).slice(0, 10) : [];
       const question = String(q.question ?? "").slice(0, 2000);
       if (s.headless) {
@@ -15195,7 +15202,7 @@ async function codeTurn(s, task, include = []) {
         return;
       }
       if (answer === null) {
-        console.log(`    ${c.dim(`not answered — the agent waits for it; \`foldrun answer ${runId} "…"\` answers it from another terminal`)}`);
+        console.log(`    ${c.dim(`not answered — the agent waits for it; \`foldrun answer ${runId} --question ${plainText(String(q.id))} "…"\` answers it from another terminal`)}`);
         return;
       }
       await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}/answer`, {
@@ -15204,6 +15211,7 @@ async function codeTurn(s, task, include = []) {
       });
     };
     const onRun = (/** @type {any} */ r) => {
+      latest = r;
       // The question on the screen, answered elsewhere or given up on, or the run over: taken back.
       if (live) {
         const now = (Array.isArray(r?.steps) ? r.steps : []).flatMap((/** @type {any} */ st) => (Array.isArray(st?.questions) ? st.questions : [])).find((/** @type {any} */ x) => x?.id === live?.id);
@@ -15219,10 +15227,15 @@ async function codeTurn(s, task, include = []) {
       }
     };
     onRun(run);
-    if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view, onRun })) ?? run;
-    // The run is over: a question still on the screen is taken back, and what was being sent finishes first.
-    /** @type {any} */ (live)?.close();
-    await asking;
+    try {
+      if (isLive(run)) run = (await followRemote(url, flags, ws, runId, seen, open, { holdOpen: true, ...view, onRun })) ?? run;
+    } finally {
+      // Over, or following it failed: a question on the screen is taken back, none waiting opens, and what was
+      // being sent finishes first — the keyboard is the turn's again (Codex).
+      over = true;
+      /** @type {any} */ (live)?.close();
+      await asking;
+    }
     if (isLive(run)) {
       run = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/runs/${enc(runId)}`);
       printNew(run, seen, open, view);
