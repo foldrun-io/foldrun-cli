@@ -12,6 +12,20 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.1.0] — 2026-11-25
+
+### New in the public API
+
+- the `--auto` flag
+
+- ci(release-merge): read a ci run's conclusion itself — the API's status=success filter missed a green re-run ([a4c9789](https://github.com/foldrun-io/foldrun-cli/commit/a4c9789))
+- feat(code): /update — take the latest foldrun and start again, check, auto-update on/off; /restart merged in (FOL-335) (#298) ([e52ccbd](https://github.com/foldrun-io/foldrun-cli/commit/e52ccbd))
+- fix(code): a patch that was refused is not listed as a change — the footer waits for the call's result (FOL-294) ([d7cb94f](https://github.com/foldrun-io/foldrun-cli/commit/d7cb94f))
+
+### feat
+
+- one command to qualify a vendor's browser through the vendor door — on-list loads, off-list refused, key never shown (FOL-151) ([6ab26d2](https://github.com/foldrun-io/foldrun-cli/commit/6ab26d2))
+
 ## [33.0.3] — 2026-11-25
 
 ### deps
