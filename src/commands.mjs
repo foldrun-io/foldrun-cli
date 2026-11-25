@@ -9519,7 +9519,7 @@ async function sessionsCmd(positional, flags, layout) {
   if (verb === "messages" || verb === "ls") {
     if (!context) throw new Error("`foldrun sessions messages <conversation>` — the conversation id `foldrun code` shows in its session line");
     const other = typeof flags.with === "string" ? flags.with : null;
-    if (flags.with === true) throw new Error("--with names the other conversation: `foldrun sessions messages <conversation> --with <other>`");
+    if (flags.with !== undefined && typeof flags.with !== "string") throw new Error("--with names the other conversation: `foldrun sessions messages <conversation> --with <other>`");
     // The thread with another conversation (FOL-307), or what this one sent.
     const q = other ? `?with=${enc(other)}` : flags.sent === true ? "?sent=1" : flags.waiting === true ? "?waiting=1" : "";
     const got = await remoteCall(url, flags, `${base(context)}${q}`);
