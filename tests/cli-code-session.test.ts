@@ -3632,11 +3632,13 @@ test("a line being typed when a permission prompt comes is drawn again after it,
     at = await t.until(/sleep 2; echo first[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     await new Promise((r) => setTimeout(r, 500));
-    t.send("draft words");
-    at = await t.until(/next: draft words/, at, 5_000);
+    t.send("draft ");
+    at = await t.until(/next: draft/, at, 5_000);
     at = await t.until(/sleep 3; echo second[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
-    // The second command runs: the draft is on the working line again.
+    // The second command runs: the draft is on the working line again, its space kept (Codex).
+    await new Promise((r) => setTimeout(r, 400));
+    t.send("words");
     at = await t.until(/next: draft words/, at, 5_000);
     at = await t.until(/Both ran\./, at, 30_000);
     // And it starts the next message.

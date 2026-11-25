@@ -15474,23 +15474,28 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
   if (onSend || queue) writeControl("\x1b[?2004h");
   process.stdin.on("data", onData);
   process.stdin.resume();
-  let stopped = false;
+  /** @type {Promise<string> | null} */
+  let stopping = null;
   return {
     text: () => text,
-    async stop() {
-      if (stopped) return "";
-      stopped = true;
-      // Keys already pressed are read before the terminal is handed back —
-      // left in it, a "y" and Enter would answer the next prompt.
-      await new Promise((r) => setImmediate(r));
-      await new Promise((r) => setTimeout(r, 15));
-      process.stdin.off("data", onData);
-      if (onSend || queue) writeControl("\x1b[?2004l");
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      const t = text.trim();
-      text = "";
-      return t;
+    /** Hands the terminal back once; every caller waits for the same handing back and gets what was typed —
+     *  trimmed, or as typed with `raw` (a draft that goes back on the line keeps its spaces) (FOL-306, Codex). */
+    async stop(raw = false) {
+      stopping ??= (async () => {
+        // Keys already pressed are read before the terminal is handed back —
+        // left in it, a "y" and Enter would answer the next prompt.
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setTimeout(r, 15));
+        process.stdin.off("data", onData);
+        if (onSend || queue) writeControl("\x1b[?2004l");
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+        const t = text;
+        text = "";
+        return t;
+      })();
+      const t = await stopping;
+      return raw ? t : t.trim();
     },
   };
 }
@@ -17475,8 +17480,8 @@ async function codeLocalTurn(s, text) {
   // The unfinished line a prompt interrupted: given back to the keyboard after it, not moved aside (FOL-306, Codex).
   let draft = "";
   const keyboardBack = async () => {
-    const t = await typeAhead.stop();
-    if (t) draft = [draft, t].filter(Boolean).join(" ");
+    const t = await typeAhead.stop(true);
+    if (t.trim()) draft = draft ? `${draft}${t}` : t;
   };
   /** The keyboard again after a prompt, unless the turn is over (its end has stopped it for good). */
   const keyboardOn = () => {
@@ -18581,7 +18586,10 @@ async function codeLocalTurn(s, text) {
     // The keyboard first (an Enter in its last moments still queues), then
     // what was sent and not taken (the turn ended first, or failed): not
     // lost — it starts the next message, before what was typed after it.
-    const typed = [draft, await typeAhead.stop()].filter(Boolean).join(" ");
+    // The same handing back a prompt may be waiting on (Codex): when that prompt took it first, the draft is exactly
+    // it (keyboardOn emptied the draft when this reader started), so it is counted once.
+    const last = await typeAhead.stop(true);
+    const typed = `${draft}${draft === last ? "" : last}`.trim();
     draft = "";
     if (pending.some((e) => e.sent)) console.log(`  ${c.dim("the agent did not get to your message: it is on the next line, to send")}`);
     s.typeAhead = [s.typeAhead, ...pending.splice(0).map((e) => e.t), typed].filter(Boolean).join(" ");
