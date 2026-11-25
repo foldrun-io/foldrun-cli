@@ -4984,3 +4984,63 @@ test("a cloud agent's question answered elsewhere (FOL-298): the one on the scre
     s.close();
   }
 });
+
+test("/where browser cloud (FOL-267): the web tool browses through the gateway's door with the session's key; the agent's locks go with it", async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const browsed: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "w1", name: "web", input: { action: "browse", url: "https://shop.example/", steps: [{ click: "#more" }] } }]),
+    () => sse([{ type: "text", text: "Read the page." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-b267/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\nweb:\n  browse:\n    allowed_domains: [\"*.shop.example\"]\n---\nYou code.\n" } : { content: "" }),
+    "GET /v1/account/agents-md": () => ({ content: "" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/foldrun/browse": (b) => {
+      browsed.push({ body: JSON.parse(String(b)) });
+      return { url: "https://shop.example/", text: "# Shop\nThree hats." };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-b267", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/where browser cloud\r");
+    at = await t.until(/Browser in the cloud/, at);
+    t.send("read the shop\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    // The web tool is asked before it runs, as every tool that is not read-only.
+    for (let i = 0; i < 3; i++) {
+      at = await t.until(/\[y\]es|Read the page\./, at, 30_000);
+      if (/Read the page\.$/.test(t.out().slice(0, at))) break;
+      t.send("y\r");
+    }
+    await t.until(/Read the page\./, 0, 30_000);
+    const door = (s as any).seen.find((x: any) => x.url === "/v1/foldrun/browse");
+    assert.equal(door.headers["x-api-key"], "fr_gw_test", "the session's own key");
+    assert.ok(door.headers["idempotency-key"], "an Idempotency-Key");
+    assert.equal(browsed.length, 1, "one call, through the door");
+    assert.deepEqual(browsed[0].body, { url: "https://shop.example/", mode: "markdown", steps: [{ click: "#more" }], allowed_domains: ["*.shop.example"] });
+    assert.ok((asked[0].tools ?? []).some((x: any) => x.name === "web" && /cloud/.test(x.description)), "the cloud web tool is offered");
+    assert.match(JSON.stringify(asked[1].messages.at(-1)), /Three hats/);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});

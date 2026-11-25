@@ -15,7 +15,7 @@ import { configDir } from "./credentials.mjs";
 /** The commands, in the groups /help shows (FOL-263; owner, 24 Nov 2026: "i think we need to orgnize them"). */
 export const CODE_GROUPS = [
   { group: "Where & how", commands: [
-    ["/where [local|local+cloud|cloud|send <task>]", "where this session works: this computer only (the agent sends nothing to the cloud), this computer with agents in the cloud, or the cloud (on a copy; you apply what comes back) — send <task> sends one task to the cloud and you stay where you are"],
+    ["/where [local|local+cloud|cloud|send <task>|browser here|cloud]", "where this session works (and browser here|cloud: where the agent browses the web): this computer only (the agent sends nothing to the cloud), this computer with agents in the cloud, or the cloud (on a copy; you apply what comes back) — send <task> sends one task to the cloud and you stay where you are"],
     ["/model [<model>|effort <level>|thinking on|off]", "the model and how it thinks: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away); effort: how hard it thinks — low, medium, high, xhigh, max, or default (the model's own), the effort: line of the agent's file, here and in the cloud; thinking on|off: a summary of its thinking above each reply, dimmed (off by default, remembered for you on this computer; /export --thinking writes it too)"],
   ] },
   { group: "Give it a job", commands: [
@@ -180,9 +180,12 @@ export function commandMenu(name, st) {
       const tick = `/where ${WHERE_WORD[now]}`;
       return {
         title: "Where should this session work?",
-        subtitle: "/where local · local+cloud · cloud · send <task> types it straight away",
+        subtitle: "/where local · local+cloud · cloud · send <task> · browser here|cloud types it straight away",
         choices: [
           ...whereChoices(st.repo !== false).map((x) => ({ v: `/where ${WHERE_WORD[x.v]}`, name: x.name, note: x.note })),
+          st.browser === "cloud"
+            ? { v: "/where browser here", name: "Browser on this computer", note: "web browse in your Chrome window (now: in the cloud)" }
+            : { v: "/where browser cloud", name: "Browser in the cloud", note: "web browse in a fresh cloud browser per call, paid per call" },
           { v: "/where send ", name: "Send one task to the cloud…", note: st.repo !== false ? "it runs on a copy there; you stay where you are" : "needs git — offered when you pick it", ask: "the task" },
         ],
         tick,

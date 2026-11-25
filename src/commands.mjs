@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, shapeOutput as browseOutput } from "./browser.mjs";
+import { CLOUD_WEB_DEFINITION, cloudBrowse, cloudBrowseBlock, cloudBrowseBody } from "./browse-cloud.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
 import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
@@ -9920,6 +9921,33 @@ async function localBrowseDefaults(s) {
 }
 
 /**
+ * The agent's `web.browse` block for a cloud browser from this computer (FOL-267): its site locks, or why not.
+ * @param {any} s @returns {Promise<{ allowed?: string[], blocked?: string[], notes: string[] } | { problem: string }>}
+ */
+async function cloudBrowseDefaults(s) {
+  let agent;
+  let project;
+  /** @type {string[]} */
+  const said = [];
+  try {
+    agent = await projectFront(s, `agents/${s.agent}/agent.md`);
+    project = { ...(await accountFront(s, said)), ...(await projectFront(s, "AGENTS.md")) };
+  } catch (err) {
+    return { problem: `could not read the files that set this agent's web.browse settings (${plainText(explain(err)).split("\n")[0]})` };
+  }
+  const P = /** @type {any} */ (await import("@foldrun/core/providers"));
+  const web = P.webConfig(agent, project);
+  if (Array.isArray(web.actions) && !web.actions.includes("browse")) return { problem: `this agent's web.actions is [${web.actions.join(", ")}] — it may not browse` };
+  const raw = web.raw.browse;
+  if (typeof P.readBrowseSettings !== "function") {
+    if (raw !== undefined && raw !== null) return { problem: "this agent has a web.browse block, which needs a newer foldrun CLI — `foldrun update`" };
+    return { notes: said };
+  }
+  const out = cloudBrowseBlock(P.readBrowseSettings(raw));
+  return "problem" in out ? out : { ...out, notes: [...said, ...out.notes] };
+}
+
+/**
  * The account's AGENTS.md frontmatter, once a session. A key held to some projects may not read it (the route
  * is account-wide): then {} and a note that its defaults are not applied here — named, never silent.
  * @param {any} s @param {string[]} said
@@ -18578,7 +18606,10 @@ async function codeLocalTurn(s, text) {
         } else if (name === "web") {
           // A browse runs as you, in foldrun's Chrome profile, outside the sandbox: say so, and show every step
           // in full, so nothing it would type or submit is hidden past the edge (FOL-267, Codex).
-          console.log(`      ${c.white("in the Chrome window on this computer, as you — outside the sandbox, with that profile's sign-ins")}`);
+          // Where it runs, said as it is: a cloud browser gets everything it would type (Codex).
+          console.log(`      ${c.white(s.browser === "cloud" && s.localOnly !== true
+            ? "in a browser in foldrun's cloud — the page, and everything below it would type, go there; paid per call"
+            : "in the Chrome window on this computer, as you — outside the sandbox, with that profile's sign-ins")}`);
           const lines = JSON.stringify(input, null, 1).split("\n").map((l) => plainText(l));
           for (const l of lines.slice(0, 200)) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.grey(l.slice(i, i + width))}`);
           if (lines.length > 200) {
@@ -19201,6 +19232,8 @@ async function codeLocalTurn(s, text) {
     // sees — offered when this computer's browser is set up (`foldrun browser setup`).
     const webHere = localBrowserReady({ remoteUrl, galleryCacheDir, credentialsDir }, s.flags);
     const webDef = "error" in webHere ? null : localWebDefinition(webHere.browse, (await core()).readFrontmatter);
+    // /where browser cloud (FOL-267): the web tool browses in a cloud browser instead, through the gateway's door.
+    const webCloud = s.browser === "cloud" && s.localOnly !== true;
     const q = engine.foldrunQuery({
           prompt: text,
           options: {
@@ -19228,7 +19261,20 @@ async function codeLocalTurn(s, text) {
                 const job = cloudJobWithoutFolder(input);
                 return "problem" in job ? Promise.resolve({ text: job.problem, isError: true }) : agentCall(job, ctx.signal);
               } }]),
-              ...(webDef && !("error" in webHere)
+              ...(webCloud
+                ? [{
+                    name: "web", description: CLOUD_WEB_DEFINITION.description, input_schema: CLOUD_WEB_DEFINITION.input_schema, readOnly: false,
+                    run: async (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {
+                      const block = await cloudBrowseDefaults(s);
+                      if ("problem" in block) return { text: block.problem, isError: true };
+                      const call = cloudBrowseBody(input ?? {}, block);
+                      if ("problem" in call) return { text: call.problem, isError: true };
+                      const r = await cloudBrowse({ gatewayUrl: engineKey.gatewayUrl, key: engineKey.key, userAgent: USER_AGENT, shotsDir: path.join(packageCacheFor(s.dir), "browse") }, call.body, ctx.signal);
+                      const notes = block.notes.length ? `not kept by the cloud browser — ${block.notes.join("; ")}\n` : "";
+                      return { text: `${notes}${r.text}`, isError: r.isError };
+                    },
+                  }]
+                : webDef && !("error" in webHere)
                 ? [{
                     name: "web", description: webDef.description, input_schema: webDef.input_schema, readOnly: false,
                     run: async (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {
@@ -20532,7 +20578,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const rows = m ? (await m.look().catch(() => ({ rows: [] }))).rows : [];
         return { mcp: rows.map((/** @type {any} */ r) => ({ name: String(r.name), state: String(r.state), source: String(r.source ?? "") })) };
       }
-      return { localOnly: s.localOnly === true, mode: s.mode, sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
+      return { localOnly: s.localOnly === true, mode: s.mode, browser: s.browser === "cloud" ? "cloud" : "here", sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
     };
     // Another sign-in under this session's profile name: stop, never go on as a different account showing the old one (Codex).
     {
@@ -21488,13 +21534,32 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       const ways = whereChoices(inGitRepo(dir));
       const nowWay = s.mode === "cloud" ? "cloud" : s.localOnly === true ? "local-only" : "local";
       if (!rest) {
-        say(`${ways.find((x) => x.v === nowWay)?.name ?? nowWay} — /where local · local+cloud · cloud · send <task>`);
+        say(`${ways.find((x) => x.v === nowWay)?.name ?? nowWay}; browser ${s.browser === "cloud" ? "in the cloud" : "on this computer"} — /where local · local+cloud · cloud · send <task> · browser here|cloud`);
+        continue;
+      }
+      // Where the agent's web browse runs on this computer's turns (FOL-267): this computer's Chrome, or a cloud browser.
+      const bw = /^browser(?:\s+(here|cloud))?$/i.exec(rest);
+      if (bw) {
+        const to = bw[1]?.toLowerCase();
+        if (!to) {
+          say(`browser ${s.browser === "cloud" ? "in the cloud" : "on this computer"} — /where browser here · cloud`);
+          continue;
+        }
+        if (to === "cloud" && s.localOnly === true) {
+          say("staying on this computer — this session keeps everything here (/where local); /where local+cloud first");
+          continue;
+        }
+        if (to === "cloud") s.browser = "cloud";
+        else delete s.browser;
+        console.log(`  ${c.green("✓")} ${to === "cloud"
+          ? `${c.white("Browser in the cloud")} ${c.dim("for this session — each web call is a fresh browser in foldrun's cloud, paid per call; nothing is kept between calls")}`
+          : `${c.white("Browser on this computer")} ${c.dim("for this session — the Chrome window set up with foldrun browser setup")}`}\n`);
         continue;
       }
       // Exactly the three ways, or send with its task: words after a way are never dropped (Codex).
       const w = /^(?:(local\+cloud|local|cloud)|(send)\s+([\s\S]+))$/i.exec(rest);
       if (!w) {
-        say("/where local · local+cloud · cloud · send <task>");
+        say("/where local · local+cloud · cloud · send <task> · browser here|cloud");
         continue;
       }
       const word = /** @type {string} */ (w[1] ?? w[2]).toLowerCase();
@@ -21523,7 +21588,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       const to = want === "cloud" ? "cloud" : "local";
       const jobsBefore = s.localOnly === true;
       if (to === "local") {
-        if (want === "local-only") s.localOnly = true;
+        if (want === "local-only") {
+          s.localOnly = true;
+          // Everything here: a cloud browser too is given up (FOL-267).
+          delete s.browser;
+        }
         else delete s.localOnly;
       }
       if (want === nowWay) {
