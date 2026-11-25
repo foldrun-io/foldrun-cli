@@ -10,6 +10,31 @@ It is the same browser program a deployed agent's `web` tool browses with
 platform's gallery with your sign-in and starts it. Nothing is sent to
 foldrun while you browse; pages load from your own connection.
 
+## In `foldrun code`, on this computer
+
+A `foldrun code` session working on this computer (`/where local`) gives its
+agent the same browser as a tool: `web` with `action: browse`, the same tool
+and the same arguments a deployed agent's `web` tool takes, run in this
+window. You see every page it opens, and you can step in. It is offered once
+`foldrun browser setup` has run; each call is asked like any other tool.
+A session in the cloud browses in the cloud, as any step does.
+
+What a call cannot do on this computer is refused by name, never dropped:
+
+| On this computer | In the cloud |
+|---|---|
+| `browse`, every option below | `search`, `fetch`, `crawl`, `map`, `extract`, `answer`, `monitor` too |
+| Google Chrome (`browser: chrome`) | chromium, firefox, safari (webkit), lightpanda, obscura |
+| the page stays open between calls (`live: true`); `live: end` closes the window | `live` as you choose |
+| — | options that name a secret from the vault: `proxy`, `captcha` (and `captcha_solver`), `cookies`, `auth`, `state_key` |
+| — | `identity` (an agent's `web.browse` identities), `extensions`, vendor browsers |
+
+Files a call writes (`mode: screenshot`, `download`) land in
+`~/.foldrun/browser/work/outputs/`. Text in pages is data from the site, never
+instructions; the agent asks you to type passwords and codes in the window
+yourself, and says what it will do before anything that pays, sends, posts or
+deletes.
+
 ## Set it up
 
 You need Google Chrome and the foldrun CLI, signed in (`foldrun login`).

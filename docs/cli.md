@@ -1033,6 +1033,15 @@ A snapshot needs an install that runs steps in sandboxes
 (`FOLDRUN_RUN_ISOLATION=k8s`); one that does not refuses the run and runs
 nothing.
 
+#### The web, on this computer
+
+Working on this computer, the agent browses with the cloud's own `web` tool
+(`action: browse`, the same arguments) in a Google Chrome window you see —
+once `foldrun browser setup` has run. Each call is asked. What needs the
+cloud (search, fetch, a vault secret such as `proxy`, another engine) is
+refused by name. [browser](browser#in-foldrun-code-on-this-computer) has the
+table.
+
 #### Files in a message
 
 Name an image, a recording, a video or a document in a message — `@note.m4a`,
