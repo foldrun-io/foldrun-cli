@@ -1027,6 +1027,28 @@ A snapshot needs an install that runs steps in sandboxes
 (`FOLDRUN_RUN_ISOLATION=k8s`); one that does not refuses the run and runs
 nothing.
 
+#### Edits that would not parse
+
+The agent's `Edit` and `Write` parse what a change would leave before they
+write it. A change that would turn a file that parses into one that does not
+is refused, and the file stays as it was. The agent is told where and why:
+*not applied — app.js would stop parsing: line 12: SyntaxError: Unexpected
+token '}'*. It fixes its edit before the broken file reaches a test run. A
+file that is already broken may be repaired one edit at a time. A file that
+is meant not to parse (a test fixture) is written with `allow_syntax_errors:
+true`.
+
+| file | checked with |
+|---|---|
+| `.json`, `.jsonc` | JSON with comments and trailing commas allowed; `package.json`, `package-lock.json`, `npm-shrinkwrap.json` and `composer.json` strictly. `tsconfig`/`jsconfig` and Babel's files are left alone (their readers are looser still) |
+| `.js`, `.cjs`, `.mjs` | foldrun's own node (`--check`, which runs nothing), in the grammar node loads the file in: the nearest `package.json`'s `type`, either when it names none. JSX in a `.js` file goes through unchecked |
+| `.py` | the newest system `python3` (`compile`, which runs nothing), only where commands run in a sandbox: inside the local walls, or in the cloud. A refusal names the Python version that checked it |
+
+TypeScript is not checked yet: its errors come with the language-server
+layer. A check that cannot finish in 3 seconds, a file over 1 MB, or a
+checker that is missing never blocks a change: it goes through, with
+*syntax not checked* and the reason.
+
 ## The loop, in order
 
 ```sh
