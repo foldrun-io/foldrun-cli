@@ -12,6 +12,63 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.8.0] — 2026-11-25
+
+### New in the public API
+
+- the `--media` flag
+
+- feat(code): a cloud agent's question in a cloud turn — shown here as a local one is, the answer sent to the run; taken back when answered elsewhere or the run ends; in a script's turn said on stderr with the command that answers it (FOL-298) ([ce6b014](https://github.com/foldrun-io/foldrun-cli/commit/ce6b014))
+- test(code): the ask_person PTY test needs no sandbox — on Linux CI none starts (no bubblewrap) and the turn stopped before the question (FOL-314) ([faf7b88](https://github.com/foldrun-io/foldrun-cli/commit/faf7b88))
+- fix(code): a Symbols location from an added folder marks the turn private, as Read does (Codex, FOL-297) ([9a310e6](https://github.com/foldrun-io/foldrun-cli/commit/9a310e6))
+- fix(code): Symbols is unasked exactly when a command inside the sandbox is — its server can write the folder (Codex, FOL-297) ([674a769](https://github.com/foldrun-io/foldrun-cli/commit/674a769))
+- feat(code): Symbols on this computer — offered inside the sandbox, unasked like Read, its language servers installed into the project's package cache and run inside the walls (FOL-297) ([312f888](https://github.com/foldrun-io/foldrun-cli/commit/312f888))
+- fix(code): long ask choices measured in screen cells (Codex, FOL-314) ([e1abeb3](https://github.com/foldrun-io/foldrun-cli/commit/e1abeb3))
+- fix(code): the ask list closes when the turn is stopped or the keyboard closes; long choices shown whole (Codex, FOL-314) ([b36c737](https://github.com/foldrun-io/foldrun-cli/commit/b36c737))
+- feat(code): ask_person in local turns — the platform's shape, a list of choices or the person's own words at the keyboard, refused with nobody to ask or for a sub-agent; only an answer the question gave counts (FOL-314) ([2d4f27e](https://github.com/foldrun-io/foldrun-cli/commit/2d4f27e))
+- fix(code): only a launch the person was asked about ends what ran on inside (Codex, FOL-296) ([8a89625](https://github.com/foldrun-io/foldrun-cli/commit/8a89625))
+- fix(code): a server outside the sandbox — starting it ends what ran on inside; while it lives no earlier always stands; its groups watched apart from the job list (Codex, FOL-296) ([46d5a66](https://github.com/foldrun-io/foldrun-cli/commit/46d5a66))
+- fix(code): a server outside the sandbox is live while its group is; none starts while jobs run inside; cloud agents' changes are asked while it runs (Codex, FOL-296) ([a052818](https://github.com/foldrun-io/foldrun-cli/commit/a052818))
+- fix(code): while a server runs outside the sandbox, the agent's commands and changes here are asked, and the question says why; outside jobs run /bin/bash (Codex, FOL-296) ([3465cc0](https://github.com/foldrun-io/foldrun-cli/commit/3465cc0))
+- feat(code): a dev server outside the sandbox — bash_outside run_in_background (asked), job o1 read unasked, typed into asked, never reachable from Bash; the agent is told how to test its app in the browser (FOL-296) ([fd29a3f](https://github.com/foldrun-io/foldrun-cli/commit/fd29a3f))
+- fix(code): /undo's copy of an Edit across files — the same 16 MB bound as core, kept under the real file (Codex, FOL-294) ([a56111d](https://github.com/foldrun-io/foldrun-cli/commit/a56111d))
+- fix(code): /undo groups an Edit's files as core does — by the real file (Codex, FOL-294) ([0a188e7](https://github.com/foldrun-io/foldrun-cli/commit/0a188e7))
+- feat(code): Edit across files — asked once with every change under its file, inside only when all are, /undo keeps and takes back each file (FOL-294) ([a3cb5ff](https://github.com/foldrun-io/foldrun-cli/commit/a3cb5ff))
+- feat(code): background jobs — input asked every time outside the sandbox with no always, reading and stopping unasked, shown in the transcript (FOL-293) ([b8b6848](https://github.com/foldrun-io/foldrun-cli/commit/b8b6848))
+- fix(code): allowed_domains as a call argument is refused on this computer too (Codex, FOL-267) ([1c792cf](https://github.com/foldrun-io/foldrun-cli/commit/1c792cf))
+- fix(code): an agent held to allowed_domains is refused on this computer — the window kept open cannot keep the hold between calls; web.actions checked on every core (Codex, FOL-267) ([465960a](https://github.com/foldrun-io/foldrun-cli/commit/465960a))
+- fix(code): web.browse locally — account file unreadable refuses, web.actions holds, url on every call when held to sites, files read again after 30 s, context settings named not applied (Codex, FOL-267) ([c47a294](https://github.com/foldrun-io/foldrun-cli/commit/c47a294))
+- feat(code): the agent's web.browse block holds on this computer as in the cloud — kept, refused by name, or noted (FOL-267) ([1559913](https://github.com/foldrun-io/foldrun-cli/commit/1559913))
+- fix(browser): browser mcp's web — a cancelled call is skipped or stopped; the first list waits for the gallery (FOL-267, Codex) ([2badbd3](https://github.com/foldrun-io/foldrun-cli/commit/2badbd3))
+- feat(browser): browser mcp serves the cloud's full web tool beside the six (FOL-267) ([a32ea85](https://github.com/foldrun-io/foldrun-cli/commit/a32ea85))
+- fix(code): web on this computer checks all of work/ for links, and a scan it could not finish refuses (FOL-267, Codex) ([65cd418](https://github.com/foldrun-io/foldrun-cli/commit/65cd418))
+- fix(code): web on this computer — the question says it runs outside the sandbox and shows every step; state refused; links and a stopped turn run nothing (FOL-267, Codex) ([54b0b87](https://github.com/foldrun-io/foldrun-cli/commit/54b0b87))
+- feat(code): the local agent browses with the cloud's web action=browse, in this computer's Chrome window (FOL-267) ([2078a16](https://github.com/foldrun-io/foldrun-cli/commit/2078a16))
+- feat(keys): keys set <id> --media text|as-is (FOL-268) ([ee4bfd5](https://github.com/foldrun-io/foldrun-cli/commit/ee4bfd5))
+- test(code): FOL-318's fake stdin passes the typecheck (cast through unknown) ([2e2f473](https://github.com/foldrun-io/foldrun-cli/commit/2e2f473))
+- test(code): /permissions rm's question now ends with (Esc to go back) (FOL-318) ([da37d0b](https://github.com/foldrun-io/foldrun-cli/commit/da37d0b))
+- fix(code): Esc leaves a menu's follow-up question instead of typing ^[ into it (FOL-318) ([e95c6da](https://github.com/foldrun-io/foldrun-cli/commit/e95c6da))
+
+### deps
+
+- @foldrun/core ^27.10.0 (background jobs, Edit edits, ENGINE_TOOLS from engine-loop, ctx.shell — FOL-293–296) ([8b97dff](https://github.com/foldrun-io/foldrun-cli/commit/8b97dff))
+
+### docs
+
+- sync (FOL-297) ([099659e](https://github.com/foldrun-io/foldrun-cli/commit/099659e))
+- sync bundled docs (FOL-321 web_search cache) ([f3bbf1d](https://github.com/foldrun-io/foldrun-cli/commit/f3bbf1d))
+- sync (FOL-313 web_browse) ([219d4f4](https://github.com/foldrun-io/foldrun-cli/commit/219d4f4))
+- sync (FOL-319, FOL-320) ([763b0b5](https://github.com/foldrun-io/foldrun-cli/commit/763b0b5))
+- sync (FOL-314) ([fad6064](https://github.com/foldrun-io/foldrun-cli/commit/fad6064))
+- sync cli.md (FOL-296) ([b3e6f64](https://github.com/foldrun-io/foldrun-cli/commit/b3e6f64))
+- sync agents.md, hooks.md (FOL-294) ([0ffdabc](https://github.com/foldrun-io/foldrun-cli/commit/0ffdabc))
+- sync agents.md, cli.md (FOL-293) ([366be54](https://github.com/foldrun-io/foldrun-cli/commit/366be54))
+- sync from foldrun-docs (security#people anchors, FOL-317) ([cccff41](https://github.com/foldrun-io/foldrun-cli/commit/cccff41))
+- sync browser.md (FOL-267) ([3c16c71](https://github.com/foldrun-io/foldrun-cli/commit/3c16c71))
+- sync browser.md, cli.md, tools.md (FOL-267) ([002b118](https://github.com/foldrun-io/foldrun-cli/commit/002b118))
+- sync api.md, cli.md (FOL-268 mediaToText) ([8aa2903](https://github.com/foldrun-io/foldrun-cli/commit/8aa2903))
+- sync api.md, notifications.md, security.md (FOL-317) ([f9be412](https://github.com/foldrun-io/foldrun-cli/commit/f9be412))
+
 ## [32.7.0] — 2026-11-25
 
 - fix(code): a gitignored image is not offered as it is in the cloud — the cloud's copy leaves it out (FOL-268, Codex) ([38b7140](https://github.com/foldrun-io/foldrun-cli/commit/38b7140))
