@@ -825,3 +825,21 @@ test("a site a sandboxed command reaches: plain names on the web ports are asked
   assert.match((await askSiteOf(s, "gone.example.com", 443)).reason, /took gone\.example\.com away/);
   assert.equal(calls, 2);
 });
+
+test("marginLines keeps line breaks, wraps by words under the width, keeps a list's hang, cuts a word wider than a row (FOL-311)", async () => {
+  const { marginLines, thinkingLines, displayWidth } = await import("../src/code-session.mjs");
+  assert.deepEqual(marginLines("a\n\n\n\nb\n"), ["a", "", "b"]);
+  const rows = marginLines("one two three four five six seven eight nine ten eleven twelve", 20);
+  assert.ok(rows.every((r: string) => displayWidth(r) <= 20), JSON.stringify(rows));
+  assert.equal(rows.join(" "), "one two three four five six seven eight nine ten eleven twelve");
+  const list = marginLines("- first item that is long enough to wrap twice over here", 20);
+  assert.ok(list.slice(1).every((r: string) => r.startsWith("  ")), JSON.stringify(list));
+  const cut = marginLines("x".repeat(45), 20);
+  assert.deepEqual(cut.map((r: string) => r.length), [20, 20, 5]);
+  const cjk = marginLines("漢".repeat(15), 10);
+  assert.ok(cjk.every((r: string) => displayWidth(r) <= 10), JSON.stringify(cjk));
+  assert.equal(cjk.join(""), "漢".repeat(15));
+  const t = thinkingLines("word ".repeat(100), 3, 30);
+  assert.equal(t.lines.length, 3);
+  assert.ok(t.more > 0, "wrapped rows are counted toward the cap");
+});

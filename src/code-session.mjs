@@ -1291,8 +1291,66 @@ export function writeCodePrefs(prefs) {
  * @param {string} text @param {number} [max]
  * @returns {{ lines: string[], more: number }}
  */
-export function thinkingLines(text, max = 30) {
-  const all = String(text ?? "").split(/\r?\n/).map((l) => l.trimEnd()).filter((l, i, a) => l || (i > 0 && a[i - 1]));
-  while (all.length && !all[all.length - 1]) all.pop();
+export function thinkingLines(text, max = 30, width = Infinity) {
+  const all = marginLines(text, width);
   return { lines: all.slice(0, max), more: Math.max(0, all.length - max) };
+}
+
+/**
+ * Text for a block with its own margin (FOL-311): its line breaks kept (runs
+ * of blank lines made one), each line wrapped at `width` cells by words so a
+ * wrapped line stays under the margin instead of running back to column 0; a
+ * word wider than a row is cut. The caller adds the margin.
+ * @param {unknown} text @param {number} [width]
+ * @returns {string[]}
+ */
+export function marginLines(text, width = Infinity) {
+  const room = Number.isFinite(width) ? Math.max(10, Math.floor(width)) : Infinity;
+  /** @type {string[]} */
+  const out = [];
+  for (const raw of String(text ?? "").split(/\r?\n/)) {
+    const line = raw.replace(/\t/g, "  ").trimEnd();
+    if (!line.trim()) {
+      if (out.length && out[out.length - 1] !== "") out.push("");
+      continue;
+    }
+    if (displayWidth(line) <= room) {
+      out.push(line);
+      continue;
+    }
+    // A line's own indent (a list, a quote) is kept on every row it wraps to.
+    const lead = /^\s*(?:[-*•]\s+|\d+[.)]\s+|>\s*)?/.exec(line)?.[0] ?? "";
+    const hang = " ".repeat(Math.min(displayWidth(lead), Math.floor(room / 2)));
+    let cur = lead;
+    let fresh = true;
+    for (let word of line.slice(lead.length).split(/ +/).filter(Boolean)) {
+      for (;;) {
+        const sep = fresh ? "" : " ";
+        if (displayWidth(cur + sep + word) <= room) {
+          cur += sep + word;
+          fresh = false;
+          break;
+        }
+        if (!fresh) {
+          out.push(cur);
+          cur = hang;
+          fresh = true;
+          continue;
+        }
+        // Alone and still too wide: cut it where the row ends.
+        let head = "";
+        for (const ch of word) {
+          if (displayWidth(cur + head + ch) > room && head) break;
+          head += ch;
+        }
+        out.push(cur + head);
+        cur = hang;
+        word = word.slice(head.length);
+        if (!word) break;
+      }
+    }
+    if (cur.trim()) out.push(cur);
+  }
+  while (out.length && out[out.length - 1] === "") out.pop();
+  return out;
 }

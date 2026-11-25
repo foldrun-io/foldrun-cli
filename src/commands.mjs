@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
-import { readCodePrefs, writeCodePrefs, thinkingLines, commandMenu } from "./code-session.mjs";
+import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
@@ -9540,12 +9540,20 @@ async function sessionsCmd(positional, flags, layout) {
 const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "");
 
 /** One session message, for the terminal: who, when, whether used, what. */
+/** Text printed under a margin, wrapped to the terminal so its rows keep the margin (FOL-311). */
+function sayUnder(/** @type {string} */ margin, /** @type {string} */ text, paint = (/** @type {string} */ x) => x) {
+  for (const l of marginLines(text, (process.stdout.columns || 80) - margin.length - 1)) console.log(l ? `${margin}${paint(l)}` : "");
+}
+
 function sessionMessageLine(m) {
   const who = plainText(String(m?.from ?? "someone"));
   const where = m?.fromContext ? c.dim(` (${plainText(String(m.fromContext))})`) : "";
   const used = m?.run ? c.dim(` · in ${plainText(String(m.run))}`) : m?.usedLocally ? c.dim(" · used in a turn on a computer") : c.dim(" · waiting");
-  const text = noBidi(plainText(String(m?.text ?? ""))).replace(/\s+/g, " ").trim();
-  return `  ${c.bold(noBidi(who))}${where}${used}\n    ${text}`;
+  // Its own line breaks kept, wrapped under its margin (FOL-311); a long one is cut, /sessions read has all of it.
+  const all = marginLines(noBidi(plainText(String(m?.text ?? ""))), (process.stdout.columns || 80) - 6);
+  const shown = all.slice(0, 20);
+  if (all.length > shown.length) shown.push(c.dim(`… ${all.length - shown.length} more lines`));
+  return `  ${c.bold(noBidi(who))}${where}${used}\n${shown.map((l) => (l ? `    ${l}` : "")).join("\n")}`;
 }
 
 async function workspaceOfRun(url, flags, layout, runId) {
@@ -14417,7 +14425,7 @@ async function messagesForTurn(s, interactive) {
   }
   if (!waiting.length) return [];
   const shown = waiting.slice(0, 20);
-  console.log(`  ${c.amber(`${waiting.length} message${waiting.length === 1 ? "" : "s"} from other sessions`)}${waiting.length > 20 ? c.dim(" (the first 20 can go in this turn)") : ""}`);
+  console.log(`\n  ${c.amber(`${waiting.length} message${waiting.length === 1 ? "" : "s"} from other sessions`)}${waiting.length > 20 ? c.dim(" (the first 20 can go in this turn)") : ""}`);
   for (const m of shown) console.log(sessionMessageLine(m));
   let yes;
   // Only an explicit yes from a person: what another session sent can steer
@@ -16240,12 +16248,13 @@ async function localKeyFor(s, cancel) {
       return made;
     });
   }
-  console.log(`  ${c.violet("◆")} ${c.bold("The agent's model calls are paid by your foldrun plan, or your foldrun credits")}`);
-  console.log(`    ${c.grey(`with a key made for this computer — the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all), kept only here; foldrun keys ls shows what it spent`)}`);
+  console.log(`  ${c.violet("◆")} ${c.bold("The agent's model calls are paid by your foldrun plan or credits")}`);
+  sayUnder("    ", `with a key made for this computer — the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all), kept only here; foldrun keys ls shows what it spent`, c.grey);
   const yes = ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
   if (cancel.asked) return null;
   if (yes !== "y" && yes !== "yes") {
-    console.log(`  ${c.dim("nothing made — the agent needs it to work on this computer; foldrun code --cloud works without one, and `foldrun login` (an admin, with model access ticked) makes your sign-in the model key too")}\n`);
+    sayUnder("  ", "nothing made — the agent needs it to work on this computer; foldrun code --cloud works without one, and `foldrun login` (an admin, with model access ticked) makes your sign-in the model key too", c.dim);
+    console.log();
     return null;
   }
   // Another session may have made one while this one asked.
@@ -16978,7 +16987,7 @@ async function localMessagesBlock(/** @type {any} */ s) {
   s.shownMessages ??= new Set();
   const fresh = waiting.filter((/** @type {any} */ m) => typeof m?.id === "string" && !s.shownMessages.has(m.id)).slice(0, 20);
   if (!fresh.length) return "";
-  console.log(`  ${c.amber(`${fresh.length} message${fresh.length === 1 ? "" : "s"} from other sessions`)}`);
+  console.log(`\n  ${c.amber(`${fresh.length} message${fresh.length === 1 ? "" : "s"} from other sessions`)}`);
   for (const m of fresh) console.log(sessionMessageLine(m));
   const answer = (await promptVisible(`  include ${fresh.length === 1 ? "it" : `these ${fresh.length}`} in this turn? [y/N] `)).trim();
   // Shown once, whatever the answer: /messages still lists them.
@@ -18446,9 +18455,9 @@ async function codeLocalTurn(s, text) {
           const summary = content.filter((b) => b.type === "thinking").map((b) => plainText(String(b.thinking ?? "")).trim()).filter(Boolean).join("\n\n");
           if (summary) {
             thought.push(summary);
-            const { lines, more } = thinkingLines(summary);
+            const { lines, more } = thinkingLines(summary, 30, (process.stdout.columns || 80) - 6);
             stopTicker();
-            console.log(`  ${c.dim("✻ thinking")}`);
+            console.log(`\n  ${c.dim("✻ thinking")}`);
             for (const l of lines) console.log(`    ${c.dim(l)}`);
             if (more) console.log(`    ${c.dim(`… ${more} more line${more === 1 ? "" : "s"} (/export --thinking writes all of it)`)}`);
             if (!cancel.asked && !turnOver) stopTicker = startTicker(started);

@@ -3551,6 +3551,62 @@ test("a message queued with Tab while a turn runs is sent when that turn has fin
   }
 });
 
+for (const cols of [200, 80]) test(`the transcript reads as separate blocks with their own margins at ${cols} columns: a message from another session keeps its paragraphs, thinking wraps under its indent (FOL-311)`, { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const long = "I should check the AWS Well-Architected guidance first, because observability lives in the Operational Excellence pillar and the person asked how it relates to security, which is its own pillar with its own design principles and review questions.";
+  const said = "Here is what I found so far.\n\nFirst paragraph: the logs go to CloudWatch.\nSecond line of it.\n\nSecond paragraph: alarms page the on-call person. " + "word ".repeat(40).trim();
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-fm/messages`]: () => ({ messages: [{ id: "m1", from: "ana", fromContext: "code-other", text: said }] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": () => sse([{ type: "thinking", thinking: `${long}\nThen answer.` }, { type: "text", text: "The answer.\n\nA second paragraph." }]),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-fm", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: String(cols) });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/model thinking on\r");
+    at = await t.until(/\w ❯ /, at);
+    const from = at;
+    t.send("one\r");
+    at = await t.until(/in this turn\? \[y\/N\]/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/✓ done/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    const screen = t.out().slice(from).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split(/\r?\n/).map((l) => l.split("\r").pop() ?? "");
+    const wide = screen.filter((l) => [...l].length > cols);
+    assert.deepEqual(wide, [], "no line runs past the edge");
+    // The message: its own block, a blank line above, paragraphs kept, every row under its margin.
+    const head = screen.findIndex((l) => /1 message from other sessions/.test(l));
+    assert.ok(head > 0 && screen[head - 1]!.trim() === "", "a blank line above the messages");
+    const body = screen.slice(head + 2, screen.findIndex((l, i) => i > head && /in this turn\?/.test(l)));
+    assert.match(body.join("\n"), /Here is what I found so far\.\n\n {4}First paragraph: the logs go to CloudWatch\.\n {4}Second line of it\.\n\n {4}Second paragraph/);
+    for (const l of body) assert.ok(l === "" || l.startsWith("    "), `under the margin: ${JSON.stringify(l)}`);
+    // Thinking: its own block, every row of it indented, the long line wrapped (not cut, not at column 0).
+    const th = screen.findIndex((l) => /✻ thinking/.test(l));
+    assert.ok(th > 0 && screen[th - 1]!.trim() === "", `a blank line above thinking: ${JSON.stringify(screen.slice(th - 3, th + 1))}`);
+    const rows = screen.slice(th + 1, screen.findIndex((l, i) => i > th && /Then answer\./.test(l)) + 1);
+    for (const l of rows) assert.ok(l.startsWith("    "), `thinking keeps its indent: ${JSON.stringify(l)}`);
+    assert.equal(rows.map((l) => l.trim()).join(" ").replace(" Then answer.", ""), long);
+    if (cols === 80) assert.ok(rows.length >= 4, "the long line wrapped at 80");
+    // The reply's paragraphs, and the done line on its own after a blank line.
+    assert.match(screen.join("\n"), /The answer\.\n\s*\n {2}A second paragraph\.\n\s*\n {2}✓ done/);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("/model thinking on shows the model's summary of its thinking above the reply, remembered for the person; off by default; /export --thinking writes it", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
