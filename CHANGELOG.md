@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.0.2] — 2026-11-25
+
+- fix(koder): --version names the version that runs — a staged update after foldrun update or an auto-update — not the installed files ([f154ad1](https://github.com/foldrun-io/foldrun-cli/commit/f154ad1))
+- fix(code): the memory watchdog finds ps by its path — a turn replaces PATH, and it saw nothing (FOL-240) ([d389eae](https://github.com/foldrun-io/foldrun-cli/commit/d389eae))
+- fix(cli): load commands with a Windows-compatible module specifier ([0006c64](https://github.com/foldrun-io/foldrun-cli/commit/0006c64))
+
+### ci
+
+- Windows smoke job (the CLI installed and run from PowerShell) (#292) ([a564d34](https://github.com/foldrun-io/foldrun-cli/commit/a564d34))
+
 ## [33.0.1] — 2026-11-25
 
 ### docs
