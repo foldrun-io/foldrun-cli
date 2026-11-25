@@ -992,6 +992,7 @@ test("a markdown table is drawn as columns, wrapped to the screen; too narrow, o
   for (const [l, w] of odd) for (const line of drawTable(l, w, c)!) assert.ok(displayWidth(plainOf(line)) <= w + 2, `${w}: ${plainOf(line)}`);
   assert.ok(drawTable(["| a | b |", "|---|---|", "| x | end\\| |"], 80, c)!.some((l) => plainOf(l).includes("end|")), "a trailing escaped bar is kept");
   formatReply(`| ${Array(140000).fill("h").join(" | ")} |\n|${Array(140000).fill("---").join("|")}|\n| v |`, 80, c);
+  formatReply(`| h |\n|---|\n${"| v |\n".repeat(140000)}`, 80, c);
   // Not a table (no rule row): kept as written.
   assert.equal(drawTable(["| a |", "| b |"], 80, c), null);
   assert.ok(formatReply("| just | bars |", 80, c).includes("| just | bars |"));

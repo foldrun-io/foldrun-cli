@@ -881,7 +881,9 @@ export function drawTable(lines, width, c) {
   const plain = (/** @type {string} */ t) => words(t).map((w) => w.map((x) => x.t).join("")).join(" ");
   const sep = " │ ";
   const room = width - (n - 1) * sep.length;
-  const natural = head.map((h, k) => Math.max(displayWidth(plain(h)), ...rows.map((r) => displayWidth(plain(/** @type {string} */ (r[k])))), 1));
+  // reduce, not Math.max(...): a table of many rows or columns would overflow the call (Codex).
+  const most = (/** @type {number[]} */ xs) => xs.reduce((a, b) => (b > a ? b : a), 0);
+  const natural = head.map((h, k) => Math.max(1, displayWidth(plain(h)), most(rows.map((r) => displayWidth(plain(/** @type {string} */ (r[k])))))));
   const MIN = 12;
   /** @type {number[]} */
   let cols;
@@ -909,7 +911,7 @@ export function drawTable(lines, width, c) {
     // largest cap that fits, never under MIN (n * MIN <= room here), the rest
     // of the room to the widest (Codex: no column is ever given less).
     let lo = MIN;
-    let hi = Math.max(...natural);
+    let hi = most(natural);
     while (lo < hi) {
       const mid = Math.ceil((lo + hi) / 2);
       if (natural.reduce((a, w) => a + Math.max(MIN, Math.min(w, mid)), 0) <= room) lo = mid;
@@ -927,7 +929,7 @@ export function drawTable(lines, width, c) {
   }
   const drawRow = (/** @type {string[]} */ cells, /** @type {boolean} */ bold) => {
     const wrapped = cells.map((cell, k) => wrapWords(words(cell), /** @type {number} */ (cols[k])));
-    const h = Math.max(...wrapped.map((w) => w.length));
+    const h = most(wrapped.map((w) => w.length));
     const out = [];
     for (let i = 0; i < h; i++) {
       out.push(`  ${wrapped.map((w, k) => {
