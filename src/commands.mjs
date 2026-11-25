@@ -16564,10 +16564,11 @@ function pickModel(/** @type {string} */ now, /** @type {ProxyCatalog | null} */
  * A list to choose one from, drawn in place: ↑/↓ (or j/k) to move, 1–9 or
  * Enter to choose, Esc, q or Ctrl-C for none. `tick` is ticked and where
  * the cursor starts.
- * @param {{ title: string, subtitle?: string, choices: Array<{ v: string, name: string, note: string }>, tick?: string | null, start?: string }} o
+ * `signal` aborting, or the keyboard closing, is none too.
+ * @param {{ title: string, subtitle?: string, choices: Array<{ v: string, name: string, note: string }>, tick?: string | null, start?: string, signal?: AbortSignal }} o
  * @returns {Promise<string | null>}
  */
-function pickOne({ title, subtitle = "", choices, tick = null, start = undefined }) {
+function pickOne({ title, subtitle = "", choices, tick = null, start = undefined, signal = undefined }) {
   holdReadyTicker();
   // The cursor starts at `start` when it is given (a command's list: what it did typed alone), else at the tick.
   let at = Math.max(0, choices.findIndex((x) => x.v === (start === undefined ? tick : start)));
@@ -16611,8 +16612,11 @@ function pickOne({ title, subtitle = "", choices, tick = null, start = undefined
     let lone;
     let over = false;
     const done = (/** @type {string | null} */ v) => {
+      if (over) return;
       over = true;
       clearTimeout(lone);
+      signal?.removeEventListener("abort", gone);
+      process.stdin.off("end", gone);
       process.stdin.off("data", onData);
       process.stdin.setRawMode(false);
       process.stdin.pause();
@@ -16651,6 +16655,10 @@ function pickOne({ title, subtitle = "", choices, tick = null, start = undefined
         }
       }
     };
+    const gone = () => done(null);
+    if (signal?.aborted) return resolve(null);
+    signal?.addEventListener("abort", gone, { once: true });
+    process.stdin.once("end", gone);
     draw();
     process.stdin.setRawMode(true);
     process.stdin.on("data", onData);
@@ -18237,8 +18245,14 @@ async function codeLocalTurn(s, text) {
           /** @type {string | null} */
           let answer = null;
           if (q.options.length) {
+            // A choice too long for its row is shown whole first, so two that start alike can be told apart (Codex).
+            if (q.options.some((o) => o.length + 8 > width)) q.options.forEach((o, i) => {
+              const lines = [];
+              for (let k = 0; k < o.length; k += width - 4) lines.push(o.slice(k, k + width - 4));
+              lines.forEach((l, j) => console.log(`    ${c.white(j ? `   ${l}` : `${i + 1}. ${l}`)}`));
+            });
             const OWN = "\u0000own";
-            const v = await pickOne({ title: "your answer", choices: [...q.options.map((o, i) => ({ v: String(i), name: o, note: "" })), { v: OWN, name: "type my own answer…", note: "" }] });
+            const v = await pickOne({ signal, title: "your answer", choices: [...q.options.map((o, i) => ({ v: String(i), name: o, note: "" })), { v: OWN, name: "type my own answer…", note: "" }] });
             if (v === OWN) answer = ((await cancellablePrompt(`    ${c.grey("your answer:")} `, cancel)) ?? "").trim();
             else if (v !== null) answer = /** @type {string} */ (q.options[Number(v)]);
           } else answer = ((await cancellablePrompt(`    ${c.grey("your answer (Enter for none):")} `, cancel)) ?? "").trim();
