@@ -29,12 +29,18 @@ with `415` and says why: save it as `.docx`/`.xlsx`/`.pptx` first.
 
 | `lang` | OCR reads | Speech is heard as |
 |---|---|---|
-| `auto` (default) | Persian and English (`fas+eng`) | the language Whisper detects in the first part; Persian goes to the Persian model |
+| `auto` (default) | English (`eng`) first; Persian and English (`fas+eng`) when English reads the page badly | the language Whisper detects in the first part; Persian goes to the Persian model |
 | `fa` | Persian and English (`fas+eng`) | Persian, on the Persian model |
 | `en` | English (`eng`) | English |
 
 OCR uses Tesseract's most accurate trained models (`tessdata_best`) for
-Persian and English. Persian text is normalised — Arabic ي and ك to Persian
+Persian and English. Under `auto` an image or scanned page is read in English
+first and kept when English reads it confidently; otherwise it is read again
+as Persian and English. Reading an English page with the Persian model loaded
+can turn digits wrong (`93.50` read as `0`), so set `lang: en` when you know
+the page is English and `lang: fa` when it is Persian. A read that finds no
+text is tried once more at half size. The language that read it is in the
+result's `engine` (`tesseract:eng` or `tesseract:fas+eng`). Persian text is normalised — Arabic ي and ك to Persian
 ی and ک — so it searches and compares as typed. Speech in Persian goes to a
 Whisper model fine-tuned on Persian; every other language to the general
 Whisper large-v3-turbo model.
