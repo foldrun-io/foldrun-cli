@@ -12,6 +12,29 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.6.0] — 2026-11-25
+
+### New in the public API
+
+- the `--sent` flag
+- the `--with` flag
+
+- fix(code): --with check reads the flag's type, so the switch test sees no boolean (FOL-307) ([8a6b2e0](https://github.com/foldrun-io/foldrun-cli/commit/8a6b2e0))
+- fix(code): --json refuses an older platform's inbox for --with/--sent too (FOL-307, Codex) ([24f377d](https://github.com/foldrun-io/foldrun-cli/commit/24f377d))
+- fix(code): /sessions <id> keeps the id's case; an older platform's inbox is never shown as a thread; only a time is printed from at (FOL-307, Codex) ([d3afd13](https://github.com/foldrun-io/foldrun-cli/commit/d3afd13))
+- feat(code): /sessions <id> shows the thread with a session; a sent message is a line of it; sessions messages --with/--sent (FOL-307) ([46308d5](https://github.com/foldrun-io/foldrun-cli/commit/46308d5))
+- fix(code): during a turn's setup every question hands the keyboard back after it too (FOL-306, Codex) ([3054b69](https://github.com/foldrun-io/foldrun-cli/commit/3054b69))
+- fix(code): the keyboard is handed back only when the turn's setup asks; a draft is cut by characters (FOL-306, Codex) ([158ce91](https://github.com/foldrun-io/foldrun-cli/commit/158ce91))
+- fix(code): the turn's end reads the draft after the handing back (FOL-306, Codex) ([b7ea41f](https://github.com/foldrun-io/foldrun-cli/commit/b7ea41f))
+- fix(code): one handing back, its text taken by the first caller only (FOL-306, Codex) ([0df450d](https://github.com/foldrun-io/foldrun-cli/commit/0df450d))
+- fix(code): every caller of stop() shares one handing back; a draft keeps its spaces across a prompt (FOL-306, Codex) ([c408f5b](https://github.com/foldrun-io/foldrun-cli/commit/c408f5b))
+- fix(code): a draft survives a prompt, keys are read through the turn's lookups, job tickers show what is typed, the keyboard comes back unless the turn is over (FOL-306, Codex) ([60df4c9](https://github.com/foldrun-io/foldrun-cli/commit/60df4c9))
+- fix(code): on a turn on this computer what is typed shows on the working line as it is typed (FOL-306) ([7b7de41](https://github.com/foldrun-io/foldrun-cli/commit/7b7de41))
+
+### docs
+
+- sync (FOL-306) ([6e4c00b](https://github.com/foldrun-io/foldrun-cli/commit/6e4c00b))
+
 ## [32.5.0] — 2026-11-25
 
 - fix(code): messages_gone passes through codeLocalTurn's own catch (FOL-305, Codex) ([bc10919](https://github.com/foldrun-io/foldrun-cli/commit/bc10919))
