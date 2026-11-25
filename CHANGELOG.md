@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.0.1] — 2026-11-25
+
+### docs
+
+- sync (FOL-327) ([027b149](https://github.com/foldrun-io/foldrun-cli/commit/027b149))
+
 ## [33.0.0] — 2026-11-25
 
 ### Breaking changes
