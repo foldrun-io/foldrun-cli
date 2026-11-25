@@ -3551,6 +3551,113 @@ test("a message queued with Tab while a turn runs is sent when that turn has fin
   }
 });
 
+test("a message from another session shows at an idle prompt with no key pressed; Enter shows it whole and asks once; a yes takes it into the turn (FOL-305)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  let arrived = false;
+  const msg = { id: "m1", from: "ana", fromContext: "code-other", text: "Line one of the note.\n\nPlease check the build." };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-ms/messages`]: () => ({ messages: arrived ? [msg] : [] }),
+    [`POST ${WS}/sessions/code-ms/messages/take`]: () => ({ taken: [msg] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return sse([{ type: "text", text: "Checked it." }]);
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-ms", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "120", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    await new Promise((r) => setTimeout(r, 700));
+    assert.doesNotMatch(t.out().slice(at), /a message from/, "nothing before one arrives");
+    arrived = true;
+    at = await t.until(/✉ a message from code-other — Line one of the note\. Please check the build\.[\s\S]*Enter on an empty line takes it into a turn/, at, 10_000);
+    // Said once, however often it is looked for.
+    await new Promise((r) => setTimeout(r, 900));
+    assert.equal((t.out().slice(at).match(/a message from code-other/g) ?? []).length, 0, "said once");
+    t.send("\r");
+    at = await t.until(/1 message from other sessions[\s\S]*Line one of the note\.\r?\n\s*\n\s+Please check the build\.[\s\S]*take it into a turn now\? \[y\/N\]/, at, 10_000);
+    t.send("y\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Checked it\./, at, 30_000);
+    assert.doesNotMatch(t.out().slice(at - 4000), /include it in this turn\?/, "not asked a second time");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  const sent = JSON.stringify(asked[0]?.messages ?? []);
+  assert.match(sent, /Please check the build\./, "the message went with the turn");
+});
+
+test("on a real terminal what is typed stays on the line when a message is said above it (FOL-305)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let arrived = false;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-mt/messages`]: () => ({ messages: arrived ? [{ id: "m1", fromContext: "code-other", text: "hi" }] : [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-mt", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", COLUMNS: "120", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/desk.*❯/);
+    t.send("half typ");
+    at = await t.until(/half typ/, at);
+    arrived = true;
+    at = await t.until(/a message from code-other/, at, 10_000);
+    // Drawn again under the line that was said, so the person goes on typing where they were.
+    at = await t.until(/half typ/, at, 5_000);
+    t.send("\x03");
+    t.send("\x03");
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("an empty Enter with a message waiting and a no starts nothing (FOL-305)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let calls = 0;
+  const msg = { id: "m1", from: "ana", fromContext: "code-other", text: "Do the thing." };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-mn/messages`]: () => ({ messages: [msg] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/messages": () => (calls++, sse([{ type: "text", text: "should not run" }])),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-mn", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "120", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    at = await t.until(/✉ a message from code-other/, at, 10_000);
+    t.send("\r");
+    at = await t.until(/take it into a turn now\? \[y\/N\]/, at, 10_000);
+    t.send("n\r");
+    at = await t.until(/left waiting/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(calls, 0);
+});
+
 for (const cols of [200, 80]) test(`the transcript reads as separate blocks with their own margins at ${cols} columns: a message from another session keeps its paragraphs, thinking wraps under its indent (FOL-311)`, { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

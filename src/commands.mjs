@@ -14423,6 +14423,8 @@ async function messagesForTurn(s, interactive) {
   }
   if (!waiting.length) return [];
   const shown = waiting.slice(0, 20);
+  const pre = takeMessagesYes(s);
+  if (interactive && shown.every((m) => pre.has(String(m.id)))) return shown.map((m) => String(m.id));
   console.log(`\n  ${c.amber(`${waiting.length} message${waiting.length === 1 ? "" : "s"} from other sessions`)}${waiting.length > 20 ? c.dim(" (the first 20 can go in this turn)") : ""}`);
   for (const m of shown) console.log(sessionMessageLine(m));
   let yes;
@@ -16985,9 +16987,13 @@ async function localMessagesBlock(/** @type {any} */ s) {
   s.shownMessages ??= new Set();
   const fresh = waiting.filter((/** @type {any} */ m) => typeof m?.id === "string" && !s.shownMessages.has(m.id)).slice(0, 20);
   if (!fresh.length) return "";
-  console.log(`\n  ${c.amber(`${fresh.length} message${fresh.length === 1 ? "" : "s"} from other sessions`)}`);
-  for (const m of fresh) console.log(sessionMessageLine(m));
-  const answer = (await promptVisible(`  include ${fresh.length === 1 ? "it" : `these ${fresh.length}`} in this turn? [y/N] `)).trim();
+  // Said yes to at the prompt, after each was shown whole (FOL-305): not shown or asked again.
+  const pre = takeMessagesYes(s);
+  const answer = fresh.every((/** @type {any} */ m) => pre.has(m.id)) ? "y" : await (async () => {
+    console.log(`\n  ${c.amber(`${fresh.length} message${fresh.length === 1 ? "" : "s"} from other sessions`)}`);
+    for (const m of fresh) console.log(sessionMessageLine(m));
+    return (await promptVisible(`  include ${fresh.length === 1 ? "it" : `these ${fresh.length}`} in this turn? [y/N] `)).trim();
+  })();
   // Shown once, whatever the answer: /messages still lists them.
   for (const m of fresh) s.shownMessages.add(m.id);
   if (!/^y(es)?$/i.test(answer)) {
@@ -19547,17 +19553,25 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         console.log(`  ${c.cyan("↑")} ${c.grey(!up.ready ? `foldrun ${up.version} is out — a major version, which may change what worked: foldrun update takes it, then /restart` : `foldrun ${up.version} is ready — /restart to use it (this conversation continues)`)}\n`);
       }
     }
-    const line = fromQueue ?? (await readCodeMessage(prompt, completer, s));
+    let line = fromQueue ?? (await readCodeMessage(prompt, completer, s));
     if (isLeave(line)) {
       await s.mcp?.closeAll?.().catch(() => undefined);
       await s.box?.close?.().catch(() => undefined);
       console.log(`\n  ${c.dim(s.turns ? `to go on later: foldrun code --continue${dir === process.cwd() ? "" : ` ${plainText(dir)}`}` : "bye")}\n`);
       return 0;
     }
+    // Enter on an empty line with messages waiting: a turn that takes them in, asked first as always (FOL-305).
+    let forMessages = false;
+    if (!line && !fromQueue && (s.messagesWaiting ?? 0) > 0) {
+      s.messagesWaiting = 0;
+      if (!(await messagesAtPrompt(s))) continue;
+      forMessages = true;
+      line = "Read the message from the other session and answer it.";
+    }
     if (!line) continue;
     // `/setup mcp add` is where a token gets pasted by mistake: refused there, and never kept (Codex).
     // Anywhere in the line: a stopped turn puts what was queued back joined into one (Codex).
-    const keepLine = !/(?:^|\s)\/(?:setup\s+)?mcp\s+add\b/i.test(line);
+    const keepLine = !forMessages && !/(?:^|\s)\/(?:setup\s+)?mcp\s+add\b/i.test(line);
     if (keepLine) appendHistory(historyFile, line);
     if (keepLine) prompt.history = [line.replace(/\s*\n\s*/g, " "), ...prompt.history.filter((h) => h !== line)].slice(0, 500);
     if (line.startsWith("!")) {
@@ -21099,6 +21113,85 @@ function slashMenu(rl, all, promptCells, status = () => /** @type {string[]} */ 
   };
 }
 
+/** The messages the person let in at the prompt (FOL-305), taken once by the next turn. @returns {Set<string>} */
+function takeMessagesYes(/** @type {any} */ s) {
+  const got = s.messagesYes instanceof Set ? s.messagesYes : new Set();
+  delete s.messagesYes;
+  return got;
+}
+
+/**
+ * Enter on an empty line with messages waiting (FOL-305): each shown whole, then one question. A yes lets
+ * exactly those into the turn that follows; a no starts nothing. @returns {Promise<boolean>} a turn is due
+ */
+async function messagesAtPrompt(/** @type {any} */ s) {
+  let waiting = [];
+  try {
+    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
+    waiting = Array.isArray(got?.messages) ? got.messages : [];
+  } catch (err) {
+    console.log(`  ${c.dim(`the messages could not be read: ${plainText(explain(err))}`)}\n`);
+    return false;
+  }
+  const shown = waiting.filter((/** @type {any} */ m) => typeof m?.id === "string" && !(s.shownMessages instanceof Set && s.shownMessages.has(m.id))).slice(0, 20);
+  if (!shown.length) {
+    console.log(`  ${c.dim("nothing is waiting any more")}\n`);
+    return false;
+  }
+  console.log(`\n  ${c.amber(`${shown.length} message${shown.length === 1 ? "" : "s"} from other sessions`)}`);
+  for (const m of shown) console.log(sessionMessageLine(m));
+  const yes = /^y(es)?$/i.test((await promptVisible(`  take ${shown.length === 1 ? "it" : `these ${shown.length}`} into a turn now? [y/N] `)).trim());
+  if (!yes) {
+    console.log(`  ${c.dim("left waiting — /sessions read lists them")}\n`);
+    return false;
+  }
+  s.messagesYes = new Set(shown.map((/** @type {any} */ m) => String(m.id)));
+  return true;
+}
+
+/** How often an idle prompt looks for messages from other sessions (FOL-305). */
+const MESSAGE_POLL_MS = () => Math.max(200, Number(process.env.FOLDRUN_CODE_MESSAGE_POLL_MS) || 5_000);
+
+/**
+ * While the prompt waits: look for messages sent to this session, and say each new one once, above the
+ * prompt, with who sent it and how to take it in (FOL-305). Nothing is included here — the turn asks.
+ * Returns the stop.
+ * @param {any} s @param {(line: string) => void} say
+ */
+function watchMessages(s, say) {
+  if (!s?.url || !s?.ws || !s?.context || s.headless) return undefined;
+  let busy = false;
+  let stopped = false;
+  const look = async () => {
+    if (busy || stopped) return;
+    busy = true;
+    try {
+      const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/sessions/${enc(s.context)}/messages?waiting=1`);
+      if (stopped) return;
+      const waiting = (Array.isArray(got?.messages) ? got.messages : []).filter((/** @type {any} */ m) => typeof m?.id === "string" && !(s.shownMessages instanceof Set && s.shownMessages.has(m.id)));
+      s.messagesWaiting = waiting.length;
+      const said = (s.messagesSaid ??= new Set());
+      const fresh = waiting.filter((/** @type {any} */ m) => !said.has(m.id));
+      for (const m of fresh) said.add(m.id);
+      if (!fresh.length) return;
+      const from = [...new Set(fresh.map((/** @type {any} */ m) => noBidi(plainText(String(m.fromContext ?? m.from ?? "another session")))))];
+      const preview = fresh.length === 1 ? ` — ${clipLine(noBidi(plainText(String(fresh[0].text ?? ""))).replace(/\s+/g, " ").trim())}` : "";
+      say(`  ${c.amber("✉")} ${c.bold(`${fresh.length === 1 ? "a message" : `${fresh.length} messages`} from ${from.slice(0, 3).join(", ")}${from.length > 3 ? ` and ${from.length - 3} more` : ""}`)}${c.grey(preview)}\n    ${c.dim("Enter on an empty line takes it into a turn (you are asked first) · /sessions read shows it whole")}`);
+    } catch {
+      // Not reachable now: looked for again next time, never a line about it.
+    } finally {
+      busy = false;
+    }
+  };
+  const every = setInterval(look, MESSAGE_POLL_MS());
+  every.unref?.();
+  setImmediate(look);
+  return () => {
+    stopped = true;
+    clearInterval(every);
+  };
+}
+
 async function readCodeMessage(state, completer, s) {
   const { createInterface } = await import("node:readline");
   // The project's name, then a chevron (owner, 19 Nov 2026): where you are
@@ -21140,6 +21233,16 @@ async function readCodeMessage(state, completer, s) {
     // The cache's minutes stay true while the prompt waits (Codex): redrawn once a minute.
     const ticking = menu && lineOn ? setInterval(() => !settled && !menu.open && search?.searching !== true && menu.refresh(), 60_000) : undefined;
     ticking?.unref?.();
+    // A message from another session shows while the prompt waits (FOL-305): looked for every few seconds,
+    // a line above the prompt, what is typed kept. Letting it into a turn still asks the person.
+    const above = (/** @type {string} */ text) => {
+      if (settled) return;
+      menu?.erase();
+      process.stdout.write(`\r\x1b[2K${text}\n`);
+      rl.prompt(true);
+      if (menu) setImmediate(() => !settled && menu.refresh());
+    };
+    const watching = s ? watchMessages(s, above) : undefined;
     if (tty && search) /** @type {any} */ (input).route((/** @type {Buffer} */ data, /** @type {(t: string) => void} */ write) => {
       if (menu?.key(data, write)) return;
       search.feed(data, write);
@@ -21196,6 +21299,7 @@ async function readCodeMessage(state, completer, s) {
       settled = true;
       clearTimeout(timer);
       clearInterval(ticking);
+      watching?.();
       menu?.erase();
       offBracketed();
       search?.end();
