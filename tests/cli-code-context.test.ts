@@ -224,8 +224,9 @@ test("suggestions: what starts with the typed part first, then what holds it; no
   const all = [...CODE_COMMANDS.map(([n, d]) => ({ name: String(n).split(" ")[0]!, desc: String(d) })), { name: "/fix-tests", desc: "Run the tests", kind: "command" }];
   assert.equal(slashMatches("/", all).length, all.length);
   assert.deepEqual(slashMatches("/co", all).map((x) => x.name), ["/compact"]);
-  assert.deepEqual(slashMatches("/st", all).map((x) => x.name), ["/status", "/restart", "/fix-tests"]);
+  assert.deepEqual(slashMatches("/st", all).map((x) => x.name), ["/status", "/fix-tests"]);
   assert.deepEqual(slashMatches("/se", all).map((x) => x.name), ["/setup", "/sessions"]);
+  assert.deepEqual(slashMatches("/up", all).map((x) => x.name), ["/update", "/setup"]);
   assert.deepEqual(slashMatches("/model max", all), []);
   assert.deepEqual(slashMatches("hello", all), []);
   assert.deepEqual(slashMatches("/zzz", all), []);

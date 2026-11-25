@@ -22,7 +22,8 @@ const LOCKED = [
   // Status
   "/status", "/sessions",
   // App
-  "/help", "/restart", "/quit",
+  // /update: the owner's yes, 26 Nov 2026 (FOL-335) — it took /restart
+  "/help", "/update", "/quit",
 ];
 
 const WHY = "a new top-level command needs the owner's yes (CLAUDE.md, Related options are one command, LOCKED); add it as an option of an existing command instead";

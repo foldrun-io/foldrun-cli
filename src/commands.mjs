@@ -21,7 +21,7 @@ import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
 import { giveHint, hintLine, CACHE_TTL_MS } from "./code-hints.mjs";
 import { DEPLOY_PAGE, DEPLOY_TITLE, DEPLOY_GUIDE } from "./code-deploy.mjs";
 import { statusFields, wrapFields, BYPASS_FIELD } from "./code-statusline.mjs";
-import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED_OVER } from "./self-update.mjs";
+import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED_OVER, autoUpdateSetting, setAutoUpdate, checkAndUpdate, isGlobalInstall, announcement } from "./self-update.mjs";
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
@@ -16172,7 +16172,7 @@ function statusBlock(s, url) {
     s.account ? row("account", plainText(s.account.label)) : null,
     row("foldrun", (() => {
       const up = stagedUpdate(CLI_VERSION);
-      return `${CLI_VERSION}${up ? (!up.ready ? ` · ${up.version} is out (a major: foldrun update, then /restart)` : ` · ${up.version} is ready — /restart`) : ""}`;
+      return `${CLI_VERSION}${up ? (!up.ready ? ` · ${up.version} is out — /update now` : ` · ${up.version} is ready — /update restart`) : ""}`;
     })()),
     row("agent", `${s.agent} in project ${s.ws}`),
     row("platform", url),
@@ -16274,9 +16274,9 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
         else if (queue.add(t)) text = "";
       } else if (k === "\t") text = text && !text.endsWith(" ") ? `${text} ` : text;
       else if (k === "\x7f" || k === "\b") text = [...text].slice(0, -1).join("");
-      // /restart with Enter during any turn, here or in the cloud: queued for after it, never words for the agent (FOL-261).
+      // /update now|restart with Enter during any turn, here or in the cloud: queued for after it, never words for the agent (FOL-261).
       else if ((k === "\r" || k === "\n") && queue && alone && isRestartLine(text)) {
-        if (queue.add("/restart")) text = "";
+        if (queue.add(text.trim().replace(/\s+/g, " ").toLowerCase())) text = "";
       } else if ((k === "\r" || k === "\n") && onSend && alone && text.trim()) {
         const t = text.trim();
         text = "";
@@ -16327,8 +16327,8 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
   };
 }
 
-/** A line that is the /restart command: its name exactly, as the prompt parser reads one (Codex). */
-const isRestartLine = (/** @type {string} */ t) => /^\/restart(?:\s|$)/i.test(t.trim()) && /^\/restart$/i.test(/^(\/[\w:?-]*)/.exec(t.trim())?.[1] ?? "");
+/** A line that starts foldrun again — /update now or /update restart: the name exactly, as the prompt parser reads one (Codex). */
+const isRestartLine = (/** @type {string} */ t) => /^\/update\s+(now|restart)\s*$/i.test(t.trim());
 
 /** How many messages wait for the turn to end: the working line says so. */
 let queuedNow = 0;
@@ -16354,7 +16354,12 @@ function queueOf(/** @type {any} */ s) {
       }
       // One restart, however often it is asked for (Codex).
       if (isRestartLine(t) && list.some(isRestartLine)) {
-        console.log(`  ${c.dim("/restart is queued already")}`);
+        // /update now asks for more than a restart: it takes the queued restart's place (Codex).
+        const i = list.findIndex(isRestartLine);
+        if (/\bnow\b/i.test(t) && !/\bnow\b/i.test(list[i] ?? "")) {
+          list[i] = "/update now";
+          console.log(`  ${c.dim("after this turn foldrun updates, then starts again")}`);
+        } else console.log(`  ${c.dim("foldrun starts again after this turn already")}`);
         return true;
       }
       if (list.length >= 20) {
@@ -20235,7 +20240,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     },
   });
   process.once("exit", () => watchdog.stop());
-  // A /restart hands over to a new session in a child of this process: this one's watchdog and record end first,
+  // A restart (/update restart or now) hands over to a new session in a child of this process: this one's watchdog and record end first,
   // never policing the next session's processes with this one's limit (Codex).
   SESSION_END.add(() => {
     watchdog.stop();
@@ -20281,7 +20286,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   if (flags.continue === true && !onlyHere && flags.local !== true ? resumed?.localOnly === true || localOnly : localOnly) /** @type {any} */ (s).localOnly = true;
   // Off only by the person's own word: the flag, or their environment (never a file of the folder).
   if (flags["no-sandbox"] === true || flags.sandbox === false || process.env.FOLDRUN_CODE_SANDBOX === "off") /** @type {any} */ (s).sandboxOff = true;
-  // A /restart hands strict approvals on (FOL-261): only ever stricter, so the variable cannot loosen anything.
+  // A restart (/update restart or now) hands strict approvals on (FOL-261): only ever stricter, so the variable cannot loosen anything.
   if (process.env.FOLDRUN_CODE_STRICT === "1") /** @type {any} */ (s).strict = true;
   // One session, two places (24 Nov 2026): what was said on one side goes
   // ahead of the next message on the other, once.
@@ -21001,13 +21006,13 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         console.log(`  ${c.amber("!")} ${c.grey(`the turn did not finish${s.mode === "cloud" ? " (or its patch was not put in the folder)" : ""}, so ${kept.length === 1 ? "the queued message was" : `the ${kept.length} queued messages were`} not sent — ${kept.length === 1 ? "it is" : "they are"} on your line`)}`);
       }
     }
-    // Between turns (FOL-261): the daily look for a newer foldrun, and once a session, a version ready for /restart.
+    // Between turns (FOL-261): the daily look for a newer foldrun, and once a session, a version ready for /update restart.
     if (!fromQueue) {
       sessionCheck(CLI_VERSION);
       const up = stagedUpdate(CLI_VERSION);
       if (up && /** @type {any} */ (s).updateSaid !== `${up.version}:${up.ready}`) {
         /** @type {any} */ (s).updateSaid = `${up.version}:${up.ready}`;
-        console.log(`  ${c.cyan("↑")} ${c.grey(!up.ready ? `foldrun ${up.version} is out — a major version, which may change what worked: foldrun update takes it, then /restart` : `foldrun ${up.version} is ready — /restart to use it (this conversation continues)`)}\n`);
+        console.log(`  ${c.cyan("↑")} ${c.grey(!up.ready ? `foldrun ${up.version} is out — a major version, which may change what worked: /update now takes it (this conversation continues)` : `foldrun ${up.version} is ready — /update restart to use it (this conversation continues)`)}\n`);
       }
     }
     let line = fromQueue ?? (await readCodeMessage(prompt, completer, s));
@@ -21046,6 +21051,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     /** What a command's list needs to know now (FOL-259): read only for the command typed. */
     const menuState = async (/** @type {string} */ cmd) => {
       if (cmd === "/model") return { thinking: readCodePrefs().thinking === true, effort: typeof s.effort === "string" ? s.effort : undefined };
+      if (cmd === "/update") return { auto: autoUpdateSetting().on, update: stagedUpdate(CLI_VERSION)?.version };
       // This folder's, then the project's in the cloud that it does not keep (FOL-264): numbered as /resume <n> reads them.
       if (cmd === "/resume") {
         s.resumeShown = [...(Array.isArray(s.past) ? s.past : []), ...(await cloudConversations(s))];
@@ -21175,13 +21181,81 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       say(`${rest ? `/setup has no ${plainText(rest.split(/\s+/)[0] ?? "")} — ` : ""}/setup instructions · skills · agents · mcp [on|off|tools|add|rm …] · dirs [path] · check`);
       continue;
     }
-    if (name === "/restart") {
+    if (name === "/update") {
+      // foldrun itself (owner, 26 Nov 2026, FOL-335): update, check, auto-update on/off, start again. /restart merged in.
+      const [verb = "", arg = ""] = rest.toLowerCase().split(/\s+/).filter(Boolean);
+      if (verb === "auto") {
+        if (arg !== "on" && arg !== "off") {
+          const a = autoUpdateSetting();
+          say(`auto-update is ${a.on ? "on" : "off"}${a.by === "env" ? " (FOLDRUN_NO_AUTO_UPDATE is set)" : ""} — /update auto on|off`);
+          continue;
+        }
+        try {
+          setAutoUpdate(arg === "on");
+        } catch (err) {
+          say(`the setting could not be saved: ${plainText(err instanceof Error ? err.message : String(err))}`);
+          continue;
+        }
+        const a = autoUpdateSetting();
+        say(arg === "on"
+          ? `auto-update on — foldrun looks for a newer release once a day and installs patches and features itself${a.on ? "" : " (but FOLDRUN_NO_AUTO_UPDATE is set in this shell, and it wins)"}`
+          : "auto-update off — nothing installs by itself; /update now takes the latest when you want it");
+        continue;
+      }
+      if (verb === "check" || verb === "now") {
+        if (verb === "now" && !isGlobalInstall(actingFor())) {
+          say(`this foldrun (${CLI_VERSION}) is not the one npm i -g installed (a git checkout, an npx cache or a project's own copy), so it is not updated — npm i -g foldrun@latest installs one`);
+          continue;
+        }
+        // Not while what is queued is still to run: a restart then would drop it (Codex, FOL-261).
+        if (verb === "now" && Array.isArray(s.queue) && s.queue.filter((/** @type {string} */ x) => !isRestartLine(x)).length) {
+          s.queue = s.queue.filter((/** @type {string} */ x) => !isRestartLine(x));
+          s.queue.push("/update now");
+          queuedNow = s.queue.length;
+          say(`${s.queue.length - 1} queued message${s.queue.length === 2 ? "" : "s"} go first — the update runs after them`);
+          continue;
+        }
+        if (verb === "now") console.log(`  ${c.dim("asking npm for the latest foldrun and installing it — up to a minute")}`);
+        /** @type {any} */
+        let r;
+        try {
+          r = checkAndUpdate({ current: CLI_VERSION, install: verb === "now", major: true });
+        } catch (err) {
+          // A staging folder that cannot be written throws: said, and the session goes on (Codex).
+          r = { did: "failed", error: err instanceof Error ? err.message : String(err), latest: "the latest" };
+        }
+        const ready = stagedUpdate(CLI_VERSION);
+        // Started again only onto a version a start will run: with FOLDRUN_NO_AUTO_UPDATE set there is no hand-over (Codex).
+        if (verb === "now" && r.did === "updated" && !ready?.ready) {
+          say(`foldrun updated ${CLI_VERSION} → ${plainText(String(r.latest))} — FOLDRUN_NO_AUTO_UPDATE is set in this shell, so a start would run ${CLI_VERSION} again; unset it, then /update restart`);
+          continue;
+        }
+        if (verb === "check" || !(r.did === "updated" || (r.did === "current" && ready?.ready))) {
+          const said = {
+            busy: "an update is already running — try again in a minute",
+            unreachable: `npm could not be asked for the latest foldrun: ${r.error ?? ""}`,
+            current: ready?.ready ? `foldrun ${ready.version} is installed and ready — /update restart uses it` : `foldrun ${r.running ?? CLI_VERSION} is the latest`,
+            available: `foldrun ${r.latest} is out (this is ${CLI_VERSION})${r.major ? " — a major version" : ""}: /update now takes it`,
+            failed: `updating to ${r.latest} failed: ${r.error ?? ""} — npm i -g foldrun@latest installs it by hand`,
+            updated: `foldrun updated ${CLI_VERSION} → ${r.latest}`,
+            major: `foldrun ${r.latest} is out — /update now takes it`,
+          }[r.did];
+          const a = autoUpdateSetting();
+          say(`${plainText(String(said))}${verb === "check" ? ` · auto-update ${a.on ? "on" : "off"}` : ""}`);
+          continue;
+        }
+        if (r.did === "updated") announcement(String(r.latest));
+        // Updated (or one was ready): start again on it, below.
+      } else if (verb !== "restart") {
+        say(`${verb ? `/update has no ${plainText(verb)} — ` : ""}/update now · check · auto on|off · restart`);
+        continue;
+      }
       // What was queued goes first: the restart waits behind it (Codex).
       if (Array.isArray(s.queue)) s.queue = s.queue.filter((/** @type {string} */ x) => !isRestartLine(x));
       if (Array.isArray(s.queue) && s.queue.length) {
-        s.queue.push("/restart");
+        s.queue.push("/update restart");
         queuedNow = s.queue.length;
-        say(`${s.queue.length - 1} queued message${s.queue.length === 2 ? "" : "s"} go first — /restart runs after them`);
+        say(`${s.queue.length - 1} queued message${s.queue.length === 2 ? "" : "s"} go first — foldrun starts again after them`);
         continue;
       }
       // The installed foldrun again, on this folder, place, account, agent and conversation (FOL-261).
@@ -22970,7 +23044,7 @@ async function readCodeMessage(state, completer, s) {
 
 /** What the person runs themselves (`!cmd`): never counted or stopped by the memory watchdog (FOL-240). */
 const PERSON_PIDS = new Set();
-/** What a session undoes when it hands over to the next (/restart): its watchdog, its record of what it holds. */
+/** What a session undoes when it hands over to the next (/update restart): its watchdog, its record of what it holds. */
 const SESSION_END = new Set();
 
 /**

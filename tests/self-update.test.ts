@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { updateKind, skipReason, announcement, checkAndUpdate, stagedUpdate, readState, activeBin, versionsDir, installDir, stateFile, CHECK_EVERY_MS, HANDED_OVER } from "../src/self-update.mjs";
+import { updateKind, skipReason, announcement, checkAndUpdate, stagedUpdate, readState, activeBin, versionsDir, installDir, stateFile, CHECK_EVERY_MS, HANDED_OVER, autoUpdateSetting, setAutoUpdate } from "../src/self-update.mjs";
 
 test("updateKind: a newer minor or patch installs, a newer major is only announced, nothing else", () => {
   assert.equal(updateKind("27.2.0", "27.1.0"), "install");
@@ -23,11 +23,21 @@ test("updateKind: a newer minor or patch installs, a newer major is only announc
 const npmCopy = path.join(path.sep, "usr", "lib", "node_modules", "foldrun");
 
 test("skipReason: off, CI, no terminal, a git checkout, already checked today; else it looks", () => {
-  const base = { env: {} as NodeJS.ProcessEnv, tty: true, now: Date.parse("2026-11-20T10:00:00Z"), state: {}, pkgRoot: npmCopy };
+  // A home of its own: the person's auto-update setting is read from it (FOL-335).
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-skip-"));
+  const base = { env: { FOLDRUN_HOME: home } as NodeJS.ProcessEnv, tty: true, now: Date.parse("2026-11-20T10:00:00Z"), state: {}, pkgRoot: npmCopy };
   assert.equal(skipReason(base), null);
-  assert.equal(skipReason({ ...base, env: { FOLDRUN_NO_AUTO_UPDATE: "1" } }), "turned off");
-  assert.equal(skipReason({ ...base, env: { CI: "true" } }), "CI");
-  assert.equal(skipReason({ ...base, env: { CI: "false" } }), null);
+  assert.equal(skipReason({ ...base, env: { FOLDRUN_HOME: home, FOLDRUN_NO_AUTO_UPDATE: "1" } }), "turned off");
+  assert.equal(skipReason({ ...base, env: { FOLDRUN_HOME: home, CI: "true" } }), "CI");
+  assert.equal(skipReason({ ...base, env: { FOLDRUN_HOME: home, CI: "false" } }), null);
+  // Turned off by the person (foldrun update --auto off, /update auto off): no daily check; on again, it looks.
+  setAutoUpdate(false, base.env);
+  assert.equal(skipReason(base), "turned off (foldrun update --auto on)");
+  assert.deepEqual(autoUpdateSetting(base.env), { on: false, by: "setting" });
+  assert.deepEqual(autoUpdateSetting({ ...base.env, FOLDRUN_NO_AUTO_UPDATE: "1" }), { on: false, by: "env" });
+  setAutoUpdate(true, base.env);
+  assert.equal(skipReason(base), null);
+  assert.deepEqual(autoUpdateSetting(base.env), { on: true, by: "setting" });
   assert.equal(skipReason({ ...base, tty: false }), "no terminal");
   assert.equal(skipReason({ ...base, pkgRoot: path.join(path.sep, "src", "foldrun-cli") }), "not an npm install");
   assert.equal(skipReason({ ...base, state: { checkedAt: new Date(base.now - 60_000).toISOString() } }), "checked today");

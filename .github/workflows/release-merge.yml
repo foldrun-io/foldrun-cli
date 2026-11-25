@@ -35,7 +35,8 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  actions: read
+  # write: to start bump-core.yml when the release asks for an older core (FOL-335 follow-up).
+  actions: write
 
 concurrency:
   group: release-merge
@@ -66,8 +67,33 @@ jobs:
           echo "pr=$n" >> "$GITHUB_OUTPUT"
           echo "head=$HEAD" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      # Every CLI release requires the newest @foldrun/core (owner, 26 Nov 2026). When core on npm is newer
+      # than what package.json asks for, nothing is merged: bump-core.yml moves the CLI onto it (typechecked
+      # and tested), that push redrafts the release, and the next ci run merges it.
+      - name: does it ask for the latest core?
         if: steps.check.outputs.pr != ''
+        id: core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest="$(npm view @foldrun/core@latest version --prefer-online)"
+          floor="$(gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=${{ steps.check.outputs.head }}" -q .content | base64 -d | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).dependencies["@foldrun/core"]).replace(/^[\^~]/,"")))')"
+          [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "npm answered '$latest' for core — not merging on a guess"; echo "behind=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ "$floor" != "$latest" ]; then
+            # Exactly npm's latest: a floor above it (npm's latest moved back) would not install either (Codex).
+            if [ "$(printf '%s\n%s\n' "$floor" "$latest" | sort -V | tail -1)" = "$latest" ]; then
+              echo "the release asks for core ^$floor; npm has $latest — not merged; starting bump-core"
+              gh workflow run bump-core.yml -R "$GITHUB_REPOSITORY" --ref main || echo "could not start bump-core (it also runs daily)"
+            else
+              echo "the release asks for core ^$floor, above npm's latest $latest — not merged; a person decides"
+            fi
+            echo "behind=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "core ^$floor is the latest ($latest)"
+          fi
+
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        if: steps.check.outputs.pr != '' && steps.core.outputs.behind != 'true'
         id: app
         with:
           client-id: ${{ vars.FOLDRUN_BOT_CLIENT_ID }}
@@ -86,7 +112,7 @@ jobs:
       # only. If main moved in between, GitHub refuses the update; the push
       # that moved it redrafts release/next and the next ci run decides.
       - name: merge it
-        if: steps.check.outputs.pr != ''
+        if: steps.check.outputs.pr != '' && steps.core.outputs.behind != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           N: ${{ steps.check.outputs.pr }}

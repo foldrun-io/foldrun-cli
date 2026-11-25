@@ -30,7 +30,7 @@ import os from "node:os";
 import path from "node:path";
 
 /** What goes in the config folder; in the cache folder; everything else is state. */
-export const CONFIG_NAMES = ["mcp.json", "agents", "code-prefs.json"];
+export const CONFIG_NAMES = ["mcp.json", "agents", "code-prefs.json", "update.json"];
 export const CACHE_NAMES = ["gallery", "version-check.json", "updates"];
 
 const XDG = /** @type {const} */ ({ config: ["XDG_CONFIG_HOME", ".config"], state: ["XDG_STATE_HOME", path.join(".local", "state")], cache: ["XDG_CACHE_HOME", ".cache"] });
