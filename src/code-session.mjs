@@ -1326,33 +1326,40 @@ export function marginLines(text, width = Infinity) {
     if (displayWidth(lead) > room / 2) lead = "";
     const hang = " ".repeat(displayWidth(lead));
     let cur = lead;
+    let curW = displayWidth(lead);
     let fresh = true;
+    // Widths counted once and carried (Codex): a long unbroken word is never re-measured per row.
     for (let word of body.split(/ +/).filter(Boolean)) {
+      let wordW = displayWidth(word);
       for (;;) {
-        const sep = fresh ? "" : " ";
-        if (displayWidth(cur + sep + word) <= room) {
-          cur += sep + word;
+        const sepW = fresh ? 0 : 1;
+        if (curW + sepW + wordW <= room) {
+          cur += (fresh ? "" : " ") + word;
+          curW += sepW + wordW;
           fresh = false;
           break;
         }
         if (!fresh) {
           out.push(cur);
           cur = hang;
+          curW = hang.length;
           fresh = true;
           continue;
         }
-        // Alone and still too wide: cut it where the row ends, counting as it goes (Codex: not re-measured per char).
+        // Alone and still too wide: cut it where the row ends.
         let head = "";
-        let used = displayWidth(cur);
+        let headW = 0;
         for (const ch of word) {
           const w = displayWidth(ch);
-          if (used + w > room && head) break;
+          if (curW + headW + w > room && head) break;
           head += ch;
-          used += w;
+          headW += w;
         }
         out.push(cur + head);
         cur = hang;
+        curW = hang.length;
         word = word.slice(head.length);
+        wordW -= headW;
         if (!word) break;
       }
     }
