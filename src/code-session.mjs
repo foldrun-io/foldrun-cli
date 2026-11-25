@@ -708,7 +708,8 @@ export function withoutSaid(/** @type {string} */ reply, /** @type {string[]} */
  * The agent's reply for the terminal (19 Nov 2026): **bold**, `code` and
  * headings drawn instead of shown as marks, lists as •, every paragraph
  * wrapped to the screen with a two-space margin (a list item's lines under
- * its text). Fenced code and tables are kept as written.
+ * its text). Fenced code is kept as written; a table is drawn as columns
+ * (FOL-310), or one block per row when the screen is too narrow for them.
  * @param {string} text plain text, no terminal control in it
  * @param {number} columns
  * @param {{ bold: (s: string) => string, cyan: (s: string) => string, dim: (s: string) => string, head?: (s: string) => string, mark?: (s: string) => string }} c
@@ -717,13 +718,24 @@ export function formatReply(text, columns, c) {
   const width = Math.max(20, columns - 4);
   const out = [];
   let fenced = false;
-  for (const raw of text.split("\n")) {
+  const all = text.split("\n");
+  for (let i = 0; i < all.length; i++) {
+    const raw = /** @type {string} */ (all[i]);
     if (/^\s*```/.test(raw)) {
       fenced = !fenced;
       continue;
     }
-    if (fenced || /^\s*\|/.test(raw)) {
-      out.push(`  ${fenced ? "  " : ""}${fenced ? c.dim(raw) : raw}`);
+    if (fenced) {
+      out.push(`    ${c.dim(raw)}`);
+      continue;
+    }
+    if (/^\s*\|/.test(raw)) {
+      let j = i;
+      while (j < all.length && /^\s*\|/.test(/** @type {string} */ (all[j]))) j++;
+      const block = all.slice(i, j);
+      const drawn = drawTable(block, width, c);
+      out.push(...(drawn ?? block.map((l) => `  ${l}`)));
+      i = j - 1;
       continue;
     }
     if (!raw.trim()) {
@@ -766,6 +778,174 @@ export function formatReply(text, columns, c) {
     });
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+/** A table row's cells: the outer bars gone, split at bars outside `code` and not escaped. */
+function tableCells(/** @type {string} */ line) {
+  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = [];
+  let cur = "";
+  let code = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = /** @type {string} */ (t[i]);
+    if (ch === "\\" && t[i + 1] === "|") {
+      cur += "|";
+      i++;
+    } else if (ch === "`") {
+      code = !code;
+      cur += ch;
+    } else if (ch === "|" && !code) {
+      cells.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+/** A row of words wrapped to `room` cells; a word longer than a row is cut. @param {Piece[][]} words @returns {Piece[][][]} */
+function wrapWords(words, room) {
+  /** @type {Piece[][][]} */
+  const lines = [];
+  /** @type {Piece[][]} */
+  let line = [];
+  let used = 0;
+  for (let w of words) {
+    let len = displayWidth(w.map((x) => x.t).join(""));
+    while (len > room) {
+      // Cut the word at the row's end: what fits now, the rest on the next row.
+      if (line.length) {
+        lines.push(line);
+        line = [];
+        used = 0;
+      }
+      /** @type {Piece[]} */
+      const head = [];
+      /** @type {Piece[]} */
+      const rest = [];
+      let n = 0;
+      for (const x of w) {
+        if (n >= room) rest.push(x);
+        else {
+          const take = clipTo(x.t, room - n);
+          if (take) head.push({ ...x, t: take });
+          if (take.length < x.t.length) rest.push({ ...x, t: x.t.slice(take.length) });
+          n += displayWidth(take);
+        }
+      }
+      lines.push([head]);
+      w = rest;
+      len = displayWidth(w.map((x) => x.t).join(""));
+    }
+    if (!w.length) continue;
+    if (line.length && used + 1 + len > room) {
+      lines.push(line);
+      line = [];
+      used = 0;
+    }
+    line.push(w);
+    used += (line.length > 1 ? 1 : 0) + len;
+  }
+  if (line.length) lines.push(line);
+  return lines.length ? lines : [[]];
+}
+
+/** The longest start of `t` that fits in `n` cells. */
+function clipTo(/** @type {string} */ t, /** @type {number} */ n) {
+  let out = "";
+  for (const ch of t) {
+    if (displayWidth(out + ch) > n) break;
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * A markdown table as columns (FOL-310): the header bold, a rule under it,
+ * each cell wrapped to its column. Too narrow for the columns: one block per
+ * row, "header: value". Null when the lines are not a table (no rule row).
+ * @param {string[]} lines @param {number} width @param {{ bold: (s: string) => string, cyan: (s: string) => string, dim: (s: string) => string }} c
+ * @returns {string[] | null}
+ */
+export function drawTable(lines, width, c) {
+  if (lines.length < 2 || !/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(/** @type {string} */ (lines[1]))) return null;
+  const head = tableCells(/** @type {string} */ (lines[0]));
+  const n = head.length;
+  const rows = lines.slice(2).map((l) => {
+    const cells = tableCells(l);
+    return Array.from({ length: n }, (_, k) => cells[k] ?? "");
+  });
+  const words = (/** @type {string} */ t) => styledWords(t);
+  const plain = (/** @type {string} */ t) => words(t).map((w) => w.map((x) => x.t).join("")).join(" ");
+  const sep = " │ ";
+  const room = width - (n - 1) * sep.length;
+  const natural = head.map((h, k) => Math.max(displayWidth(plain(h)), ...rows.map((r) => displayWidth(plain(/** @type {string} */ (r[k])))), 1));
+  const MIN = 12;
+  /** @type {number[]} */
+  let cols;
+  if (natural.reduce((a, b) => a + b, 0) <= room) cols = natural;
+  else if (n * MIN > room) {
+    // One block per row: the header names each value.
+    const out = [];
+    for (const r of rows) {
+      r.forEach((cell, k) => {
+        const label = `${plain(/** @type {string} */ (head[k]))}: `;
+        // A label wider than half the screen goes on its own line, the value under it.
+        const own = displayWidth(label) > Math.floor(width / 2);
+        if (own) wrapWords(words(label.trim()), width).forEach((ln) => out.push(`  ${c.bold(ln.map((w) => w.map((x) => x.t).join("")).join(" "))}`));
+        const lw = own ? 2 : displayWidth(label);
+        wrapWords(words(cell), Math.max(10, width - lw)).forEach((ln, i) => {
+          out.push(`  ${i === 0 && !own ? c.bold(label) : " ".repeat(lw)}${ln.map((w) => w.map((x) => paint(x, c)).join("")).join(" ")}`);
+        });
+      });
+      out.push("");
+    }
+    if (out.at(-1) === "") out.pop();
+    return out;
+  } else {
+    // Short columns keep their width; the long ones share what is left.
+    cols = natural.slice();
+    let left = room;
+    const fixed = new Set();
+    for (let changed = true; changed; ) {
+      changed = false;
+      const open = cols.map((_, k) => k).filter((k) => !fixed.has(k));
+      const share = Math.floor((room - [...fixed].reduce((a, k) => a + /** @type {number} */ (natural[k]), 0)) / Math.max(1, open.length));
+      for (const k of open) if (/** @type {number} */ (natural[k]) <= share) {
+        fixed.add(k);
+        changed = true;
+      }
+    }
+    left = room - [...fixed].reduce((a, k) => a + /** @type {number} */ (natural[k]), 0);
+    const open = cols.map((_, k) => k).filter((k) => !fixed.has(k));
+    const openSum = open.reduce((a, k) => a + /** @type {number} */ (natural[k]), 0);
+    let given = 0;
+    open.forEach((k, i) => {
+      const w = i === open.length - 1 ? left - given : Math.max(MIN, Math.floor((left * /** @type {number} */ (natural[k])) / openSum));
+      cols[k] = w;
+      given += w;
+    });
+  }
+  const drawRow = (/** @type {string[]} */ cells, /** @type {boolean} */ bold) => {
+    const wrapped = cells.map((cell, k) => wrapWords(words(cell), /** @type {number} */ (cols[k])));
+    const h = Math.max(...wrapped.map((w) => w.length));
+    const out = [];
+    for (let i = 0; i < h; i++) {
+      out.push(`  ${wrapped.map((w, k) => {
+        const ln = w[i] ?? [];
+        const txt = ln.map((wd) => wd.map((x) => paint(bold ? { ...x, bold: true } : x, c)).join("")).join(" ");
+        const pad = /** @type {number} */ (cols[k]) - displayWidth(ln.map((wd) => wd.map((x) => x.t).join("")).join(" "));
+        return k === n - 1 ? txt : txt + " ".repeat(Math.max(0, pad));
+      }).join(c.dim(sep))}`.replace(/\s+$/, ""));
+    }
+    return out;
+  };
+  const rule = `  ${c.dim(cols.map((w) => "─".repeat(w)).join("─┼─"))}`;
+  const body = rows.map((r) => drawRow(r, false));
+  // Rows that wrap get a faint rule between them, or their lines run together.
+  const tall = body.some((b) => b.length > 1);
+  const thin = `  ${c.dim(cols.map((w) => "╌".repeat(w)).join("╌┼╌"))}`;
+  return [...drawRow(head, true), rule, ...body.flatMap((b, i) => (tall && i > 0 ? [thin, ...b] : b))];
 }
 
 /** One run of characters and how it is drawn. @typedef {{ t: string, bold: boolean, code: boolean }} Piece */

@@ -957,6 +957,35 @@ test("the reply: markdown drawn, wrapped to the screen, words already shown left
   assert.equal(replyPaths("```\ncd snapshot/site\n```"), "```\ncd snapshot/site\n```", "fenced code is left as written");
 });
 
+test("a markdown table is drawn as columns, wrapped to the screen; too narrow, one block per row (FOL-310)", async () => {
+  const { formatReply, drawTable } = await import("../src/code-session.mjs");
+  const c = { bold: (x: string) => `<b>${x}</b>`, cyan: (x: string) => `<c>${x}</c>`, dim: (x: string) => `<d>${x}</d>` };
+  const plainOf = (x: string) => x.replace(/<\/?[bcd]>/g, "");
+  const table = "Before.\n\n| Source | What it says |\n|---|:---:|\n| **AWS**: aws.amazon.com/what-is/observability/ | Describes observability as built on telemetry, chiefly logs, metrics and traces. |\n| `otel` \\| spec | Lists traces. |\n\nAfter.";
+  const wide = formatReply(table, 120, c).split("\n");
+  assert.ok(!wide.some((l) => /^\s*\||\*\*|---/.test(plainOf(l))), `no markdown marks left: ${wide.join("\n")}`);
+  const head = wide.find((l) => plainOf(l).includes("Source"))!;
+  assert.match(head, /<b>Source<\/b>.*<d> │ <\/d><b>What<\/b>/, "the header is bold, columns split by │");
+  assert.ok(wide.some((l) => /^  <d>─+─┼─+<\/d>$/.test(l)), "a rule under the header");
+  const awsRow = wide.find((l) => plainOf(l).includes("AWS"))!;
+  const col = plainOf(head).indexOf("│");
+  assert.equal(plainOf(awsRow).indexOf("│"), col, "columns line up");
+  assert.ok(wide.some((l) => plainOf(l).includes("otel | spec")), "an escaped bar stays in its cell, code drawn");
+  assert.ok(wide.includes("  Before.") && wide.includes("  After."));
+  // 60 columns: every line within the screen, a long cell wrapped in its column.
+  const mid = formatReply(table, 60, c).split("\n");
+  for (const l of mid) assert.ok(plainOf(l).length <= 58, `within the screen: ${l}`);
+  assert.ok(mid.filter((l) => plainOf(l).includes("│")).length > 4, "wrapped rows keep their columns");
+  assert.ok(mid.some((l) => plainOf(l).includes("╌┼╌")), "rows that wrap are kept apart");
+  // 30 columns: one block per row, the header naming each value.
+  const narrow = formatReply(table, 30, c).split("\n");
+  for (const l of narrow) assert.ok(plainOf(l).length <= 28, `within the screen: ${l}`);
+  assert.ok(narrow.some((l) => l.startsWith("  <b>Source: </b>")), narrow.join("\n"));
+  // Not a table (no rule row): kept as written.
+  assert.equal(drawTable(["| a |", "| b |"], 80, c), null);
+  assert.ok(formatReply("| just | bars |", 80, c).includes("| just | bars |"));
+});
+
 // ------------------------------------------------- where the agent works
 // Owner, 19 Nov 2026: "it asks them if they want to run cloud or local and
 // … existing project or new one — as simple as possible". Asked once per

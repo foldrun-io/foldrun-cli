@@ -1028,6 +1028,14 @@ A snapshot needs an install that runs steps in sandboxes
 (`FOLDRUN_RUN_ISOLATION=k8s`); one that does not refuses the run and runs
 nothing.
 
+#### How a reply is drawn
+
+The agent writes markdown, and the terminal draws it: headings, **bold**,
+`code` and lists without their marks, every paragraph wrapped to the screen.
+A table is drawn as columns, each cell wrapped in its own column. When the
+screen is too narrow for the columns, each row becomes a block that names
+every value by its header. Fenced code is shown as written.
+
 #### Edits that would not parse
 
 The agent's `Edit` and `Write` parse what a change would leave before they
