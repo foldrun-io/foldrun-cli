@@ -151,7 +151,11 @@ next tool call, as context; it never changes the step's tools or what it may
 do. A model writing without calling tools hears it at the next call it makes.
 Every question, answer and delivered message is on the step's trace and its
 record. A local `foldrun run` has no inbox; there `ask_person` asks on the
-terminal when there is one.
+terminal when there is one. A `foldrun code` session on this computer gives its agent
+the same `ask_person`: the question is shown at the keyboard, the choices as a
+list (↑/↓, Enter, or a number) with "type my own answer" last, and Enter on an
+empty answer says none was given. In a turn run from a script (`-p`), or for a
+sub-agent, it is refused and the agent is told to decide or say what it needs.
 
 ### Asking a colleague beside you
 
