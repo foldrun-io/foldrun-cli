@@ -1260,14 +1260,14 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   /** @type {Record<string, string>} */
   const out = {};
-  for (const [k, how] of Object.entries(v)) if (["image", "audio", "video", "document"].includes(k) && (how === "text" || how === "only")) out[k] = how;
+  for (const [k, how] of Object.entries(v)) if (["image", "audio", "video", "document"].includes(k) && (how === "text" || how === "only" || (how === "show" && k === "image"))) out[k] = how;
   return Object.keys(out).length ? { files: out } : {};
 }
 

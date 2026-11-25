@@ -3749,6 +3749,67 @@ test("a named file is read into text on foldrun's servers: into text for the age
   }
 });
 
+test("an image sent to the model as it is: the token estimate shown, the image block in the turn, nothing uploaded (FOL-268)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const ihdr = Buffer.alloc(16);
+  ihdr.writeUInt32BE(13, 0);
+  ihdr.write("IHDR", 4, "latin1");
+  ihdr.writeUInt32BE(640, 8);
+  ihdr.writeUInt32BE(480, 12);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ihdr, Buffer.alloc(64, 7)]);
+  fs.writeFileSync(path.join(d, "shot.png"), png);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  let extracted = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-i268/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/extract": () => {
+      extracted += 1;
+      return { text: "never" };
+    },
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return sse([{ type: "text", text: "The button is cut off." }]);
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-i268", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "140" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("what is wrong here? @shot.png\r");
+    at = await t.until(/shot\.png — image[\s\S]*3\. Send it to the model as it is\s+about 410 input tokens/, at);
+    t.send("3");
+    at = await t.until(/✓ shot\.png goes to the model as it is — about 410 input tokens/, at, 30_000);
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/The button is cut off\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    const user = (asked[0]?.messages ?? []).filter((m: any) => m.role === "user").at(-1);
+    const blocks = Array.isArray(user?.content) ? user.content : [];
+    assert.ok(blocks.some((b: any) => b.type === "image" && b.source?.media_type === "image/png" && b.source?.data === png.toString("base64")), JSON.stringify(blocks).slice(0, 300));
+    assert.ok(blocks.some((b: any) => b.type === "text" && /Sent with this message as an image: shot\.png/.test(b.text)));
+    // The next turn still has the image in the conversation, and sends no new one.
+    t.send("and now?\r");
+    at = await t.until(/The button is cut off\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    const second = JSON.stringify(asked[1]?.messages ?? []);
+    assert.equal(second.split(png.toString("base64")).length - 1, 1, "the image once, from the conversation");
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    assert.equal(extracted, 0, "an image sent as it is is not uploaded to be read");
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("a message the agent sends shows in this session's transcript as a line of the thread (FOL-307)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

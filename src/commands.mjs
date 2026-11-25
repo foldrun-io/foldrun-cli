@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
-import { filesIn, fileTextBlock, chosenBytes, FILE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
+import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
@@ -9592,8 +9592,11 @@ const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/
  * @param {any} s @param {string} line @param {string} dir @returns {Promise<string | null>}
  */
 async function filesForTurn(s, line, dir) {
+  delete s.turnImages;
   const found = filesIn(line, dir);
   if (!found.length) return line;
+  /** Images to send as they are (FOL-268): on this computer, where the person's turn carries them. @type {Array<{ data: string, mediaType: string, name: string }>} */
+  const images = [];
   const say = (/** @type {string} */ t) => console.log(`  ${c.dim(t)}`);
   /** @type {string[]} */
   const blocks = [];
@@ -9610,8 +9613,21 @@ async function filesForTurn(s, line, dir) {
     }
     // A kept choice answers only for a file typed as @path inside this folder, never a link out of it (Codex).
     const kept = f.typed ? readCodePrefs().files?.[f.kind] : undefined;
+    // As it is: an image of a size a model takes, on this computer (the cloud agent is given text).
+    const canShow = f.kind === "image" && s.mode === "local" && f.bytes <= IMAGE_BYTES_MAX;
+    /** @type {Buffer | null} */
+    let head = null;
+    if (canShow) {
+      try {
+        head = chosenBytes(f);
+      } catch {
+        head = null;
+      }
+    }
+    const showable = canShow && head !== null && imageType(head) !== null;
+    const tokens = showable && head ? imageTokens(head) : null;
     /** @type {string | null} */
-    let how = kept === "text" || kept === "only" ? kept : null;
+    let how = kept === "text" || kept === "only" || (kept === "show" && showable) ? kept : null;
     if (!how) {
       const plural = KIND_PLURAL[f.kind];
       // No terminal to ask on: nothing leaves this machine unasked — the file stays a path (Codex).
@@ -9622,8 +9638,10 @@ async function filesForTurn(s, line, dir) {
             choices: [
               { v: "text", name: "Into text for the agent", note: "only its text goes to the model" },
               { v: "only", name: "Just the text", note: "shown here, no model call · /export copy takes it" },
+              ...(showable ? [{ v: "show", name: "Send it to the model as it is", note: `${tokens ? `about ${tokens.toLocaleString("en")} input tokens` : "image tokens"} · for a UI, a chart, a design` }] : []),
               { v: "text!", name: `Into text, every time for ${plural}`, note: "kept · /permissions lists it" },
               { v: "only!", name: `Just the text, every time for ${plural}`, note: "kept · /permissions lists it" },
+              ...(showable ? [{ v: "show!", name: "As it is, every time for images", note: "kept · /permissions lists it" }] : []),
             ],
             start: "text",
           })
@@ -9639,10 +9657,16 @@ async function filesForTurn(s, line, dir) {
         writeCodePrefs({ ...prefs, files: { ...(prefs.files ?? {}), [f.kind]: how } });
       }
     }
+    if (how === "show" && head) {
+      const mediaType = /** @type {string} */ (imageType(head));
+      images.push({ data: head.toString("base64"), mediaType, name });
+      console.log(`  ${c.green("✓")} ${c.dim(`${plainText(name)} goes to the model as it is${tokens ? ` — about ${tokens.toLocaleString("en")} input tokens` : ""}`)}`);
+      continue;
+    }
     /** @type {any} */
     let result;
     try {
-      result = await extractLocalFile(s.url, s.flags, f.real, {}, chosenBytes(f));
+      result = await extractLocalFile(s.url, s.flags, f.real, {}, head ?? chosenBytes(f));
     } catch (err) {
       console.log(`  ${c.red("✗")} ${plainText(name)}: ${plainText(explain(err))} ${c.dim("— left as a path in your message")}`);
       left += 1;
@@ -9662,11 +9686,13 @@ async function filesForTurn(s, line, dir) {
     console.log(`  ${c.green("✓")} ${c.dim(`${plainText(name)} read into text (${what}) — the agent is given the text, not the file`)}`);
   }
   // Every file was "just the text": no model call. One left as a path keeps the message going (Codex).
-  if (only && !blocks.length && !left) {
+  if (only && !blocks.length && !images.length && !left) {
     console.log(`\n  ${c.dim("nothing was sent to the model · /export copy takes the text")}\n`);
     return null;
   }
-  return blocks.length ? `${line}\n\n${blocks.join("\n\n")}` : line;
+  if (images.length) s.turnImages = images;
+  const shownNote = images.length ? `[Sent with this message as ${images.length === 1 ? "an image" : "images"}: ${images.map((i) => i.name).join(", ")}]` : "";
+  return [line, ...blocks, shownNote].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -18259,7 +18285,11 @@ async function codeLocalTurn(s, text) {
     };
     const history = (s.localHistory ??= readEngineConversation(s));
     /** @type {Array<{ role: string, content: Array<Record<string, unknown>> }>} */
-    const turn = [{ role: "user", content: [{ type: "text", text }] }];
+    // Images the person chose to send as they are (FOL-268): in this turn, and kept in the conversation.
+    const turnImages = Array.isArray(s.turnImages) ? s.turnImages : [];
+    delete s.turnImages;
+    const imageBlocks = turnImages.map((/** @type {any} */ i) => ({ type: "image", source: { type: "base64", media_type: i.mediaType, data: i.data } }));
+    const turn = [{ role: "user", content: [{ type: "text", text }, ...imageBlocks] }];
     rewindTurn = rewindNextTurn(rewindJournal);
     historyAtStart = history;
     turnSoFar = turn;
@@ -18548,10 +18578,11 @@ async function codeLocalTurn(s, text) {
     text = await withHeldMessages(s, text);
     // Started only to take them in, and another turn took them all meanwhile: nothing to send (Codex).
     if (only && text === before) throw Object.assign(new Error("the message was taken by another turn meanwhile — nothing sent"), { code: "messages_gone" });
-    turn[0].content[0].text = text;
+    /** @type {any} */ (turn[0].content[0]).text = text;
     const q = engine.foldrunQuery({
           prompt: text,
           options: {
+            ...(turnImages.length ? { images: turnImages.map((/** @type {any} */ i) => ({ data: i.data, mediaType: i.mediaType })) } : {}),
             cwd: s.dir,
             // The model's key stays with the loop; the commands the agent
             // runs get the person's own environment without it.
@@ -21039,7 +21070,12 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     // Files named in it (FOL-268): read into text on foldrun's servers first, as the person chooses.
     const withFiles = await filesForTurn(s, typedLine, dir);
     if (withFiles === null) continue;
-    await towardGoal(withFiles, typedLine);
+    try {
+      await towardGoal(withFiles, typedLine);
+    } finally {
+      // Images for this message only: never carried into a later turn (FOL-268).
+      delete s.turnImages;
+    }
   }
 }
 
