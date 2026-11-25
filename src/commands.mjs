@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
-import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, shapeOutput as browseOutput } from "./browser.mjs";
+import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, shapeOutput as browseOutput } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
 import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
@@ -9749,23 +9749,104 @@ async function agentMedia(s) {
   if (s.agentMedia === "text" || s.agentMedia === "as-is") return s.agentMedia;
   let media = /** @type {"text" | "as-is"} */ ("text");
   try {
-    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${encodeURIComponent(`agents/${s.agent}/agent.md`)}`);
-    if (typeof got?.content === "string") {
-      // Read with core's own YAML reader, as the runner reads it — quoted keys and all (Codex).
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-agent-"));
-      try {
-        const file = path.join(tmp, "agent.md");
-        fs.writeFileSync(file, got.content);
-        if ((await core()).readFrontmatter(file)?.media === "as-is") media = "as-is";
-      } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
-      }
-    }
+    if ((await projectFront(s, `agents/${s.agent}/agent.md`))?.media === "as-is") media = "as-is";
   } catch {
     /* text, the default */
   }
   s.agentMedia = media;
   return media;
+}
+
+/**
+ * A project file's frontmatter, read with core's own YAML reader as the runner reads it (quoted keys and all),
+ * once a session: {} when the file is not there; throws when it could not be read (FOL-267: a lock in it must
+ * not be skipped because the platform did not answer).
+ * @param {any} s @param {string} file @returns {Promise<Record<string, any>>}
+ */
+async function projectFront(s, file) {
+  s.fronts ??= {};
+  if (s.fronts[file]) return s.fronts[file];
+  let content = null;
+  try {
+    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${encodeURIComponent(file)}`);
+    content = typeof got?.content === "string" ? got.content : null;
+  } catch (err) {
+    if (!(err instanceof HttpError && err.status === 404)) throw err;
+  }
+  let front = {};
+  if (content !== null) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-front-"));
+    try {
+      const f = path.join(tmp, "file.md");
+      fs.writeFileSync(f, content);
+      front = (await core()).readFrontmatter(f) ?? {};
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  s.fronts[file] = front;
+  return front;
+}
+
+/**
+ * The agent's `web.browse` block (else the project's), as it holds on this computer (FOL-267): read the way the
+ * runner reads it (core webConfig, readBrowseSettings, browseSettingsEnv), or why a call cannot go on.
+ * @param {any} s @returns {Promise<{ env: Record<string, string>, notes: string[] } | { problem: string }>}
+ */
+async function localBrowseDefaults(s) {
+  let agent;
+  let project;
+  /** @type {string[]} */
+  const said = [];
+  try {
+    agent = await projectFront(s, `agents/${s.agent}/agent.md`);
+    // The project's AGENTS.md over the account's, as the runner merges them (workspaceFrontmatter).
+    project = { ...(await accountFront(s, said)), ...(await projectFront(s, "AGENTS.md")) };
+  } catch (err) {
+    return { problem: `could not read this agent's file to apply its web.browse settings (${plainText(explain(err)).split("\n")[0]}) — try again` };
+  }
+  const P = /** @type {any} */ (await import("@foldrun/core/providers"));
+  if (typeof P.browseSettingsEnv !== "function") {
+    // An older core: say so rather than browse without the block's settings.
+    const raw = P.webConfig(agent, project).raw.browse;
+    if (raw !== undefined && raw !== null) return { problem: "this agent has a web.browse block, which needs a newer foldrun CLI to apply on this computer — `foldrun update`" };
+    return { env: {}, notes: [] };
+  }
+  const out = localBrowseBlock(P.readBrowseSettings(P.webConfig(agent, project).raw.browse), P.browseSettingsEnv);
+  return "problem" in out ? out : { env: out.env, notes: [...said, ...out.notes] };
+}
+
+/**
+ * The account's AGENTS.md frontmatter, once a session. A key held to some projects may not read it (the route
+ * is account-wide): then {} and a note that its defaults are not applied here — named, never silent.
+ * @param {any} s @param {string[]} said
+ */
+async function accountFront(s, said) {
+  if (s.accountFront) {
+    if (s.accountFront.note) said.push(s.accountFront.note);
+    return s.accountFront.front;
+  }
+  let front = {};
+  let note = /** @type {string | null} */ (null);
+  try {
+    const got = await remoteCall(s.url, s.flags, "/v1/account/agents-md");
+    if (typeof got?.content === "string" && got.content) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-front-"));
+      try {
+        const f = path.join(tmp, "AGENTS.md");
+        fs.writeFileSync(f, got.content);
+        front = (await core()).readFrontmatter(f) ?? {};
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  } catch (err) {
+    if (!(err instanceof HttpError && (err.status === 403 || err.status === 404))) throw err;
+    if (err.status === 403) note = "the account's AGENTS.md (this key may not read it): any web.browse defaults it sets";
+  }
+  s.accountFront = { front, note };
+  if (note) said.push(note);
+  return front;
 }
 
 async function filesForTurn(s, line, dir) {
@@ -18848,9 +18929,13 @@ async function codeLocalTurn(s, text) {
                     run: async (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {
                       const call = localWebArgv(input ?? {}, webDef);
                       if ("problem" in call) return { text: call.problem, isError: true };
-                      const r = await runLocalWeb(webHere, call.argv, { signal: ctx.signal });
+                      // The agent's web.browse block holds here as in the cloud, or the call says why not.
+                      const block = await localBrowseDefaults(s);
+                      if ("problem" in block) return { text: block.problem, isError: true };
+                      const r = await runLocalWeb(webHere, call.argv, { signal: ctx.signal, env: block.env });
                       const files = /outputs\//.test(r.stdout + r.stderr) ? `\n(files named outputs/… are in ${path.join(webHere.paths.work, "outputs")})` : "";
-                      return { text: `${browseOutput(r)}${files}`, isError: r.code !== 0 };
+                      const notes = block.notes.length ? `not kept on this computer — ${block.notes.join("; ")}\n` : "";
+                      return { text: `${notes}${browseOutput(r)}${files}`, isError: r.code !== 0 };
                     },
                   }]
                 : []),

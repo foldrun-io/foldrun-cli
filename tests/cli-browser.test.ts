@@ -217,7 +217,7 @@ console.log('{"get":"url","value":"https://example.com/"}');
 
 // ---------------------------------------------- web action=browse, here (FOL-267)
 
-const { localWebDefinition, localWebArgv, runLocalWeb, browseHelp, notHere } = await import("../src/browser.mjs");
+const { localWebDefinition, localWebArgv, runLocalWeb, browseHelp, notHere, localBrowseBlock } = await import("../src/browser.mjs");
 const { readFrontmatter } = await import("@foldrun/core");
 
 function webGallery() {
@@ -340,4 +340,18 @@ test("FOL-267: browser mcp also serves the cloud's full web tool, refused option
   assert.match(answers.get(5).result.content[0].text, /proxy uses a secret from foldrun's vault/);
   assert.equal(answers.has(6), false, "a cancelled call is not run or answered");
   assert.doesNotMatch(r.out, /cancelled --browser/);
+});
+
+test("FOL-267: the agent's web.browse block on this computer — kept, refused by name, or noted, never dropped", () => {
+  const toEnv = (k: Record<string, unknown>) => Object.fromEntries(Object.entries(k).map(([a, b]) => [`FOLDRUN_BROWSER_${a.toUpperCase()}`, Array.isArray(b) ? b.join(",") : String(b)]));
+  const ok: any = localBrowseBlock({ settings: { engine: "chrome", device: "iPhone 15", allowed_domains: ["example.com"], headless: false, live: true } }, toEnv);
+  assert.deepEqual(ok.env, { FOLDRUN_BROWSER_DEVICE: "iPhone 15", FOLDRUN_BROWSER_ALLOWED_DOMAINS: "example.com" });
+  assert.equal(ok.notes.length, 2);
+  assert.match(ok.notes[0], /^headless: the window on this computer is always visible/);
+  const no = (read: any) => (localBrowseBlock(read, toEnv) as any).problem as string;
+  assert.match(no({ settings: { cookies: "SITE_COOKIES" } }), /web\.browse cookies is a vault secret's sign-in cookies/);
+  assert.match(no({ settings: { engine: "firefox" } }), /firefox runs in the cloud/);
+  assert.match(no({ settings: {}, rest: "browserbase" }), /names a browser vendor \(browserbase\)/);
+  assert.match(no({ settings: {}, error: "web.browse.headless is true or false" }), /^this agent's web\.browse block: web\.browse\.headless/);
+  assert.match(no({ settings: { init: ["x.js"] } }), /init is scripts from a cloud workspace/);
 });

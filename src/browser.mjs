@@ -486,6 +486,52 @@ export function localWebDefinition(browse, readFront) {
   };
 }
 
+/** web.browse settings that run on this computer as in the cloud. */
+const BLOCK_HERE = ["user_agent", "device", "locale", "timezone", "allowed_domains", "deny", "boundaries", "webgpu", "ignore_https_errors", "video", "cookie_domain", "storage_origin"];
+/** Settings this computer cannot honour, and why: a call is refused while the agent's block names one. */
+const BLOCK_CLOUD = {
+  cookies: "a vault secret's sign-in cookies — this computer has no vault; sign in in the window instead",
+  storage: "a vault secret's Web Storage — this computer has no vault; sign in in the window instead",
+  state_key: "a vault secret — this computer has no vault",
+  state: "a sign-in kept in a file — on this computer the window's profile keeps sign-ins",
+  init: "scripts from a cloud workspace run in every page",
+  extensions: "extensions from a cloud workspace",
+};
+/** Settings that change nothing that matters here: each is named in every answer, never silently dropped. */
+const BLOCK_NOTED = {
+  headless: "headless: the window on this computer is always visible, so you can step in",
+  version: "version: this computer runs the Google Chrome it has installed",
+  live: "live: on this computer the page always stays open between calls",
+  live_view: "live_view: the window on this computer is the view",
+  identities: "identities: not used here (the identity option runs in the cloud)",
+};
+
+/**
+ * What the agent's `web.browse` block (core readBrowseSettings) means on this computer (FOL-267): the defaults the
+ * cloud's runner would set (core browseSettingsEnv) for what holds here, a refusal naming what cannot run here,
+ * and a note for what is not kept.
+ * @param {{ settings: Record<string, any>, rest?: unknown, error?: string }} read
+ * @param {(s: Record<string, any>) => Record<string, string>} toEnv core's browseSettingsEnv
+ * @returns {{ env: Record<string, string>, notes: string[] } | { problem: string }}
+ */
+export function localBrowseBlock(read, toEnv) {
+  if (read.error) return { problem: `this agent's web.browse block: ${read.error}` };
+  if (read.rest !== undefined) return { problem: `this agent's web.browse block names a browser vendor (${typeof read.rest === "string" ? read.rest : JSON.stringify(read.rest)}), which runs in the cloud — browse in the cloud, or take it out of the block` };
+  const kept = /** @type {Record<string, any>} */ ({});
+  const notes = [];
+  for (const [k, v] of Object.entries(read.settings ?? {})) {
+    if (k === "engine") {
+      if (!/^(chrome|chromium)$/.test(String(v))) return { problem: `this agent's web.browse engine is ${String(v)} — this computer drives Google Chrome; ${String(v)} runs in the cloud` };
+      continue;
+    }
+    if (k in BLOCK_CLOUD) return { problem: `this agent's web.browse ${k} is ${/** @type {Record<string, string>} */ (BLOCK_CLOUD)[k]} — it runs in the cloud, not on this computer` };
+    if (k in BLOCK_NOTED) { notes.push(/** @type {Record<string, string>} */ (BLOCK_NOTED)[k]); continue; }
+    if (BLOCK_HERE.includes(k)) kept[k] = v;
+    else return { problem: `this agent's web.browse ${k} is not known on this computer — browse in the cloud for it` };
+  }
+  return { env: toEnv(kept), notes };
+}
+
 /**
  * The command line for one call, or the refusal. @param {Record<string, unknown>} input
  * @param {{ names: string[], help: Record<string, string> }} def
@@ -515,17 +561,20 @@ export function localWebArgv(input, def) {
 /**
  * One local `web` call: run.mjs beside browse.mjs, in this window's profile. Never throws.
  * @param {{ browse: string, paths: ReturnType<typeof browserPaths> }} ctx @param {string[]} argv
- * @param {{ signal?: AbortSignal, timeoutMs?: number }} [o]
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, env?: Record<string, string> }} [o]
  */
-export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000 } = {}) {
+export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000, env = {} } = {}) {
   if (signal?.aborted) return Promise.resolve({ code: 1, stdout: "", stderr: "stopped before it started\n", timedOut: false });
   // A link in what a call may upload from or write to could point anywhere on this computer (Codex).
   // The whole of work/: a call may upload from, or download to, anywhere in it.
   const link = linkUnder([ctx.paths.work]);
   if (link) return Promise.resolve({ code: 1, stdout: "", stderr: `not run: ${link === LINK_SCAN_FULL ? `${ctx.paths.work} holds too many files to check for links — clear its outputs/` : `${link} is a link`} — the browser's folder holds only real files\n`, timedOut: false });
   return new Promise((resolve) => {
+    // The agent's block's defaults: only FOLDRUN_BROWSER_* settings, never the window's own (where it runs, its profile).
+    const own = callEnv(ctx.paths);
+    const block = Object.fromEntries(Object.entries(env).filter(([k]) => /^FOLDRUN_BROWSER_[A-Z_]+$/.test(k) && !(k in own)));
     const child = spawn(process.execPath, [path.join(path.dirname(ctx.browse), "run.mjs"), ...argv], {
-      cwd: ctx.paths.work, env: callEnv(ctx.paths), stdio: ["ignore", "pipe", "pipe"],
+      cwd: ctx.paths.work, env: { ...block, ...own }, stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";

@@ -3871,6 +3871,62 @@ test("the local agent browses on this computer with the cloud's web tool, asked 
   }
 });
 
+test("the agent's web.browse block holds on this computer as in the cloud: its defaults reach the browser, what is not kept is named (FOL-267)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "w1", name: "web", input: { action: "browse", url: "https://example.com" } }]),
+    () => sse([{ type: "text", text: "Done browsing." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-wb267/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/source`]: (_b, q) =>
+      q.get("path") === "agents/coder/agent.md"
+        ? { content: "---\nname: coder\nweb:\n  browse:\n    device: iPhone 15\n    allowed_domains: [example.com]\n    headless: false\n---\nYou code.\n", sha256: "x" }
+        : q.get("path") === "AGENTS.md" ? { content: "---\nweb:\n  browse:\n    locale: fr-FR\n---\n", sha256: "y" } : { files: [] },
+    "GET /v1/account/agents-md": () => ({ content: "", sha256: null, exists: false }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const web = path.join(home, "gallery", new URL(s.url).host, "tools", "web");
+  fs.mkdirSync(web, { recursive: true });
+  fs.writeFileSync(path.join(web, "tool.md"), '---\nname: web\ndescription: "browse: a real browser — JavaScript runs. Use it. Start."\nargs:\n  action: "browse"\n  url: "(browse) The page to open"\n---\n');
+  fs.writeFileSync(path.join(web, "run.mjs"), 'const ARGS = { "browse": [ "url" ] };\nconsole.log("DEVICE=" + process.env.FOLDRUN_BROWSER_DEVICE + " DOMAINS=" + process.env.FOLDRUN_BROWSER_ALLOWED_DOMAINS + " HEADLESS=" + process.env.FOLDRUN_BROWSER_HEADLESS + " LOCALE=" + process.env.FOLDRUN_BROWSER_LOCALE);\n');
+  fs.writeFileSync(path.join(web, "browse.mjs"), "");
+  fs.mkdirSync(path.join(home, "browser", "node_modules", "playwright"), { recursive: true });
+  fs.writeFileSync(path.join(home, "browser", "node_modules", "playwright", "package.json"), '{"version":"1.63.0"}');
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-wb267", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "140" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("browse\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Web[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Done browsing\./, at, 30_000);
+    const result = JSON.stringify((asked[1]?.messages ?? []).at(-1));
+    // The agent's block, whole: the project's applies only when the agent has none (core webConfig), so no locale.
+    assert.match(result, /DEVICE=iPhone 15 DOMAINS=example\.com HEADLESS=0 LOCALE=undefined/, result.slice(0, 400));
+    assert.match(result, /not kept on this computer — headless: the window on this computer is always visible/);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("a message the agent sends shows in this session's transcript as a line of the thread (FOL-307)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
