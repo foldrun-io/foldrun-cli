@@ -8,6 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,38 @@ test("koder --version names foldrun code and the version", () => {
   const r = run("koder.mjs", ["--version"]);
   assert.equal(r.status, 0);
   assert.equal(r.stdout.trim(), `koder (foldrun code) ${pkg.version}`);
+});
+
+test("koder --version names the staged version that runs, not the installed files (26 Nov 2026)", () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "koder-staged-"));
+  try {
+    // A global install, npm-shaped, copied (not linked: the copy's real folder is its identity).
+    const pkgRoot = path.join(d, "lib", "node_modules", "foldrun");
+    fs.mkdirSync(pkgRoot, { recursive: true });
+    for (const dir of ["bin", "src"]) fs.cpSync(path.join(ROOT, dir), path.join(pkgRoot, dir), { recursive: true });
+    fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ ...pkg, version: "1.0.0" }));
+    fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(pkgRoot, "node_modules"), "junction");
+    // The copy `foldrun update` staged beside it, and the record that makes it active.
+    const home = path.join(d, "home");
+    const real = fs.realpathSync(pkgRoot);
+    const id = crypto.createHash("sha256").update(real).digest("hex").slice(0, 16);
+    const versions = path.join(home, "updates", id, "versions");
+    const staged = path.join(versions, "2.0.0", "node_modules", "foldrun");
+    fs.mkdirSync(path.join(staged, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(staged, "bin", "foldrun.mjs"), "");
+    fs.writeFileSync(path.join(staged, "package.json"), JSON.stringify({ name: "foldrun", version: "2.0.0" }));
+    fs.writeFileSync(path.join(versions, "active.json"), JSON.stringify({ for: real, version: "2.0.0" }));
+    const env: NodeJS.ProcessEnv = { ...process.env, FOLDRUN_HOME: home, NO_COLOR: "1" };
+    delete env.FOLDRUN_NO_AUTO_UPDATE;
+    const r = spawnSync(process.execPath, [path.join(pkgRoot, "bin", "koder.mjs"), "--version"], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), "koder (foldrun code) 2.0.0");
+    // Turned off, the installed files are what runs, and what it says.
+    const off = spawnSync(process.execPath, [path.join(pkgRoot, "bin", "koder.mjs"), "--version"], { encoding: "utf8", env: { ...env, FOLDRUN_NO_AUTO_UPDATE: "1" } });
+    assert.equal(off.stdout.trim(), "koder (foldrun code) 1.0.0");
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
 });
 
 test("koder --help is foldrun code --help", () => {

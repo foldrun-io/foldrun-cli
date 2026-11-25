@@ -24,6 +24,17 @@ if (args.length === 1 && (args[0] === "--version" || args[0] === "-v")) {
   } catch {
     /* printed without a number */
   }
+  // The version that runs, not the files here: after `foldrun update` to a new
+  // major, or an auto-update, a newer copy is staged and every start hands over
+  // to it (bin/foldrun.mjs). This said the old number while koder ran the new
+  // one (26 Nov 2026).
+  try {
+    const { activeBin } = await import("../src/self-update.mjs");
+    const staged = activeBin(v);
+    if (staged) v = String(JSON.parse(fs.readFileSync(path.join(path.dirname(staged), "../package.json"), "utf8")).version);
+  } catch {
+    /* the installed number */
+  }
   console.log(`koder (foldrun code) ${v}`.trim());
   process.exit(0);
 }
