@@ -17468,6 +17468,8 @@ async function codeLocalTurn(s, text) {
   };
   const onSend = steers ? onSendNow : undefined;
   let typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
+  // What is typed shows on the working line as it is typed, on every turn on this computer (FOL-306).
+  const typedNow = () => typeAhead.text();
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
     if (t) pending.push({ t, sent: false, n: typedSeq++ });
@@ -17615,7 +17617,7 @@ async function codeLocalTurn(s, text) {
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
-    stopTicker = startTicker(started);
+    stopTicker = startTicker(started, typedNow);
     /** This turn's MCP tools by name, its sub-agents, and the project's agents a job may be run as in the cloud. */
     /** @type {Map<string, any>} */
     let turnMcp = new Map();
@@ -17916,7 +17918,7 @@ async function codeLocalTurn(s, text) {
       } finally {
         if (!cancel.asked) {
           typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
-          stopTicker = startTicker(started);
+          stopTicker = startTicker(started, typedNow);
         }
       }
     };
@@ -18027,7 +18029,7 @@ async function codeLocalTurn(s, text) {
         pause: () => stopTicker(),
         resume: () => {
           stopTicker();
-          if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
+          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
         },
         approveApply: (n, lines, patch) => {
           // The patch's own bytes go with it: taken file by file, it is cut and joined as bytes.
@@ -18088,7 +18090,7 @@ async function codeLocalTurn(s, text) {
     const said = (/** @type {() => void} */ print) => {
       stopTicker();
       print();
-      if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
+      if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
     };
     // The sites of the remote MCP servers this turn will start are added
     // first, so the walls are put up once — never reopened (and the handle
@@ -18152,7 +18154,7 @@ async function codeLocalTurn(s, text) {
           pause: () => stopTicker(),
           resume: () => {
             stopTicker();
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
           },
         });
       }
@@ -18447,7 +18449,7 @@ async function codeLocalTurn(s, text) {
         lastSteer = null;
         stopTicker();
         console.log(`  ${c.dim("⋯ the conversation was getting long: its older part was summarised")}`);
-        stopTicker = startTicker(started);
+        stopTicker = startTicker(started, typedNow);
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) {
         // The model is answering: what was sent into the turn reached it.
@@ -18470,7 +18472,7 @@ async function codeLocalTurn(s, text) {
             console.log(`\n  ${c.dim("✻ thinking")}`);
             for (const l of lines) console.log(`    ${c.dim(l)}`);
             if (more) console.log(`    ${c.dim(`… ${more} more line${more === 1 ? "" : "s"} (/export --thinking writes all of it)`)}`);
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started);
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
           }
         }
         if (calls.length) {
@@ -18481,7 +18483,7 @@ async function codeLocalTurn(s, text) {
             const what = localCallSummary(String(b.name), /** @type {Record<string, unknown>} */ (b.input ?? {}), s.dir);
             console.log(`  ${toolHue(label)("●")} ${c.bold(c.white(clipLine(label)))}${what ? ` ${c.grey(clipLine(what))}` : ""}`);
           }
-          stopTicker = startTicker(started);
+          stopTicker = startTicker(started, typedNow);
         } else if (words) reply = words;
       }
       if (m.type === "user" && !m.parent_tool_use_id) {
@@ -18496,7 +18498,7 @@ async function codeLocalTurn(s, text) {
           stopTicker();
           console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}\n`);
           reply = "";
-          stopTicker = startTicker(started);
+          stopTicker = startTicker(started, typedNow);
         }
         for (const b of /** @type {any[]} */ (content)) {
           const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");

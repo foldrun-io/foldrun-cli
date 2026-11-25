@@ -3551,6 +3551,54 @@ test("a message queued with Tab while a turn runs is sent when that turn has fin
   }
 });
 
+test("on a turn on this computer what is typed shows on the working line — after a permission prompt, while a command runs — and Enter sends it into the turn (FOL-306)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "b1", name: "Bash", input: { command: "sleep 4; echo slept" } }]),
+    () => sse([{ type: "text", text: "Finished." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-ty/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--context", "code-ty", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "160" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/sleep 4; echo slept[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    // The command runs: what is typed now is shown as it is typed.
+    await new Promise((r) => setTimeout(r, 600));
+    t.send("also check the readme");
+    at = await t.until(/next: also check the readme/, at, 5_000);
+    t.send("\r");
+    at = await t.until(/Finished\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  // It reached the agent in this turn, with the command's result.
+  assert.match(JSON.stringify(asked[1]?.messages ?? []), /also check the readme/);
+});
+
 test("a message from another session shows at an idle prompt with no key pressed; Enter shows it whole and asks once; a yes takes it into the turn (FOL-305)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
