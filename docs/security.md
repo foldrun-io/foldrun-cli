@@ -325,6 +325,13 @@ Signing in, in particular:
   links sent in place of a code count too), and
   one caller can use at most a small share of the install's hourly reset
   mail, so nobody can spend everyone else's;
+- a reset link works once, even when it is opened twice at the same moment:
+  the new password, the confirmed address and the end of the sessions open
+  at that moment are written together or not at all. A sign-in that was
+  waiting for its two-step code when the password was reset has to start
+  again. On an install with no database, sessions are signed cookies with no
+  record to end, so a reset there does not sign out other browsers, and the
+  once-only guarantee holds for one server process;
 - ten wrong two-step codes in a row pause codes from the app for up to a
   day and mail the person — a backup code still signs in, and the pause
   lifts by itself;
