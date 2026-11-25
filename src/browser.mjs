@@ -454,6 +454,8 @@ export function notHere(name, help) {
   if (name === "extensions") return "extensions load from a cloud workspace — not on this computer";
   // It would write this profile's cookies (HttpOnly too) to a plain file (Codex).
   if (name === "state") return "state saves the window's sign-ins to a file — on this computer the profile keeps them already";
+  // A hold the window kept open here cannot keep: its tabs from before are read with no request to refuse (Codex).
+  if (name === "allowed_domains") return "allowed_domains holds a browser to some sites, which the window kept open on this computer cannot keep — browse in the cloud for that";
   return null;
 }
 

@@ -353,5 +353,6 @@ test("FOL-267: the agent's web.browse block on this computer — kept, refused b
   assert.match(no({ settings: {}, rest: "browserbase" }), /names a browser vendor \(browserbase\)/);
   assert.match(no({ settings: {}, error: "web.browse.headless is true or false" }), /^this agent's web\.browse block: web\.browse\.headless/);
   assert.match(no({ settings: { init: ["x.js"] } }), /init is scripts from a cloud workspace/);
+  assert.match(String(notHere("allowed_domains", "Domains")), /cannot keep/);
   assert.match(no({ settings: { allowed_domains: ["example.com"] } }), /allowed_domains is a hold to some sites, which the window kept open on this computer cannot keep/);
 });
