@@ -12,6 +12,19 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.8.1] — 2026-11-25
+
+- fix(code): a cloud question waiting behind another is asked only while still open; cleanup runs however following ends; the Esc hint names the question (Codex, FOL-298) ([22ca952](https://github.com/foldrun-io/foldrun-cli/commit/22ca952))
+
+### deps
+
+- @foldrun/core ^27.12.0 (Symbols, FOL-297) ([bd844c6](https://github.com/foldrun-io/foldrun-cli/commit/bd844c6))
+
+### docs
+
+- sync (FOL-297 symbols) ([a930c29](https://github.com/foldrun-io/foldrun-cli/commit/a930c29))
+- sync (FOL-298) ([bcd3021](https://github.com/foldrun-io/foldrun-cli/commit/bcd3021))
+
 ## [32.8.0] — 2026-11-25
 
 ### New in the public API
