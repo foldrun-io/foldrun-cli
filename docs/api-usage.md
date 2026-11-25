@@ -286,6 +286,12 @@ credential only when a person wrote that credential. Search, fetch and the
 model all run on foldrun's own accounts; to use your own search or scraping
 service, give an agent its API (`apis:`, `mcpServers:`, `tools/`).
 
+The same search asked again by your account within ten minutes (same words,
+domain lists and location) may be answered from foldrun's short cache rather
+than run again. It is never shared with another account, and an answer that
+looks like it carries a credential is never kept. A fetch is always run
+fresh.
+
 ### Server tool: a page in a cloud browser
 
 `foldrun_web_browse_20251125` (`web_browse`) is foldrun's own: it opens a page
