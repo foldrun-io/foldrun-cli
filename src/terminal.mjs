@@ -138,8 +138,9 @@ export function writeExact(chunk, stream = process.stdout) {
 /** The cursor and mode controls this CLI writes itself, and nothing else:
  *  go to the line's start, clear the line, bracketed paste on and off. */
 // Carriage return, clear the line, bracketed paste on/off, and — for a
-// picker drawn in place (/model) — cursor up n rows and clear to the end.
-const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[\?2004[hl]|\u001b\[\d{1,2}A|\u001b\[J)+$/;
+// picker drawn in place (/model) — cursor up n rows and clear to the end;
+// the cursor hidden and shown again around the working line.
+const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[\?2004[hl]|\u001b\[\?25[hl]|\u001b\[\d{1,2}A|\u001b\[J)+$/;
 
 /**
  * One of the CLI's own terminal controls (OUR_CONTROLS), past the guard —

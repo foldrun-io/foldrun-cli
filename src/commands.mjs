@@ -2260,6 +2260,7 @@ async function deploy(source, flags, layout) {
 /** Read a value without echoing it. A secret typed into a terminal should
  *  not sit in the scrollback afterwards. */
 function promptHidden(question) {
+  holdReadyTicker();
   return new Promise((resolve, reject) => {
     process.stdout.write(question);
     const { stdin } = process;
@@ -2317,6 +2318,7 @@ let keysAfterAsk = null;
 
 /** Read a line with normal echo — for the non-secret halves of a config. */
 async function promptVisible(question) {
+  holdReadyTicker();
   if (!keysBeforeAsk) return promptVisibleNow(question);
   await keysBeforeAsk();
   try {
@@ -14358,6 +14360,7 @@ function numstatPaths(out) {
  *  EOF ends with null, its listeners removed — so the session goes on to
  *  its next prompt rather than waiting for a line nobody will type (Codex). */
 async function cancellablePrompt(question, cancel) {
+  holdReadyTicker();
   if (!keysBeforeAsk) return cancellablePromptNow(question, cancel);
   await keysBeforeAsk();
   try {
@@ -15743,7 +15746,26 @@ function queueOf(/** @type {any} */ s) {
   };
 }
 
+/**
+ * The line shown from the moment Enter sends a message until the turn's own ticker starts: the setup before a
+ * turn (files read, the key, the agent, waiting messages) is a round trip or more to the platform, and the
+ * screen stood still meanwhile (the owner saw it as a glitch, 25 Nov). Any question takes it down first.
+ * @type {(() => void) | null}
+ */
+let readyTicker = null;
+/** When the getting-ready line started: the turn's ticker counts from there, never back to 0. @type {number | null} */
+let readySince = null;
+/** Take the getting-ready line down (before a question, or when the turn's own ticker starts). */
+function holdReadyTicker() {
+  const stop = readyTicker;
+  readyTicker = null;
+  stop?.();
+}
+
 function startTicker(since, typed = () => "") {
+  // The turn's own ticker takes over from the getting-ready one, its clock with it.
+  if (readyTicker && readySince !== null) since = Math.min(since, readySince);
+  holdReadyTicker();
   if (!process.stdout.isTTY || process.env.FOLDRUN_NO_TICKER) return () => {};
   const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
   const log = console.log;
@@ -15787,6 +15809,10 @@ function startTicker(since, typed = () => "") {
     log(...args);
     draw();
   };
+  // The cursor hidden while the line redraws, so it does not jump along it; shown again however the process ends.
+  const showCursor = () => writeControl("\x1b[?25h");
+  writeControl("\x1b[?25l");
+  process.once("exit", showCursor);
   const timer = setInterval(draw, 250);
   draw();
   let stopped = false;
@@ -15795,6 +15821,8 @@ function startTicker(since, typed = () => "") {
     stopped = true;
     clearInterval(timer);
     clear();
+    showCursor();
+    process.off("exit", showCursor);
     console.log = log;
   };
 }
@@ -16205,6 +16233,7 @@ function pickModel(/** @type {string} */ now, /** @type {ProxyCatalog | null} */
  * @returns {Promise<string | null>}
  */
 function pickOne({ title, subtitle = "", choices, tick = null, start = undefined }) {
+  holdReadyTicker();
   // The cursor starts at `start` when it is given (a command's list: what it did typed alone), else at the tick.
   let at = Math.max(0, choices.findIndex((x) => x.v === (start === undefined ? tick : start)));
   const width = Math.max(...choices.map((x) => x.name.length));
@@ -21067,12 +21096,17 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     }
     // \/etc/hosts … : a message that starts with a slash.
     const typedLine = line.startsWith("\\/") ? line.slice(1) : line;
-    // Files named in it (FOL-268): read into text on foldrun's servers first, as the person chooses.
-    const withFiles = await filesForTurn(s, typedLine, dir);
-    if (withFiles === null) continue;
+    // Something moves the moment Enter sends it: the setup before the model call is round trips to the platform.
+    readySince = Date.now();
+    readyTicker = startTicker(readySince);
     try {
+      // Files named in it (FOL-268): read into text on foldrun's servers first, as the person chooses.
+      const withFiles = await filesForTurn(s, typedLine, dir);
+      if (withFiles === null) continue;
       await towardGoal(withFiles, typedLine);
     } finally {
+      holdReadyTicker();
+      readySince = null;
       // Images for this message only: never carried into a later turn (FOL-268).
       delete s.turnImages;
     }
