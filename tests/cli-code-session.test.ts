@@ -3599,6 +3599,39 @@ test("on a turn on this computer what is typed shows on the working line — aft
   assert.match(JSON.stringify(asked[1]?.messages ?? []), /also check the readme/);
 });
 
+test("a line typed while the turn looks up the plan never answers the key question that follows (FOL-306, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let keys = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-tk/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => new Promise((r) => setTimeout(() => r({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }), 4000)),
+    "POST /v1/keys": () => (keys++, { id: "key-1", key: "fr_gw_test", gatewayUrl: "http://127.0.0.1:1", credential: "account" }),
+  });
+  const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--context", "code-tk", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "160" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    await new Promise((r) => setTimeout(r, 1500));
+    // Typed before any question is on the screen.
+    t.send("y\r");
+    at = await t.until(/make it\? \[y\/N\]/, at, 10_000);
+    await new Promise((r) => setTimeout(r, 800));
+    assert.equal(keys, 0, "the early y did not answer it");
+    t.send("n\r");
+    at = await t.until(/nothing made/, at, 10_000);
+    // What was typed early is kept: it starts the next message, to send or clear.
+    at = await t.until(/\w ❯ y/, at);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(keys, 0);
+});
+
 test("a line being typed when a permission prompt comes is drawn again after it, not hidden till the turn ends (FOL-306, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

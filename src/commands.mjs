@@ -2304,8 +2304,17 @@ function promptHidden(question) {
   });
 }
 
+/**
+ * Called before a question is put to the person, while a turn's keyboard reader may be running (FOL-306): it
+ * hands the terminal back first, so what was typed before the question is kept for the next message and never
+ * read as its answer (Codex). Set only while a turn's setup may ask.
+ * @type {(() => Promise<void>) | null}
+ */
+let keysBeforeAsk = null;
+
 /** Read a line with normal echo — for the non-secret halves of a config. */
-function promptVisible(question) {
+async function promptVisible(question) {
+  if (keysBeforeAsk) await keysBeforeAsk();
   return new Promise((resolve) => {
     process.stdout.write(question);
     const { stdin } = process;
@@ -14180,7 +14189,8 @@ function numstatPaths(out) {
 /** A one-line answer from the terminal that Ctrl-C (via `cancel.onAsk`) or
  *  EOF ends with null, its listeners removed — so the session goes on to
  *  its next prompt rather than waiting for a line nobody will type (Codex). */
-function cancellablePrompt(question, cancel) {
+async function cancellablePrompt(question, cancel) {
+  if (keysBeforeAsk) await keysBeforeAsk();
   return new Promise((resolve) => {
     const { stdin } = process;
     const done = (/** @type {string | null} */ v) => {
@@ -15421,10 +15431,11 @@ const TYPE_AHEAD_MAX = 4000;
  * @param {string} [initial] what is on the line already
  */
 function startTypeAhead(onInt, onSend, queue, initial = "") {
-  if (!codeInteractive || !process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") return { text: () => "", stop: async () => "" };
+  if (!codeInteractive || !process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") return { text: () => "", running: () => false, stop: async () => "" };
   const decoder = new StringDecoder("utf8");
   // A draft the keyboard was stopped on (a prompt came): drawn again as it was (FOL-306).
-  let text = String(initial).slice(0, TYPE_AHEAD_MAX);
+  // Cut by characters, never inside one (Codex).
+  let text = [...String(initial)].slice(0, TYPE_AHEAD_MAX).join("");
   let carry = "";
   let pasting = false;
   const onData = (/** @type {Buffer} */ d) => {
@@ -15479,6 +15490,8 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
   let claimed = false;
   return {
     text: () => text,
+    /** Still reading the keyboard: not handed back yet. */
+    running: () => stopping === null,
     /** Hands the terminal back once; every caller waits for the same handing back (Codex), and the first to get
      *  there takes what was typed — trimmed, or as typed with `raw` (a draft that goes back on the line keeps its
      *  spaces) — the others "", so it is counted once (FOL-306). */
@@ -17489,7 +17502,8 @@ async function codeLocalTurn(s, text) {
   };
   /** The keyboard again after a prompt, unless the turn is over (its end has stopped it for good). */
   const keyboardOn = () => {
-    if (turnOver) return;
+    // Still reading (no question came): one reader, never a second beside it.
+    if (turnOver || typeAhead.running()) return;
     typeAhead = startTypeAhead(onInt, onSend, queueOf(s), draft);
     draft = "";
   };
@@ -17625,9 +17639,14 @@ async function codeLocalTurn(s, text) {
     // `FAST`, `cheap` or `foldrun/fast` is fast (Codex review).
     resolveTierFn ??= (await modelNames()).resolveTier;
     model = tierOf(model) ?? model;
-    await keyboardBack();
-    if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
-    engineKey = await localKeyFor(s, cancel);
+    // Read on through the plan and key lookups; handed back only if one of them asks something (Codex).
+    keysBeforeAsk = keyboardBack;
+    try {
+      if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
+      engineKey = await localKeyFor(s, cancel);
+    } finally {
+      keysBeforeAsk = null;
+    }
     if (!engineKey || cancel.asked) return;
     s.engineKeyInUse = engineKey.key;
     s.engineKeyKind = engineKey.kind;

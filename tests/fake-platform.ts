@@ -54,7 +54,8 @@ export function serve(
           res.end(JSON.stringify({ error: "run not found" }));
           return;
         }
-        const answer = route(body, query) as any;
+        // A route may answer later (a promise): a slow platform, for tests of what happens meanwhile.
+        void Promise.resolve(route(body, query)).then((answer: any) => {
         if (answer && typeof answer === "object" && "__raw" in answer) {
           res.writeHead(answer.status ?? 200, { "content-type": answer.type, ...(answer.headers ?? {}) });
           res.end(answer.__raw);
@@ -63,6 +64,7 @@ export function serve(
         const bad = answer && typeof answer === "object" && "__status" in answer;
         res.writeHead(bad ? answer.__status : 200, { "content-type": "application/json" });
         res.end(JSON.stringify(bad ? answer.body : answer));
+        });
       });
     });
     server.listen(0, "127.0.0.1", () => {
