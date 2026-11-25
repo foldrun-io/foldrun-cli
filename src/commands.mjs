@@ -9645,7 +9645,9 @@ async function filesForTurn(s, line, dir) {
     const kept = f.typed ? readCodePrefs().files?.[f.kind] : undefined;
     // As it is: an image of a size a model takes — sent with the message on this computer; in the cloud, one
     // inside the folder, which the cloud agent has a copy of and looks at with Read (Codex).
-    const canShow = f.kind === "image" && f.bytes <= IMAGE_BYTES_MAX && (s.mode === "local" || (f.inside && !f.link));
+    // A gitignored file is not in the cloud's copy (Codex).
+    const inCloudCopy = () => f.inside && !f.link && spawnSync("git", ["-C", dir, "check-ignore", "-q", "--", f.real], { stdio: "ignore" }).status !== 0;
+    const canShow = f.kind === "image" && f.bytes <= IMAGE_BYTES_MAX && (s.mode === "local" || inCloudCopy());
     /** @type {Buffer | null} */
     let head = null;
     if (canShow) {
