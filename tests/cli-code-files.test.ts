@@ -33,3 +33,15 @@ test("fileKindOf and fileTextBlock: the model is told it has the text, not the f
   assert.match(b, /^\[The audio note\.m4a, transcribed on foldrun's servers — you are given its text, not the file; the text was cut at the platform's limit:\]\nhello there\n\[end of note\.m4a\]$/);
   assert.match(fileTextBlock("s.png", "image", " "), /read by OCR[\s\S]*\(no text was found in it\)/);
 });
+
+test("filesIn: a link is followed to where its bytes are, and a kept choice answers only for an @path inside the folder (Codex)", () => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-"));
+  fs.writeFileSync(path.join(outside, "secret.pdf"), "s");
+  fs.symlinkSync(path.join(outside, "secret.pdf"), path.join(dir, "report.pdf"));
+  const [link] = filesIn("@report.pdf", dir);
+  assert.equal(fs.realpathSync(link!.real), fs.realpathSync(path.join(outside, "secret.pdf")), "the target is what would be sent");
+  assert.equal(link!.typed, false, "a link out of the folder is always asked about");
+  assert.equal(filesIn("@scan.pdf", dir)[0]!.typed, true);
+  assert.equal(filesIn(path.join(dir, "scan.pdf"), dir)[0]!.typed, false, "a pasted path is always asked about");
+  assert.equal(filesIn(`@${path.join(outside, "secret.pdf")}`, dir)[0]!.typed, false, "an @path outside the folder too");
+});

@@ -9597,22 +9597,27 @@ async function filesForTurn(s, line, dir) {
   /** @type {string[]} */
   const blocks = [];
   let only = 0;
+  let left = 0;
   for (const f of found) {
     const name = path.basename(f.file);
+    // A link is shown as where its bytes are: those are what would be sent (Codex).
+    const shown = f.link ? `${name} (a link to ${homeTilde(f.real)})` : name;
     if (!f.bytes || f.bytes > FILE_BYTES_MAX) {
       say(`${plainText(name)} is ${f.bytes ? "larger than foldrun reads (200 MB)" : "empty"} — left in your message as a path`);
+      left += 1;
       continue;
     }
-    const kept = readCodePrefs().files?.[f.kind];
+    // A kept choice answers only for a file typed as @path inside this folder, never a link out of it (Codex).
+    const kept = f.typed ? readCodePrefs().files?.[f.kind] : undefined;
     /** @type {string | null} */
     let how = kept === "text" || kept === "only" ? kept : null;
     if (!how) {
       const plural = KIND_PLURAL[f.kind];
-      // No terminal to ask on: into text, the default, which spends no model tokens on the file.
+      // No terminal to ask on: nothing leaves this machine unasked — the file stays a path (Codex).
       const v = process.stdin.isTTY
         ? await pickOne({
-            title: `${plainText(name)} — ${f.kind}, ${formatBytes(f.bytes)}`,
-            subtitle: "read on foldrun's servers — no model tokens are spent reading it",
+            title: `${plainText(shown)} — ${f.kind}, ${formatBytes(f.bytes)}`,
+            subtitle: "its bytes are sent to foldrun's servers to be read — no model tokens are spent reading it",
             choices: [
               { v: "text", name: "Into text for the agent", note: "only its text goes to the model" },
               { v: "only", name: "Just the text", note: "shown here, no model call · /export copy takes it" },
@@ -9621,9 +9626,10 @@ async function filesForTurn(s, line, dir) {
             ],
             start: "text",
           })
-        : "text";
+        : null;
       if (v === null) {
         say(`${plainText(name)} left as a path in your message — the agent is not given its text`);
+        left += 1;
         continue;
       }
       how = v.replace("!", "");
@@ -9635,9 +9641,10 @@ async function filesForTurn(s, line, dir) {
     /** @type {any} */
     let result;
     try {
-      result = await extractLocalFile(s.url, s.flags, f.file);
+      result = await extractLocalFile(s.url, s.flags, f.real);
     } catch (err) {
       console.log(`  ${c.red("✗")} ${plainText(name)}: ${plainText(explain(err))} ${c.dim("— left as a path in your message")}`);
+      left += 1;
       continue;
     }
     const text = typeof result?.text === "string" ? result.text : "";
@@ -9653,7 +9660,8 @@ async function filesForTurn(s, line, dir) {
     blocks.push(fileTextBlock(name, f.kind, text, { truncated: result?.truncated === true }));
     console.log(`  ${c.green("✓")} ${c.dim(`${plainText(name)} read into text (${what}) — the agent is given the text, not the file`)}`);
   }
-  if (only && !blocks.length) {
+  // Every file was "just the text": no model call. One left as a path keeps the message going (Codex).
+  if (only && !blocks.length && !left) {
     console.log(`\n  ${c.dim("nothing was sent to the model · /export copy takes the text")}\n`);
     return null;
   }

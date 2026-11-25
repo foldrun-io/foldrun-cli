@@ -34,10 +34,13 @@ export function fileKindOf(file) {
  * dropped on it ('/Users/a/My File.png', /Users/a/My\ File.png, ~/x.pdf).
  * Only existing files of a kind foldrun reads; each once, in order.
  * @param {string} line @param {string} dir the session's folder, for a relative @path
- * @returns {Array<{ raw: string, file: string, kind: FileKind, bytes: number }>}
+ * `real` is where its bytes are (a link followed); `typed` is true for an `@path` inside the folder — the only
+ * kind a choice kept "every time" may answer for, so a path in pasted text is always asked about (Codex).
+ * `link` is true when the named file is itself a link.
+ * @returns {Array<{ raw: string, file: string, real: string, link: boolean, kind: FileKind, bytes: number, typed: boolean }>}
  */
 export function filesIn(line, dir) {
-  /** @type {Array<{ raw: string, file: string, kind: FileKind, bytes: number }>} */
+  /** @type {Array<{ raw: string, file: string, real: string, link: boolean, kind: FileKind, bytes: number, typed: boolean }>} */
   const out = [];
   const seen = new Set();
   // @"…", @'…', '…', "…", or a run of non-space characters where "\ " is a space.
@@ -52,16 +55,27 @@ export function filesIn(line, dir) {
     const kind = fileKindOf(word);
     if (!kind) continue;
     const file = path.resolve(dir, word.startsWith("~/") ? path.join(os.homedir(), word.slice(2)) : word);
-    if (seen.has(file)) continue;
     let st;
+    let real;
+    let link = false;
     try {
-      st = fs.statSync(file);
+      link = fs.lstatSync(file).isSymbolicLink();
+      real = fs.realpathSync(file);
+      st = fs.statSync(real);
     } catch {
       continue;
     }
-    if (!st.isFile()) continue;
-    seen.add(file);
-    out.push({ raw: `${m[2]}${m[3] !== undefined ? `"${m[3]}"` : m[4] !== undefined ? `'${m[4]}'` : m[5]}`, file, kind, bytes: st.size });
+    if (!st.isFile() || seen.has(real)) continue;
+    seen.add(real);
+    let root = dir;
+    try {
+      root = fs.realpathSync(dir);
+    } catch {
+      /* the folder as given */
+    }
+    const rel = path.relative(root, real);
+    const inside = rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+    out.push({ raw: `${m[2]}${m[3] !== undefined ? `"${m[3]}"` : m[4] !== undefined ? `'${m[4]}'` : m[5]}`, file, real, link, kind, bytes: st.size, typed: at && inside && !link });
     if (out.length >= FILES_MAX) break;
   }
   return out;
