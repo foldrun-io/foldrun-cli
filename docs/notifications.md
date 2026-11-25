@@ -355,8 +355,12 @@ verified domain, or Resend's onboarding sender for testing).
 
 An account that has set neither still gets its notifications: they fall
 back to the platform's connection and come from `foldrun <hello@foldrun.io>`.
-An invite and a low-balance warning are the platform's own mail and always
-come from foldrun; the platform never sends those through your key.
+An invite, a sign-in code, a password-reset link, an address confirmation,
+a security notice and a low-balance warning are the platform's own mail and
+always come from foldrun; the platform never sends those through your key
+(each of the first five carries something that signs a person in). Only a
+self-hosted install with no mail sender of its own sends them through the
+account's.
 
 ## Choosing what mail you get
 

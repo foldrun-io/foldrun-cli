@@ -295,6 +295,33 @@ reads](team-and-access#support-access).
 
 Signing in, in particular:
 
+- until a login has confirmed its email address, it can sign in and look
+  around but cannot make anything that would outlast a password reset: no
+  API keys (including the one `foldrun login` makes), no two-step sign-in,
+  no connected apps (MCP OAuth or machine clients), no team invites, no
+  public file links and no webhook URLs through the API (it sees that links
+  exist, not their tokens; the dashboard's settings and storage pages and
+  `storage/public` publishing get the same rule next). The answer is a `403` with `code: "email_unconfirmed"`. Anyone can
+  sign up with someone else's address; when the real owner of that inbox
+  first proves it with a password reset, every session ends and whatever the
+  login made before is revoked — its API keys, connected apps and pending
+  invites, and app approvals not yet exchanged — and a second factor it
+  enrolled is removed. Any reset also voids an app approval made with the
+  old password that has not been exchanged yet. Whether an address
+  must be confirmed is the install's setting, never an account's: always on
+  foldrun's hosted platform, on any install with its own mail sender, and
+  where `FOLDRUN_REQUIRE_EMAIL_CONFIRMATION=1`; a self-hosted install that
+  cannot send mail can never confirm anyone, so there nothing is held back.
+  Known limit: if the inbox's owner confirms the address from the sign-up
+  mail instead of resetting the password, the first signer's session and
+  password stay; the confirmation mail tells anyone who did not sign up to use "Forgot
+  password" instead;
+- sign-in codes, reset links, address confirmations, invites and security
+  notices always go out through the platform's own mail sender, never an
+  account's own: each carries a secret that signs someone in, and the
+  account's mail provider must not be able to read a member's. On the hosted
+  platform it fails closed when its own sender is missing; only a
+  self-hosted install with no sender of its own uses the account's;
 - a password reset or change, two-step sign-in turned on or off, and a new
   API key each send a notice to the person's address;
 - signing out ends the session on the server, not just in the browser;
@@ -350,8 +377,9 @@ Signing in, in particular:
 - before the first sign-up, a self-hosted install's setup token guards key
   minting as it guards sign-up;
 - only the account's owner can set, rebind or remove the account's
-  `RESEND_API_KEY` and `EMAIL_FROM`, because that sender carries everyone's
-  reset links — whether through the secrets API or an OAuth connect. The
+  `RESEND_API_KEY` and `EMAIL_FROM`, because that sender carries the
+  account's notifications (and, on a self-hosted install with no sender of
+  its own, everyone's reset links) — whether through the secrets API or an OAuth connect. The
   owner means the owner signed in, in the browser: no API key can, not even
   the one their own `foldrun login` made (since 5 November 2026), so a
   leaked laptop key cannot repoint the reset mail and take the account;
