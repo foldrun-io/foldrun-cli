@@ -2311,10 +2311,22 @@ function promptHidden(question) {
  * @type {(() => Promise<void>) | null}
  */
 let keysBeforeAsk = null;
+/** And after it is answered: the keyboard reader again, so nothing typed waits in the terminal for the next question (Codex). @type {(() => void) | null} */
+let keysAfterAsk = null;
 
 /** Read a line with normal echo — for the non-secret halves of a config. */
 async function promptVisible(question) {
-  if (keysBeforeAsk) await keysBeforeAsk();
+  if (!keysBeforeAsk) return promptVisibleNow(question);
+  await keysBeforeAsk();
+  try {
+    return await promptVisibleNow(question);
+  } finally {
+    keysAfterAsk?.();
+  }
+}
+
+/** @param {string} question @returns {Promise<string>} */
+function promptVisibleNow(question) {
   return new Promise((resolve) => {
     process.stdout.write(question);
     const { stdin } = process;
@@ -14190,7 +14202,17 @@ function numstatPaths(out) {
  *  EOF ends with null, its listeners removed — so the session goes on to
  *  its next prompt rather than waiting for a line nobody will type (Codex). */
 async function cancellablePrompt(question, cancel) {
-  if (keysBeforeAsk) await keysBeforeAsk();
+  if (!keysBeforeAsk) return cancellablePromptNow(question, cancel);
+  await keysBeforeAsk();
+  try {
+    return await cancellablePromptNow(question, cancel);
+  } finally {
+    keysAfterAsk?.();
+  }
+}
+
+/** @param {string} question @param {any} cancel @returns {Promise<string | null>} */
+function cancellablePromptNow(question, cancel) {
   return new Promise((resolve) => {
     const { stdin } = process;
     const done = (/** @type {string | null} */ v) => {
@@ -17641,11 +17663,13 @@ async function codeLocalTurn(s, text) {
     model = tierOf(model) ?? model;
     // Read on through the plan and key lookups; handed back only if one of them asks something (Codex).
     keysBeforeAsk = keyboardBack;
+    keysAfterAsk = keyboardOn;
     try {
       if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
       engineKey = await localKeyFor(s, cancel);
     } finally {
       keysBeforeAsk = null;
+      keysAfterAsk = null;
     }
     if (!engineKey || cancel.asked) return;
     s.engineKeyInUse = engineKey.key;
