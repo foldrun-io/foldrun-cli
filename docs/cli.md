@@ -630,7 +630,8 @@ ticked so Enter keeps it, and the first time in a folder which project:
    - **In the cloud**: see the next bullet.
 
    On this computer, either way: foldrun's own agent works directly in your
-     folder, with Read, Write, Edit, Glob, Grep and Bash. Its model calls are
+     folder, with Read, Write, Edit, Glob, Grep and Bash (Read shows it a
+     screenshot or a design as the image itself). Its model calls are
      paid by your foldrun plan's allowance while it has room. **One key:**
      when your sign-in has model access — ticked on the approval page of
      `foldrun login` (an admin of every project; the page shows the limits:

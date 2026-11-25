@@ -258,6 +258,38 @@ curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-
   -d '{"model": "openai/gpt-5", "max_tokens": 200, "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
+### Server tools: web search and fetch
+
+Anthropic's web tools work on the gateway as written for Anthropic, with any
+model: name `web_search_20250305` (`web_search`) or `web_fetch_20250910`
+(`web_fetch`) in `tools`. **foldrun runs them, never the model's provider:**
+the provider is given a plain tool, foldrun runs each search or fetch itself,
+and the reply comes back in Anthropic's shape: `server_tool_use` and
+`web_search_tool_result` / `web_fetch_tool_result` blocks, `pause_turn` for a
+long turn (send the conversation back to go on), `usage.server_tool_use` for
+the counts. Streaming works too, with the text arriving as it is written.
+
+```sh
+curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model": "claude-sonnet-4-5", "max_tokens": 1000,
+       "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+       "messages": [{"role": "user", "content": "What changed in Node 24?"}]}'
+```
+
+The options are Anthropic's: `max_uses`, `allowed_domains` or
+`blocked_domains` (a path narrows search; fetch matches the domain only),
+`user_location` (search), `max_content_tokens` (fetch). Fetch reads only a
+URL that is already in the conversation (from the user, a tool result, or an
+earlier search or fetch), never one the model made up, and a URL carrying a
+credential only when a person wrote that credential. Search, fetch and the
+model all run on foldrun's own accounts; to use your own search or scraping
+service, give an agent its API (`apis:`, `mcpServers:`, `tools/`).
+
+Any other server tool (`code_execution`, an MCP toolset, `mcp_servers`, a
+tool added mid-conversation) is refused with a `400`
+(`server_tool_not_offered`): it is never passed on to the provider.
+
 ## Pagination
 
 There is no cursor yet. The lists that can grow — runs — answer newest first
