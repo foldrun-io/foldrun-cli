@@ -12,6 +12,25 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.2.0] — 2026-11-25
+
+- fix(code): bypass ends with /permissions reset and with a new or resumed conversation; the list ticks it (FOL-308, Codex) ([509a7ac](https://github.com/foldrun-io/foldrun-cli/commit/509a7ac))
+- test(code): /permissions list moved by Bypass (FOL-308) ([2ba6e61](https://github.com/foldrun-io/foldrun-cli/commit/2ba6e61))
+- feat(code): /permissions bypass — nothing asked for the session, red in the status line (FOL-308) ([0734b38](https://github.com/foldrun-io/foldrun-cli/commit/0734b38))
+- fix(code): a this-computer-only session is told the person answers other sessions (/sessions send), not a session_send it does not have (FOL-309) ([a2c2e1c](https://github.com/foldrun-io/foldrun-cli/commit/a2c2e1c))
+- fix(doctor): foldrun's koder from another install (global beside a checkout) is not another program ([f606784](https://github.com/foldrun-io/foldrun-cli/commit/f606784))
+- feat(code): the header says koder from foldrun.io ([409aae6](https://github.com/foldrun-io/foldrun-cli/commit/409aae6))
+
+### deps
+
+- @foldrun/core ^27.7.0 ([a00d5bd](https://github.com/foldrun-io/foldrun-cli/commit/a00d5bd))
+- @foldrun/core ^27.6.0 ([9659713](https://github.com/foldrun-io/foldrun-cli/commit/9659713))
+- @foldrun/core ^27.5.1 ([db1b4c4](https://github.com/foldrun-io/foldrun-cli/commit/db1b4c4))
+
+### docs
+
+- sync — edits that would not parse (FOL-292) ([4b74af2](https://github.com/foldrun-io/foldrun-cli/commit/4b74af2))
+
 ## [32.1.2] — 2026-11-24
 
 ### docs
