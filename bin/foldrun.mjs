@@ -787,7 +787,7 @@ if (command === "deploy") {
       : path.join(layout.accountRoot, ".foldrun"));
 }
 
-const { run, explain } = await import(path.join(HERE, "../src/commands.mjs"));
+const { run, explain } = await import("../src/commands.mjs");
 
 try {
   const code = await run(command, positional, flags, workspace, layout);
