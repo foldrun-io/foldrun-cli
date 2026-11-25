@@ -217,7 +217,7 @@ console.log('{"get":"url","value":"https://example.com/"}');
 
 // ---------------------------------------------- web action=browse, here (FOL-267)
 
-const { localWebDefinition, localWebArgv, runLocalWeb, browseHelp } = await import("../src/browser.mjs");
+const { localWebDefinition, localWebArgv, runLocalWeb, browseHelp, notHere } = await import("../src/browser.mjs");
 const { readFrontmatter } = await import("@foldrun/core");
 
 function webGallery() {
@@ -289,6 +289,18 @@ test("FOL-267: a local call runs run.mjs in the browser's folder with the window
   assert.deepEqual(said.env, ["FOLDRUN_BROWSER_DESKTOP", "FOLDRUN_BROWSER_HEADLESS", "FOLDRUN_BROWSER_LIVE_IDLE_MS", "FOLDRUN_BROWSER_LIVE_ROOT", "FOLDRUN_BROWSER_MODULES"]);
   assert.match(shapeOutput(r), /wrote outputs\/page\.png/);
   assert.doesNotMatch(shapeOutput(r), /live session/, "the session chatter is left out");
+  // A link where uploads come from or outputs go is refused before anything runs (Codex).
+  fs.mkdirSync(path.join(paths.work, "uploads"), { recursive: true });
+  fs.symlinkSync(os.homedir(), path.join(paths.work, "uploads", "home"));
+  const linked: any = await runLocalWeb({ browse: path.join(dir, "browse.mjs"), paths }, ["--action", "browse"]);
+  assert.equal(linked.code, 1);
+  assert.match(linked.stderr, /uploads\/home is a link/);
+  fs.rmSync(path.join(paths.work, "uploads", "home"));
+  // A turn already stopped runs nothing.
+  const gone = new AbortController();
+  gone.abort();
+  assert.match(((await runLocalWeb({ browse: path.join(dir, "browse.mjs"), paths }, [], { signal: gone.signal })) as any).stderr, /stopped before it started/);
+  assert.match(notHere("state", "Optional name of a login kept across runs") ?? "", /profile keeps them already/);
   // Stopped with the turn.
   fs.writeFileSync(path.join(dir, "run.mjs"), "setTimeout(() => {}, 60000);");
   const stop = new AbortController();

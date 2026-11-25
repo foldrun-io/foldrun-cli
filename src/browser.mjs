@@ -452,6 +452,8 @@ export function notHere(name, help) {
   if (/^Optional NAME of a secret/.test(help) || name === "captcha_solver") return `${name} uses a secret from foldrun's vault, which this computer does not have — browse in the cloud for it`;
   if (name === "identity") return "identity names an entry of an agent's web.browse identities, which a session on this computer does not have — pass the settings themselves";
   if (name === "extensions") return "extensions load from a cloud workspace — not on this computer";
+  // It would write this profile's cookies (HttpOnly too) to a plain file (Codex).
+  if (name === "state") return "state saves the window's sign-ins to a file — on this computer the profile keeps them already";
   return null;
 }
 
@@ -516,6 +518,10 @@ export function localWebArgv(input, def) {
  * @param {{ signal?: AbortSignal, timeoutMs?: number }} [o]
  */
 export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000 } = {}) {
+  if (signal?.aborted) return Promise.resolve({ code: 1, stdout: "", stderr: "stopped before it started\n", timedOut: false });
+  // A link in what a call may upload from or write to could point anywhere on this computer (Codex).
+  const link = linkUnder([path.join(ctx.paths.work, "uploads"), path.join(ctx.paths.work, "outputs")]);
+  if (link) return Promise.resolve({ code: 1, stdout: "", stderr: `not run: ${link} is a link — the browser's folder holds only real files (remove it)\n`, timedOut: false });
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(path.dirname(ctx.browse), "run.mjs"), ...argv], {
       cwd: ctx.paths.work, env: callEnv(ctx.paths), stdio: ["ignore", "pipe", "pipe"],
@@ -536,6 +542,21 @@ export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000 } = {}) {
     child.on("error", (err) => done(1, `${err.message}\n`));
     child.on("close", (code) => done(code ?? 1));
   });
+}
+
+/** The first symbolic link at or below these folders, or null. @param {string[]} roots */
+export function linkUnder(roots) {
+  const stack = [...roots];
+  let seen = 0;
+  while (stack.length && seen < 20_000) {
+    const p = /** @type {string} */ (stack.pop());
+    seen += 1;
+    let st;
+    try { st = fs.lstatSync(p); } catch { continue; }
+    if (st.isSymbolicLink()) return p;
+    if (st.isDirectory()) for (const e of fs.readdirSync(p)) stack.push(path.join(p, e));
+  }
+  return null;
 }
 
 /**

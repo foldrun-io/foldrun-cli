@@ -18253,6 +18253,16 @@ async function codeLocalTurn(s, text) {
           }
           console.log(`      ${c.grey(`a message to the session ${msg.to} of ${plainText(s.ws)} — it waits there until that session's person includes it`)}`);
           for (const l of msg.text.split("\n")) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.white(l.slice(i, i + width))}`);
+        } else if (name === "web") {
+          // A browse runs as you, in foldrun's Chrome profile, outside the sandbox: say so, and show every step
+          // in full, so nothing it would type or submit is hidden past the edge (FOL-267, Codex).
+          console.log(`      ${c.white("in the Chrome window on this computer, as you — outside the sandbox, with that profile's sign-ins")}`);
+          const lines = JSON.stringify(input, null, 1).split("\n").map((l) => plainText(l));
+          for (const l of lines.slice(0, 200)) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.grey(l.slice(i, i + width))}`);
+          if (lines.length > 200) {
+            console.log(`      ${c.amber(`a call too long to show whole (${lines.length} lines) — not run`)}`);
+            return { behavior: /** @type {const} */ ("deny"), message: "the call was too long to show the person whole — split it into smaller calls" };
+          }
         } else {
           const shown = plainText(JSON.stringify(input)).slice(0, 400);
           console.log(`      ${c.grey(clipCells(shown, width))}`);

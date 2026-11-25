@@ -3850,9 +3850,9 @@ test("the local agent browses on this computer with the cloud's web tool, asked 
     t.send("read example.com\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
-    at = await t.until(/Web[\s\S]*browse https:\/\/example\.com[\s\S]*\[y\]es/, at, 30_000);
+    at = await t.until(/Web[\s\S]*browse https:\/\/example\.com[\s\S]*outside the sandbox[\s\S]*"mode": "aria"[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
-    at = await t.until(/"proxy":"MY_PROXY"[\s\S]*\[y\]es/, at, 30_000);
+    at = await t.until(/"proxy": "MY_PROXY"[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/Read the page\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
