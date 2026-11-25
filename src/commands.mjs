@@ -3222,11 +3222,11 @@ function toolHue(/** @type {string} */ name) {
 function codeHeader(/** @type {Array<[string, string, string]>} */ rows) {
   const cols = process.stdout.columns || 80;
   // Too narrow for a frame: the same rows, unframed (Codex).
-  if (cols < 40) return [`  ${c.bold(c.sweep(`◆ foldrun code ${CLI_VERSION}`))}`, ...rows.map(([k, painted, plain]) => `  ${c.grey(k.padEnd(7))} ${displayWidth(plain) <= cols - 11 ? painted : c.white(clipCells(plain, cols - 11))}`)].join("\n");
+  if (cols < 40) return [`  ${c.bold(c.sweep(`◆ koder from foldrun.io ${CLI_VERSION}`))}`, ...rows.map(([k, painted, plain]) => `  ${c.grey(k.padEnd(7))} ${displayWidth(plain) <= cols - 11 ? painted : c.white(clipCells(plain, cols - 11))}`)].join("\n");
   const inner = Math.min(64, cols - 6);
   // │ + 2 spaces + the label in 7 and a space + the value + a space + │ = inner + 2.
   const room = inner - 11;
-  const title = ` ◆ foldrun code ${CLI_VERSION} `;
+  const title = ` ◆ koder from foldrun.io ${CLI_VERSION} `;
   const top = `  ${c.grey("╭─")}${c.bold(c.sweep(title))}${c.grey(`${"─".repeat(Math.max(0, inner - displayWidth(title) - 1))}╮`)}`;
   const body = rows.map(([k, painted, plain]) => {
     const fits = displayWidth(plain) <= room;
@@ -18715,7 +18715,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   // computer, unless --cloud says so (Codex: no silent upload).
   if (typeof flags.task === "string" && mode === "local" && flags.local !== true && !onlyHere) throw new Error("this folder works on this computer — say where this script's turn runs: --local -p (here; file changes only with --yes) or --cloud -p (a copy goes to the cloud)");
   if (asking && flags.local !== true && !onlyHere && flags.cloud !== true && !(flags.continue === true && mode)) {
-    console.log(`\n  ${c.bold(c.sweep("◆ foldrun code"))}\n`);
+    console.log(`\n  ${c.bold(c.sweep("◆ koder from foldrun.io"))}\n`);
     // Three answers (owner, 24 Nov 2026: "it has to have 3 options and the where allows to change" — FOL-263),
     // the same list as /where, the last one ticked.
     const before = mode === "cloud" ? "cloud" : mode === "local" ? (localOnly ? "local-only" : "local") : null;
@@ -18905,7 +18905,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       // so a client may wait for a result before it sends the next (Codex).
       const fromStdin = flags.task === "\u0000stdin";
       const tasks = fromStdin ? stdinMessages() : (async function* () { yield String(flags.task).trim(); })();
-      console.log(`\n  ${c.bold("foldrun code")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
+      console.log(`\n  ${c.bold("koder from foldrun.io")} ${c.dim(plainText(`· the ${agent} agent · project ${ws} · ${homeTilde(dir)} · session ${s.context}`))}\n`);
       for await (const task of tasks) {
         // A script's turn is part of the session too: the cloud is told what the
         // folder holds, and a later /local hears what this turn did (Codex).

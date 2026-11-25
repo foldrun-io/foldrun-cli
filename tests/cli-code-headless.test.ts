@@ -107,7 +107,7 @@ test("-p with --output-format json: one result object on stdout, the person's li
   assert.equal(res.cost_usd, 0.02);
   assert.equal(res.applied, false);
   assert.deepEqual(tasks, ["read hello"], "-p is the task");
-  assert.match(r.err, /foldrun code/, "the header went to stderr");
+  assert.match(r.err, /koder from foldrun\.io/, "the header went to stderr");
 });
 
 test("--output-format stream-json: init, the agent's calls and words as they happen, then the result — every stdout line is JSON", async () => {
