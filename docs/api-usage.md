@@ -292,13 +292,6 @@ than run again. It is never shared with another account, and an answer that
 looks like it carries a credential is never kept. A fetch is always run
 fresh.
 
-Searches and fetches that actually run (a cached answer does not count) are
-limited in how many run at once: per account, across all its keys, and on
-each of foldrun's servers. A call over the limit waits its turn for a few
-seconds, then comes back as the tool's own `too_many_requests` error, as
-Anthropic's does, and the model can try again. It is a limit on load, not on
-spend.
-
 ### Server tool: a page in a cloud browser
 
 `foldrun_web_browse_20251125` (`web_browse`) is foldrun's own: it opens a page
