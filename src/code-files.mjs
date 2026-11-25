@@ -112,10 +112,12 @@ export function fileTextBlock(name, kind, text, o = {}) {
  * @param {FoundFile} f @returns {Buffer}
  */
 export function chosenBytes(f) {
-  const fd = fs.openSync(f.real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  // Non-blocking: a pipe put in its place is not waited on, and fails the check below (Codex).
+  const fd = fs.openSync(f.real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const st = fs.fstatSync(fd);
     if (`${st.dev}:${st.ino}` !== f.id || !st.isFile()) throw new Error("the file changed after you chose — not sent; name it again");
+    if (st.size > FILE_BYTES_MAX) throw new Error("the file grew larger than foldrun reads (200 MB) — not sent");
     return fs.readFileSync(fd);
   } finally {
     fs.closeSync(fd);
