@@ -9775,6 +9775,30 @@ function editParts(/** @type {string} */ name, /** @type {any} */ input, /** @ty
   return [...by.values()];
 }
 
+/** foldrun code's local ask (FOL-314): the platform's `ask_person`, by name and input, answered at this keyboard. */
+const ASK_TOOL_LOCAL = "ask_person";
+/** Marks an answer the person gave at this keyboard; never shown to the model. */
+const ASK_MARK = crypto.randomBytes(16).toString("hex");
+const ASK_DESCRIPTION_LOCAL = "Ask the person at the keyboard a question and wait for their answer. Use it for a decision you cannot make safely yourself — which of two designs, whether to delete something, what they meant — not for information you can look up. Give a short list of options when the answer is one of them; they can always type their own.";
+const ASK_SCHEMA_LOCAL = {
+  type: "object",
+  properties: {
+    question: { type: "string", description: "The complete, self-contained question — the person has not read your work" },
+    options: { type: "array", items: { type: "string" }, description: "Up to 10 short choices, when the answer is one of them" },
+  },
+  required: ["question"],
+};
+
+/** The question and choices as the platform's ask_person holds them: trimmed, capped, never empty. @param {any} input */
+/** @returns {{ problem: string } | { question: string, options: string[] }} */
+export function askInput(input) {
+  const question = String(input?.question ?? "").trim().slice(0, 2000);
+  if (!question) return { problem: "ask_person needs a question." };
+  if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(question)) return { problem: "the question held control characters — ask in plain text" };
+  const options = (Array.isArray(input?.options) ? input.options : []).map((/** @type {unknown} */ o) => plainText(String(o)).replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean).slice(0, 10);
+  return { question, options };
+}
+
 async function agentMedia(s) {
   if (s.agentMedia === "text" || s.agentMedia === "as-is") return s.agentMedia;
   let media = /** @type {"text" | "as-is"} */ ("text");
@@ -18197,6 +18221,35 @@ async function codeLocalTurn(s, text) {
       if (name === FOLDRUN_DOCS_TOOL) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       // The todo list is the session's own note: nothing in the folder changes.
       if (name === TODO_WRITE || name === TODO_READ) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      // ask_person (FOL-314): the question is put here, in the queue every question waits in; the answer rides back
+      // on the call (any `answer` the model wrote is replaced). Nobody to ask in a script's turn, nor for a sub-agent.
+      if (name === ASK_TOOL_LOCAL) {
+        if (s.headless) return { behavior: /** @type {const} */ ("deny"), message: "This turn runs from a script with no one to ask. Decide it yourself if it is safe to, or end the turn saying plainly what you need from the person." };
+        if (child) return { behavior: /** @type {const} */ ("deny"), message: "A sub-agent does not ask the person. Finish with what you found and say what needs deciding; the agent that started you will ask." };
+        const q = askInput(input);
+        if ("problem" in q) return { behavior: /** @type {const} */ ("deny"), message: String(q.problem) };
+        stopTicker();
+        await keyboardBack();
+        try {
+          console.log(`  ${c.cyan("?")} ${c.bold("the agent asks you:")}`);
+          const width = Math.max(20, (process.stdout.columns || 80) - 6);
+          for (const l of q.question.split("\n")) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`    ${c.white(l.slice(i, i + width))}`);
+          /** @type {string | null} */
+          let answer = null;
+          if (q.options.length) {
+            const OWN = "\u0000own";
+            const v = await pickOne({ title: "your answer", choices: [...q.options.map((o, i) => ({ v: String(i), name: o, note: "" })), { v: OWN, name: "type my own answer…", note: "" }] });
+            if (v === OWN) answer = ((await cancellablePrompt(`    ${c.grey("your answer:")} `, cancel)) ?? "").trim();
+            else if (v !== null) answer = /** @type {string} */ (q.options[Number(v)]);
+          } else answer = ((await cancellablePrompt(`    ${c.grey("your answer (Enter for none):")} `, cancel)) ?? "").trim();
+          if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
+          if (answer) console.log(`    ${c.dim(`answered: ${clipCells(plainText(answer.replace(/\s+/g, " ")), width - 10)}`)}`);
+          return { behavior: /** @type {const} */ ("allow"), updatedInput: { question: q.question, options: q.options, answer: answer ?? "", answeredBy: ASK_MARK } };
+        } finally {
+          keyboardOn();
+          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
+        }
+      }
       // A sub-agent that only reads, on this computer, reads what the agent
       // itself may read unasked; a call that does not read as one is
       // answered by the tool (its own message), not asked about.
@@ -19066,6 +19119,14 @@ async function codeLocalTurn(s, text) {
               ...(s.localOnly === true ? [] : [{ name: SESSION_SEND_TOOL, description: SESSION_SEND_DESCRIPTION, input_schema: SESSION_SEND_SCHEMA, run: async (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => sessionSendCall(s, input, ctx.signal) }]),
               // A job handed to a second conversation: on this computer, or run in the project's cloud sandbox.
               { name: AGENT_TOOL, description: sub.description, input_schema: sub.schema, run: (/** @type {unknown} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => agentCall(input, ctx.signal) },
+              // A question for the person at the keyboard, the platform's ask_person shape (FOL-314); asked in decide.
+              {
+                name: ASK_TOOL_LOCAL, description: ASK_DESCRIPTION_LOCAL, input_schema: ASK_SCHEMA_LOCAL,
+                // Only an answer put there by the question above counts: one the model wrote has no mark (defence in depth).
+                run: async (/** @type {any} */ input) => (input?.answeredBy === ASK_MARK && String(input?.answer ?? "").trim()
+                  ? { text: `The person answered: ${String(input.answer).trim()}`, isError: false }
+                  : { text: "The person gave no answer. Decide yourself if it is safe to, or end the turn saying plainly what you need.", isError: false }),
+              },
               // The session's todo list: its own note, shown to the person.
               {
                 name: TODO_WRITE, description: TODO_WRITE_DESCRIPTION, input_schema: TODO_WRITE_SCHEMA,

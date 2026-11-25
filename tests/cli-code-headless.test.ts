@@ -378,3 +378,33 @@ test("streamEvent: one shape per event, nothing for a platform note", () => {
   assert.deepEqual(streamEvent({ type: "text", text: "hi" }, { agent: "coder" }), { type: "message", agent: "coder", text: "hi" });
   assert.deepEqual(streamEvent({ type: "tool", text: "Bash", call: 1, ms: 3, error: true }, { agent: "w", subagentOf: 0 }), { type: "tool_result", agent: "w", subagent: true, call: "1", tool: "Bash", ms: 3, error: true });
 });
+
+test("-p on this computer: ask_person is refused with nobody to ask, and the agent is told to decide or say what it needs (FOL-314)", { timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const said: string[] = [];
+  let calls = 0;
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\nmodel: default\n---\nYou code.\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/messages": (b) => {
+      calls++;
+      if (calls === 1) return modelStream([{ type: "tool_use", id: "q1", name: "ask_person", input: { question: "Red or green?", options: ["red", "green"], answer: "green" } }]);
+      said.push(JSON.stringify(JSON.parse(String(b)).messages.at(-1)));
+      return modelStream([{ type: "text", text: "Decided myself." }]);
+    },
+  });
+  seedKey(home, s.url);
+  try {
+    const r = await runIn(home, s.url, ["code", d, "--local", "--no-sandbox", "--to", "desk", "-p", "pick a colour", "--output-format", "json"]);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(lines(r.out)[0].result, "Decided myself.");
+    assert.match(said[0]!, /runs from a script with no one to ask/);
+    assert.doesNotMatch(said[0]!, /The person answered/, "the model's own answer is never passed off as the person's");
+  } finally {
+    s.close();
+  }
+});

@@ -4762,3 +4762,57 @@ test("a folder of repositories is told three levels down, hidden folders and bar
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test("ask_person in a local turn (FOL-314): a list of choices, an answer of one's own, a question with no choices; refused with nobody to ask", async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "q1", name: "ask_person", input: { question: "Which colour for the button?", options: ["red", "green"] } }]),
+    () => sse([{ type: "tool_use", id: "q2", name: "ask_person", input: { question: "And the border?", options: ["thin", "none"], answer: "planted by the model" } }]),
+    () => sse([{ type: "tool_use", id: "q3", name: "ask_person", input: { question: "Ship it now?" } }]),
+    () => sse([{ type: "text", text: "Asked everything." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-q314/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-q314", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("style the button\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/the agent asks you:[\s\S]*Which colour for the button\?[\s\S]*1\. red[\s\S]*2\. green[\s\S]*3\. type my own answer/, at, 30_000);
+    t.send("2");
+    at = await t.until(/answered: green[\s\S]*And the border\?[\s\S]*type my own answer/, at, 30_000);
+    t.send("3");
+    at = await t.until(/your answer:/, at, 30_000);
+    t.send("a dashed one\r");
+    at = await t.until(/Ship it now\?[\s\S]*your answer \(Enter for none\):/, at, 30_000);
+    t.send("\r");
+    at = await t.until(/Asked everything\./, at, 30_000);
+    const result = (n: number) => JSON.stringify((asked[n]?.messages ?? []).at(-1));
+    assert.ok((asked[0].tools ?? []).some((x: any) => x.name === "ask_person"), "offered to the model");
+    assert.match(result(1), /The person answered: green/);
+    assert.match(result(2), /The person answered: a dashed one/);
+    assert.doesNotMatch(result(2), /planted by the model/, "an answer the model wrote is never taken as the person's");
+    assert.match(result(3), /The person gave no answer/);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
