@@ -18531,6 +18531,8 @@ async function codeLocalTurn(s, text) {
     }
   } catch (err) {
     stopTicker();
+    // Nothing was sent (FOL-305): the caller keeps its notes; no history is written for it (Codex).
+    if (/** @type {any} */ (err)?.code === "messages_gone") throw err;
     // An unanswered follow-up goes back to the prompt; what came before it
     // was a whole exchange, and is kept whole (Codex).
     const gaveBack = giveBackUnanswered();
