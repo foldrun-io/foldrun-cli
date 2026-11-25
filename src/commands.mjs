@@ -18246,9 +18246,14 @@ async function codeLocalTurn(s, text) {
           let answer = null;
           if (q.options.length) {
             // A choice too long for its row is shown whole first, so two that start alike can be told apart (Codex).
-            if (q.options.some((o) => o.length + 8 > width)) q.options.forEach((o, i) => {
-              const lines = [];
-              for (let k = 0; k < o.length; k += width - 4) lines.push(o.slice(k, k + width - 4));
+            // Measured in screen cells, as the list clips (Codex).
+            if (q.options.some((o) => displayWidth(o) + 8 > width)) q.options.forEach((o, i) => {
+              /** @type {string[]} */
+              const lines = [""];
+              for (const ch of o) {
+                if (displayWidth(/** @type {string} */ (lines.at(-1)) + ch) > width - 4) lines.push("");
+                lines[lines.length - 1] += ch;
+              }
               lines.forEach((l, j) => console.log(`    ${c.white(j ? `   ${l}` : `${i + 1}. ${l}`)}`));
             });
             const OWN = "\u0000own";
