@@ -121,6 +121,43 @@ jobs:
       - run: npm run typecheck
         working-directory: foldrun-cli
 
+  # Windows, the way a customer gets it (26 Nov 2026): the CLI packed and
+  # installed globally with core from npm, driven from PowerShell. Every
+  # Windows start had failed since 26 Oct (an import by a C:\ path) and no
+  # job ran on Windows to see it.
+  windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: pack and install globally
+        run: |
+          $tgz = (npm pack --silent | Select-Object -Last 1).Trim()
+          npm install -g ".\$tgz"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: a customer's first commands
+        run: |
+          $ErrorActionPreference = "Stop"
+          foldrun --version; if ($LASTEXITCODE -ne 0) { throw "foldrun --version" }
+          koder --version; if ($LASTEXITCODE -ne 0) { throw "koder --version" }
+          foldrun --help | Out-Null; if ($LASTEXITCODE -ne 0) { throw "foldrun --help" }
+          foldrun login --help | Out-Null; if ($LASTEXITCODE -ne 0) { throw "foldrun login --help" }
+          foldrun code --help | Out-Null; if ($LASTEXITCODE -ne 0) { throw "foldrun code --help" }
+          $dir = Join-Path $env:RUNNER_TEMP "acct"
+          foldrun init $dir; if ($LASTEXITCODE -ne 0) { throw "foldrun init" }
+          Set-Location $dir
+          foldrun check; if ($LASTEXITCODE -ne 0) { throw "foldrun check" }
+          foldrun check --security; if ($LASTEXITCODE -ne 0) { throw "foldrun check --security" }
+          foldrun whoami; if ($LASTEXITCODE -eq 0) { throw "whoami with no login should refuse" }
+          "windows smoke: ok"
+          exit 0  # whoami above set a non-zero exit code on purpose; pwsh would end the step with it
+
   # The release pull request passed: wake release-merge.yml (27 Oct 2026).
   # Its own workflow_run never fires for this run — GITHUB_TOKEN started it —
   # but a workflow_dispatch from GITHUB_TOKEN does. release-merge checks the
