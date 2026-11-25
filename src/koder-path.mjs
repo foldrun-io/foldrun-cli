@@ -53,9 +53,19 @@ export function koderOnPath(env = process.env, platform = process.platform, own 
 /** npm links the bin straight to bin/koder.mjs on macOS and Linux; on Windows it writes a small wrapper that names it. */
 function isOurs(/** @type {string} */ p, /** @type {string} */ platform, /** @type {string} */ own) {
   if (real(p) === real(own)) return true;
-  if (platform !== "win32") return false;
+  if (platform !== "win32") return isFoldrunKoder(real(p));
   try {
     return /[\\/]foldrun[\\/]bin[\\/]koder\.mjs/.test(fs.readFileSync(p, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/** foldrun's koder from another install (a global one beside a checkout): bin/koder.mjs in a package named foldrun. */
+function isFoldrunKoder(/** @type {string} */ file) {
+  if (path.basename(file) !== "koder.mjs" || path.basename(path.dirname(file)) !== "bin") return false;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(path.dirname(file), "..", "package.json"), "utf8")).name === "foldrun";
   } catch {
     return false;
   }

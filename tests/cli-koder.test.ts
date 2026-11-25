@@ -72,6 +72,19 @@ test("the check: none, ours, or another program first on PATH", (t) => {
   assert.equal(theirs.ok, false);
   assert.match(theirs.text, /another program called koder/);
   assert.ok(theirs.text.includes(path.join(other, "koder")));
+
+  // foldrun's koder from another install (a global one beside a checkout) is still foldrun's.
+  const pkg = path.join(d, "lib", "node_modules", "foldrun");
+  fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "foldrun" }));
+  fs.writeFileSync(path.join(pkg, "bin", "koder.mjs"), "#!/usr/bin/env node\n", { mode: 0o755 });
+  const glob = path.join(d, "global");
+  fs.mkdirSync(glob);
+  fs.symlinkSync(path.join(pkg, "bin", "koder.mjs"), path.join(glob, "koder"));
+  assert.equal(koderLine({ PATH: glob }).ok, true);
+  // The same layout under another package's name is not.
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "koder" }));
+  assert.equal(koderLine({ PATH: glob }).ok, false);
   fs.rmSync(d, { recursive: true, force: true });
 });
 
