@@ -27,7 +27,20 @@ What a call cannot do on this computer is refused by name, never dropped:
 | Google Chrome (`browser: chrome`) | chromium, firefox, safari (webkit), lightpanda, obscura |
 | the page stays open between calls (`live: true`); `live: end` closes the window | `live` as you choose |
 | — | options that name a secret from the vault: `proxy`, `captcha` (and `captcha_solver`), `cookies`, `auth`, `state_key` |
-| — | `identity` (an agent's `web.browse` identities), `extensions`, vendor browsers |
+| — | `identity` (an agent's `web.browse` identities), `extensions`, `state`, vendor browsers |
+| — | `allowed_domains`: the window stays open between calls, so a hold to some sites cannot be kept there |
+
+The agent's `web.browse` block (else its project's, else the account's) means
+the same here as in the cloud, read by the same code. `deny`, `boundaries`,
+`webgpu`, `ignore_https_errors`, `cookie_domain` and `storage_origin` apply.
+A block that names what cannot run here (a vendor, an engine other than
+Chrome, `cookies`, `storage`, `state`, `state_key`, `init`, `extensions`,
+`allowed_domains`) refuses each call with the reason, and so does an agent
+whose `web.actions` leaves out `browse`. Settings the open window does not
+take (`device`, `user_agent`, `locale`, `timezone`, `video`, `headless`,
+`version`, `live`, `live_view`, `identities`) are named in every answer as
+not kept. The files are read again after 30 seconds, so a change to them
+holds without a restart.
 
 Files a call writes (`mode: screenshot`, `download`) land in
 `~/.foldrun/browser/work/outputs/`. Text in pages is data from the site, never
