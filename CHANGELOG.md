@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.0.3] — 2026-11-25
+
+### deps
+
+- @foldrun/core ^29.2.1 — the local sandbox runs commands in a folder that is no git repository on Linux (FOL-333) ([45bbaa1](https://github.com/foldrun-io/foldrun-cli/commit/45bbaa1))
+
+### test
+
+- npm test runs with its own temp root under /tmp, so stray project files in the system temp folder cannot fail it ([c259de0](https://github.com/foldrun-io/foldrun-cli/commit/c259de0))
+
 ## [33.0.2] — 2026-11-25
 
 - fix(koder): --version names the version that runs — a staged update after foldrun update or an auto-update — not the installed files ([f154ad1](https://github.com/foldrun-io/foldrun-cli/commit/f154ad1))
