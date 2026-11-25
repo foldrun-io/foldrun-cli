@@ -14926,19 +14926,23 @@ export async function askSiteOf(s, host, port) {
   if (problem) return { allow: false, reason: `not on the sandbox's list, and not asked about: ${problem}` };
   if (port !== 443 && port !== 80) return { allow: false, reason: `port ${port} is not asked about (only 80 and 443) — the person can run it outside the sandbox` };
   if (sites.includes(h)) return true;
+  // A yes is for that site on that port: kept apart from the sandbox's list, which opens a name on every port (Codex).
+  const key = `${h}:${port}`;
+  if (s.siteYes instanceof Set && s.siteYes.has(key)) return true;
+  // Bypass lets it through without keeping it: once bypass ends the site is asked about again (Codex).
+  if (s.bypass === true && !s.headless) return true;
   if (s.siteNo instanceof Set && s.siteNo.has(h)) return { allow: false, reason: `the person said no to ${h} this turn` };
   if (typeof s.askSiteLive !== "function") return { allow: false, reason: `${h} is not on the sandbox's list — the person can allow it with /permissions sandbox allow ${h}` };
   const pending = (s.sitePending ??= new Map());
-  if (!pending.has(h)) {
+  if (!pending.has(key)) {
     const asked = Promise.resolve(s.askSiteLive(h, port)).then((yes) => {
-      if (yes) {
-        if (!sites.includes(h)) (s.sandboxSites ??= sites).push(h);
-      } else (s.siteNo ??= new Set()).add(h);
+      if (yes) (s.siteYes ??= new Set()).add(key);
+      else (s.siteNo ??= new Set()).add(h);
       return yes;
-    }, () => false).finally(() => pending.delete(h));
-    pending.set(h, asked);
+    }, () => false).finally(() => pending.delete(key));
+    pending.set(key, asked);
   }
-  return (await pending.get(h)) ? true : { allow: false, reason: `the person said no to ${h}` };
+  return (await pending.get(key)) ? true : { allow: false, reason: `the person said no to ${h}` };
 }
 
 /** The walls for this session now: the handle; null when the person turned them off; or why they cannot be had. */
@@ -17969,10 +17973,15 @@ async function codeLocalTurn(s, text) {
     // A site a command inside the sandbox reaches that is not on its list (FOL-312): asked in turn with the rest,
     // while this turn runs. A no holds for this turn only.
     delete s.siteNo;
+    // Live only while this turn is: a question still waiting, or answered, after it ends is a no (Codex).
+    const siteTurn = { live: true };
     s.askSiteLive = (/** @type {string} */ host, /** @type {number} */ port) => {
-      const next = gate.then(() => decide(SITE_ASK, { host, port }, abort.signal));
+      const next = gate.then(() => (siteTurn.live ? decide(SITE_ASK, { host, port }, abort.signal) : { behavior: /** @type {const} */ ("deny"), message: "the turn ended" }));
       gate = next.then(() => undefined, () => undefined);
-      return next.then((r) => r.behavior === "allow", () => false);
+      return next.then((r) => siteTurn.live && r.behavior === "allow", () => false);
+    };
+    s.endSiteTurn = () => {
+      siteTurn.live = false;
     };
     /** One cloud_agents call, from either engine: the turn's Ctrl-C stops it too. */
     const cloudCall = (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ sig) => {
@@ -18521,7 +18530,9 @@ async function codeLocalTurn(s, text) {
   } finally {
     stopTicker();
     // Between turns no one is asked about a site (FOL-312).
+    s.endSiteTurn?.();
     delete s.askSiteLive;
+    delete s.endSiteTurn;
     // A cloud_agents call the turn's end cut off: its stops go out before the next prompt.
     // Still going when the turn ends (an engine error, a withdrawn call):
     // stopped, then waited for so its stops are sent (Codex).
@@ -20238,7 +20249,17 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         // A site taken away stays away: a remote MCP server's yes does not add it back (Codex).
         if (verb === "allow") s.sandboxDenied?.delete?.(site);
         if (verb === "deny") (s.sandboxDenied ??= new Set()).add(site);
+        // The yeses given when a command asked for it go too (FOL-312).
+        let hadAsked = false;
+        if (verb === "deny" && s.siteYes instanceof Set) for (const k of [...s.siteYes]) if (k.replace(/:\d+$/, "") === site) {
+          s.siteYes.delete(k);
+          hadAsked = true;
+        }
         if (verb === "deny") {
+          if (!sites.includes(site) && hadAsked) {
+            say(`taken away: ${site} — you had allowed it when a command asked; it is refused from now on`);
+            continue;
+          }
           if (!sites.includes(site)) {
             say(`${site} is not one you added${sites.length ? ` (yours: ${sites.join(", ")})` : ""} — the built-in list is not changed here`);
             continue;
@@ -20267,7 +20288,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         // Every folder a command may write, not only "this folder" (core's writable(), FOL-271).
         const writes = typeof walls.writable === "function" ? walls.writable() : [];
         if (writes.length) console.log(`  ${c.grey(`commands may write: ${writes.map((/** @type {string} */ w) => plainText(homeTilde(w))).join(", ")}`)}`);
-        console.log(`  ${c.grey(`sites: the built-in list of package and code sites (${await boxOf(s).trustedCount()})${sites.length ? `, and yours: ${sites.join(", ")}` : ""}`)}`);
+        console.log(`  ${c.grey(`sites: the built-in list of package and code sites (${await boxOf(s).trustedCount()})${sites.length ? `, and yours: ${sites.join(", ")}` : ""}${s.siteYes instanceof Set && s.siteYes.size ? `; allowed when a command asked: ${[...s.siteYes].join(", ")}` : ""}`)}`);
         console.log(`  ${c.grey(`inside it a command runs without a question${s.strict === true ? " — but /permissions strict is on, so each is asked" : ""}; one that needs to leave it (bash_outside) is asked every time, and runs as you`)}`);
         if (Array.isArray(s.sandboxKept) && s.sandboxKept.length) console.log(`  ${c.grey(`kept out of its commands — variables of your shell that hold keys: ${s.sandboxKept.slice(0, 12).map((/** @type {string} */ k) => plainText(k)).join(", ")}${s.sandboxKept.length > 12 ? ` and ${s.sandboxKept.length - 12} more` : ""}`)}`);
         console.log(`  ${c.grey("not inside it: !commands you type, a goal's check, and MCP servers at a web address — those are yours")}`);
@@ -20574,6 +20595,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       if (rest === "reset") {
         delete s.localAllow;
         delete s.bypass;
+        delete s.siteYes;
         s.uploadAgreed?.delete(dir);
         const kept = folderRules(dir).length;
         say(`forgotten — every change, command and send is asked again${kept ? ` (the ${kept} rule${kept === 1 ? "" : "s"} kept for this folder stay${kept === 1 ? "s" : ""}: /permissions rm <n>)` : ""}`);
