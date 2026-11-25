@@ -12,6 +12,33 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.7.0] — 2026-11-25
+
+- fix(code): a gitignored image is not offered as it is in the cloud — the cloud's copy leaves it out (FOL-268, Codex) ([38b7140](https://github.com/foldrun-io/foldrun-cli/commit/38b7140))
+- fix(code): media: read with core's YAML reader; in the cloud an image inside the folder can be looked at as it is (FOL-268, Codex) ([c8f9e1c](https://github.com/foldrun-io/foldrun-cli/commit/c8f9e1c))
+- feat(code): the agent's media: as-is starts a named image's list at 'as it is' (FOL-268) ([b02ec78](https://github.com/foldrun-io/foldrun-cli/commit/b02ec78))
+- fix(code): the cursor comes back on a signal during the working line; no working line with --output-format json (Codex) ([8ac2b08](https://github.com/foldrun-io/foldrun-cli/commit/8ac2b08))
+- fix(code): a chosen file's identity includes size and change times — a reused inode number is not the same file (dev gate, FOL-268) ([8cde9f6](https://github.com/foldrun-io/foldrun-cli/commit/8cde9f6))
+- fix(code): 'working' shows the moment Enter sends a message (the setup's round trips left the screen still for a second); the cursor hidden while it redraws ([2a55fa4](https://github.com/foldrun-io/foldrun-cli/commit/2a55fa4))
+- feat(code): an image named in a message can go to the model as it is, with its token estimate, kept in the conversation (FOL-268 slice 2; needs core 27.9.0) ([8784843](https://github.com/foldrun-io/foldrun-cli/commit/8784843))
+- Revert "docs: sync from foldrun-docs" — it carried another session's uncommitted docs edits (api.md, security.md) ([45c2722](https://github.com/foldrun-io/foldrun-cli/commit/45c2722))
+- fix(code): chosen file opened non-blocking and its size checked again (FOL-268, Codex) ([41bdcbb](https://github.com/foldrun-io/foldrun-cli/commit/41bdcbb))
+- fix(code): named files — a hidden file always asked, the bytes read are the file chosen (inode, no link followed), a file outside the folder shown by its path (FOL-268, Codex) ([15d0cf3](https://github.com/foldrun-io/foldrun-cli/commit/15d0cf3))
+- fix(code): named files — a link shown and sent as its target, a kept choice only for an @path inside the folder, no upload without a terminal to ask, a skipped file keeps the message (FOL-268, Codex) ([ff3cb5e](https://github.com/foldrun-io/foldrun-cli/commit/ff3cb5e))
+- feat(code): files named in a message are read into text on foldrun's servers — into text for the agent, or just the text with no model call; kept per kind, listed in /permissions (FOL-268 slice 1) ([ab77fab](https://github.com/foldrun-io/foldrun-cli/commit/ab77fab))
+
+### deps
+
+- @foldrun/core ^27.9.0 (images on the engine, FOL-295/FOL-268) ([b7f742e](https://github.com/foldrun-io/foldrun-cli/commit/b7f742e))
+
+### docs
+
+- sync agents.md (media:, FOL-268) ([251b931](https://github.com/foldrun-io/foldrun-cli/commit/251b931))
+- sync api.md and security.md from foldrun-docs (FOL-316) ([c21deed](https://github.com/foldrun-io/foldrun-cli/commit/c21deed))
+- sync from foldrun-docs (server tools on the gateway, FOL-313; and pages changed upstream) ([74b88cd](https://github.com/foldrun-io/foldrun-cli/commit/74b88cd))
+- sync api.md and security.md from foldrun-docs (FOL-315) ([c74896a](https://github.com/foldrun-io/foldrun-cli/commit/c74896a))
+- sync from foldrun-docs ([0ff666f](https://github.com/foldrun-io/foldrun-cli/commit/0ff666f))
+
 ## [32.6.1] — 2026-11-25
 
 ### deps
