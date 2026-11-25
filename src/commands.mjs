@@ -9752,15 +9752,21 @@ function editFiles(name, input) {
   return files.length ? files : null;
 }
 
-/** Edit's `edits` grouped by file, in the order first named, each file's changes in order: what /undo keeps per file. */
-function editParts(/** @type {string} */ name, /** @type {any} */ input) {
+/** Edit's `edits` grouped by file as core groups them (a link and its target are one file), in the order first
+ *  named, each file's changes in order: what /undo keeps per file. */
+function editParts(/** @type {string} */ name, /** @type {any} */ input, /** @type {string} */ dir) {
   const files = editFiles(name, input);
   if (!files) return null;
   /** @type {Map<string, { file: string, edits: any[] }>} */
   const by = new Map();
   for (const e of input.edits) {
     if (typeof e?.file_path !== "string" || !e.file_path) continue;
-    const key = path.resolve(e.file_path);
+    let key = path.resolve(dir, e.file_path);
+    try {
+      key = fs.realpathSync(key);
+    } catch {
+      /* missing: core refuses it */
+    }
     const part = by.get(key) ?? { file: e.file_path, edits: /** @type {any[]} */ ([]) };
     part.edits.push(e);
     by.set(key, part);
@@ -18559,7 +18565,7 @@ async function codeLocalTurn(s, text) {
         if (r.behavior === "allow" && FILE_CHANGES.has(name) && typeof (/** @type {any} */ (opts))?.toolUseID === "string") {
           const now = r.updatedInput ?? input;
           // Edit's edits: a copy of each file, each settled on its own (FOL-294).
-          const parts = editParts(name, now);
+          const parts = editParts(name, now, s.dir);
           if (parts) parts.forEach((p, i) => rewindCapture(rewindJournal, { turn: rewindTurn, label: rewindLabel, id: `${/** @type {any} */ (opts).toolUseID}#${i}`, tool: name, file: p.file, input: { edits: p.edits } }));
           else rewindCapture(rewindJournal, { turn: rewindTurn, label: rewindLabel, id: /** @type {any} */ (opts).toolUseID, tool: name, file: now.file_path, input: now });
           if (rewindJournal.off && !s.rewindOffSaid) {
@@ -18672,7 +18678,7 @@ async function codeLocalTurn(s, text) {
     // Edit left on disk settles its /rewind record. A sub-agent's too.
     const afterTool = async (/** @type {any} */ payload, /** @type {string} */ id) => {
       // Only a call a copy was kept for: a read never touches the journal.
-      const parts = editParts(String(payload?.tool_name), payload?.tool_input);
+      const parts = editParts(String(payload?.tool_name), payload?.tool_input, s.dir);
       if (parts) parts.forEach((_p, i) => rewindSettle(rewindJournal, `${id}#${i}`));
       else if (FILE_CHANGES.has(String(payload?.tool_name))) rewindSettle(rewindJournal, id);
       if (parts && typeof s.goal === "string") for (const p of parts) (s.goalFiles ??= new Set()).add(path.relative(s.dir, path.resolve(s.dir, p.file)) || p.file);
