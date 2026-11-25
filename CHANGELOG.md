@@ -12,6 +12,24 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.4.0] — 2026-11-25
+
+- fix(code): marginLines counts widths once, linear in the text (FOL-311, Codex) ([a5ac813](https://github.com/foldrun-io/foldrun-cli/commit/a5ac813))
+- fix(code): a message is shown whole, a deep indent stays inside the row, a long cut is counted once (FOL-311, Codex) ([509876f](https://github.com/foldrun-io/foldrun-cli/commit/509876f))
+- feat(code): the transcript reads as separate blocks — thinking and messages wrap under their margin and keep their line breaks (FOL-311) ([93081ba](https://github.com/foldrun-io/foldrun-cli/commit/93081ba))
+- fix(code): pass askSite as core's trailing argument (FOL-312) ([5d0b3e3](https://github.com/foldrun-io/foldrun-cli/commit/5d0b3e3))
+- fix(code): a site question still open when the turn ends is withdrawn, its keyboard given back (FOL-312, Codex) ([f02acb1](https://github.com/foldrun-io/foldrun-cli/commit/f02acb1))
+- fix(code): a site's yes is for its port, bypass keeps nothing, a question after the turn is a no; deny and reset take asked sites away (FOL-312, Codex) ([1693ec9](https://github.com/foldrun-io/foldrun-cli/commit/1693ec9))
+- feat(code): a site the sandbox does not list is asked about by name while the command runs, not sent outside the sandbox (FOL-312) ([fe58549](https://github.com/foldrun-io/foldrun-cli/commit/fe58549))
+
+### deps
+
+- @foldrun/core ^27.8.0 ([1a8afca](https://github.com/foldrun-io/foldrun-cli/commit/1a8afca))
+
+### docs
+
+- sync cli.md (FOL-311) ([3ae197e](https://github.com/foldrun-io/foldrun-cli/commit/3ae197e))
+
 ## [32.3.0] — 2026-11-25
 
 - fix(code): tables of many rows — no spread into Math.max (FOL-310, Codex) ([747de42](https://github.com/foldrun-io/foldrun-cli/commit/747de42))
