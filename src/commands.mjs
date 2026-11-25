@@ -9603,8 +9603,17 @@ async function agentMedia(s) {
   let media = /** @type {"text" | "as-is"} */ ("text");
   try {
     const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${encodeURIComponent(`agents/${s.agent}/agent.md`)}`);
-    const front = typeof got?.content === "string" ? /^---\r?\n([\s\S]*?)\r?\n---/.exec(got.content)?.[1] ?? "" : "";
-    if (/^media:\s*["']?as-is["']?\s*(#.*)?$/m.test(front)) media = "as-is";
+    if (typeof got?.content === "string") {
+      // Read with core's own YAML reader, as the runner reads it — quoted keys and all (Codex).
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-agent-"));
+      try {
+        const file = path.join(tmp, "agent.md");
+        fs.writeFileSync(file, got.content);
+        if ((await core()).readFrontmatter(file)?.media === "as-is") media = "as-is";
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
   } catch {
     /* text, the default */
   }
@@ -9634,8 +9643,9 @@ async function filesForTurn(s, line, dir) {
     }
     // A kept choice answers only for a file typed as @path inside this folder, never a link out of it (Codex).
     const kept = f.typed ? readCodePrefs().files?.[f.kind] : undefined;
-    // As it is: an image of a size a model takes, on this computer (the cloud agent is given text).
-    const canShow = f.kind === "image" && s.mode === "local" && f.bytes <= IMAGE_BYTES_MAX;
+    // As it is: an image of a size a model takes — sent with the message on this computer; in the cloud, one
+    // inside the folder, which the cloud agent has a copy of and looks at with Read (Codex).
+    const canShow = f.kind === "image" && f.bytes <= IMAGE_BYTES_MAX && (s.mode === "local" || (f.inside && !f.link));
     /** @type {Buffer | null} */
     let head = null;
     if (canShow) {
@@ -9677,6 +9687,11 @@ async function filesForTurn(s, line, dir) {
         const prefs = readCodePrefs();
         writeCodePrefs({ ...prefs, files: { ...(prefs.files ?? {}), [f.kind]: how } });
       }
+    }
+    if (how === "show" && head && s.mode !== "local") {
+      blocks.push(`[The image ${path.relative(fs.realpathSync(dir), f.real).split(path.sep).join("/")} is in your copy of the folder: look at it itself with Read.]`);
+      console.log(`  ${c.green("✓")} ${c.dim(`${plainText(name)} is in the folder the cloud agent gets — it is told to look at it itself${tokens ? ` (about ${tokens.toLocaleString("en")} input tokens)` : ""}`)}`);
+      continue;
     }
     if (how === "show" && head) {
       const mediaType = /** @type {string} */ (imageType(head));
