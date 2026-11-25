@@ -229,6 +229,41 @@ export async function reapTree(root, seen, o = {}) {
 }
 
 /**
+ * What lsof said that leaves the answer for `dir` in doubt. A mount lsof could
+ * not stat elsewhere on the machine says nothing about the folder: with Docker
+ * running, a person's lsof always warns about /run/docker/netns/default, and
+ * the copy then counted as held forever — the slot never came back (the dev CI
+ * runner, 25 Nov 2026). Such a line is dropped when its mount is neither in the
+ * folder nor above it, and "may be incomplete" with it when nothing else is
+ * left; anything else stays a doubt.
+ */
+export function lsofWarnings(/** @type {string} */ stderr, /** @type {string} */ dir) {
+  const within = (/** @type {string} */ a, /** @type {string} */ b) => a === b || a.startsWith(b.endsWith("/") ? b : `${b}/`);
+  // lsof names mounts by their real path; a folder reached through a link is compared both ways, and unresolvable keeps every warning (Codex).
+  /** @type {string[]} */
+  let names;
+  try {
+    names = [...new Set([dir, fs.realpathSync(dir)])];
+  } catch {
+    return stderr.trim();
+  }
+  const kept = [];
+  let dropped = false;
+  for (const line of stderr.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const m = /^lsof: WARNING: can't stat\(\) \S+ file system (\/.*)$/.exec(t);
+    if (m && names.every((d) => !within(m[1], d) && !within(d, m[1]))) {
+      dropped = true;
+      continue;
+    }
+    kept.push(t);
+  }
+  const rest = dropped && kept.every((t) => t === "Output information may be incomplete.") ? [] : kept;
+  return rest.join("\n");
+}
+
+/**
  * Processes holding anything inside a folder (its cwd, an open file, a
  * mapped one): their ids and starts. The folder (ours: a worker's copy) is
  * made readable first, so no part of it is skipped. Throws when it cannot
@@ -246,7 +281,8 @@ export function holdersOf(/** @type {string} */ dir, /** @type {{ lsof?: string 
   if (lsof) {
     // Warnings on: -t would silence the one that says a part was skipped. Its exit status is no guide (1 even when it finds one).
     const out = spawnSync(lsof, ["-F", "p", "+D", dir], { encoding: "utf8", timeout: 20_000 });
-    if (out.error || out.signal || String(out.stderr).length) throw new Error(`what holds the copy could not be checked (${out.error?.message ?? out.signal ?? String(out.stderr).trim().slice(0, 200)})`);
+    const warned = lsofWarnings(String(out.stderr), dir);
+    if (out.error || out.signal || warned) throw new Error(`what holds the copy could not be checked (${out.error?.message ?? out.signal ?? warned.slice(0, 200)})`);
     for (const line of String(out.stdout).split("\n")) if (/^p\d+$/.test(line)) pids.add(Number(line.slice(1)));
   } else if (fs.existsSync(path.join(proc, "self", "fd"))) {
     const inside = (/** @type {string} */ t) => t === dir || t.startsWith(`${dir}/`);

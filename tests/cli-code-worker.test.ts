@@ -735,3 +735,20 @@ test("a definition's sandbox: own, at the top, quoted or in guardrail:, marks it
   assert.equal(by.odd, undefined);
   assert.ok(problems.some((p: any) => /sandbox: is own or parent/.test(p.why)));
 });
+
+test("lsof's warning about a mount elsewhere (Docker's netns) is no doubt about the copy; one in or above it, or any other, still is", () => {
+  const docker = "lsof: WARNING: can't stat() nsfs file system /run/docker/netns/default\n      Output information may be incomplete.\n";
+  const copy = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "copy-")));
+  const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "via-")), "copy");
+  fs.symlinkSync(copy, link);
+  assert.equal(W.lsofWarnings(docker, copy), "", "the dev CI runner, 25 Nov 2026: Docker running, the slot never came back");
+  assert.equal(W.lsofWarnings("", copy), "");
+  assert.equal(W.lsofWarnings("lsof: WARNING: can't stat() smbfs file system /Volumes/Team Share\n", copy), "", "a mount elsewhere with a space in its name (Codex)");
+  assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() fuse file system ${copy}/a b\n`, copy), /fuse/, "one inside it, with a space");
+  assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() fuse file system ${copy}/mnt\n`, link), /fuse/, "inside it by its real path, the folder named through a link (Codex)");
+  assert.match(W.lsofWarnings(docker, path.join(copy, "gone")), /nsfs/, "a folder that cannot be resolved keeps every warning");
+  assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() fuse file system ${copy}/mnt\n      Output information may be incomplete.\n`, copy), /fuse file system/, "a mount inside the copy");
+  assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() nfs file system ${path.dirname(copy)}\n`, copy), /nfs/, "a mount above it");
+  assert.match(W.lsofWarnings(docker + `lsof: WARNING: can't open ${copy}/x: Permission denied\n`, copy), /Permission denied/, "another warning stays");
+  assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() nsfs file system /run/docker/netns/x\nlsof: status error on ${copy}/y\n      Output information may be incomplete.\n`, copy), /status error[\s\S]*may be incomplete/, "the incomplete line stays with another doubt");
+});
