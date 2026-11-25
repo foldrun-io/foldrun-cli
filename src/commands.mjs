@@ -15476,10 +15476,12 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
   process.stdin.resume();
   /** @type {Promise<string> | null} */
   let stopping = null;
+  let claimed = false;
   return {
     text: () => text,
-    /** Hands the terminal back once; every caller waits for the same handing back and gets what was typed —
-     *  trimmed, or as typed with `raw` (a draft that goes back on the line keeps its spaces) (FOL-306, Codex). */
+    /** Hands the terminal back once; every caller waits for the same handing back (Codex), and the first to get
+     *  there takes what was typed — trimmed, or as typed with `raw` (a draft that goes back on the line keeps its
+     *  spaces) — the others "", so it is counted once (FOL-306). */
     async stop(raw = false) {
       stopping ??= (async () => {
         // Keys already pressed are read before the terminal is handed back —
@@ -15495,6 +15497,8 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
         return t;
       })();
       const t = await stopping;
+      if (claimed) return "";
+      claimed = true;
       return raw ? t : t.trim();
     },
   };
@@ -18586,10 +18590,8 @@ async function codeLocalTurn(s, text) {
     // The keyboard first (an Enter in its last moments still queues), then
     // what was sent and not taken (the turn ended first, or failed): not
     // lost — it starts the next message, before what was typed after it.
-    // The same handing back a prompt may be waiting on (Codex): when that prompt took it first, the draft is exactly
-    // it (keyboardOn emptied the draft when this reader started), so it is counted once.
-    const last = await typeAhead.stop(true);
-    const typed = `${draft}${draft === last ? "" : last}`.trim();
+    // The same handing back a prompt may be waiting on (Codex): whichever took the text, it is counted once.
+    const typed = `${draft}${await typeAhead.stop(true)}`.trim();
     draft = "";
     if (pending.some((e) => e.sent)) console.log(`  ${c.dim("the agent did not get to your message: it is on the next line, to send")}`);
     s.typeAhead = [s.typeAhead, ...pending.splice(0).map((e) => e.t), typed].filter(Boolean).join(" ");
