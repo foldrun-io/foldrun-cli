@@ -9988,10 +9988,11 @@ async function resourcesReport(s) {
     /* the agent's file could not be read: what it asks is not known */
   }
   const asked = await R.agentAsks(front);
-  // Memory is watched (sampled) while the session works here; CPU is not held yet (FOL-240 slice 2).
+  // On a Mac, memory is watched (sampled) and CPU held by priority while the session works here (FOL-240); Linux
+  // holds neither yet (its cgroup is a later step).
   // With no limit chosen on this computer, foldrun holds nothing here: the agent's ask is shown, not put in force.
   const unlimited = ![budget.cpu, budget.memoryMi, s.resCeiling?.cpu, s.resCeiling?.memoryMi].some((v) => typeof v === "number");
-  const rows = R.resolveLocal({ budget, session: s.resCeiling ?? null, ask: unlimited ? null : asked.ask, held: { cpu: "not yet held", memory: s.mode === "local" && process.platform === "darwin" ? "sampled" : "not yet held" } });
+  const rows = R.resolveLocal({ budget, session: s.resCeiling ?? null, ask: unlimited ? null : asked.ask, held: { cpu: s.mode === "local" && process.platform === "darwin" ? "by priority" : "not yet held", memory: s.mode === "local" && process.platform === "darwin" ? "sampled" : "not yet held" } });
   const fig = (/** @type {string} */ k, /** @type {number | null} */ v) => (v === null ? "no limit" : k === "cpu" ? R.formatCpu(v) : R.formatMi(v));
   const others = R.readHolds(path.join(configDir(), "resources")).filter((/** @type {any} */ h) => h.pid !== process.pid);
   const out = [
@@ -10002,7 +10003,8 @@ async function resourcesReport(s) {
     `other sessions ${others.length ? `${others.length} open on this computer, drawing on the same budget` : "none open"}`,
   ];
   if (rows.some((/** @type {any} */ x) => x.held === "sampled")) out.push("sampled: about once a second foldrun adds up the memory of everything it started for this session, and stops the largest command when the total is over — a burst between two samples is not caught");
-  if (rows.some((/** @type {any} */ x) => x.held === "not yet held")) out.push("not yet held: recorded and shown; CPU is held in a later step");
+  if (rows.some((/** @type {any} */ x) => x.held === "by priority")) out.push("by priority: when foldrun's processes use more CPU than allowed for a few seconds, the busiest command is moved to low priority (macOS's background band) — it is never stopped for CPU, it gives way to the rest of the computer");
+  if (rows.some((/** @type {any} */ x) => x.held === "not yet held")) out.push("not yet held: recorded and shown; on Linux the limits are held in a later step");
   if (unlimited && asked.ask) out.push("no limit is chosen on this computer, so foldrun holds nothing here — the agent's own size:/resources: included");
   out.push("what you run yourself (!cmd) is never limited");
   return out;
@@ -20187,15 +20189,40 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   process.once("exit", () => /** @type {any} */ (s).releaseHold?.());
   // The memory watchdog (FOL-240 slice 2): sampled, over everything foldrun started for this session but the person's
   // own commands; the limit in force is read at each sample, so /permissions resources changes it at once.
+  const anyLimit = () => {
+    const r = /** @type {any} */ (s).resources;
+    return Boolean(r) && [r.budget?.cpu, r.budget?.memoryMi, /** @type {any} */ (s).resCeiling?.cpu, /** @type {any} */ (s).resCeiling?.memoryMi].some((v) => typeof v === "number");
+  };
   const watchLimit = () => {
     const r = /** @type {any} */ (s).resources;
     // macOS first (owner, 25 Nov 2026); Linux holds it with a cgroup, a later slice — nothing is stopped there yet.
     if (!r || s.mode !== "local" || process.platform !== "darwin") return null;
+    // The agent's ask counts only while some limit is set here, the same test as the gate and the report (Codex).
+    if (!anyLimit()) return null;
     const vals = [r.budget.memoryMi, /** @type {any} */ (s).resCeiling?.memoryMi, /** @type {any} */ (s).resAsk?.memoryMi].filter((v) => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  };
+  // CPU, the same way (FOL-240): by priority — the busiest command moves to the background band, never stopped.
+  // The same limit as memory: the lowest of the computer's allowance, this session's ceiling and the agent's ask.
+  const cpuOn = () => Boolean(/** @type {any} */ (s).resources) && s.mode === "local" && process.platform === "darwin";
+  const watchCpu = () => {
+    if (!cpuOn()) return null;
+    if (!anyLimit()) return null;
+    const r = /** @type {any} */ (s).resources;
+    const vals = [r.budget.cpu, /** @type {any} */ (s).resCeiling?.cpu, /** @type {any} */ (s).resAsk?.cpu].filter((v) => typeof v === "number");
     return vals.length ? Math.min(...vals) : null;
   };
   const watchdog = (await import("./code-watchdog.mjs")).startWatchdog({
     limitMi: watchLimit,
+    limitCpu: watchCpu,
+    onSlow: (info) => {
+      const cores = (/** @type {number} */ n) => `${Number(n.toFixed(1))} CPU${n === 1 ? "" : "s"}`;
+      const what = `${plainText(info.command)} was moved to low priority — this session's processes used ${cores(info.totalCpu)}, over the ${cores(info.limitCpu)} it may use on this computer (sampled); it goes on, slower`;
+      console.log(`\n  ${c.amber("■")} ${c.grey(what)}`);
+      // Added to a note not yet read (a memory stop in the same moment keeps its reason: Codex), never in its place.
+      const note = `${what}. Run fewer things at once (lower -j, one build at a time) or ask the person to raise the limit (/permissions resources).`;
+      /** @type {any} */ (s).watchdogNote = /** @type {any} */ (s).watchdogNote ? `${/** @type {any} */ (s).watchdogNote} ${note}` : note;
+    },
     spared: () => PERSON_PIDS,
     onStop: (info) => {
       const fmtMi = (/** @type {number} */ mi) => (mi >= 1024 ? `${Number((mi / 1024).toFixed(1))} GiB` : `${Math.round(mi)} MiB`);
