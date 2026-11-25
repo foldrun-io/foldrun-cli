@@ -9549,10 +9549,8 @@ function sessionMessageLine(m) {
   const who = plainText(String(m?.from ?? "someone"));
   const where = m?.fromContext ? c.dim(` (${plainText(String(m.fromContext))})`) : "";
   const used = m?.run ? c.dim(` · in ${plainText(String(m.run))}`) : m?.usedLocally ? c.dim(" · used in a turn on a computer") : c.dim(" · waiting");
-  // Its own line breaks kept, wrapped under its margin (FOL-311); a long one is cut, /sessions read has all of it.
-  const all = marginLines(noBidi(plainText(String(m?.text ?? ""))), (process.stdout.columns || 80) - 6);
-  const shown = all.slice(0, 20);
-  if (all.length > shown.length) shown.push(c.dim(`… ${all.length - shown.length} more lines`));
+  // Its own line breaks kept, wrapped under its margin (FOL-311); all of it — the person may be asked to let it in (Codex).
+  const shown = marginLines(noBidi(plainText(String(m?.text ?? ""))), (process.stdout.columns || 80) - 6);
   return `  ${c.bold(noBidi(who))}${where}${used}\n${shown.map((l) => (l ? `    ${l}` : "")).join("\n")}`;
 }
 

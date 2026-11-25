@@ -843,3 +843,11 @@ test("marginLines keeps line breaks, wraps by words under the width, keeps a lis
   assert.equal(t.lines.length, 3);
   assert.ok(t.more > 0, "wrapped rows are counted toward the cap");
 });
+
+test("marginLines: a deep indent stays inside the row, and a long run of combining marks wraps quickly (FOL-311, Codex)", async () => {
+  const { marginLines, displayWidth } = await import("../src/code-session.mjs");
+  for (const r of marginLines(" ".repeat(15) + "界abc", 10)) assert.ok(displayWidth(r) <= 10, JSON.stringify(r));
+  const t0 = Date.now();
+  marginLines("a" + "́".repeat(16000) + " " + "b".repeat(16000), 40);
+  assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
+});

@@ -1319,11 +1319,15 @@ export function marginLines(text, width = Infinity) {
       continue;
     }
     // A line's own indent (a list, a quote) is kept on every row it wraps to.
-    const lead = /^\s*(?:[-*•]\s+|\d+[.)]\s+|>\s*)?/.exec(line)?.[0] ?? "";
-    const hang = " ".repeat(Math.min(displayWidth(lead), Math.floor(room / 2)));
+    let lead = /^\s*(?:[-*•]\s+|\d+[.)]\s+|>\s*)?/.exec(line)?.[0] ?? "";
+    const body = line.slice(lead.length);
+    // An indent wider than half a row is dropped to its marker, or to nothing (Codex): the first row stays inside too.
+    if (displayWidth(lead) > room / 2) lead = lead.trimStart();
+    if (displayWidth(lead) > room / 2) lead = "";
+    const hang = " ".repeat(displayWidth(lead));
     let cur = lead;
     let fresh = true;
-    for (let word of line.slice(lead.length).split(/ +/).filter(Boolean)) {
+    for (let word of body.split(/ +/).filter(Boolean)) {
       for (;;) {
         const sep = fresh ? "" : " ";
         if (displayWidth(cur + sep + word) <= room) {
@@ -1337,11 +1341,14 @@ export function marginLines(text, width = Infinity) {
           fresh = true;
           continue;
         }
-        // Alone and still too wide: cut it where the row ends.
+        // Alone and still too wide: cut it where the row ends, counting as it goes (Codex: not re-measured per char).
         let head = "";
+        let used = displayWidth(cur);
         for (const ch of word) {
-          if (displayWidth(cur + head + ch) > room && head) break;
+          const w = displayWidth(ch);
+          if (used + w > room && head) break;
           head += ch;
+          used += w;
         }
         out.push(cur + head);
         cur = hang;
