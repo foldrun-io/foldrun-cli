@@ -18262,7 +18262,8 @@ async function codeLocalTurn(s, text) {
       // Never for a command sent outside the sandbox: that one is asked every time.
       const byRule = !child && s.strict !== true && command !== null && scope === "command" && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout") && rulesAllow(command, folderRules(s.dir), s.dir, inFolder);
       // A script's turn takes no earlier yes: a folder rule ("always npm test") would run past --yes (Codex).
-      const allowedNow = !s.headless && !(outsideLive && (scope === "changes" || scope === "command" || scope === "cloud-changes")) && (byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
+      // While a server runs outside the sandbox no earlier "always" stands: every call that is asked at all is asked (Codex).
+      const allowedNow = !s.headless && !outsideLive && (byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
       // /permissions bypass (owner, 25 Nov 2026, FOL-308): nothing is asked for this session — not outside the sandbox,
       // not a sub-agent's. Never a script's turn (-p has its own --yes), and never a /plan turn (refused above).
       if (allowedNow || (s.bypass === true && !s.headless)) {
@@ -18295,7 +18296,7 @@ async function codeLocalTurn(s, text) {
       try {
         if (child) console.log(`    ${c.grey(`the sub-agent ${plainText(child)} asks:`)}`);
         if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
-        if (outsideLive && (scope === "changes" || scope === "command" || scope === "job-input" || scope === "cloud-changes")) console.log(`    ${c.amber("a server started outside the sandbox is running — it can run what changes here as you, so this is asked")}`);
+        if (outsideLive && !outside) console.log(`    ${c.amber("a server started outside the sandbox is running — it can run what changes here as you, so this is asked")}`);
         if (outside && input.run_in_background === true) console.log(`    ${c.amber("left running as you — while it runs, the agent's commands and file changes in this folder are asked too, since the server may run them outside the sandbox")}`);
         const width = Math.max(20, (process.stdout.columns || 80) - 10);
         if (name === MCP_START) {
@@ -18683,6 +18684,8 @@ async function codeLocalTurn(s, text) {
     // Jobs started outside the sandbox (FOL-296: a dev server the agent then opens in the browser): their own
     // list, ids o1, o2…, so Bash's job calls — unasked inside the walls — never reach one. They end with the turn.
     const outsideJobs = new Map();
+    /** @type {Set<number>} */
+    const outsidePgids = new Set();
     const outsideCall = async (/** @type {any} */ input, /** @type {any} */ ctx) => {
       if (input?.job === undefined && (!String(input?.command ?? "").trim() || !String(input?.reason ?? "").trim())) return { text: "bash_outside needs command and reason (or job, for one started here in the background)", isError: true };
       if (input?.job === undefined && input?.run_in_background !== true) {
@@ -18691,23 +18694,40 @@ async function codeLocalTurn(s, text) {
       const Bash = /** @type {any} */ (engine).ENGINE_TOOLS?.Bash;
       if (!Bash) return { text: "a command left running outside the sandbox needs a newer foldrun — `foldrun update`", isError: true };
       if (input.run_in_background === true && !String(input.reason ?? "").trim()) return { text: "bash_outside needs reason: why it cannot run inside the sandbox", isError: true };
-      // Jobs already running inside the sandbox go on unasked; they could change what the server runs (Codex).
-      const inside = [.../** @type {Map<string, any>} */ (ctx.jobs ?? new Map()).values()].filter((j) => !j.exit).map((j) => j.id);
-      if (input.run_in_background === true && inside.length) return { text: `stop the background job${inside.length === 1 ? "" : "s"} running inside the sandbox first (${inside.join(", ")}, with Bash {job, stop: true}): while a server runs outside it, they could change what it runs`, isError: true };
+      // What commands inside the sandbox left running (a job, a child of a finished command) would go on unasked and
+      // could change what the server runs: it is ended first, and the answer says so (Codex).
+      let ended = "";
+      if (input.run_in_background === true) {
+        const mine = new Set([...outsidePgids]);
+        const groups = /** @type {Set<number>} */ (ctx.groups ?? new Set());
+        let n = 0;
+        for (const g of [...groups]) {
+          if (mine.has(g)) continue;
+          try {
+            process.kill(-g, "SIGKILL");
+            n += 1;
+          } catch {
+            /* already gone */
+          }
+          groups.delete(g);
+        }
+        if (n) ended = `(ended ${n} process group${n === 1 ? "" : "s"} commands inside the sandbox had left running, so nothing changes what this runs unasked)\n`;
+      }
       const { reason: _reason, ...rest } = input;
-      return Bash.run(rest, { ...ctx, cwd: s.dir, env: own, sandbox: null, jobs: outsideJobs, jobPrefix: "o", shell: "/bin/bash" });
+      const r = await Bash.run(rest, { ...ctx, cwd: s.dir, env: own, sandbox: null, jobs: outsideJobs, jobPrefix: "o", shell: "/bin/bash" });
+      // Its group is watched apart from the job list, which may drop a finished entry (Codex).
+      for (const j of outsideJobs.values()) if (/** @type {any} */ (j).pid) outsidePgids.add(/** @type {any} */ (j).pid);
+      return ended ? { ...r, text: `${ended}${r.text}` } : r;
     };
     // Live while anything of its group is: a server's child outlives the shell that started it (Codex).
-    const groupAlive = (/** @type {any} */ j) => {
-      if (!j.exit) return true;
+    s.outsideLive = () => [...outsidePgids].some((g) => {
       try {
-        if (j.pid) process.kill(-j.pid, 0);
-        return !!j.pid;
+        process.kill(-g, 0);
+        return true;
       } catch {
         return false;
       }
-    };
-    s.outsideLive = () => [...outsideJobs.values()].some(groupAlive);
+    });
     // Right after each tool ran and before the next call: what the Write or
     // Edit left on disk settles its /rewind record. A sub-agent's too.
     const afterTool = async (/** @type {any} */ payload, /** @type {string} */ id) => {

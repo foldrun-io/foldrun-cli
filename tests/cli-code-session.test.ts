@@ -3362,8 +3362,6 @@ test("a dev server outside the sandbox (FOL-296): bash_outside run_in_background
   const asked: any[] = [];
   const turns = [
     () => sse([{ type: "tool_use", id: "i1", name: "Bash", input: { command: "sleep 30", run_in_background: true } }]),
-    () => sse([{ type: "tool_use", id: "i2", name: "bash_outside", input: { command: "sleep 1", reason: "a dev server", run_in_background: true } }]),
-    () => sse([{ type: "tool_use", id: "i3", name: "Bash", input: { job: "b1", stop: true } }]),
     () => sse([{ type: "tool_use", id: "s1", name: "bash_outside", input: { command: "while read l; do echo srv-$l; done", reason: "a dev server: the sandbox cannot listen on a port", run_in_background: true } }]),
     () => sse([{ type: "tool_use", id: "s1b", name: "Bash", input: { command: "echo while-live > live.txt" } }]),
     () => sse([{ type: "tool_use", id: "s2", name: "Bash", input: { job: "o1", stdin: "sneak\n" } }]),
@@ -3393,8 +3391,6 @@ test("a dev server outside the sandbox (FOL-296): bash_outside run_in_background
     t.send("run the server\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
-    at = await t.until(/OUTSIDE the sandbox[\s\S]*\$ sleep 1[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
-    t.send("y\r");
     at = await t.until(/left running as you — while it runs, the agent's commands and file changes in this folder are asked too[\s\S]*OUTSIDE the sandbox[\s\S]*while read l[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     t.send("y\r");
     // Commands inside the sandbox — unasked otherwise — are asked while the server runs.
@@ -3405,10 +3401,9 @@ test("a dev server outside the sandbox (FOL-296): bash_outside run_in_background
     at = await t.until(/OUTSIDE the sandbox[\s\S]*typed into the background job o1[\s\S]*> hi[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     t.send("y\r");
     at = await t.until(/Server handled\./, at, 30_000);
-    const result = (n: number) => JSON.stringify((asked[n + 3]?.messages ?? []).at(-1));
-    // A job inside the sandbox runs on unasked, so no server outside it starts until it is stopped.
-    assert.match(JSON.stringify((asked[2]?.messages ?? []).at(-1)), /stop the background job running inside the sandbox first \(b1/);
-    assert.match(result(1), /job o1 is running/);
+    const result = (n: number) => JSON.stringify((asked[n + 1]?.messages ?? []).at(-1));
+    // What ran on inside the sandbox is ended before the server starts: nothing changes what it runs unasked.
+    assert.match(result(1), /ended 1 process group commands inside the sandbox had left running[\s\S]*job o1 is running/);
     assert.equal(fs.readFileSync(path.join(d, "live.txt"), "utf8"), "while-live\n");
     assert.match(result(3), /no background job o1 in this step/, "Bash's jobs are not the outside ones, even when let through");
     assert.match(result(5), /srv-hi/, "the wait read it, unasked");
