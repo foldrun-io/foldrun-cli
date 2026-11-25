@@ -2328,6 +2328,140 @@ async function promptVisible(question) {
   }
 }
 
+/**
+ * One line from a terminal in raw mode, for a menu choice's follow-up question only (FOL-318: "in such mode escape
+ * button should make it exit this mode"; cooked mode typed Esc into the answer as "^["). Keys, not reads, as the
+ * picker does: several may come in one read, a sequence may be cut across two, and Esc alone is Esc only when
+ * nothing follows it within 40 ms. Esc and Ctrl-C leave; arrows and other sequences are not text; Backspace and
+ * Ctrl-U erase (the line is redrawn through the CLI's own controls, so what is shown is what is sent); Enter
+ * answers, and a paste is taken to its first line end. Every other question keeps the cooked reader, whose
+ * confirmations (y/N, Ctrl-U, Ctrl-C) behave as before (Codex). Exported for tests.
+ * @param {string} question
+ * @param {NodeJS.ReadStream & { setRawMode?: (on: boolean) => unknown, isRaw?: boolean }} stdin
+ * @param {{ write: (s: string) => unknown }} out
+ * @param {(seq: string) => unknown} [control] the CLI's own controls past the stream's guard
+ * @returns {Promise<{ text: string, escaped: boolean }>}
+ */
+export function readLineRaw(question, stdin, out, control = (seq) => out.write(seq)) {
+  return new Promise((resolve) => {
+    out.write(question);
+    const wasRaw = Boolean(stdin.isRaw);
+    stdin.setRawMode?.(true);
+    stdin.resume();
+    const decoder = new StringDecoder("utf8");
+    let buf = "";
+    let text = "";
+    let over = false;
+    /** @type {NodeJS.Timeout | undefined} */
+    let lone;
+    // How many rows the question and answer take now, so a redraw clears them all (a wrapped answer too).
+    const cols = Math.max(1, Number(/** @type {{ columns?: number }} */ (out).columns) || 80);
+    const shown = () => question.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").length + [...text].length;
+    let rows = 0;
+    const redraw = () => {
+      control(`\r${rows ? `\u001b[${Math.min(rows, 99)}A` : ""}\u001b[J`);
+      out.write(question + text);
+      rows = Math.floor(Math.max(0, shown() - 1) / cols);
+    };
+    const finish = (/** @type {boolean} */ escaped) => {
+      if (over) return;
+      over = true;
+      clearTimeout(lone);
+      stdin.off("data", onData);
+      stdin.off("end", gone);
+      stdin.off("close", gone);
+      stdin.off("error", gone);
+      stdin.setRawMode?.(wasRaw);
+      stdin.pause();
+      out.write("\n");
+      resolve({ text: escaped ? "" : text, escaped });
+    };
+    const gone = () => finish(true);
+    const onData = (/** @type {Buffer | string} */ d) => {
+      clearTimeout(lone);
+      buf += typeof d === "string" ? d : decoder.write(d);
+      let echo = "";
+      const flush = () => {
+        if (echo) out.write(echo);
+        echo = "";
+        rows = Math.floor(Math.max(0, shown() - 1) / cols);
+      };
+      // One pass by index: slicing the buffer per character made a long paste take a second (Codex).
+      let i = 0;
+      const ESC_SEQ = /\u001b(?:\[[0-?]*[ -/]*[@-~]|O[^\u001b]|[^[O\u001b])/uy;
+      while (i < buf.length && !over) {
+        ESC_SEQ.lastIndex = i;
+        const seq = ESC_SEQ.exec(buf);
+        if (seq) {
+          i += seq[0].length; // an arrow, a function key, Alt and a key: not text
+          continue;
+        }
+        if (buf[i] === "\u001b") {
+          // Esc alone, or the start of a sequence cut across reads: wait a moment for the rest.
+          flush();
+          buf = buf.slice(i);
+          lone = setTimeout(() => {
+            if (over) return;
+            const loneEsc = /^\u001b+$/.test(buf); // Esc, or Esc pressed again before the first was read alone
+            buf = "";
+            if (loneEsc) finish(true);
+          }, 40);
+          return;
+        }
+        const cp = /** @type {number} */ (buf.codePointAt(i));
+        const ch = String.fromCodePoint(cp);
+        i += ch.length;
+        if (ch === "\r" || ch === "\n") {
+          flush();
+          buf = "";
+          return finish(false);
+        }
+        if (ch === "\u0003") {
+          flush();
+          buf = "";
+          return finish(true);
+        }
+        if (ch === "\u0004") {
+          if (!text && !echo) {
+            buf = "";
+            return finish(true);
+          }
+          continue;
+        }
+        if (ch === "\u007f" || ch === "\b" || ch === "\u0015") {
+          flush();
+          if (!text) continue;
+          text = ch === "\u0015" ? "" : [...text].slice(0, -1).join("");
+          redraw();
+          continue;
+        }
+        if (ch < " ") continue;
+        text += ch;
+        echo += ch;
+      }
+      buf = "";
+      flush();
+    };
+    stdin.on("data", onData);
+    stdin.once("end", gone);
+    stdin.once("close", gone);
+    stdin.once("error", gone);
+  });
+}
+
+/** A menu choice's follow-up question: raw on a terminal (Esc leaves), the cooked reader otherwise. */
+async function promptMenuAnswer(/** @type {string} */ question) {
+  const tty = process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
+  if (!tty) return { text: await promptVisible(question), escaped: false };
+  holdReadyTicker();
+  await keysBeforeAsk?.();
+  try {
+    return await readLineRaw(question, process.stdin, process.stdout, (seq) => writeControl(seq));
+  } finally {
+    keysAfterAsk?.();
+  }
+}
+
 /** @param {string} question @returns {Promise<string>} */
 function promptVisibleNow(question) {
   return new Promise((resolve) => {
@@ -19989,9 +20123,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const choice = menu.choices.find((x) => x.v === picked);
         let chosen = picked;
         if (choice?.ask) {
-          const more = (await promptVisible(`  ${c.cyan(choice.name.replace(/…$/, ""))} ${c.dim(`— ${choice.ask}:`)} `)).trim();
-          // Enter alone cancels, unless the choice has its own default for it (/export's file name, Codex).
-          if (!more && choice.optional !== true) {
+          const answer = await promptMenuAnswer(`  ${c.cyan(choice.name.replace(/…$/, ""))} ${c.dim(`— ${choice.ask} (Esc to go back):`)} `);
+          const more = answer.text.trim();
+          // Enter alone cancels, unless the choice has its own default for it (/export's file name, Codex). Esc always cancels.
+          if (answer.escaped || (!more && choice.optional !== true)) {
             console.log(`  ${c.dim("nothing changed")}\n`);
             dropped = true;
             break;
