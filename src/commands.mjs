@@ -9928,6 +9928,12 @@ async function localBrowseDefaults(s) {
  */
 async function localServerTools(s, gateway = /** @type {{ url: string, key: string } | null} */ (null)) {
   if (s.localOnly === true) return [];
+  // What one gateway said holds for that gateway alone: a sign-in that moved the session to another asks again (Codex).
+  if (gateway && s.gatewayRunsFor !== gateway.url) {
+    delete s.gatewayRuns;
+    s.gatewayAsked = false;
+    s.gatewayRunsFor = gateway.url;
+  }
   // Not yet heard from this gateway: asked once, so a session's first turn (and a -p turn) knows too (Codex).
   if (!Array.isArray(s.gatewayRuns) && gateway && !s.gatewayAsked) {
     s.gatewayAsked = true;
@@ -19417,7 +19423,7 @@ async function codeLocalTurn(s, text) {
       if (m.type === "assistant" || (m.type === "system" && (m.subtype === "compact_boundary" || m.subtype === "compact_failed"))) checkCeiling();
       if (m.type === "system" && m.subtype === "init" && m.model) s.model = String(m.model);
       // The gateway runs these server tools itself (FOL-304): offered from the next turn.
-      if (m.type === "system" && m.subtype === "server_tools" && Array.isArray(m.tools)) s.gatewayRuns = m.tools.map(String);
+      if (m.type === "system" && m.subtype === "server_tools" && Array.isArray(m.tools) && s.gatewayRunsFor === engineKey.gatewayUrl) s.gatewayRuns = m.tools.map(String);
       if (m.type === "system" && m.subtype === "compact_boundary" && Array.isArray(m.conversation)) {
         // The older part was summarised so the conversation fits the
         // model's window: it goes on from here, and so does what is kept.
