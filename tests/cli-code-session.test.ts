@@ -3599,6 +3599,55 @@ test("on a turn on this computer what is typed shows on the working line — aft
   assert.match(JSON.stringify(asked[1]?.messages ?? []), /also check the readme/);
 });
 
+test("a line being typed when a permission prompt comes is drawn again after it, not hidden till the turn ends (FOL-306, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "b1", name: "Bash", input: { command: "sleep 2; echo first" } }]),
+    () => sse([{ type: "tool_use", id: "b2", name: "Bash", input: { command: "sleep 3; echo second" } }]),
+    () => sse([{ type: "text", text: "Both ran." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-td/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--context", "code-td", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "160" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/sleep 2; echo first[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    await new Promise((r) => setTimeout(r, 500));
+    t.send("draft words");
+    at = await t.until(/next: draft words/, at, 5_000);
+    at = await t.until(/sleep 3; echo second[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    // The second command runs: the draft is on the working line again.
+    at = await t.until(/next: draft words/, at, 5_000);
+    at = await t.until(/Both ran\./, at, 30_000);
+    // And it starts the next message.
+    at = await t.until(/\w ❯ draft words/, at, 5_000);
+    t.send("\x03\x03");
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("a message from another session shows at an idle prompt with no key pressed; Enter shows it whole and asks once; a yes takes it into the turn (FOL-305)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

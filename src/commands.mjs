@@ -15068,7 +15068,7 @@ async function cloudAgentNames(/** @type {any} */ s) {
  * @param {any} s
  * @param {{ agent: string, prompt: string, description: string }} job
  * @param {AbortSignal} signal
- * @param {{ pause: () => void, resume: () => void }} h
+ * @param {{ pause: () => void, resume: () => void, typed?: () => string }} h
  */
 async function runCloudSub(s, job, signal, h) {
   const { url, flags, ws } = s;
@@ -15110,7 +15110,7 @@ async function runCloudSub(s, job, signal, h) {
     }
     console.log(`  ${c.violet("☁")} ${c.white(`cloud sub-agent ${plainText(job.agent)}`)} ${c.grey(`· ${id} ·`)} ${c.grey(clipLine(plainText(job.description)))}`);
     const t0 = Date.now();
-    tick = startTicker(t0);
+    tick = startTicker(t0, h.typed);
     let faults = 0;
     while (!signal.aborted) {
       try {
@@ -15418,11 +15418,13 @@ const TYPE_AHEAD_MAX = 4000;
  * @param {() => void} onInt
  * @param {(text: string) => void} [onSend]
  * @param {{ add: (text: string) => boolean, back: () => string | null }} [queue] add: false when it was not taken (it stays on the line)
+ * @param {string} [initial] what is on the line already
  */
-function startTypeAhead(onInt, onSend, queue) {
+function startTypeAhead(onInt, onSend, queue, initial = "") {
   if (!codeInteractive || !process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") return { text: () => "", stop: async () => "" };
   const decoder = new StringDecoder("utf8");
-  let text = "";
+  // A draft the keyboard was stopped on (a prompt came): drawn again as it was (FOL-306).
+  let text = String(initial).slice(0, TYPE_AHEAD_MAX);
   let carry = "";
   let pasting = false;
   const onData = (/** @type {Buffer} */ d) => {
@@ -17189,7 +17191,7 @@ export function cloudTasks(/** @type {unknown} */ input) {
  * @param {any} s
  * @param {unknown} input
  * @param {AbortSignal} signal
- * @param {{ pause: () => void, resume: () => void, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
+ * @param {{ pause: () => void, resume: () => void, typed?: () => string, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
  * @returns {Promise<{ text: string, isError?: boolean }>}
  */
 async function runCloudAgents(s, input, signal, h) {
@@ -17299,7 +17301,7 @@ async function runCloudAgents(s, input, signal, h) {
     }
     if (signal.aborted) return stoppedText(await stopAll());
     const t0 = Date.now();
-    tick = startTicker(t0);
+    tick = startTicker(t0, h.typed);
     /** Wait for one run, in short pieces as `agent run --wait` does; a few network faults in a row are retried. */
     const waitOne = async (/** @type {typeof runs[number]} */ r) => {
       let faults = 0;
@@ -17326,7 +17328,7 @@ async function runCloudAgents(s, input, signal, h) {
       tick();
       const ok = r.run.status === "completed";
       console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.white(`cloud agent ${r.n}`)} ${c.grey(`· ${plainText(String(r.run.status))} · ${formatSecs((Date.now() - t0) / 1000)} · ${formatCost(cost)}`)}`);
-      tick = startTicker(t0);
+      tick = startTicker(t0, h.typed);
     };
     const aborted = new Promise((res) => {
       if (signal.aborted) res("stopped");
@@ -17470,9 +17472,17 @@ async function codeLocalTurn(s, text) {
   let typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
   // What is typed shows on the working line as it is typed, on every turn on this computer (FOL-306).
   const typedNow = () => typeAhead.text();
+  // The unfinished line a prompt interrupted: given back to the keyboard after it, not moved aside (FOL-306, Codex).
+  let draft = "";
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
-    if (t) pending.push({ t, sent: false, n: typedSeq++ });
+    if (t) draft = [draft, t].filter(Boolean).join(" ");
+  };
+  /** The keyboard again after a prompt, unless the turn is over (its end has stopped it for good). */
+  const keyboardOn = () => {
+    if (turnOver) return;
+    typeAhead = startTypeAhead(onInt, onSend, queueOf(s), draft);
+    draft = "";
   };
   const changed = new Set();
   /** @type {any} */
@@ -17565,7 +17575,7 @@ async function codeLocalTurn(s, text) {
     return true;
   };
   try {
-    await keyboardBack();
+    // The keyboard is read through the lookups below and stopped only before what may ask (credits, a key) (Codex).
     // The CLI's own keys must not be in reach of what the agent reads
     // without asking (Codex).
     // As the CLI itself reads it: a relative FOLDRUN_HOME is from where the
@@ -17606,6 +17616,7 @@ async function codeLocalTurn(s, text) {
     // `FAST`, `cheap` or `foldrun/fast` is fast (Codex review).
     resolveTierFn ??= (await modelNames()).resolveTier;
     model = tierOf(model) ?? model;
+    await keyboardBack();
     if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
     engineKey = await localKeyFor(s, cancel);
     if (!engineKey || cancel.asked) return;
@@ -17613,7 +17624,7 @@ async function codeLocalTurn(s, text) {
     s.engineKeyKind = engineKey.kind;
     s.engineKeyMade = true;
     await foldrunPlanLabel(s);
-    typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
+    keyboardOn();
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
@@ -17916,10 +17927,8 @@ async function codeLocalTurn(s, text) {
         if (!/^(n|no|)$/.test(answer)) return { behavior: /** @type {const} */ ("deny"), message: `The person said no to this, and said: ${JSON.stringify(words.slice(0, 2_000))}. Do what they said; do not try the same thing another way.` };
         return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
       } finally {
-        if (!cancel.asked) {
-          typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
-          stopTicker = startTicker(started, typedNow);
-        }
+        keyboardOn();
+        if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow);
       }
     };
     // This conversation's /rewind journal; a turn's number is one past the last recorded.
@@ -18026,6 +18035,7 @@ async function codeLocalTurn(s, text) {
         if (d.behavior !== "allow" || !takeTicket(input)) return { text: d.message ?? "The person said no.", isError: true };
       }
       return runCloudAgents(s, input, signal, {
+        typed: typedNow,
         pause: () => stopTicker(),
         resume: () => {
           stopTicker();
@@ -18054,7 +18064,7 @@ async function codeLocalTurn(s, text) {
               try {
                 return await cancellablePrompt(q, cancel);
               } finally {
-                if (!cancel.asked) typeAhead = startTypeAhead(onInt, onSend, queueOf(s));
+                keyboardOn();
               }
             }, () => cancel.asked),
           );
@@ -18151,6 +18161,7 @@ async function codeLocalTurn(s, text) {
       if (job.where === "cloud") {
         if (typeof s.turnCeilingUsd === "number") return { text: "This turn has a spend ceiling the person set, and a cloud agent's cost is not counted in it — so no cloud agent is started in this turn. Do the work here, or tell the person what is left for a cloud agent.", isError: true };
         return runCloudSub(s, { agent: job.cloudAgent, prompt: job.prompt, description: job.description }, signal, {
+          typed: typedNow,
           pause: () => stopTicker(),
           resume: () => {
             stopTicker();
@@ -18570,7 +18581,8 @@ async function codeLocalTurn(s, text) {
     // The keyboard first (an Enter in its last moments still queues), then
     // what was sent and not taken (the turn ended first, or failed): not
     // lost — it starts the next message, before what was typed after it.
-    const typed = await typeAhead.stop();
+    const typed = [draft, await typeAhead.stop()].filter(Boolean).join(" ");
+    draft = "";
     if (pending.some((e) => e.sent)) console.log(`  ${c.dim("the agent did not get to your message: it is on the next line, to send")}`);
     s.typeAhead = [s.typeAhead, ...pending.splice(0).map((e) => e.t), typed].filter(Boolean).join(" ");
     process.off("SIGINT", onInt);
