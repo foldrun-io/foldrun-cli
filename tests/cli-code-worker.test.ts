@@ -747,6 +747,11 @@ test("lsof's warning about a mount elsewhere (Docker's netns) is no doubt about 
   assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() fuse file system ${copy}/a b\n`, copy), /fuse/, "one inside it, with a space");
   assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() fuse file system ${copy}/mnt\n`, link), /fuse/, "inside it by its real path, the folder named through a link (Codex)");
   assert.match(W.lsofWarnings(docker, path.join(copy, "gone")), /nsfs/, "a folder that cannot be resolved keeps every warning");
+  const spaced = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sp-")), "team ");
+  fs.mkdirSync(path.join(spaced, "copy"), { recursive: true });
+  const inSpaced = fs.realpathSync(path.join(spaced, "copy"));
+  assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() nfs file system ${path.dirname(inSpaced)}\n`, inSpaced), /nfs/, "a mount whose name ends in a space, above the copy (Codex)");
+  if (process.platform === "darwin") assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() smbfs file system ${path.dirname(copy).toUpperCase()}\n`, copy), /smbfs/, "on a Mac, the same folder in another case (Codex)");
   assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() fuse file system ${copy}/mnt\n      Output information may be incomplete.\n`, copy), /fuse file system/, "a mount inside the copy");
   assert.match(W.lsofWarnings(`lsof: WARNING: can't stat() nfs file system ${path.dirname(copy)}\n`, copy), /nfs/, "a mount above it");
   assert.match(W.lsofWarnings(docker + `lsof: WARNING: can't open ${copy}/x: Permission denied\n`, copy), /Permission denied/, "another warning stays");

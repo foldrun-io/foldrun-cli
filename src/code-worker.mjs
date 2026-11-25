@@ -238,7 +238,12 @@ export async function reapTree(root, seen, o = {}) {
  * left; anything else stays a doubt.
  */
 export function lsofWarnings(/** @type {string} */ stderr, /** @type {string} */ dir) {
-  const within = (/** @type {string} */ a, /** @type {string} */ b) => a === b || a.startsWith(b.endsWith("/") ? b : `${b}/`);
+  // On a Mac a path's case may differ between lsof and us: compared folded there, so an overlap keeps the warning (Codex).
+  const fold = (/** @type {string} */ x) => (process.platform === "darwin" ? x.toLowerCase() : x);
+  const within = (/** @type {string} */ a, /** @type {string} */ b) => {
+    const [fa, fb] = [fold(a), fold(b)];
+    return fa === fb || fa.startsWith(fb.endsWith("/") ? fb : `${fb}/`);
+  };
   // lsof names mounts by their real path; a folder reached through a link is compared both ways, and unresolvable keeps every warning (Codex).
   /** @type {string[]} */
   let names;
@@ -252,7 +257,8 @@ export function lsofWarnings(/** @type {string} */ stderr, /** @type {string} */
   for (const line of stderr.split("\n")) {
     const t = line.trim();
     if (!t) continue;
-    const m = /^lsof: WARNING: can't stat\(\) \S+ file system (\/.*)$/.exec(t);
+    // The mount from the line as written: a trailing space may be part of its name (Codex).
+    const m = /^\s*lsof: WARNING: can't stat\(\) \S+ file system (\/.*?)\r?$/.exec(line);
     if (m && names.every((d) => !within(m[1], d) && !within(d, m[1]))) {
       dropped = true;
       continue;
