@@ -4253,7 +4253,7 @@ test("f at a command's question keeps a rule for the folder: later sessions run 
     at = await t.until(/What the agent may do without asking[\s\S]*Relaxed[^\n]*✔[\s\S]*5\. Remove a rule…[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("5");
-    at = await t.until(/Remove a rule — the rule's number: /, at);
+    at = await t.until(/Remove a rule — the rule's number \(Esc to go back\): /, at);
     t.send("1\r");
     at = await t.until(/removed: commands that start with  touch — it is asked again/, at);
     t.send("five\r");
