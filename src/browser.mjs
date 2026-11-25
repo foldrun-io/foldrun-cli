@@ -520,8 +520,9 @@ export function localWebArgv(input, def) {
 export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000 } = {}) {
   if (signal?.aborted) return Promise.resolve({ code: 1, stdout: "", stderr: "stopped before it started\n", timedOut: false });
   // A link in what a call may upload from or write to could point anywhere on this computer (Codex).
-  const link = linkUnder([path.join(ctx.paths.work, "uploads"), path.join(ctx.paths.work, "outputs")]);
-  if (link) return Promise.resolve({ code: 1, stdout: "", stderr: `not run: ${link} is a link — the browser's folder holds only real files (remove it)\n`, timedOut: false });
+  // The whole of work/: a call may upload from, or download to, anywhere in it.
+  const link = linkUnder([ctx.paths.work]);
+  if (link) return Promise.resolve({ code: 1, stdout: "", stderr: `not run: ${link === LINK_SCAN_FULL ? `${ctx.paths.work} holds too many files to check for links — clear its outputs/` : `${link} is a link`} — the browser's folder holds only real files\n`, timedOut: false });
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(path.dirname(ctx.browse), "run.mjs"), ...argv], {
       cwd: ctx.paths.work, env: callEnv(ctx.paths), stdio: ["ignore", "pipe", "pipe"],
@@ -544,11 +545,15 @@ export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000 } = {}) {
   });
 }
 
-/** The first symbolic link at or below these folders, or null. @param {string[]} roots */
+/** What linkUnder answers when it could not look at everything: not known to be free of links. */
+export const LINK_SCAN_FULL = "(too many files to check)";
+
+/** The first symbolic link at or below these folders, LINK_SCAN_FULL past 20,000 entries, or null. @param {string[]} roots */
 export function linkUnder(roots) {
   const stack = [...roots];
   let seen = 0;
-  while (stack.length && seen < 20_000) {
+  while (stack.length) {
+    if (seen >= 20_000) return LINK_SCAN_FULL;
     const p = /** @type {string} */ (stack.pop());
     seen += 1;
     let st;

@@ -296,6 +296,9 @@ test("FOL-267: a local call runs run.mjs in the browser's folder with the window
   assert.equal(linked.code, 1);
   assert.match(linked.stderr, /uploads\/home is a link/);
   fs.rmSync(path.join(paths.work, "uploads", "home"));
+  fs.symlinkSync(os.homedir(), path.join(paths.work, "elsewhere"));
+  assert.match(((await runLocalWeb({ browse: path.join(dir, "browse.mjs"), paths }, ["--action", "browse"])) as any).stderr, /elsewhere is a link/, "anywhere in work/");
+  fs.rmSync(path.join(paths.work, "elsewhere"));
   // A turn already stopped runs nothing.
   const gone = new AbortController();
   gone.abort();
