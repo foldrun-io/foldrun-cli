@@ -3134,6 +3134,15 @@ test("/permissions bypass (FOL-308): nothing is asked for the session, outside t
     at = await t.until(/Asked this time\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.equal(fs.existsSync(path.join(other, "asked.txt")), false);
+    // reset forgets bypass too (Codex).
+    t.send("/permissions bypass\r");
+    at = await t.until(/bypass on/, at);
+    t.send("/permissions reset\r");
+    at = await t.until(/forgotten — every change, command and send is asked again/, at);
+    const shown = at;
+    at = await alone(t, "/permissions", at);
+    at = await t.until(/commands that only look/, at);
+    assert.doesNotMatch(t.out().slice(shown), /bypass: nothing is asked/);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
   } finally {

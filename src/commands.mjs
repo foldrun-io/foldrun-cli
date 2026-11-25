@@ -19321,6 +19321,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     delete s.lastWhere;
     s.context = newContext();
     delete s.localAllow;
+    // Bypass was given in the conversation being left (FOL-308, Codex).
+    delete s.bypass;
     delete s.localHistory;
     delete s.lastReply;
     delete s.cloudBriefed;
@@ -19343,8 +19345,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     // Where it was worked on: its conversation is kept on that side.
     s.mode = to.mode === "local" ? "local" : "cloud";
     s.lastWhere = s.mode;
-    // What was allowed with "always" was allowed in the conversation being left (Codex).
+    // What was allowed with "always" was allowed in the conversation being left (Codex) — bypass too (FOL-308).
     delete s.localAllow;
+    delete s.bypass;
     if (s.mode === "local") s.engine = "foldrun";
     delete s.localHistory;
     delete s.lastReply;
@@ -19517,7 +19520,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const rows = m ? (await m.look().catch(() => ({ rows: [] }))).rows : [];
         return { mcp: rows.map((/** @type {any} */ r) => ({ name: String(r.name), state: String(r.state), source: String(r.source ?? "") })) };
       }
-      return { localOnly: s.localOnly === true, mode: s.mode, sandboxOff: s.sandboxOff === true, strict: s.strict === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
+      return { localOnly: s.localOnly === true, mode: s.mode, sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
     };
     // Another sign-in under this session's profile name: stop, never go on as a different account showing the old one (Codex).
     {
@@ -20522,6 +20525,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     if (name === "/permissions") {
       if (rest === "reset") {
         delete s.localAllow;
+        delete s.bypass;
         s.uploadAgreed?.delete(dir);
         const kept = folderRules(dir).length;
         say(`forgotten — every change, command and send is asked again${kept ? ` (the ${kept} rule${kept === 1 ? "" : "s"} kept for this folder stay${kept === 1 ? "s" : ""}: /permissions rm <n>)` : ""}`);
