@@ -9523,13 +9523,13 @@ async function sessionsCmd(positional, flags, layout) {
     // The thread with another conversation (FOL-307), or what this one sent.
     const q = other ? `?with=${enc(other)}` : flags.sent === true ? "?sent=1" : flags.waiting === true ? "?waiting=1" : "";
     const got = await remoteCall(url, flags, `${base(context)}${q}`);
+    // An older platform ignores ?with= and ?sent=: its answer is the inbox, never shown as a thread (Codex).
+    if ((other && got?.with !== other) || (flags.sent === true && got?.sent !== true)) throw new Error(`${url} does not answer ${other ? "--with" : "--sent"} yet — an older platform`);
     const messages = Array.isArray(got?.messages) ? got.messages : [];
     if (flags.json === true) {
       console.log(JSON.stringify(messages, null, 2));
       return 0;
     }
-    // An older platform ignores ?with= and ?sent=: its answer is the inbox, never shown as a thread (Codex).
-    if ((other && got?.with !== other) || (flags.sent === true && got?.sent !== true)) throw new Error(`${url} does not answer ${other ? "--with" : "--sent"} yet — an older platform`);
     if (other) {
       console.log(threadText(messages, context, other));
       return 0;
