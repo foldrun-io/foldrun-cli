@@ -426,6 +426,7 @@ What holds:
 |---|---|
 | `size` | `small` \| `large` (default) \| `heavy` — the sandbox reservation |
 | `resources` | `{cpu, memory, disk}` in numbers, over the `size` class's figures one key at a time |
+| `media` | `text` (default) \| `as-is` — what an image handed to it becomes. `text`: read on foldrun's servers (OCR) and given as text, no image tokens. `as-is`: it looks at the image itself (a UI, a chart, a design) with Read; the text stays beside it. Recordings and documents are always read into text. In `foldrun code` it is where the list for a named image starts |
 | `runtime` | language runtimes, packages and Debian system packages the agent's own scripts need |
 
 `size` is a price and a limit. Each class gives the sandbox a number of cores,
