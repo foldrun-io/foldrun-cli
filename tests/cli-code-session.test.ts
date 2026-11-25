@@ -5047,7 +5047,7 @@ test("/where browser cloud (FOL-267): the web tool browses through the gateway's
 
 // The engine's serverTools option ships in a newer core than the one installed until the CLI's range moves.
 const coreServerTools = typeof (/** @type {any} */ (await import("@foldrun/core/engine-common")) as any).serverToolsOf === "function";
-test("search and fetch on foldrun's servers in a local turn (FOL-304): offered only after the gateway says it runs them, and as the agent's web.actions allow", { skip: coreServerTools ? false : "needs a core with the engine's serverTools (FOL-304)" }, async () => {
+test("search and fetch on foldrun's servers in a local turn (FOL-304): offered once the gateway says it runs them, and as the agent's web.actions allow", { skip: coreServerTools ? false : "needs a core with the engine's serverTools (FOL-304)" }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -5083,8 +5083,10 @@ test("search and fetch on foldrun's servers in a local turn (FOL-304): offered o
     t.send("again\r");
     await t.until(/Second answer\./, at, 30_000);
     const types = (n: number) => (asked[n].tools ?? []).filter((x: any) => x.type).map((x: any) => `${x.type}:${x.name}`);
-    assert.deepEqual(types(0), [], "nothing before the gateway said it runs them");
-    assert.deepEqual(types(1), ["web_search_20250305:web_search"], "search only: the agent's web.actions do not hold fetch");
+    // The gateway was asked once before the first turn (its models answer carries the header).
+    assert.ok((s as any).seen.some((x: any) => x.url === "/v1/models" && x.headers["x-api-key"] === "fr_gw_test"), "asked with the session's key");
+    assert.deepEqual(types(0), ["web_search_20250305:web_search"], "search only: the agent's web.actions do not hold fetch");
+    assert.deepEqual(types(1), ["web_search_20250305:web_search"]);
     t.send("/where local\r");
     at = await t.until(/This computer only/, 0, 15_000);
     t.send("/quit\r");

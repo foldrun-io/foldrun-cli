@@ -9926,8 +9926,21 @@ async function localBrowseDefaults(s) {
  * the model's provider), and only what the agent's web grant and web.actions allow. [] when not.
  * @param {any} s @returns {Promise<{ type: string, name: string }[]>}
  */
-async function localServerTools(s) {
-  if (s.localOnly === true || !Array.isArray(s.gatewayRuns)) return [];
+async function localServerTools(s, gateway = /** @type {{ url: string, key: string } | null} */ (null)) {
+  if (s.localOnly === true) return [];
+  // Not yet heard from this gateway: asked once, so a session's first turn (and a -p turn) knows too (Codex).
+  if (!Array.isArray(s.gatewayRuns) && gateway && !s.gatewayAsked) {
+    s.gatewayAsked = true;
+    try {
+      const res = await fetch(`${gateway.url.replace(/\/+$/, "")}/v1/models`, { headers: { "x-api-key": gateway.key, "user-agent": USER_AGENT }, redirect: "error", signal: AbortSignal.timeout(5000) });
+      const said = res.headers.get("foldrun-server-tools");
+      void res.body?.cancel();
+      if (said !== null) s.gatewayRuns = said.split(",").map((x) => x.trim()).filter((x) => /^[a-z_]+_\d{8}$/.test(x));
+    } catch {
+      /* not known: none offered until a model answer says */
+    }
+  }
+  if (!Array.isArray(s.gatewayRuns)) return [];
   let agent;
   let project;
   try {
@@ -9939,14 +9952,19 @@ async function localServerTools(s) {
   const tools = Array.isArray(agent?.tools) ? agent.tools.map(String) : [];
   if (!tools.includes("web")) return [];
   const P = /** @type {any} */ (await import("@foldrun/core/providers"));
-  const actions = P.webConfig(agent, project).actions;
-  const may = (/** @type {string} */ a) => !Array.isArray(actions) || actions.includes(a);
+  const web = P.webConfig(agent, project);
+  // A web block that does not read is no grant (Codex).
+  if (Array.isArray(web.problems) && web.problems.length) return [];
+  const actions = web.actions;
+  // A provider or settings chosen for an action (exclude_engines, a vendor) is not something this door takes: that
+  // action is not offered here rather than run without them (Codex).
+  const may = (/** @type {string} */ a) => (!Array.isArray(actions) || actions.includes(a)) && (web.raw?.[a] === undefined || web.raw?.[a] === null);
   /** @type {{ type: string, name: string }[]} */
   const out = [];
   const search = s.gatewayRuns.find((/** @type {string} */ t) => /^web_search_\d{8}$/.test(t));
-  const fetch = s.gatewayRuns.find((/** @type {string} */ t) => /^web_fetch_\d{8}$/.test(t));
+  const fetchType = s.gatewayRuns.find((/** @type {string} */ t) => /^web_fetch_\d{8}$/.test(t));
   if (search && may("search")) out.push({ type: search, name: "web_search" });
-  if (fetch && may("fetch")) out.push({ type: fetch, name: "web_fetch" });
+  if (fetchType && may("fetch")) out.push({ type: fetchType, name: "web_fetch" });
   return out;
 }
 
@@ -19265,7 +19283,7 @@ async function codeLocalTurn(s, text) {
     // /where browser cloud (FOL-267): the web tool browses in a cloud browser instead, through the gateway's door.
     const webCloud = s.browser === "cloud" && s.localOnly !== true;
     // Search and fetch on foldrun's servers (FOL-304): only where the gateway said it runs them, and the agent may.
-    const serverTools = await localServerTools(s);
+    const serverTools = await localServerTools(s, { url: engineKey.gatewayUrl, key: engineKey.key });
     const q = engine.foldrunQuery({
           prompt: text,
           options: {
