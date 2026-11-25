@@ -9921,6 +9921,36 @@ async function localBrowseDefaults(s) {
 }
 
 /**
+ * The server tools a local turn offers (FOL-304): web search and fetch, run by the gateway itself — never on a
+ * session that keeps everything here, never before the gateway said it runs them (an older one could pass them to
+ * the model's provider), and only what the agent's web grant and web.actions allow. [] when not.
+ * @param {any} s @returns {Promise<{ type: string, name: string }[]>}
+ */
+async function localServerTools(s) {
+  if (s.localOnly === true || !Array.isArray(s.gatewayRuns)) return [];
+  let agent;
+  let project;
+  try {
+    agent = await projectFront(s, `agents/${s.agent}/agent.md`);
+    project = { ...(await accountFront(s, [])), ...(await projectFront(s, "AGENTS.md")) };
+  } catch {
+    return [];
+  }
+  const tools = Array.isArray(agent?.tools) ? agent.tools.map(String) : [];
+  if (!tools.includes("web")) return [];
+  const P = /** @type {any} */ (await import("@foldrun/core/providers"));
+  const actions = P.webConfig(agent, project).actions;
+  const may = (/** @type {string} */ a) => !Array.isArray(actions) || actions.includes(a);
+  /** @type {{ type: string, name: string }[]} */
+  const out = [];
+  const search = s.gatewayRuns.find((/** @type {string} */ t) => /^web_search_\d{8}$/.test(t));
+  const fetch = s.gatewayRuns.find((/** @type {string} */ t) => /^web_fetch_\d{8}$/.test(t));
+  if (search && may("search")) out.push({ type: search, name: "web_search" });
+  if (fetch && may("fetch")) out.push({ type: fetch, name: "web_fetch" });
+  return out;
+}
+
+/**
  * The agent's `web.browse` block for a cloud browser from this computer (FOL-267): its site locks, or why not.
  * @param {any} s @returns {Promise<{ allowed?: string[], blocked?: string[], notes: string[] } | { problem: string }>}
  */
@@ -19234,6 +19264,8 @@ async function codeLocalTurn(s, text) {
     const webDef = "error" in webHere ? null : localWebDefinition(webHere.browse, (await core()).readFrontmatter);
     // /where browser cloud (FOL-267): the web tool browses in a cloud browser instead, through the gateway's door.
     const webCloud = s.browser === "cloud" && s.localOnly !== true;
+    // Search and fetch on foldrun's servers (FOL-304): only where the gateway said it runs them, and the agent may.
+    const serverTools = await localServerTools(s);
     const q = engine.foldrunQuery({
           prompt: text,
           options: {
@@ -19331,6 +19363,7 @@ async function codeLocalTurn(s, text) {
             ],
             hooks: { PostToolUse: [{ hooks: [afterTool] }] },
             ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
+            ...(serverTools.length ? { serverTools } : {}),
             // Symbols' language servers: in this project's own package cache, writable inside the walls (FOL-297).
             toolsDir: path.join(packageCacheFor(s.dir), "lsp"),
             // A location shown from outside the folder (an added one) is private, as Read's is: asked before it goes to the cloud (Codex).
@@ -19365,6 +19398,8 @@ async function codeLocalTurn(s, text) {
       // After every call that was answered — a reply, or the summary a compaction paid for.
       if (m.type === "assistant" || (m.type === "system" && (m.subtype === "compact_boundary" || m.subtype === "compact_failed"))) checkCeiling();
       if (m.type === "system" && m.subtype === "init" && m.model) s.model = String(m.model);
+      // The gateway runs these server tools itself (FOL-304): offered from the next turn.
+      if (m.type === "system" && m.subtype === "server_tools" && Array.isArray(m.tools)) s.gatewayRuns = m.tools.map(String);
       if (m.type === "system" && m.subtype === "compact_boundary" && Array.isArray(m.conversation)) {
         // The older part was summarised so the conversation fits the
         // model's window: it goes on from here, and so does what is kept.
@@ -19390,6 +19425,14 @@ async function codeLocalTurn(s, text) {
         else turn.push({ role: "assistant", content });
         const words = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
         const calls = content.filter((b) => b.type === "tool_use");
+        // A search or fetch the gateway ran itself (FOL-304): shown, nothing to run here.
+        for (const b of content.filter((/** @type {any} */ x) => x.type === "server_tool_use")) {
+          stopTicker();
+          const q = /** @type {any} */ (b).input ?? {};
+          const what = typeof q.query === "string" ? q.query : typeof q.url === "string" ? q.url : "";
+          console.log(`  ${c.cyan("●")} ${c.bold(c.white(String(/** @type {any} */ (b).name) === "web_fetch" ? "Fetch" : String(/** @type {any} */ (b).name) === "web_browse" ? "Browse" : "Search"))}${what ? ` ${c.grey(clipLine(plainText(what)))}` : ""} ${c.dim("· on foldrun's servers")}`);
+          stopTicker = startTicker(started, typedNow);
+        }
         if (showThinking) {
           const summary = content.filter((b) => b.type === "thinking").map((b) => plainText(String(b.thinking ?? "")).trim()).filter(Boolean).join("\n\n");
           if (summary) {

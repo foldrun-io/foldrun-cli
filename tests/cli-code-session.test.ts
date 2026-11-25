@@ -5044,3 +5044,53 @@ test("/where browser cloud (FOL-267): the web tool browses through the gateway's
     s.close();
   }
 });
+
+// The engine's serverTools option ships in a newer core than the one installed until the CLI's range moves.
+const coreServerTools = typeof (/** @type {any} */ (await import("@foldrun/core/engine-common")) as any).serverToolsOf === "function";
+test("search and fetch on foldrun's servers in a local turn (FOL-304): offered only after the gateway says it runs them, and as the agent's web.actions allow", { skip: coreServerTools ? false : "needs a core with the engine's serverTools (FOL-304)" }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "text", text: "First answer." }]),
+    () => sse([{ type: "text", text: "Second answer." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-s304/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\ntools: [web]\nweb:\n  actions: [search, browse]\n---\nYou code.\n" } : { content: "" }),
+    "GET /v1/account/agents-md": () => ({ content: "" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  }, { headers: { "foldrun-server-tools": "web_search_20250305,web_fetch_20250910,foldrun_web_browse_20251125" } });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-s304", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("hello\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/First answer\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at, 30_000);
+    t.send("again\r");
+    await t.until(/Second answer\./, at, 30_000);
+    const types = (n: number) => (asked[n].tools ?? []).filter((x: any) => x.type).map((x: any) => `${x.type}:${x.name}`);
+    assert.deepEqual(types(0), [], "nothing before the gateway said it runs them");
+    assert.deepEqual(types(1), ["web_search_20250305:web_search"], "search only: the agent's web.actions do not hold fetch");
+    t.send("/where local\r");
+    at = await t.until(/This computer only/, 0, 15_000);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
