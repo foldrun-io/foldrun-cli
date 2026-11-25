@@ -10010,7 +10010,7 @@ async function localServerTools(s, gateway = /** @type {{ url: string, key: stri
   if (!Array.isArray(s.gatewayRuns) && gateway && !s.gatewayAsked) {
     s.gatewayAsked = true;
     // Only an engine that can send server tools needs to know (a core from before FOL-304 has no serverToolsOf).
-    const spec = "@foldrun/core/engine-common";
+    const spec = "@foldrun/core/engine-loop";
     const common = /** @type {any} */ (await import(spec).catch(() => null));
     if (typeof common?.serverToolsOf !== "function") return [];
     try {
