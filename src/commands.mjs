@@ -18697,7 +18697,9 @@ async function codeLocalTurn(s, text) {
       // What commands inside the sandbox left running (a job, a child of a finished command) would go on unasked and
       // could change what the server runs: it is ended first, and the answer says so (Codex).
       let ended = "";
-      if (input.run_in_background === true) {
+      // Only for a launch the person was asked about: a job call (read unasked) never ends anything (Codex).
+      // A group id is signalled as the step's own clean-up signals it (killGroups): reused only once none of it lives.
+      if (input.run_in_background === true && input.job === undefined) {
         const mine = new Set([...outsidePgids]);
         const groups = /** @type {Set<number>} */ (ctx.groups ?? new Set());
         let n = 0;
