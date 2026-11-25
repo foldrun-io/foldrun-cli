@@ -241,7 +241,7 @@ never a platform route. The gateway's address is shown when the key is made
 |---|---|
 | `POST /v1/messages` | a model call, whole or streamed |
 | `POST /v1/messages/count_tokens` | what a request would count |
-| `GET /v1/models` | the models the key can call |
+| `GET /v1/models` | the models the key can call: on foldrun's models, only those on foldrun's price list (a model the list does not price is refused, so it is not shown); a key signed in to a Claude plan sees the whole list |
 | `GET /v1/usage` | the key's spend (`?format=line` for one line) |
 
 Any Anthropic SDK or client works: `ANTHROPIC_BASE_URL=<gateway>`,
