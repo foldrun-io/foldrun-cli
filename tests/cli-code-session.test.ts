@@ -3683,6 +3683,81 @@ test("a line being typed when a permission prompt comes is drawn again after it,
   }
 });
 
+test("a message the agent sends shows in this session's transcript as a line of the thread (FOL-307)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "s1", name: "session_send", input: { to: "code-api", text: "Which routes moved?" } }]),
+    () => sse([{ type: "text", text: "Asked them." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-ss7/messages`]: () => ({ messages: [] }),
+    [`POST ${WS}/sessions/code-api/messages`]: () => ({ ok: true, message: { id: "m9" } }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-ss7", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "120" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("ask the api session\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/a message to the session code-api[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/→ you to code-api · \d\d:\d\d · waiting for code-api\r?\n\s+Which routes moved\?/, at, 30_000);
+    at = await t.until(/Asked them\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("/sessions <id> shows the thread with that session, both ways, oldest first (FOL-307)", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-th7/messages`]: (_b, q) =>
+      q.get("with") === "code-api"
+        ? { messages: [
+            { id: "a", fromContext: "code-th7", context: "code-api", text: "what changed?", at: "2026-11-25T01:00:00.000Z", run: "run-1", direction: "out" },
+            { id: "b", fromContext: "code-api", from: "bo", text: "the routes moved", at: "2026-11-25T01:02:00.000Z", direction: "in" },
+          ] }
+        : { messages: [] },
+    "GET /v1/me": () => ({ account: "acme" }),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-th7", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "120" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/sessions code-api\r");
+    at = await t.until(/code-th7 and code-api · 2 messages[\s\S]*→ you to code-api · 01:00 · code-api read it in a turn[\s\S]*what changed\?[\s\S]*← code-api \(bo\) · 01:02 · waiting for you[\s\S]*the routes moved/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/sessions code-th7\r");
+    at = await t.until(/that is this session/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("a message from another session shows at an idle prompt with no key pressed; Enter shows it whole and asks once; a yes takes it into the turn (FOL-305)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

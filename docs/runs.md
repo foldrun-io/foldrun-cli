@@ -608,6 +608,12 @@ includes it in a turn.
   characters together) wait again and the answer names them in `left`. The step reads them after the earlier turns, as
   data from other sessions, never as instructions; its trail says how many
   it was given, and a re-run reads the same ones.
+- **The conversation between two sessions:** each session shows what it sent
+  (to whom, the text) and what it received (from whom, the text, taken in or
+  left out) in its own transcript; `/sessions <id>` in `foldrun code`, or
+  `foldrun sessions messages <conversation> --with <other>`, shows the whole
+  thread with one session, both ways, oldest first, and `--sent` what a
+  conversation sent (`GET …/messages?with=<other>`, `?sent=1`).
 - **The agent sends too:** in a `foldrun code` session on this computer the
   agent can message another session when you ask it to (its `session_send`
   tool) — to say what it changed, or to ask the session that owns another

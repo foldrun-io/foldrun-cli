@@ -9518,11 +9518,22 @@ async function sessionsCmd(positional, flags, layout) {
   }
   if (verb === "messages" || verb === "ls") {
     if (!context) throw new Error("`foldrun sessions messages <conversation>` — the conversation id `foldrun code` shows in its session line");
-    const q = flags.waiting === true ? "?waiting=1" : "";
+    const other = typeof flags.with === "string" ? flags.with : null;
+    if (flags.with === true) throw new Error("--with names the other conversation: `foldrun sessions messages <conversation> --with <other>`");
+    // The thread with another conversation (FOL-307), or what this one sent.
+    const q = other ? `?with=${enc(other)}` : flags.sent === true ? "?sent=1" : flags.waiting === true ? "?waiting=1" : "";
     const got = await remoteCall(url, flags, `${base(context)}${q}`);
     const messages = Array.isArray(got?.messages) ? got.messages : [];
     if (flags.json === true) {
       console.log(JSON.stringify(messages, null, 2));
+      return 0;
+    }
+    if (other) {
+      console.log(threadText(messages, context, other));
+      return 0;
+    }
+    if (flags.sent === true) {
+      console.log(messages.length ? `\n${messages.map((/** @type {any} */ m) => threadLine({ ...m, direction: "out" }, String(m.context ?? ""))).join("\n")}\n` : `\n  ${c.dim(`${plainText(context)} has sent nothing`)}\n`);
       return 0;
     }
     if (!messages.length) {
@@ -9534,7 +9545,7 @@ async function sessionsCmd(positional, flags, layout) {
     console.log();
     return 0;
   }
-  if (verb) throw new Error('`foldrun sessions` lists the project\'s conversations; `foldrun sessions send <conversation> "…"`, `foldrun sessions messages <conversation> [--waiting]`, `foldrun sessions search <words>`');
+  if (verb) throw new Error('`foldrun sessions` lists the project\'s conversations; `foldrun sessions send <conversation> "…"`, `foldrun sessions messages <conversation> [--waiting | --sent | --with <other>]`, `foldrun sessions search <words>`');
   // No verb: the project's conversations, the most recently used first (FOL-236).
   const limit = typeof flags.limit === "string" && /^\d+$/.test(flags.limit) ? `?limit=${flags.limit}` : "";
   const got = await remoteCall(url, flags, `/v1/workspaces/${encodeURIComponent(ws)}/sessions${limit}`);
@@ -9561,6 +9572,27 @@ async function sessionsCmd(positional, flags, layout) {
 const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "");
 
 /** One session message, for the terminal: who, when, whether used, what. */
+/**
+ * One message of a thread between two conversations (FOL-307): which way it went, when, and where it stands —
+ * read in a turn, or still waiting; its text whole, under its margin.
+ * @param {any} m @param {string} other @param {Set<string>} [leftOut] ids this session showed and did not include
+ */
+function threadLine(m, other, leftOut) {
+  const out = m?.direction === "out";
+  const at = typeof m?.at === "string" ? m.at.slice(11, 16) : "";
+  const used = Boolean(m?.run || m?.usedLocally);
+  const state = out ? (used ? `${plainText(other)} read it in a turn` : `waiting for ${plainText(other)}`) : used ? "you took it into a turn" : leftOut?.has(m?.id) ? "you left it out" : "waiting for you";
+  const head = out ? `${c.violet("→")} ${c.bold("you")} ${c.dim(`to ${plainText(other)}`)}` : `${c.cyan("←")} ${c.bold(noBidi(plainText(other)))}${m?.from ? c.dim(` (${noBidi(plainText(String(m.from)))})`) : ""}`;
+  const body = marginLines(noBidi(plainText(String(m?.text ?? ""))), (process.stdout.columns || 80) - 6).map((l) => (l ? `    ${l}` : ""));
+  return `  ${head} ${c.dim(`· ${at}${at ? " · " : ""}${state}`)}\n${body.join("\n")}`;
+}
+
+/** The whole thread with one conversation, oldest first (FOL-307). @param {any[]} messages @param {string} me @param {string} other @param {Set<string>} [leftOut] */
+function threadText(messages, me, other, leftOut) {
+  if (!messages.length) return `\n  ${c.dim(`nothing between ${plainText(me)} and ${plainText(other)} yet — /sessions send ${plainText(other)} <text> starts it`)}\n`;
+  return `\n  ${c.white(`${plainText(me)} and ${plainText(other)}`)} ${c.dim(`· ${messages.length} message${messages.length === 1 ? "" : "s"}, oldest first`)}\n\n${messages.map((m) => threadLine(m, other, leftOut)).join("\n\n")}\n`;
+}
+
 /** Text printed under a margin, wrapped to the terminal so its rows keep the margin (FOL-311). */
 function sayUnder(/** @type {string} */ margin, /** @type {string} */ text, paint = (/** @type {string} */ x) => x) {
   for (const l of marginLines(text, (process.stdout.columns || 80) - margin.length - 1)) console.log(l ? `${margin}${paint(l)}` : "");
@@ -17008,6 +17040,8 @@ async function sessionSendCall(/** @type {any} */ s, /** @type {unknown} */ inpu
   const { to, text } = msg;
   try {
     await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/sessions/${enc(to)}/messages`, { method: "POST", body: JSON.stringify({ text, from: s.context }), signal });
+    // In this session's own transcript, as a line of the thread with that session (FOL-307).
+    console.log(threadLine({ direction: "out", text, at: new Date().toISOString() }, to));
     return { text: `Sent to ${to}. It waits there until that session's person includes it in a turn; an answer, if one comes, arrives here as a message from that session.` };
   } catch (err) {
     return { text: `Not sent: ${explain(err)}`, isError: true };
@@ -19797,6 +19831,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       else if (name === "/sessions" && w0 === "send") [name, rest] = ["#send", after];
       else if (name === "/sessions" && w0 === "read" && !after) [name, rest] = ["#messages", ""];
       else if (name === "/sessions" && w0 === "list" && !after) rest = "";
+      // /sessions <id>: the thread with that session (FOL-307) — an option of /sessions, no command of its own.
+      else if (name === "/sessions" && w0 && !after && !["send", "read", "list"].includes(w0)) [name, rest] = ["#thread", w0];
       // /model holds how hard it thinks and whether its thinking shows; /setup what the agent reads and reaches (FOL-263, owner).
       else if (name === "/model" && w0 === "effort") [name, rest] = ["#effort", after];
       else if (name === "/model" && w0 === "thinking") [name, rest] = ["#thinking", after];
@@ -19813,7 +19849,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       continue;
     }
     if (name === "/sessions" && rest) {
-      say(`/sessions has no ${plainText(rest)} — /sessions list · send <id> <text> · read`);
+      say(`/sessions has no ${plainText(rest)} — /sessions list · <id> · send <id> <text> · read`);
       continue;
     }
     if (name === "/setup") {
@@ -19885,6 +19921,19 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       try {
         await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/sessions/${enc(m[1])}/messages`, { method: "POST", body: JSON.stringify({ text: m[2].trim(), from: s.context }) });
         console.log(`  ${c.green("✓")} sent to ${plainText(m[1])} ${c.dim("— it waits until that session's person includes it in a turn")}\n`);
+      } catch (err) {
+        console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
+      }
+      continue;
+    }
+    if (name === "#thread") {
+      if (rest === s.context) {
+        say("that is this session — /sessions <another id> shows the thread with it");
+        continue;
+      }
+      try {
+        const got = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?with=${enc(rest)}`);
+        console.log(threadText(Array.isArray(got?.messages) ? got.messages : [], s.context, rest, s.shownMessages instanceof Set ? s.shownMessages : undefined));
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
       }

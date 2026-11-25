@@ -85,6 +85,30 @@ test("sessions messages: lists who sent what, waiting or used; --waiting asks fo
   assert.doesNotMatch(waiting.out, /run-0/);
 });
 
+test("sessions messages --with: the thread with another conversation, both ways, oldest first; --sent: what it sent (FOL-307)", async () => {
+  const thread = [
+    { id: "sm-1", workspace: "desk", context: "code-api", from: "ana", sender: "user:u1", fromContext: "code-me", text: "what changed in the API?", at: "2026-11-25T01:00:00.000Z", usedLocally: true, direction: "out" },
+    { id: "sm-2", workspace: "desk", context: "code-me", from: "bo", sender: "user:u2", fromContext: "code-api", text: "the routes moved to /v2.\n\nTests are green. \u001b[31mred\u001b[0m", at: "2026-11-25T01:05:00.000Z", direction: "in" },
+  ];
+  const s = await serve({
+    [MSG]: (_b, q) => (q.get("with") === "code-api" ? { context: "code-me", with: "code-api", messages: thread } : q.get("sent") === "1" ? { context: "code-me", messages: [{ ...thread[0], direction: undefined }] } : { context: "code-me", messages: [] }),
+  });
+  const r = await at(s.url, "sessions", "messages", "code-me", "--with", "code-api", "--to", "desk");
+  const sent = await at(s.url, "sessions", "messages", "code-me", "--sent", "--to", "desk");
+  const none = await at(s.url, "sessions", "messages", "code-me", "--with", "code-x", "--to", "desk");
+  s.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /code-me and code-api · 2 messages, oldest first/);
+  assert.match(r.out, /→ you to code-api · 01:00 · code-api read it in a turn\n\s+what changed in the API\?/);
+  assert.match(r.out, /← code-api \(bo\) · 01:05 · waiting for you\n\s+the routes moved to \/v2\.\n\n\s+Tests are green\./);
+  assert.ok(r.out.indexOf("what changed") < r.out.indexOf("routes moved"), "oldest first");
+  assert.doesNotMatch(r.out, /\u001b\[31m/);
+  assert.match(sent.out, /→ you to code-api/);
+  assert.match(none.out, /nothing between code-me and code-x yet/);
+  const q = s.seen.filter((x) => x.url === MSG).map((x) => x.query.toString());
+  assert.deepEqual(q, ["with=code-api", "sent=1", "with=code-x"]);
+});
+
 test("sessions: a wrong call says how to use it", async () => {
   const s = await platform([]);
   const r = await at(s.url, "sessions", "send", "--to", "desk");
