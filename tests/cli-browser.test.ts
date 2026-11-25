@@ -311,3 +311,28 @@ test("FOL-267: a local call runs run.mjs in the browser's folder with the window
   stop.abort();
   assert.notEqual(((await p) as any).code, 0);
 });
+
+test("FOL-267: browser mcp also serves the cloud's full web tool, refused options named, beside the six", async () => {
+  const dir = home();
+  const toolMd = '---\nname: web\ndescription: "browse: a real browser — JavaScript runs. Use it when fetch is empty. Start with fetch."\nargs:\n  action: "browse"\n  url: "(browse) The page to open"\n  mode: "(browse) What comes back"\n  proxy: "(browse) Optional NAME of a secret holding a proxy URL"\n---\n';
+  const runMjs = 'const ARGS = { "browse": [ "url", "mode", "proxy" ] };\nconsole.log("PAGE " + process.argv.slice(2).join(" "));\n';
+  const full = { tools: [{ ...gallery.tools[0], files: [...gallery.tools[0].files, { kind: "tools", file: "web/tool.md", content: toolMd }, { kind: "tools", file: "web/run.mjs", content: runMjs }] }] };
+  const s = await serve({ "/v1/library/gallery": () => full });
+  const msgs = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_read", arguments: {} } },
+    { jsonrpc: "2.0", id: 3, method: "tools/list" },
+    { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "web", arguments: { action: "browse", url: "https://example.com", mode: "text" } } },
+    { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "web", arguments: { action: "browse", proxy: "P" } } },
+  ];
+  const r = await cli(["browser", "mcp", "--url", s.url, "--token", "k"], { env: { FOLDRUN_HOME: dir }, input: msgs.map((m) => JSON.stringify(m)).join("\n") + "\n" });
+  s.close();
+  const answers = new Map(r.out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l)).map((m: any) => [m.id, m]));
+  const tools = answers.get(3).result.tools;
+  assert.equal(tools.length, 7, r.out);
+  const web = tools.find((t: any) => t.name === "web");
+  assert.deepEqual(Object.keys(web.inputSchema.properties).sort(), ["action", "mode", "url"]);
+  assert.match(answers.get(4).result.content[0].text, /PAGE --action browse --url https:\/\/example\.com --mode text --browser chrome --live true/);
+  assert.equal(answers.get(5).result.isError, true);
+  assert.match(answers.get(5).result.content[0].text, /proxy uses a secret from foldrun's vault/);
+});

@@ -94,6 +94,7 @@ data centre. Clicks move the pointer the way a person's does.
 | `browser_screenshot` | a picture of what is in view, the whole page (`full_page`) or one element; one too big to send (a very long page) is refused with what to take instead |
 | `browser_wait_for_person` | hand the page to you; returns when the address changes, or the condition given (`until_url_contains`, `until_gone`, `until_visible`) |
 | `browser_close` | close the window; the sign-ins stay |
+| `web` | the cloud's own `web` tool, `action: browse`, with every option this computer can run (`mode`, `actions`, `device`, `block`, `capture`, `har`…): the same tool a deployed agent and `foldrun code` browse with. What needs the cloud is refused by name ([the table](#in-foldrun-code-on-this-computer)). Offered once `foldrun browser setup` has fetched it |
 
 Reading a page as text costs the app far less than a screenshot, which is
 an image; the app is told to take one only when the layout matters.

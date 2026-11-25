@@ -588,9 +588,9 @@ export function localBrowserReady(deps, flags) {
  * The MCP server: one JSON-RPC message per line on stdin, one answer per line
  * on stdout. Calls run one at a time — there is one window.
  * @param {() => Promise<{ browse: string, paths: ReturnType<typeof browserPaths> } | { error: string }>} context
- * @param {{ version?: string, work?: string, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream }} [opts]
+ * @param {{ version?: string, work?: string, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream, webTool?: () => Promise<ReturnType<typeof localWebDefinition>> }} [opts]
  */
-export function serveMcp(context, { version, work = browserPaths(() => path.join(os.homedir(), ".foldrun")).work, input = process.stdin, output = process.stdout } = {}) {
+export function serveMcp(context, { version, work = browserPaths(() => path.join(os.homedir(), ".foldrun")).work, input = process.stdin, output = process.stdout, webTool } = {}) {
   /** @param {unknown} msg */
   const send = (msg) => { output.write(`${JSON.stringify(msg)}\n`); };
   let chain = Promise.resolve();
@@ -612,12 +612,23 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
       }
       case "ping":
         return answer({});
-      case "tools/list":
-        return answer({ tools: TOOLS });
+      case "tools/list": {
+        // The cloud's web action=browse with every option this computer can run (FOL-267), beside the six.
+        const web = webTool ? await webTool().catch(() => null) : null;
+        return answer({ tools: web ? [...TOOLS, { name: "web", description: web.description, inputSchema: web.input_schema }] : TOOLS });
+      }
       case "tools/call": {
         const ctx = await context();
         if ("error" in ctx) return answer(textResult(ctx.error, true));
         try {
+          if (params?.name === "web") {
+            const web = webTool ? await webTool().catch(() => null) : null;
+            if (!web) return answer(textResult("the web tool is not set up on this computer — `foldrun browser setup`", true));
+            const call = localWebArgv(params?.arguments ?? {}, web);
+            if ("problem" in call) return answer(textResult(call.problem, true));
+            const r = await runLocalWeb(ctx, call.argv);
+            return answer(textResult(shapeOutput(r), r.code !== 0));
+          }
           return answer(await callTool(ctx, params?.name, params?.arguments ?? {}));
         } catch (err) {
           return answer(textResult(`foldrun browser: ${err?.message ?? err}`, true));
@@ -643,7 +654,7 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
  * @param {{
  *   c: Record<string, (s: string) => string>, credentialsDir: () => string, remoteUrl: (f: any) => string | undefined,
  *   remoteCall: Function, galleryCacheDir: (url: string) => string, writeGalleryCache: Function,
- *   sureToDelete: Function, explain: (e: unknown) => string, version: string,
+ *   sureToDelete: Function, explain: (e: unknown) => string, version: string, readFrontmatter?: () => Promise<(file: string) => Record<string, any> | null>,
  * }} deps
  */
 export async function browserCmd(positional, flags, deps) {
@@ -691,7 +702,12 @@ export async function browserCmd(positional, flags, deps) {
         await refreshing;
         return ready({ refresh: false });
       };
-      return serveMcp(context, { version: deps.version, work: paths.work });
+      // The full web tool, from the gallery copy on disk, read with core's frontmatter reader (FOL-267).
+      const webTool = async () => {
+        const p = await program({ refresh: false });
+        return p.browse && deps.readFrontmatter ? localWebDefinition(p.browse, await deps.readFrontmatter()) : null;
+      };
+      return serveMcp(context, { version: deps.version, work: paths.work, webTool });
     }
 
     case "setup": {

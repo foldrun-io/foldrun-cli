@@ -26259,6 +26259,7 @@ export async function run(command, positional, flags, workspace, layout) {
       // program, for an AI app over MCP (src/browser.mjs).
       return browserCmd(positional, flags, {
         c, credentialsDir, remoteUrl, remoteCall, galleryCacheDir, writeGalleryCache, sureToDelete, explain, version: CLI_VERSION,
+        readFrontmatter: async () => (await core()).readFrontmatter,
       });
     case "storage":
       return storageCmd(positional, flags, layout);
