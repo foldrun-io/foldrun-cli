@@ -3734,7 +3734,7 @@ test("/sessions <id> shows the thread with that session, both ways, oldest first
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/sessions/code-th7/messages`]: (_b, q) =>
       q.get("with") === "code-api"
-        ? { messages: [
+        ? { with: "code-api", messages: [
             { id: "a", fromContext: "code-th7", context: "code-api", text: "what changed?", at: "2026-11-25T01:00:00.000Z", run: "run-1", direction: "out" },
             { id: "b", fromContext: "code-api", from: "bo", text: "the routes moved", at: "2026-11-25T01:02:00.000Z", direction: "in" },
           ] }

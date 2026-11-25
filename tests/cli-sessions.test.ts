@@ -91,11 +91,19 @@ test("sessions messages --with: the thread with another conversation, both ways,
     { id: "sm-2", workspace: "desk", context: "code-me", from: "bo", sender: "user:u2", fromContext: "code-api", text: "the routes moved to /v2.\n\nTests are green. \u001b[31mred\u001b[0m", at: "2026-11-25T01:05:00.000Z", direction: "in" },
   ];
   const s = await serve({
-    [MSG]: (_b, q) => (q.get("with") === "code-api" ? { context: "code-me", with: "code-api", messages: thread } : q.get("sent") === "1" ? { context: "code-me", messages: [{ ...thread[0], direction: undefined }] } : { context: "code-me", messages: [] }),
+    [MSG]: (_b, q) => (q.get("with") ? { context: "code-me", with: q.get("with"), messages: q.get("with") === "code-api" ? thread : [] } : q.get("sent") === "1" ? { context: "code-me", sent: true, messages: [{ ...thread[0], direction: undefined }] } : { context: "code-me", messages: [] }),
   });
   const r = await at(s.url, "sessions", "messages", "code-me", "--with", "code-api", "--to", "desk");
   const sent = await at(s.url, "sessions", "messages", "code-me", "--sent", "--to", "desk");
   const none = await at(s.url, "sessions", "messages", "code-me", "--with", "code-x", "--to", "desk");
+  // An older platform answers the inbox to both: refused, never shown as a thread (Codex).
+  const old = await serve({ [MSG]: () => ({ context: "code-me", messages: thread }) });
+  const oldWith = await at(old.url, "sessions", "messages", "code-me", "--with", "code-api", "--to", "desk");
+  const oldSent = await at(old.url, "sessions", "messages", "code-me", "--sent", "--to", "desk");
+  old.close();
+  assert.notEqual(oldWith.code, 0);
+  assert.match(oldWith.out, /does not answer --with yet/);
+  assert.match(oldSent.out, /does not answer --sent yet/);
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /code-me and code-api · 2 messages, oldest first/);

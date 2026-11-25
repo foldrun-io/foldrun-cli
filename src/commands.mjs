@@ -9528,6 +9528,8 @@ async function sessionsCmd(positional, flags, layout) {
       console.log(JSON.stringify(messages, null, 2));
       return 0;
     }
+    // An older platform ignores ?with= and ?sent=: its answer is the inbox, never shown as a thread (Codex).
+    if ((other && got?.with !== other) || (flags.sent === true && got?.sent !== true)) throw new Error(`${url} does not answer ${other ? "--with" : "--sent"} yet — an older platform`);
     if (other) {
       console.log(threadText(messages, context, other));
       return 0;
@@ -9579,7 +9581,8 @@ const noBidi = (t) => t.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/
  */
 function threadLine(m, other, leftOut) {
   const out = m?.direction === "out";
-  const at = typeof m?.at === "string" ? m.at.slice(11, 16) : "";
+  // Only a time read as one: nothing else from the server reaches the terminal here (Codex).
+  const at = typeof m?.at === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(m.at) ? m.at.slice(11, 16) : "";
   const used = Boolean(m?.run || m?.usedLocally);
   const state = out ? (used ? `${plainText(other)} read it in a turn` : `waiting for ${plainText(other)}`) : used ? "you took it into a turn" : leftOut?.has(m?.id) ? "you left it out" : "waiting for you";
   const head = out ? `${c.violet("→")} ${c.bold("you")} ${c.dim(`to ${plainText(other)}`)}` : `${c.cyan("←")} ${c.bold(noBidi(plainText(other)))}${m?.from ? c.dim(` (${noBidi(plainText(String(m.from)))})`) : ""}`;
@@ -19832,7 +19835,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       else if (name === "/sessions" && w0 === "read" && !after) [name, rest] = ["#messages", ""];
       else if (name === "/sessions" && w0 === "list" && !after) rest = "";
       // /sessions <id>: the thread with that session (FOL-307) — an option of /sessions, no command of its own.
-      else if (name === "/sessions" && w0 && !after && !["send", "read", "list"].includes(w0)) [name, rest] = ["#thread", w0];
+      // The id as typed: ids are case-sensitive (Codex).
+      else if (name === "/sessions" && w0 && !after && !["send", "read", "list"].includes(w0)) [name, rest] = ["#thread", /** @type {string} */ (sub?.[1] ?? w0)];
       // /model holds how hard it thinks and whether its thinking shows; /setup what the agent reads and reaches (FOL-263, owner).
       else if (name === "/model" && w0 === "effort") [name, rest] = ["#effort", after];
       else if (name === "/model" && w0 === "thinking") [name, rest] = ["#thinking", after];
@@ -19933,6 +19937,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       }
       try {
         const got = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/sessions/${enc(s.context)}/messages?with=${enc(rest)}`);
+        if (got?.with !== rest) {
+          console.log(`  ${c.dim("this platform does not show threads yet (it answered with this session's messages instead) — /sessions read lists what was sent here")}\n`);
+          continue;
+        }
         console.log(threadText(Array.isArray(got?.messages) ? got.messages : [], s.context, rest, s.shownMessages instanceof Set ? s.shownMessages : undefined));
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
