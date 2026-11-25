@@ -2860,7 +2860,7 @@ test("no git needed on this computer (FOL-274): a folder without git starts, the
     at = await t.until(/1\. This computer only\s+the agent sends nothing to th[^\n]*✔[\s\S]*3\. The cloud\s+needs git[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\r");
-    at = await t.until(/This computer only — \/where local · local\+cloud · cloud · send <task>/, at);
+    at = await t.until(/This computer only; browser on this computer — \/where local · local\+cloud · cloud · send <task> · browser here\|cloud/, at);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
   } finally {
@@ -3544,7 +3544,7 @@ test("three ways to work (FOL-258, FOL-263): /where local takes the agent's clou
     at = await t.until(/\w ❯ /, at);
     // /where alone: the three ways, where it works now ticked; Enter on it says so and changes nothing.
     at = await alone(t, "/where", at);
-    at = await t.until(/This computer only — \/where local · local\+cloud · cloud · send <task>/, at);
+    at = await t.until(/This computer only; browser on this computer — \/where local · local\+cloud · cloud · send <task> · browser here\|cloud/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/where local+cloud\r");
     at = await t.until(/✓ This computer, agents in the cloud from here on/, at);
