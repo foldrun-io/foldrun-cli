@@ -11,7 +11,7 @@ function fakeTty() {
   const modes: boolean[] = [];
   Object.assign(e, {
     isRaw: false,
-    setRawMode(on: boolean) { modes.push(on); (e as { isRaw: boolean }).isRaw = on; },
+    setRawMode(on: boolean) { modes.push(on); (e as unknown as { isRaw: boolean }).isRaw = on; },
     resume() {}, pause() {}, setEncoding() {},
   });
   return { stdin: e as never as NodeJS.ReadStream, emit: (s: string) => (e as EventEmitter).emit("data", Buffer.from(s)), raw: e as EventEmitter, modes };
