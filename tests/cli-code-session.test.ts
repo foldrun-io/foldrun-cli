@@ -4788,7 +4788,7 @@ test("ask_person in a local turn (FOL-314): a list of choices, an answer of one'
       return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
     },
   });
-  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-q314", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "" });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-q314", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/\w ❯ /);
     t.send("style the button\r");
