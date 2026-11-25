@@ -3812,6 +3812,65 @@ test("an image sent to the model as it is: the token estimate shown, the image b
   }
 });
 
+test("the local agent browses on this computer with the cloud's web tool, asked first; a call that needs the cloud is refused by name (FOL-267)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "w1", name: "web", input: { action: "browse", url: "https://example.com", mode: "aria" } }]),
+    () => sse([{ type: "tool_use", id: "w2", name: "web", input: { action: "browse", proxy: "MY_PROXY" } }]),
+    () => sse([{ type: "text", text: "Read the page." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-w267/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  // This computer's browser, set up: the gallery's web tool on disk (a stand-in run.mjs) and the driver installed.
+  const web = path.join(home, "gallery", new URL(s.url).host, "tools", "web");
+  fs.mkdirSync(web, { recursive: true });
+  fs.writeFileSync(path.join(web, "tool.md"), '---\nname: web\ndescription: "browse: a real browser — JavaScript runs. Use it when fetch is empty. Start with fetch."\nargs:\n  action: "browse"\n  url: "(browse) The page to open"\n  mode: "(browse) What comes back"\n  proxy: "(browse) Optional NAME of a secret holding a proxy URL"\n---\n');
+  fs.writeFileSync(path.join(web, "run.mjs"), 'const ARGS = { "browse": [ "url", "mode", "proxy" ] };\nconsole.log("PAGE " + process.argv.slice(2).join(" "));\n');
+  fs.writeFileSync(path.join(web, "browse.mjs"), "");
+  fs.mkdirSync(path.join(home, "browser", "node_modules", "playwright"), { recursive: true });
+  fs.writeFileSync(path.join(home, "browser", "node_modules", "playwright", "package.json"), '{"version":"1.63.0"}');
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-w267", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "140" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("read example.com\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Web[\s\S]*browse https:\/\/example\.com[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/"proxy":"MY_PROXY"[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Read the page\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    const tool = (asked[0]?.tools ?? []).find((x: any) => x.name === "web");
+    assert.ok(tool, "the web tool is offered once this computer's browser is set up");
+    assert.deepEqual(tool.input_schema.properties.action.enum, ["browse"]);
+    assert.equal(tool.input_schema.properties.proxy, undefined, "a vault option is not offered");
+    const results = (n: number) => JSON.stringify((asked[n]?.messages ?? []).at(-1));
+    assert.match(results(1), /PAGE --action browse --url https:\/\/example\.com --mode aria --browser chrome --live true/);
+    assert.match(results(2), /proxy uses a secret from foldrun's vault/);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("a message the agent sends shows in this session's transcript as a line of the thread (FOL-307)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

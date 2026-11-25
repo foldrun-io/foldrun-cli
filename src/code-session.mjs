@@ -1190,6 +1190,7 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "Grep") return `${String(input.pattern ?? "")}${input.path ? ` in ${rel(input.path)}` : ""}`;
   if (name === "Bash") return String(input.command ?? "").replace(/\s+/g, " ").trim();
   if (name === "WebFetch") return String(input.url ?? "");
+  if (name === "web") return `${String(input.action ?? "")}${input.url ? ` ${String(input.url)}` : input.live === "end" ? " · close the window" : " · the page as it stands"}${Array.isArray(input.actions) ? ` · ${input.actions.length} step${input.actions.length === 1 ? "" : "s"}` : ""}`;
   if (name === "WebSearch") return String(input.query ?? "");
   if (name === "Task" || name === "Agent") return String(input.description ?? "");
   if (name === "agent") return `${input.where === "cloud" ? `cloud · ${String(input.cloud_agent ?? "")}` : String(input.agent ?? "explore")} · ${String(input.description ?? "")}`.replace(/ ·  · /, " · ");

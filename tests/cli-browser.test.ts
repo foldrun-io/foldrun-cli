@@ -214,3 +214,85 @@ console.log('{"get":"url","value":"https://example.com/"}');
   assert.match(whole.content[0].text, /too big to send.*no full_page/);
   assert.deepEqual(fs.readdirSync(path.join(paths.work, "outputs")), [], "the picture is not left behind");
 });
+
+// ---------------------------------------------- web action=browse, here (FOL-267)
+
+const { localWebDefinition, localWebArgv, runLocalWeb, browseHelp } = await import("../src/browser.mjs");
+const { readFrontmatter } = await import("@foldrun/core");
+
+function webGallery() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "local-web-"));
+  fs.writeFileSync(path.join(dir, "tool.md"), [
+    "---",
+    "name: web",
+    "description: >",
+    "  The web. search: a query. fetch: a page. browse: a real browser — JavaScript runs; mode= picks what comes back. Use it when fetch is empty. Start with fetch.",
+    "args:",
+    '  action: "search | fetch | browse"',
+    '  url: "(fetch) One page · (browse) The page to open"',
+    '  mode: "(browse) What comes back"',
+    '  actions: "(browse) Optional JSON array of steps"',
+    '  proxy: "(browse) Optional NAME of a secret holding a proxy URL"',
+    '  captcha_solver: "(browse) Optional capsolver"',
+    '  identity: "(browse) Optional name of an entry"',
+    '  browser: "(browse) Optional engine"',
+    '  live: "(browse) Optional true"',
+    "---",
+    "",
+  ].join("\n"));
+  fs.writeFileSync(path.join(dir, "run.mjs"), `const ARGS = { "fetch": [ "url" ], "browse": [ "url", "mode", "actions", "proxy", "captcha_solver", "identity", "browser", "live" ] };
+console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: Object.keys(process.env).filter((k) => k.startsWith("FOLDRUN") || /KEY|TOKEN/.test(k)).sort() }));
+console.error("browser: live session live");
+console.error("wrote outputs/page.png");
+`);
+  fs.writeFileSync(path.join(dir, "browse.mjs"), "");
+  return dir;
+}
+
+test("FOL-267: the local web tool is the gallery's own browse — its options, minus what needs the cloud", () => {
+  const dir = webGallery();
+  const d = localWebDefinition(path.join(dir, "browse.mjs"), readFrontmatter);
+  assert.ok(d);
+  assert.deepEqual(d!.names, ["url", "mode", "actions", "browser", "live"], "vault secrets, the solver and identities are not offered");
+  assert.deepEqual(d!.input_schema.properties.action.enum, ["browse"]);
+  assert.equal(d!.input_schema.properties.url.description, "The page to open", "the browse part of each help line");
+  assert.match(d!.description, /browse: a real browser/);
+  assert.match(d!.description, /Never type a password/);
+  assert.equal(browseHelp({ x: "(fetch) a · (browse) b · (map) c" }).x, "b");
+});
+
+test("FOL-267: a call is the cloud's arguments plus this window; what cannot run here is refused by name", () => {
+  const dir = webGallery();
+  const d = localWebDefinition(path.join(dir, "browse.mjs"), readFrontmatter)!;
+  assert.deepEqual((localWebArgv({ action: "browse", url: "https://example.com", mode: "aria" }, d) as any).argv, ["--action", "browse", "--url", "https://example.com", "--mode", "aria", "--browser", "chrome", "--live", "true"]);
+  const steps = (localWebArgv({ action: "browse", actions: [{ click: "@e3" }] }, d) as any).argv;
+  assert.deepEqual(JSON.parse(steps[steps.indexOf("--actions") + 1]), [{ click: "@e3", human: true }]);
+  assert.deepEqual((localWebArgv({ action: "browse", live: "end" }, d) as any).argv, ["--action", "browse", "--browser", "chrome", "--live", "end"]);
+  const refused = (input: Record<string, unknown>) => (localWebArgv(input, d) as any).problem as string;
+  assert.match(refused({ action: "fetch", url: "x" }), /^web action=fetch does not run on this computer/);
+  assert.match(refused({ action: "browse", proxy: "P" }), /^proxy uses a secret from foldrun's vault/);
+  assert.match(refused({ action: "browse", identity: "au-phone" }), /^identity names an entry/);
+  assert.match(refused({ action: "browse", browser: "firefox" }), /firefox runs in the cloud/);
+  assert.match(refused({ action: "browse", live: "false" }), /always stays open/);
+  assert.match(refused({ action: "browse", depth: "2" }), /does not take depth/);
+});
+
+test("FOL-267: a local call runs run.mjs in the browser's folder with the window's environment, no secrets", async () => {
+  const dir = webGallery();
+  const paths = browserPaths(() => fs.mkdtempSync(path.join(os.tmpdir(), "local-web-home-")));
+  fs.mkdirSync(paths.work, { recursive: true });
+  const r: any = await runLocalWeb({ browse: path.join(dir, "browse.mjs"), paths }, ["--action", "browse", "--url", "https://example.com"]);
+  assert.equal(r.code, 0, r.stderr);
+  const said = JSON.parse(r.stdout);
+  assert.deepEqual(said.argv, ["--action", "browse", "--url", "https://example.com"]);
+  assert.equal(fs.realpathSync(said.cwd), fs.realpathSync(paths.work));
+  assert.deepEqual(said.env, ["FOLDRUN_BROWSER_DESKTOP", "FOLDRUN_BROWSER_HEADLESS", "FOLDRUN_BROWSER_LIVE_IDLE_MS", "FOLDRUN_BROWSER_LIVE_ROOT", "FOLDRUN_BROWSER_MODULES"]);
+  assert.match(shapeOutput(r), /wrote outputs\/page\.png/);
+  assert.doesNotMatch(shapeOutput(r), /live session/, "the session chatter is left out");
+  // Stopped with the turn.
+  fs.writeFileSync(path.join(dir, "run.mjs"), "setTimeout(() => {}, 60000);");
+  const stop = new AbortController();
+  const p = runLocalWeb({ browse: path.join(dir, "browse.mjs"), paths }, [], { signal: stop.signal });
+  stop.abort();
+  assert.notEqual(((await p) as any).code, 0);
+});

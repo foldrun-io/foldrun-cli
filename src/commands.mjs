@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
-import { browserCmd } from "./browser.mjs";
+import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, shapeOutput as browseOutput } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
 import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
@@ -18802,6 +18802,10 @@ async function codeLocalTurn(s, text) {
     // Started only to take them in, and another turn took them all meanwhile: nothing to send (Codex).
     if (only && text === before) throw Object.assign(new Error("the message was taken by another turn meanwhile — nothing sent"), { code: "messages_gone" });
     /** @type {any} */ (turn[0].content[0]).text = text;
+    // The web, browsed on this computer (FOL-267): the cloud's web action=browse, in a Chrome window the person
+    // sees — offered when this computer's browser is set up (`foldrun browser setup`).
+    const webHere = localBrowserReady({ remoteUrl, galleryCacheDir, credentialsDir }, s.flags);
+    const webDef = "error" in webHere ? null : localWebDefinition(webHere.browse, (await core()).readFrontmatter);
     const q = engine.foldrunQuery({
           prompt: text,
           options: {
@@ -18828,6 +18832,18 @@ async function codeLocalTurn(s, text) {
                 const job = cloudJobWithoutFolder(input);
                 return "problem" in job ? Promise.resolve({ text: job.problem, isError: true }) : agentCall(job, ctx.signal);
               } }]),
+              ...(webDef && !("error" in webHere)
+                ? [{
+                    name: "web", description: webDef.description, input_schema: webDef.input_schema, readOnly: false,
+                    run: async (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {
+                      const call = localWebArgv(input ?? {}, webDef);
+                      if ("problem" in call) return { text: call.problem, isError: true };
+                      const r = await runLocalWeb(webHere, call.argv, { signal: ctx.signal });
+                      const files = /outputs\//.test(r.stdout + r.stderr) ? `\n(files named outputs/… are in ${path.join(webHere.paths.work, "outputs")})` : "";
+                      return { text: `${browseOutput(r)}${files}`, isError: r.code !== 0 };
+                    },
+                  }]
+                : []),
               // foldrun's own docs, from the pages this CLI carries: text that
               // shipped with it, read with no command and so no question.
               { name: FOLDRUN_DOCS_TOOL, description: FOLDRUN_DOCS_DESCRIPTION, input_schema: FOLDRUN_DOCS_SCHEMA, run: async (/** @type {unknown} */ input) => foldrunDocsCall(input) },
