@@ -490,7 +490,7 @@ export function localWebDefinition(browse, readFront) {
 // Read from gallery browse.mjs (24 Nov): a live session reuses the open browser's context and applies only
 // headers, permissions and geolocation to it, so the context's own settings (device, user_agent, locale,
 // timezone, video) are not applied to the window kept open here; the locks are, by request routing.
-const BLOCK_HERE = ["allowed_domains", "deny", "boundaries", "webgpu", "ignore_https_errors", "cookie_domain", "storage_origin"];
+const BLOCK_HERE = ["deny", "boundaries", "webgpu", "ignore_https_errors", "cookie_domain", "storage_origin"];
 /** Settings this computer cannot honour, and why: a call is refused while the agent's block names one. */
 const BLOCK_CLOUD = {
   cookies: "a vault secret's sign-in cookies — this computer has no vault; sign in in the window instead",
@@ -499,6 +499,9 @@ const BLOCK_CLOUD = {
   state: "a sign-in kept in a file — on this computer the window's profile keeps sign-ins",
   init: "scripts from a cloud workspace run in every page",
   extensions: "extensions from a cloud workspace",
+  // The window here outlives each call, and its pages reach any host between calls and from tabs opened before:
+  // a hold that cannot hold is refused, as the cloud tool refuses a live session under a network list (Codex).
+  allowed_domains: "a hold to some sites, which the window kept open on this computer cannot keep between calls",
 };
 /** Settings that change nothing that matters here: each is named in every answer, never silently dropped. */
 const BLOCK_NOTED = {

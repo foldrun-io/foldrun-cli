@@ -344,8 +344,8 @@ test("FOL-267: browser mcp also serves the cloud's full web tool, refused option
 
 test("FOL-267: the agent's web.browse block on this computer — kept, refused by name, or noted, never dropped", () => {
   const toEnv = (k: Record<string, unknown>) => Object.fromEntries(Object.entries(k).map(([a, b]) => [`FOLDRUN_BROWSER_${a.toUpperCase()}`, Array.isArray(b) ? b.join(",") : String(b)]));
-  const ok: any = localBrowseBlock({ settings: { engine: "chrome", device: "iPhone 15", allowed_domains: ["example.com"], headless: false, live: true } }, toEnv);
-  assert.deepEqual(ok.env, { FOLDRUN_BROWSER_ALLOWED_DOMAINS: "example.com" }, "the locks are kept");
+  const ok: any = localBrowseBlock({ settings: { engine: "chrome", device: "iPhone 15", deny: ["eval"], headless: false, live: true } }, toEnv);
+  assert.deepEqual(ok.env, { FOLDRUN_BROWSER_DENY: "eval" }, "the locks are kept");
   assert.deepEqual(ok.notes.map((n: string) => n.split(":")[0]), ["device", "headless", "live"], "the rest is named, not dropped");
   const no = (read: any) => (localBrowseBlock(read, toEnv) as any).problem as string;
   assert.match(no({ settings: { cookies: "SITE_COOKIES" } }), /web\.browse cookies is a vault secret's sign-in cookies/);
@@ -353,4 +353,5 @@ test("FOL-267: the agent's web.browse block on this computer — kept, refused b
   assert.match(no({ settings: {}, rest: "browserbase" }), /names a browser vendor \(browserbase\)/);
   assert.match(no({ settings: {}, error: "web.browse.headless is true or false" }), /^this agent's web\.browse block: web\.browse\.headless/);
   assert.match(no({ settings: { init: ["x.js"] } }), /init is scripts from a cloud workspace/);
+  assert.match(no({ settings: { allowed_domains: ["example.com"] } }), /allowed_domains is a hold to some sites, which the window kept open on this computer cannot keep/);
 });

@@ -3885,7 +3885,7 @@ test("the agent's web.browse block holds on this computer as in the cloud: its d
     [`GET ${WS}/sessions/code-wb267/messages`]: () => ({ messages: [] }),
     [`GET ${WS}/source`]: (_b, q) =>
       q.get("path") === "agents/coder/agent.md"
-        ? { content: "---\nname: coder\nweb:\n  browse:\n    device: iPhone 15\n    allowed_domains: [example.com]\n    headless: false\n---\nYou code.\n", sha256: "x" }
+        ? { content: "---\nname: coder\nweb:\n  browse:\n    device: iPhone 15\n    deny: [eval]\n    headless: false\n---\nYou code.\n", sha256: "x" }
         : q.get("path") === "AGENTS.md" ? { content: "---\nweb:\n  browse:\n    locale: fr-FR\n---\n", sha256: "y" } : { files: [] },
     "GET /v1/account/agents-md": () => ({ content: "", sha256: null, exists: false }),
     "GET /v1/me": () => ({ account: "acme" }),
@@ -3902,7 +3902,7 @@ test("the agent's web.browse block holds on this computer as in the cloud: its d
   const web = path.join(home, "gallery", new URL(s.url).host, "tools", "web");
   fs.mkdirSync(web, { recursive: true });
   fs.writeFileSync(path.join(web, "tool.md"), '---\nname: web\ndescription: "browse: a real browser — JavaScript runs. Use it. Start."\nargs:\n  action: "browse"\n  url: "(browse) The page to open"\n---\n');
-  fs.writeFileSync(path.join(web, "run.mjs"), 'const ARGS = { "browse": [ "url" ] };\nconsole.log("DEVICE=" + process.env.FOLDRUN_BROWSER_DEVICE + " DOMAINS=" + process.env.FOLDRUN_BROWSER_ALLOWED_DOMAINS + " HEADLESS=" + process.env.FOLDRUN_BROWSER_HEADLESS + " LOCALE=" + process.env.FOLDRUN_BROWSER_LOCALE);\n');
+  fs.writeFileSync(path.join(web, "run.mjs"), 'const ARGS = { "browse": [ "url" ] };\nconsole.log("DEVICE=" + process.env.FOLDRUN_BROWSER_DEVICE + " DENY=" + process.env.FOLDRUN_BROWSER_DENY + " HEADLESS=" + process.env.FOLDRUN_BROWSER_HEADLESS + " LOCALE=" + process.env.FOLDRUN_BROWSER_LOCALE);\n');
   fs.writeFileSync(path.join(web, "browse.mjs"), "");
   fs.mkdirSync(path.join(home, "browser", "node_modules", "playwright"), { recursive: true });
   fs.writeFileSync(path.join(home, "browser", "node_modules", "playwright", "package.json"), '{"version":"1.63.0"}');
@@ -3917,7 +3917,7 @@ test("the agent's web.browse block holds on this computer as in the cloud: its d
     at = await t.until(/Done browsing\./, at, 30_000);
     const result = JSON.stringify((asked[1]?.messages ?? []).at(-1));
     // The agent's block, whole: the project's applies only when the agent has none (core webConfig), so no locale.
-    assert.match(result, /DEVICE=undefined DOMAINS=example\.com HEADLESS=0 LOCALE=undefined/, result.slice(0, 400));
+    assert.match(result, /DEVICE=undefined DENY=eval HEADLESS=0 LOCALE=undefined/, result.slice(0, 400));
     assert.match(result, /not kept on this computer — device: not applied to the window kept open on this computer; headless: the window on this computer is always visible/);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
