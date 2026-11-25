@@ -5139,7 +5139,7 @@ test("CPU and memory on this computer (FOL-240): asked once at the start, shown 
     t.send("\r");
     at = await t.until(/\w ❯ /, at, 30_000);
     t.send("/permissions resources\r");
-    at = await t.until(/allowed .*\(kept for this computer\)[\s\S]*coder asks +4 cores, 8 GiB \(its size:\/resources:\)[\s\S]*not yet held/, at);
+    at = await t.until(/allowed .*\(kept for this computer\)[\s\S]*coder asks +4 cores, 8 GiB \(its size:\/resources:\)[\s\S]*memory in force [^\n]*sampled/, at);
     t.send("/permissions resources memory 1Gi\r");
     at = await t.until(/this session: memory 1Gi/, at);
     t.send("/permissions resources\r");

@@ -2583,6 +2583,8 @@ async function restartSession(args, envNow) {
         else env[k] = v;
       }
       fs.rmSync(next, { force: true });
+      for (const end of SESSION_END) end();
+      SESSION_END.clear();
       // Ctrl-C reaches the session too, which handles it: the supervisor stays for it (Codex).
       const hold = () => {};
       process.on("SIGINT", hold);
@@ -9874,19 +9876,28 @@ async function projectFront(s, file) {
   } catch (err) {
     if (!(err instanceof HttpError && err.status === 404)) throw err;
   }
-  let front = {};
-  if (content !== null) {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-front-"));
-    try {
-      const f = path.join(tmp, "file.md");
-      fs.writeFileSync(f, content);
-      front = (await core()).readFrontmatter(f) ?? {};
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  }
+  const front = content !== null ? await frontOfText(content) : {};
   s.fronts[file] = { front, at: Date.now() };
   return front;
+}
+
+/**
+ * The frontmatter of a markdown text, read as the runtime reads it — through core's light entry (FOL-240: a session
+ * must not load all of core to read one agent's fields), or all of core on an older one.
+ * @param {string} text @returns {Promise<Record<string, any>>}
+ */
+async function frontOfText(text) {
+  const spec = "@foldrun/core/frontmatter-read";
+  const light = /** @type {any} */ (await import(spec).catch(() => null));
+  if (typeof light?.frontmatterOf === "function") return light.frontmatterOf(text) ?? {};
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-front-"));
+  try {
+    const f = path.join(tmp, "file.md");
+    fs.writeFileSync(f, text);
+    return (await core()).readFrontmatter(f) ?? {};
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -9977,7 +9988,10 @@ async function resourcesReport(s) {
     /* the agent's file could not be read: what it asks is not known */
   }
   const asked = await R.agentAsks(front);
-  const rows = R.resolveLocal({ budget, session: s.resCeiling ?? null, ask: asked.ask });
+  // Memory is watched (sampled) while the session works here; CPU is not held yet (FOL-240 slice 2).
+  // With no limit chosen on this computer, foldrun holds nothing here: the agent's ask is shown, not put in force.
+  const unlimited = ![budget.cpu, budget.memoryMi, s.resCeiling?.cpu, s.resCeiling?.memoryMi].some((v) => typeof v === "number");
+  const rows = R.resolveLocal({ budget, session: s.resCeiling ?? null, ask: unlimited ? null : asked.ask, held: { cpu: "not yet held", memory: s.mode === "local" && process.platform === "darwin" ? "sampled" : "not yet held" } });
   const fig = (/** @type {string} */ k, /** @type {number | null} */ v) => (v === null ? "no limit" : k === "cpu" ? R.formatCpu(v) : R.formatMi(v));
   const others = R.readHolds(path.join(configDir(), "resources")).filter((/** @type {any} */ h) => h.pid !== process.pid);
   const out = [
@@ -9987,7 +10001,9 @@ async function resourcesReport(s) {
     ...rows.map((/** @type {any} */ x) => `${x.resource === "cpu" ? "cpu in force  " : "memory in force"} ${fig(x.resource, x.inForce)}${x.over ? ` — it asks ${fig(x.resource, x.asked)}, more than allowed here` : ""} · ${x.held}`),
     `other sessions ${others.length ? `${others.length} open on this computer, drawing on the same budget` : "none open"}`,
   ];
-  if (rows.some((/** @type {any} */ x) => x.held === "not yet held")) out.push("not yet held: these figures are recorded and shown; holding them comes next (a sampled watchdog on macOS, a cgroup on Linux)");
+  if (rows.some((/** @type {any} */ x) => x.held === "sampled")) out.push("sampled: about once a second foldrun adds up the memory of everything it started for this session, and stops the largest command when the total is over — a burst between two samples is not caught");
+  if (rows.some((/** @type {any} */ x) => x.held === "not yet held")) out.push("not yet held: recorded and shown; CPU is held in a later step");
+  if (unlimited && asked.ask) out.push("no limit is chosen on this computer, so foldrun holds nothing here — the agent's own size:/resources: included");
   out.push("what you run yourself (!cmd) is never limited");
   return out;
 }
@@ -10092,16 +10108,7 @@ async function accountFront(s, said) {
   let note = /** @type {string | null} */ (null);
   try {
     const got = await remoteCall(s.url, s.flags, "/v1/account/agents-md");
-    if (typeof got?.content === "string" && got.content) {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-front-"));
-      try {
-        const f = path.join(tmp, "AGENTS.md");
-        fs.writeFileSync(f, got.content);
-        front = (await core()).readFrontmatter(f) ?? {};
-      } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
-      }
-    }
+    if (typeof got?.content === "string" && got.content) front = await frontOfText(got.content);
   } catch (err) {
     if (!(err instanceof HttpError && (err.status === 403 || err.status === 404))) throw err;
     // Its locks (allowed_domains, deny) cannot be skipped because this key may not read them (Codex).
@@ -19119,6 +19126,9 @@ async function codeLocalTurn(s, text) {
     // Right after each tool ran and before the next call: what the Write or
     // Edit left on disk settles its /rewind record. A sub-agent's too.
     const afterTool = async (/** @type {any} */ payload, /** @type {string} */ id) => {
+      // A command the memory watchdog stopped (FOL-240): the agent learns why with this result.
+      const note = s.watchdogNote;
+      if (note) delete s.watchdogNote;
       // Only a call a copy was kept for: a read never touches the journal.
       const parts = editParts(String(payload?.tool_name), payload?.tool_input, s.dir);
       if (parts) parts.forEach((_p, i) => rewindSettle(rewindJournal, `${id}#${i}`));
@@ -19127,7 +19137,7 @@ async function codeLocalTurn(s, text) {
       // For a goal's check: every file Write or Edit was used on, taken back or not.
       const used = payload?.tool_input?.file_path;
       if (typeof s.goal === "string" && FILE_CHANGES.has(String(payload?.tool_name)) && typeof used === "string") (s.goalFiles ??= new Set()).add(path.relative(s.dir, path.resolve(s.dir, used)) || used);
-      return {};
+      return note ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note } } : {};
     };
     const said = (/** @type {() => void} */ print) => {
       stopTicker();
@@ -20009,6 +20019,69 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   };
   holdNow();
   process.once("exit", () => /** @type {any} */ (s).releaseHold?.());
+  // The memory watchdog (FOL-240 slice 2): sampled, over everything foldrun started for this session but the person's
+  // own commands; the limit in force is read at each sample, so /permissions resources changes it at once.
+  const watchLimit = () => {
+    const r = /** @type {any} */ (s).resources;
+    // macOS first (owner, 25 Nov 2026); Linux holds it with a cgroup, a later slice — nothing is stopped there yet.
+    if (!r || s.mode !== "local" || process.platform !== "darwin") return null;
+    const vals = [r.budget.memoryMi, /** @type {any} */ (s).resCeiling?.memoryMi, /** @type {any} */ (s).resAsk?.memoryMi].filter((v) => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  };
+  const watchdog = (await import("./code-watchdog.mjs")).startWatchdog({
+    limitMi: watchLimit,
+    spared: () => PERSON_PIDS,
+    onStop: (info) => {
+      const fmtMi = (/** @type {number} */ mi) => (mi >= 1024 ? `${Number((mi / 1024).toFixed(1))} GiB` : `${Math.round(mi)} MiB`);
+      const what = `${plainText(info.command)} was stopped — foldrun's processes held ${fmtMi(info.totalMi)}, over the ${fmtMi(info.limitMi)} allowed on this computer (sampled)`;
+      console.log(`\n  ${c.amber("■")} ${c.grey(what)}`);
+      // The agent is told why, with the next tool result it gets.
+      /** @type {any} */ (s).watchdogNote = `${what}. Use less memory (smaller batches, one process at a time) or ask the person to raise the limit (/permissions resources).`;
+    },
+  });
+  process.once("exit", () => watchdog.stop());
+  // A /restart hands over to a new session in a child of this process: this one's watchdog and record end first,
+  // never policing the next session's processes with this one's limit (Codex).
+  SESSION_END.add(() => {
+    watchdog.stop();
+    /** @type {any} */ (s).releaseHold?.();
+  });
+  // What the agent's own size:/resources: ask, read once a session (FOL-240): an ask over what this computer allows
+  // runs at the lower figure only after a yes — never smaller in silence; a script is refused, not asked. With no
+  // limit chosen on this computer ("No limit" / off) foldrun holds nothing here, the agent's ask included, and its
+  // fields are not read at all. Every way into a laptop turn passes here: the prompt, /where, /resume, -p, stream-json.
+  const resourceGate = async () => {
+    const r = /** @type {any} */ (s).resources;
+    const limited = r && [r.budget?.cpu, r.budget?.memoryMi, /** @type {any} */ (s).resCeiling?.cpu, /** @type {any} */ (s).resCeiling?.memoryMi].some((v) => typeof v === "number");
+    if (!limited || /** @type {any} */ (s).resAskRead) return true;
+    const atTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY) && typeof flags.task !== "string" && !s.headless;
+    let front = {};
+    try {
+      front = await projectFront(s, `agents/${s.agent}/agent.md`);
+    } catch (err) {
+      // Not known is not "asks nothing": this turn waits, and the next one reads it again (Codex).
+      console.log(`  ${c.amber("■")} ${c.grey(`not run — this agent's size: and resources: could not be read (${plainText(explain(err)).split("\n")[0]}); try again`)}`);
+      return false;
+    }
+    const ask = (await r.R.agentAsks(front)).ask;
+    const rows = r.R.resolveLocal({ budget: r.budget, session: /** @type {any} */ (s).resCeiling ?? null, ask });
+    const over = rows.filter((/** @type {any} */ x) => x.over);
+    if (over.length) {
+      const fig = (/** @type {any} */ x, /** @type {number} */ v) => (x.resource === "cpu" ? r.R.formatCpu(v) : r.R.formatMi(v));
+      const line = over.map((/** @type {any} */ x) => `${fig(x, x.asked)} of ${x.resource === "cpu" ? "CPU" : "memory"}, this computer allows ${fig(x, x.allowed)}`).join("; ");
+      const yes = atTerminal
+        ? await pickOne({ title: `${s.agent} asks ${line}`, subtitle: "its size: / resources: — run it at what this computer allows?", choices: [{ v: "yes", name: "Yes, at what this computer allows", note: "for this session" }, { v: "no", name: "No — not this turn", note: "/permissions resources raises the limit" }], tick: "yes" })
+        : null;
+      if (yes !== "yes") {
+        console.log(`  ${c.amber("■")} ${c.grey(`not run — ${plainText(s.agent)} asks ${line}${atTerminal ? "" : "; a script is not asked: raise the limit with FOLDRUN_CODE_RESOURCES"}`)}`);
+        return false;
+      }
+    }
+    /** @type {any} */ (s).resAsk = ask;
+    /** @type {any} */ (s).resAskRead = true;
+    return true;
+  };
+
   // For turns on this computer, whatever the session is doing now: a cloud session that moves to /local keeps it.
   if (flags.continue === true && !onlyHere && flags.local !== true ? resumed?.localOnly === true || localOnly : localOnly) /** @type {any} */ (s).localOnly = true;
   // Off only by the person's own word: the flag, or their environment (never a file of the folder).
@@ -20167,7 +20240,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           };
           process.on("SIGINT", mark);
           try {
-            await codeLocalTurn(s, task);
+            if (await resourceGate()) await codeLocalTurn(s, task);
           } finally {
             process.off("SIGINT", mark);
           }
@@ -20441,6 +20514,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     if (where === "local") {
       if (!(/** @type {any} */ (s).resources)) /** @type {any} */ (s).resources = await computerBudget(Boolean(process.stdin.isTTY && process.stdout.isTTY) && typeof flags.task !== "string");
       if (!(/** @type {any} */ (s).releaseHold)) holdNow();
+      if (!(await resourceGate())) return;
     }
     const started = Date.now();
     // A turn started only to take messages in (FOL-305): with none in it at the end, nothing is sent (Codex).
@@ -22699,6 +22773,11 @@ async function readCodeMessage(state, completer, s) {
   });
 }
 
+/** What the person runs themselves (`!cmd`): never counted or stopped by the memory watchdog (FOL-240). */
+const PERSON_PIDS = new Set();
+/** What a session undoes when it hands over to the next (/restart): its watchdog, its record of what it holds. */
+const SESSION_END = new Set();
+
 /**
  * `!command`: run by the person's shell in the folder, its output shown as
  * it comes and kept. Ctrl-C stops the command, never the session.
@@ -22717,6 +22796,9 @@ function runShellLive(dir, command) {
     process.on("SIGINT", ignore);
     // Your own command, with your own environment: not the agent's, so not inside its sandbox.
     const child = spawn(hostEnv().SHELL || "/bin/sh", ["-c", command], { cwd: dir, stdio: ["inherit", "pipe", "pipe"], env: hostEnv() });
+    if (child.pid) PERSON_PIDS.add(child.pid);
+    // Kept a while after it ends: a command it left running in a group of its own may still be in a sample (Codex).
+    child.on("close", () => setTimeout(() => PERSON_PIDS.delete(child.pid), 10_000).unref());
     child.stdout.on("data", (b) => process.stdout.write(keep(b)));
     child.stderr.on("data", (b) => process.stderr.write(keep(b)));
     const done = (/** @type {number} */ code, /** @type {string | null} */ error) => {
