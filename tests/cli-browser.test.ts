@@ -320,10 +320,13 @@ test("FOL-267: browser mcp also serves the cloud's full web tool, refused option
   const s = await serve({ "/v1/library/gallery": () => full });
   const msgs = [
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } },
-    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_read", arguments: {} } },
+    // Listed first, on a cold start: the list waits for the gallery, so web is in it (Codex).
     { jsonrpc: "2.0", id: 3, method: "tools/list" },
     { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "web", arguments: { action: "browse", url: "https://example.com", mode: "text" } } },
     { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "web", arguments: { action: "browse", proxy: "P" } } },
+    // Cancelled while queued: never run, never answered.
+    { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 6 } },
+    { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "web", arguments: { action: "browse", url: "https://example.com/cancelled" } } },
   ];
   const r = await cli(["browser", "mcp", "--url", s.url, "--token", "k"], { env: { FOLDRUN_HOME: dir }, input: msgs.map((m) => JSON.stringify(m)).join("\n") + "\n" });
   s.close();
@@ -335,4 +338,6 @@ test("FOL-267: browser mcp also serves the cloud's full web tool, refused option
   assert.match(answers.get(4).result.content[0].text, /PAGE --action browse --url https:\/\/example\.com --mode text --browser chrome --live true/);
   assert.equal(answers.get(5).result.isError, true);
   assert.match(answers.get(5).result.content[0].text, /proxy uses a secret from foldrun's vault/);
+  assert.equal(answers.has(6), false, "a cancelled call is not run or answered");
+  assert.doesNotMatch(r.out, /cancelled --browser/);
 });

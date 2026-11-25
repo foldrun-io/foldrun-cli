@@ -594,11 +594,15 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
   /** @param {unknown} msg */
   const send = (msg) => { output.write(`${JSON.stringify(msg)}\n`); };
   let chain = Promise.resolve();
+  /** A call the client cancelled (notifications/cancelled): skipped if queued, stopped if running. */
+  const cancels = new Map();
+  const cancelled = new Set();
   const handle = async (line) => {
     let msg;
     try { msg = JSON.parse(line); } catch { return send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "not JSON — one JSON-RPC message per line" } }); }
     const { id, method, params } = msg ?? {};
     if (id === undefined || id === null) return; // a notification
+    if (cancelled.has(id)) { cancelled.delete(id); return; }
     const answer = (result) => send({ jsonrpc: "2.0", id, result });
     switch (method) {
       case "initialize": {
@@ -614,7 +618,12 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
         return answer({});
       case "tools/list": {
         // The cloud's web action=browse with every option this computer can run (FOL-267), beside the six.
-        const web = webTool ? await webTool().catch(() => null) : null;
+        let web = webTool ? await webTool().catch(() => null) : null;
+        // Nothing on disk yet: wait for the first fetch, so a client that lists once still sees it (Codex).
+        if (!web && webTool) {
+          await context().catch(() => null);
+          web = await webTool().catch(() => null);
+        }
         return answer({ tools: web ? [...TOOLS, { name: "web", description: web.description, inputSchema: web.input_schema }] : TOOLS });
       }
       case "tools/call": {
@@ -626,8 +635,15 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
             if (!web) return answer(textResult("the web tool is not set up on this computer — `foldrun browser setup`", true));
             const call = localWebArgv(params?.arguments ?? {}, web);
             if ("problem" in call) return answer(textResult(call.problem, true));
-            const r = await runLocalWeb(ctx, call.argv);
-            return answer(textResult(shapeOutput(r), r.code !== 0));
+            const stop = new AbortController();
+            cancels.set(id, stop);
+            try {
+              const r = await runLocalWeb(ctx, call.argv, { signal: stop.signal });
+              if (stop.signal.aborted) return; // the client cancelled: no answer is sent (MCP)
+              return answer(textResult(shapeOutput(r), r.code !== 0));
+            } finally {
+              cancels.delete(id);
+            }
           }
           return answer(await callTool(ctx, params?.name, params?.arguments ?? {}));
         } catch (err) {
@@ -641,6 +657,18 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
   const rl = readline.createInterface({ input });
   rl.on("line", (line) => {
     if (!line.trim()) return;
+    // A cancellation acts at once, not in the queue: it stops the running call or marks a queued one.
+    try {
+      const m = JSON.parse(line);
+      if (m?.method === "notifications/cancelled" && m.params?.requestId !== undefined) {
+        const running = cancels.get(m.params.requestId);
+        if (running) running.abort();
+        else if (cancelled.size < 1000) cancelled.add(m.params.requestId);
+        return;
+      }
+    } catch {
+      /* answered in the queue */
+    }
     chain = chain.then(() => handle(line)).catch((err) => { process.stderr.write(`foldrun browser: ${err?.message ?? err}\n`); });
   });
   return new Promise((resolve) => rl.on("close", () => chain.then(() => resolve(0))));
