@@ -1191,6 +1191,7 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   }
   if (name === "Read" || name === "Write" || name === "Edit") return rel(input.file_path);
   if (name === "Glob") return String(input.pattern ?? "");
+  if (name === "Symbols") return `${input.action === "references" ? "uses of" : "definition of"} ${String(input.symbol ?? `column ${input.column}`)} · ${rel(input.file_path)}:${input.line}`;
   if (name === "Grep") return `${String(input.pattern ?? "")}${input.path ? ` in ${rel(input.path)}` : ""}`;
   if ((name === "Bash" || name === "bash_outside") && input.job !== undefined) {
     const id = String(input.job);

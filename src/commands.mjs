@@ -31,7 +31,7 @@ import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
-import { sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
+import { packageCacheFor, sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
 import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX, allowSiteFor, remoteSiteProblem } from "./code-mcp.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
@@ -18599,9 +18599,10 @@ async function codeLocalTurn(s, text) {
       // The foldrun engine asks about every call: what only looks inside
       // the folder runs, as Claude Code would let it.
       // Each tool's own field, read as core reads it (Codex).
-      if (name === "Read" || name === "Glob" || name === "Grep") {
+      if (name === "Read" || name === "Glob" || name === "Grep" || name === "Symbols") {
         let ok;
-        if (name === "Read") ok = typeof input.file_path === "string" && readableBy(s, input.file_path);
+        // Symbols reads like Read (its server runs inside the walls; core shows only what readable allows).
+        if (name === "Read" || name === "Symbols") ok = typeof input.file_path === "string" && readableBy(s, input.file_path);
         else {
           const base = input.path === undefined ? s.dir : input.path;
           ok = typeof base === "string" && readableBy(s, base);
@@ -19038,6 +19039,9 @@ async function codeLocalTurn(s, text) {
               : {}),
             hooks: { PostToolUse: [{ hooks: [afterTool] }] },
             ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
+            // Symbols' language servers: in this project's own package cache, writable inside the walls (FOL-297).
+            toolsDir: path.join(packageCacheFor(s.dir), "lsp"),
+            readable: (/** @type {string} */ f) => readableBy(s, f),
             maxTurns: Math.min(AGENT_TURNS_EACH, left),
             canUseTool: childCan,
             abortController: childAbort,
@@ -19099,7 +19103,8 @@ async function codeLocalTurn(s, text) {
             userAgent: USER_AGENT,
             model: localModelOf(model),
             systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local", canSend: s.localOnly !== true }), s.localOnly !== true), folderInstructions(s.dir).text, walls ? SANDBOX_NOTE : "", skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
-            tools: ENGINE_TOOLS_LOCAL,
+            // Symbols (FOL-297): a language server is a program, so only inside the walls, and only from a core that has it.
+            tools: [...ENGINE_TOOLS_LOCAL, ...(walls && /** @type {any} */ (engine).ENGINE_TOOLS?.Symbols ? ["Symbols"] : [])],
             extraTools: [
               // The one way out of the sandbox: a command as the person, asked every time.
               ...(walls ? [{ name: OUTSIDE_TOOL, description: OUTSIDE_DESCRIPTION, input_schema: OUTSIDE_SCHEMA, readOnly: false, run: (/** @type {any} */ input, /** @type {any} */ ctx) => outsideCall(input, ctx) }] : []),
@@ -19170,6 +19175,9 @@ async function codeLocalTurn(s, text) {
             ],
             hooks: { PostToolUse: [{ hooks: [afterTool] }] },
             ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
+            // Symbols' language servers: in this project's own package cache, writable inside the walls (FOL-297).
+            toolsDir: path.join(packageCacheFor(s.dir), "lsp"),
+            readable: (/** @type {string} */ f) => readableBy(s, f),
             maxTurns: 80,
             history,
             canUseTool,

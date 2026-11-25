@@ -4816,3 +4816,73 @@ test("ask_person in a local turn (FOL-314): a list of choices, an answer of one'
     s.close();
   }
 });
+
+test("Symbols inside the sandbox (FOL-297): unasked, its server run from the project's package cache inside the walls", { skip: canSandbox ? false : "needs the sandbox" }, async () => {
+  const { packageCacheFor } = await import("../src/code-sandbox.mjs");
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const cache = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-xdg-")));
+  fs.writeFileSync(path.join(d, "a.ts"), "export function add(a: number, b: number) { return a + b; }\n");
+  fs.writeFileSync(path.join(d, "b.ts"), 'import { add } from "./a";\nconsole.log(add(1, 2));\n');
+  // A stand-in for the pinned TypeScript server, where the real one is installed; it writes where it ran.
+  const bin = path.join(packageCacheFor(d, { XDG_CACHE_HOME: cache }), "lsp", "typescript-7.0.2", "node_modules", ".bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const target = new URL(`file://${fs.realpathSync(d)}/a.ts`).href;
+  fs.writeFileSync(path.join(bin, "tsc"), `#!/usr/bin/env node
+let buf = Buffer.alloc(0);
+const send = (m) => { const s = JSON.stringify(m); process.stdout.write("Content-Length: " + Buffer.byteLength(s) + "\\r\\n\\r\\n" + s); };
+let escaped = "no";
+try { require("node:fs").writeFileSync(require("node:os").homedir() + "/foldrun-lsp-escape-test", "x"); escaped = "yes"; } catch {}
+process.stdin.on("data", (d) => {
+  buf = Buffer.concat([buf, d]);
+  for (;;) {
+    const h = buf.indexOf("\\r\\n\\r\\n"); if (h < 0) return;
+    const n = Number(/Content-Length: (\\d+)/i.exec(buf.subarray(0, h).toString())[1]);
+    if (buf.length < h + 4 + n) return;
+    const m = JSON.parse(buf.subarray(h + 4, h + 4 + n).toString()); buf = buf.subarray(h + 4 + n);
+    if (m.method === "initialize") send({ jsonrpc: "2.0", id: m.id, result: { capabilities: {} } });
+    else if (m.method === "textDocument/definition") send({ jsonrpc: "2.0", id: m.id, result: [{ uri: ${JSON.stringify(target)}, range: { start: { line: 0, character: 16 }, end: { line: 0, character: 19 } } }], escaped });
+    else if (m.id !== undefined && m.method) send({ jsonrpc: "2.0", id: m.id, result: null });
+  }
+});
+`, { mode: 0o755 });
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "y1", name: "Symbols", input: { action: "definition", file_path: "b.ts", line: 2, symbol: "add" } }]),
+    () => sse([{ type: "text", text: "Found it." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-y297/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-y297", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "", XDG_CACHE_HOME: cache });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("where is add defined\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Found it\./, at, 60_000);
+    assert.doesNotMatch(t.out().slice(at), /allow\?/, "not asked");
+    assert.ok((asked[0].tools ?? []).some((x: any) => x.name === "Symbols"), "offered inside the walls");
+    const result = JSON.stringify((asked[1]?.messages ?? []).at(-1));
+    assert.match(result, /definition of add at b\.ts:2:13:\\na\.ts:1:17  export function add/);
+    assert.equal(fs.existsSync(path.join(os.homedir(), "foldrun-lsp-escape-test")), false, "the server ran inside the walls: it could not write the home folder");
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+    fs.rmSync(path.join(os.homedir(), "foldrun-lsp-escape-test"), { force: true });
+  }
+});
