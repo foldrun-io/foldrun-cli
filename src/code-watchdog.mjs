@@ -16,10 +16,15 @@ import { execFile } from "node:child_process";
 
 /** One `ps` row. @typedef {{ pid: number, ppid: number, pgid: number, rssKb: number, command: string, cpuPct?: number, nice?: number }} PsRow */
 
+// Whole paths: once a turn starts, this process's PATH is a private folder, and a bare `ps` is not found there —
+// the watchdog then saw no process at all and stopped nothing.
+const PS = "/bin/ps";
+const TASKPOLICY = "/usr/sbin/taskpolicy";
+
 /** Every process, from `ps`. Never throws: [] when it cannot be read. @returns {Promise<PsRow[]>} */
 export function psRows() {
   return new Promise((resolve) => {
-    execFile("ps", ["-A", "-o", "pid=,ppid=,pgid=,rss=,pcpu=,nice=,comm="], { maxBuffer: 16 * 1024 * 1024, timeout: 5000 }, (err, out) => {
+    execFile(PS, ["-A", "-o", "pid=,ppid=,pgid=,rss=,pcpu=,nice=,comm="], { maxBuffer: 16 * 1024 * 1024, timeout: 5000 }, (err, out) => {
       if (err) return resolve([]);
       /** @type {PsRow[]} */
       const rows = [];
@@ -223,10 +228,10 @@ export function startWatchdog(o) {
 /** One process to macOS's background band: true when it was set (a process gone is false). @param {number} pid
  *  @returns {Promise<boolean>} */
 export function lowerPriority(pid) {
-  return new Promise((resolve) => execFile("taskpolicy", ["-b", "-p", String(pid)], { timeout: 5000 }, (err) => resolve(!err)));
+  return new Promise((resolve) => execFile(TASKPOLICY, ["-b", "-p", String(pid)], { timeout: 5000 }, (err) => resolve(!err)));
 }
 
 /** One process back out of the background band. @param {number} pid @returns {Promise<boolean>} */
 export function raisePriority(pid) {
-  return new Promise((resolve) => execFile("taskpolicy", ["-B", "-p", String(pid)], { timeout: 5000 }, (err) => resolve(!err)));
+  return new Promise((resolve) => execFile(TASKPOLICY, ["-B", "-p", String(pid)], { timeout: 5000 }, (err) => resolve(!err)));
 }

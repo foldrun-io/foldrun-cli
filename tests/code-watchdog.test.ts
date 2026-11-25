@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { sessionTree, startWatchdog } from "../src/code-watchdog.mjs";
+import { psRows, sessionTree, startWatchdog } from "../src/code-watchdog.mjs";
 
 /** A tick, then the CPU step it started (it runs beside the memory check). */
 const settle = () => new Promise((r) => setTimeout(r, 5));
@@ -178,4 +178,15 @@ test("startWatchdog: a slow CPU change never holds up the memory check (Codex)",
   assert.deepEqual(sent, [[-200, "SIGTERM"]], "memory acted while the CPU change hangs");
   w.stop();
   w2.stop();
+});
+
+test("psRows reads the process table even when PATH holds no ps: a turn replaces PATH with a private folder (FOL-240)", async () => {
+  const was = process.env.PATH;
+  process.env.PATH = "/nonexistent-foldrun-bin";
+  try {
+    const rows = await psRows();
+    assert.ok(rows.some((r) => r.pid === process.pid), "this process is in the table");
+  } finally {
+    process.env.PATH = was;
+  }
 });
