@@ -1188,7 +1188,11 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "Read" || name === "Write" || name === "Edit") return rel(input.file_path);
   if (name === "Glob") return String(input.pattern ?? "");
   if (name === "Grep") return `${String(input.pattern ?? "")}${input.path ? ` in ${rel(input.path)}` : ""}`;
-  if (name === "Bash") return String(input.command ?? "").replace(/\s+/g, " ").trim();
+  if (name === "Bash" && input.job !== undefined) {
+    const id = String(input.job);
+    return input.stop === true ? `stop job ${id}` : typeof input.stdin === "string" ? `job ${id} ← ${input.stdin.replace(/\s+/g, " ").trim()}` : input.wait ? `wait for job ${id}` : `job ${id} · new output`;
+  }
+  if (name === "Bash") return `${String(input.command ?? "").replace(/\s+/g, " ").trim()}${input.run_in_background === true ? " · in the background" : ""}`;
   if (name === "WebFetch") return String(input.url ?? "");
   if (name === "web") return `${String(input.action ?? "")}${input.url ? ` ${String(input.url)}` : input.live === "end" ? " · close the window" : " · the page as it stands"}${Array.isArray(input.actions) ? ` · ${input.actions.length} step${input.actions.length === 1 ? "" : "s"}` : ""}`;
   if (name === "WebSearch") return String(input.query ?? "");

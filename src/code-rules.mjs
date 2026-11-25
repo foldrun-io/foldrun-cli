@@ -243,7 +243,7 @@ export function commandParts(command, dir, inside = (f) => plainInside(dir, f)) 
       }
       // `&>file` is a redirect to bash and "in the background, then a redirect" to sh: not matched (Codex).
       if (next === ">") return { never: "&>, which shells read differently" };
-      return { never: "a command left running in the background" };
+      return { never: "a command left running in the background (start one with run_in_background instead)" };
     }
     if (ch === "|") {
       split();

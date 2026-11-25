@@ -1142,6 +1142,55 @@ test("/status explain ranks what used the model, its figures add up, and foldrun
   }
 });
 
+test("a background job (FOL-293): started as a command is, its input asked every time with no always, reading and stopping it unasked", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "j1", name: "Bash", input: { command: "while read l; do echo got-$l; done", run_in_background: true } }]),
+    () => sse([{ type: "tool_use", id: "j2", name: "Bash", input: { job: "b1", stdin: "hi\n" } }]),
+    () => sse([{ type: "tool_use", id: "j3", name: "Bash", input: { job: "b1", wait: 500 } }]),
+    () => sse([{ type: "tool_use", id: "j4", name: "Bash", input: { job: "b1", stop: true } }]),
+    () => sse([{ type: "text", text: "Job handled." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-bg293/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--context", "code-bg293", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("start the reader\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/typed into the background job b1[\s\S]*> hi[\s\S]*allow\? \[y\]es · \[n\]o/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Job handled\./, at, 30_000);
+    const result = (n: number) => JSON.stringify((asked[n]?.messages ?? []).at(-1));
+    assert.match(result(1), /job b1 is running/);
+    assert.match(result(3), /got-hi/, "the wait read what the job printed, unasked");
+    assert.match(result(4), /stopped|SIGTERM/, "the stop ran unasked");
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("/resume find finds a conversation by a line only a tool printed and goes back to it; /rename names it; foldrun sessions search finds it from the shell", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

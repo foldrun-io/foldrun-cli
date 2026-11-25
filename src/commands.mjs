@@ -18181,7 +18181,12 @@ async function codeLocalTurn(s, text) {
       const file = input.file_path ?? input.notebook_path ?? input.path;
       const inside = file !== undefined && bothInside(s.dir, file);
       const outside = name === OUTSIDE_TOOL;
-      const command = name === "Bash" || outside ? String(input.command ?? "") : null;
+      // A background job (FOL-293): reading what it printed, waiting for it or stopping it touches only a command
+      // the person already let run, so it is not asked; text written to its input is a command of its own — shown
+      // whole and asked every time outside the sandbox, never kept as an "always".
+      const jobInput = name === "Bash" && input.job !== undefined;
+      if (jobInput && input.stdin === undefined) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
+      const command = name === "Bash" || outside ? String((jobInput ? input.stdin : input.command) ?? "") : null;
       // A command that only looks (pwd, ls, git status…) runs without a
       // question, in the shape readOnlyCommand hands back: in this folder,
       // git held to itself. /permissions strict asks for these too.
@@ -18207,7 +18212,7 @@ async function codeLocalTurn(s, text) {
       // asked every time.
       // A cloud agent's patch has its own "always": a yes to the agent's own
       // edits is not a yes to what comes back from the cloud (Codex).
-      const scope = mcpTool ? "mcp" : job && !("problem" in job) && job.where === "cloud" ? "cloud-sub" : isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : outside ? "outside" : command !== null ? "command" : null;
+      const scope = mcpTool ? "mcp" : job && !("problem" in job) && job.where === "cloud" ? "cloud-sub" : isApply ? "cloud-changes" : cloud ? "cloud" : FILE_CHANGES.has(name) && inside ? "changes" : outside ? "outside" : jobInput ? "job-input" : command !== null ? "command" : null;
       const allowed = scope === "changes" || scope === "cloud" || scope === "cloud-changes" ? allow.kinds.has(scope) : scope === "command" ? allow.commands.has(/** @type {string} */ (command)) : false;
       // An "always" was given to the session's own agent: it does not reach
       // into a sub-agent, whose every change and command is asked (Codex).
@@ -18297,7 +18302,8 @@ async function codeLocalTurn(s, text) {
             console.log(`      ${c.amber(`a command of ${lines.length} lines — too long to show, so not run`)}`);
             return { behavior: /** @type {const} */ ("deny"), message: "The command was too long for the person to read. Write it to a script file in the folder first (that is asked separately), then run the script." };
           }
-          for (const l of lines) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.white(`${i === 0 ? "$" : " "} ${l.slice(i, i + width)}`)}`);
+          if (jobInput) console.log(`      ${c.grey(`typed into the background job ${plainText(String(input.job))}, which reads it as input:`)}`);
+          for (const l of lines) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`      ${c.white(`${i === 0 ? (jobInput ? ">" : "$") : " "} ${l.slice(i, i + width)}`)}`);
         } else if (mcpTool) {
           // What goes to the server, whole: nothing clipped. A server's own
           // word that a tool only reads is not taken.
