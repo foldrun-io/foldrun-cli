@@ -85,14 +85,17 @@ const LSOF = ["/usr/sbin/lsof", "/usr/bin/lsof", "/bin/lsof"].find((p) => fs.exi
 /** @typedef {{ pgid: number, start: string }} Seen */
 
 /** Every process: id, parent, group, start time. Throws when it cannot be read: an empty table must never mean "all gone". */
+// A zombie (state Z) is a process that has ended and waits to be reaped by its parent — in a container with no init,
+// forever. It runs nothing and holds nothing, so here it is gone; `kill(pid, 0)` alone would call it alive and a reap
+// would wait on it to its deadline.
 function processTable() {
-  const out = spawnSync(PS, ["-axo", "pid=,ppid=,pgid=,lstart="], { encoding: "utf8", env: { LC_ALL: "C", TZ: "UTC" } });
+  const out = spawnSync(PS, ["-axo", "pid=,ppid=,pgid=,stat=,lstart="], { encoding: "utf8", env: { LC_ALL: "C", TZ: "UTC" } });
   if (out.status !== 0 || out.error) throw new Error(`the process list could not be read (${out.error?.message ?? String(out.stderr).trim()})`);
   /** @type {Map<number, { ppid: number, pgid: number, start: string }>} */
   const rows = new Map();
   for (const line of String(out.stdout).split("\n")) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
-    if (m) rows.set(Number(m[1]), { ppid: Number(m[2]), pgid: Number(m[3]), start: m[4] });
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (m && !ended(Number(m[1]), m[4])) rows.set(Number(m[1]), { ppid: Number(m[2]), pgid: Number(m[3]), start: m[5] });
   }
   return rows;
 }
@@ -103,13 +106,36 @@ export function processStart(/** @type {number} */ pid) {
   return out.status === 0 ? String(out.stdout).trim() || null : null;
 }
 
+/** Ended and not reaped: state Z — and on Linux one thread or none, because a thread-group leader that called
+ *  pthread_exit() also shows Z while its other threads run on. A count that cannot be read is "running". */
+function ended(/** @type {number} */ pid, /** @type {string} */ stat) {
+  if (!stat.startsWith("Z")) return false;
+  if (process.platform !== "linux") return true;
+  try {
+    const line = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // Fields after the name's closing ")": state is the first, num_threads the 18th (field 20 of proc(5)).
+    const fields = line.slice(line.lastIndexOf(")") + 2).split(" ");
+    const threads = Number(fields[17]);
+    return fields[0] === "Z" && Number.isInteger(threads) && threads <= 1;
+  } catch {
+    return false;
+  }
+}
+
+/** Is it a zombie that has fully ended? False when ps cannot say: then it is taken to be running. */
+function isZombie(/** @type {number} */ pid) {
+  const out = spawnSync(PS, ["-o", "stat=", "-p", String(pid)], { encoding: "utf8", env: { LC_ALL: "C" } });
+  return out.status === 0 && ended(pid, String(out.stdout).trim());
+}
+
+/** A process that exists and has not ended (a zombie has). */
 const pidAlive = (/** @type {number} */ pid) => {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (err) {
-    return /** @type {any} */ (err).code === "EPERM";
+    if (/** @type {any} */ (err).code !== "EPERM") return false;
   }
+  return !isZombie(pid);
 };
 
 /** A process that is still the one recorded: same id, same start (one whose start cannot be read now counts as it). */

@@ -17,6 +17,15 @@ const git = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "user.na
 const where = () => ({ copies: tmp("fw-copies-"), baselines: tmp("fw-bases-") });
 const capture = (dir: string): any => W.captureFolder(dir, where());
 const patchOf = (got: any) => W.workerPatch({ copy: got.copy, base: got.base, source: got.source });
+/** Ended: no such process, or a zombie (in a container with no init, nothing reaps an orphan). */
+const gone = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+  } catch (err: any) {
+    if (err.code === "ESRCH") return true;
+  }
+  return /^Z/.test(spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim());
+};
 const SRC = path.join(import.meta.dirname, "..", "src", "code-worker.mjs");
 
 test("three jobs start two: the third waits, and starts when a slot is given back", async () => {
@@ -285,7 +294,7 @@ test("a stop reaps the tree: a process in a group of its own, left by a worker k
   await new Promise((r) => setTimeout(r, 200));
   const left = await reapTree(root, seen, { graceMs: 300 });
   assert.deepEqual(left, []);
-  for (const pid of seen.keys()) assert.throws(() => process.kill(pid, 0), "nothing of it is left");
+  for (const pid of seen.keys()) assert.ok(gone(pid), "nothing of it is left");
 });
 
 test("a member of a group seen earlier, vouched for by no live process, is held and never signalled", async () => {
