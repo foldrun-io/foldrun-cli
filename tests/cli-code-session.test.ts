@@ -4969,6 +4969,70 @@ test("a cloud agent's question in a cloud turn (FOL-298): shown as a list here, 
   }
 });
 
+test("a cloud agent's question in a script's cloud turn (FOL-298): said on stderr with the command that answers it, no list, nothing sent", async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let streamed = false;
+  let answers = 0;
+  const step = () => ({
+    agent: "coder", group: 1, status: streamed ? "failed" : "running", attempts: 1, costUsd: 0.01,
+    events: [{ t: "2026-11-26T01:00:01.000Z", type: "info", text: "asked a person: Which database?" }],
+    questions: [{ id: "q-7", question: "Which database?", options: ["Postgres", "SQLite"], askedAt: "2026-11-26T01:00:01.000Z", ...(streamed ? { unanswered: true } : {}) }],
+  });
+  const record = () => ({ id: RUN, flow: "adhoc:coder", status: streamed ? "failed" : "running", snapshot: { id: ID }, startedAt: "2026-11-26T01:00:00.000Z", ...(streamed ? { finishedAt: "2026-11-26T01:00:05.000Z" } : {}), steps: [step()] });
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID, context: "code-me" }),
+    [`GET ${WS}/runs/${RUN}`]: () => record(),
+    [`GET ${WS}/runs/${RUN}/stream`]: async () => {
+      const first = `event: run\ndata: ${JSON.stringify(record())}\n\n`;
+      await new Promise((r) => setTimeout(r, 1500));
+      streamed = true;
+      return raw(`${first}event: run\ndata: ${JSON.stringify(record())}\n\nevent: done\ndata: {}\n\n`, "text/event-stream");
+    },
+    [`POST ${WS}/runs/${RUN}/answer`]: () => {
+      answers++;
+      return { ok: true };
+    },
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "unchanged", bytes: 0, modified: [], added: [], deleted: [] }), "application/json") : raw("", "text/x-diff")),
+    [`GET ${WS}/sessions/code-me/messages`]: () => ({ messages: [] }),
+  });
+  try {
+    const cli = path.join(import.meta.dirname, "..", "bin/foldrun.mjs");
+    const r = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+      const child = spawn(process.execPath, [cli, "code", d, "--cloud", "--to", "desk", "--context", "code-me", "-p", "pick a database", "--yes", "--url", s.url, "--token", "k"], { env: { ...process.env, FOLDRUN_HOME: home, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (b) => (out += b));
+      child.stderr.on("data", (b) => (err += b));
+      const kill = setTimeout(() => child.kill("SIGKILL"), 60_000);
+      child.on("close", (code) => (clearTimeout(kill), resolve({ code, out, err })));
+    });
+    assert.match(r.err, /coder \(in the cloud\) asks: Which database\?/, r.err + r.out);
+    assert.match(r.err, /choices: 1\. Postgres · 2\. SQLite/);
+    assert.match(r.err, new RegExp(`foldrun answer ${RUN} --question q-7`));
+    assert.doesNotMatch(r.out + r.err, /setRawMode|↑↓ to move|type my own answer/);
+    assert.equal(answers, 0, "nothing is sent for a person who was not asked");
+    assert.notEqual(r.code, null, "it ended by itself, not by the test's kill");
+    assert.notEqual(r.code, 0, "the run ended unanswered: a failed turn");
+    // -p at a terminal is a script's turn too: told, never a list (Codex).
+    streamed = false;
+    const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "-p", "pick a database", "--yes", "--url", s.url, "--token", "k"], home, { COLUMNS: "200" });
+    try {
+      await t.until(/coder \(in the cloud\) asks: Which database\?[\s\S]*foldrun answer/, 0, 30_000);
+      await t.ended();
+      assert.doesNotMatch(t.out(), /↑↓ to move|type my own answer/);
+      assert.equal(answers, 0);
+    } finally {
+      t.child.kill();
+    }
+  } finally {
+    s.close();
+  }
+});
+
 test("a cloud agent's question answered elsewhere (FOL-298): the one on the screen is taken back, nothing is sent", { skip: hasPty ? false : "needs a pty" }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

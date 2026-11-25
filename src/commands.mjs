@@ -15340,7 +15340,9 @@ async function codeTurn(s, task, include = []) {
       if (!isLive(latest) || !still || still.answer !== undefined || still.unanswered) return;
       const options = Array.isArray(q.options) ? q.options.map((/** @type {unknown} */ o) => plainText(String(o)).replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean).slice(0, 10) : [];
       const question = String(q.question ?? "").slice(0, 2000);
-      if (s.headless) {
+      // A script's turn (-p, or no terminal to read keys from) is told, never shown a list: a picker there has no
+      // keyboard and failed with setRawMode (seen on dev, 26 Nov 2026).
+      if (s.headless || typeof flags.task === "string" || !process.stdin.isTTY) {
         process.stderr.write(`${who} asks: ${plainText(question)}${options.length ? `\n  choices: ${options.map((o, i) => `${i + 1}. ${o}`).join(" · ")}` : ""}\n  it waits for an answer: foldrun answer ${runId} --question ${plainText(String(q.id))} "…"${options.length ? " (or --option <n>)" : ""}\n`);
         return;
       }
