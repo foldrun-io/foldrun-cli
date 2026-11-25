@@ -68,6 +68,11 @@ if (/\bgit\s+push\b.*\s(--force|-f)(\s|$)/.test(cmd)) {
 }
 ```
 
+A hook that guards files reads every path a call names: Edit takes one
+`file_path`, or an `edits` list whose entries each carry one (one change
+across files), and Bash's text reaches a program through `command` and,
+for a job started with `run_in_background`, through `stdin`.
+
 | event | answer |
 |---|---|
 | `tool.call` | `{}` or `{"decision":"allow"}` lets it through; `{"decision":"deny","reason":"…"}` refuses it (the model reads the reason); `{"input":{…}}` replaces the tool's whole input |
