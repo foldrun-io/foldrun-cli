@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { filesIn, fileKindOf, fileTextBlock, FILES_MAX } from "../src/code-files.mjs";
+import { filesIn, fileKindOf, fileTextBlock, chosenBytes, FILES_MAX } from "../src/code-files.mjs";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-files-"));
 for (const f of ["note.m4a", "scan.pdf", "My Photo.png", "clip.mov", "code.ts", "empty.pdf"]) fs.writeFileSync(path.join(dir, f), f === "empty.pdf" ? "" : "x");
@@ -44,4 +44,22 @@ test("filesIn: a link is followed to where its bytes are, and a kept choice answ
   assert.equal(filesIn("@scan.pdf", dir)[0]!.typed, true);
   assert.equal(filesIn(path.join(dir, "scan.pdf"), dir)[0]!.typed, false, "a pasted path is always asked about");
   assert.equal(filesIn(`@${path.join(outside, "secret.pdf")}`, dir)[0]!.typed, false, "an @path outside the folder too");
+});
+
+test("a hidden file is always asked about; the bytes read are the file chosen, a swap refused (Codex)", () => {
+  fs.writeFileSync(path.join(dir, ".env.pdf"), "k");
+  fs.mkdirSync(path.join(dir, ".secrets"), { recursive: true });
+  fs.writeFileSync(path.join(dir, ".secrets", "a.pdf"), "k");
+  assert.equal(filesIn("@.env.pdf", dir)[0]!.typed, false);
+  assert.equal(filesIn("@.secrets/a.pdf", dir)[0]!.typed, false);
+  const swap = path.join(dir, "swap.pdf");
+  fs.writeFileSync(swap, "first");
+  const [f] = filesIn("@swap.pdf", dir);
+  assert.equal(chosenBytes(f!).toString(), "first");
+  fs.rmSync(swap);
+  fs.writeFileSync(swap, "second");
+  assert.throws(() => chosenBytes(f!), /changed after you chose/);
+  fs.rmSync(swap);
+  fs.symlinkSync(path.join(dir, "scan.pdf"), swap);
+  assert.throws(() => chosenBytes(f!), /ELOOP|changed after you chose/, "a link put in its place is not followed");
 });

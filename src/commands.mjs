@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd } from "./browser.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
-import { filesIn, fileTextBlock, FILE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
+import { filesIn, fileTextBlock, chosenBytes, FILE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
@@ -7973,10 +7973,11 @@ async function textCmd(positional, flags) {
 /**
  * A file on this machine read into text by the platform: POST /v1/extract with its bytes, the job
  * followed when it answers 202. `foldrun text` and files named in a foldrun code message (FOL-268).
- * @param {string} url @param {Record<string, any>} flags @param {string} file @param {Record<string, any>} [opts]
+ * `given` is bytes already read (a file checked to be the one chosen); else the file is read here.
+ * @param {string} url @param {Record<string, any>} flags @param {string} file @param {Record<string, any>} [opts] @param {Buffer} [given]
  */
-async function extractLocalFile(url, flags, file, opts = {}) {
-  const bytes = fs.readFileSync(file);
+async function extractLocalFile(url, flags, file, opts = {}, given = undefined) {
+  const bytes = given ?? fs.readFileSync(file);
   if (!bytes.length) throw new Error(`${file} is empty`);
   const q = new URLSearchParams({ name: path.basename(file) });
   for (const k of ["lang", "ocr", "engine", "wait"]) if (opts[k] !== undefined) q.set(k, String(opts[k]));
@@ -9601,7 +9602,7 @@ async function filesForTurn(s, line, dir) {
   for (const f of found) {
     const name = path.basename(f.file);
     // A link is shown as where its bytes are: those are what would be sent (Codex).
-    const shown = f.link ? `${name} (a link to ${homeTilde(f.real)})` : name;
+    const shown = f.link ? `${name} (a link to ${homeTilde(f.real)})` : f.inside ? name : homeTilde(f.real);
     if (!f.bytes || f.bytes > FILE_BYTES_MAX) {
       say(`${plainText(name)} is ${f.bytes ? "larger than foldrun reads (200 MB)" : "empty"} — left in your message as a path`);
       left += 1;
@@ -9641,7 +9642,7 @@ async function filesForTurn(s, line, dir) {
     /** @type {any} */
     let result;
     try {
-      result = await extractLocalFile(s.url, s.flags, f.real);
+      result = await extractLocalFile(s.url, s.flags, f.real, {}, chosenBytes(f));
     } catch (err) {
       console.log(`  ${c.red("✗")} ${plainText(name)}: ${plainText(explain(err))} ${c.dim("— left as a path in your message")}`);
       left += 1;

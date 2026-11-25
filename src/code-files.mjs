@@ -17,6 +17,8 @@ const KIND_BY_EXT = {
   pdf: "document", docx: "document", doc: "document", pptx: "document", xlsx: "document", odt: "document", odp: "document", ods: "document", rtf: "document", epub: "document",
 };
 
+/** @typedef {{ raw: string, file: string, real: string, link: boolean, inside: boolean, id: string, kind: FileKind, bytes: number, typed: boolean }} FoundFile */
+
 /** At most this many files are taken from one message. */
 export const FILES_MAX = 5;
 /** The largest file sent to be read: the platform's own upload limit is the real one. */
@@ -36,11 +38,12 @@ export function fileKindOf(file) {
  * @param {string} line @param {string} dir the session's folder, for a relative @path
  * `real` is where its bytes are (a link followed); `typed` is true for an `@path` inside the folder — the only
  * kind a choice kept "every time" may answer for, so a path in pasted text is always asked about (Codex).
- * `link` is true when the named file is itself a link.
- * @returns {Array<{ raw: string, file: string, real: string, link: boolean, kind: FileKind, bytes: number, typed: boolean }>}
+ * `link` is true when the named file is itself a link; `inside` when its bytes are inside the folder; `id` is
+ * the file's device and inode, so what is read after the person chose is the file they chose (Codex).
+ * @returns {Array<FoundFile>}
  */
 export function filesIn(line, dir) {
-  /** @type {Array<{ raw: string, file: string, real: string, link: boolean, kind: FileKind, bytes: number, typed: boolean }>} */
+  /** @type {Array<FoundFile>} */
   const out = [];
   const seen = new Set();
   // @"…", @'…', '…', "…", or a run of non-space characters where "\ " is a space.
@@ -75,7 +78,9 @@ export function filesIn(line, dir) {
     }
     const rel = path.relative(root, real);
     const inside = rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-    out.push({ raw: `${m[2]}${m[3] !== undefined ? `"${m[3]}"` : m[4] !== undefined ? `'${m[4]}'` : m[5]}`, file, real, link, kind, bytes: st.size, typed: at && inside && !link });
+    // A hidden file or folder (.env.pdf, .secrets/x.pdf) is always asked about, whatever was kept (Codex).
+    const hidden = rel.split(path.sep).some((part) => part.startsWith("."));
+    out.push({ raw: `${m[2]}${m[3] !== undefined ? `"${m[3]}"` : m[4] !== undefined ? `'${m[4]}'` : m[5]}`, file, real, link, inside, id: `${st.dev}:${st.ino}`, kind, bytes: st.size, typed: at && inside && !link && !hidden });
     if (out.length >= FILES_MAX) break;
   }
   return out;
@@ -99,4 +104,20 @@ export function fileTextBlock(name, kind, text, o = {}) {
   const how = kind === "audio" || kind === "video" ? "transcribed" : kind === "image" ? "read by OCR" : "read into text";
   const body = text.trim() || "(no text was found in it)";
   return `[The ${kind} ${name}, ${how} on foldrun's servers — you are given its text, not the file${o.truncated ? "; the text was cut at the platform's limit" : ""}:]\n${body}\n[end of ${name}]`;
+}
+
+/**
+ * The bytes of the file the person chose, read without following a link at its last step and checked to be
+ * the same file (device and inode) — a file swapped while the list was open is refused (Codex).
+ * @param {FoundFile} f @returns {Buffer}
+ */
+export function chosenBytes(f) {
+  const fd = fs.openSync(f.real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const st = fs.fstatSync(fd);
+    if (`${st.dev}:${st.ino}` !== f.id || !st.isFile()) throw new Error("the file changed after you chose — not sent; name it again");
+    return fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
