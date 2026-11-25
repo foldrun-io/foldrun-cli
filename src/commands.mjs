@@ -15813,6 +15813,15 @@ function startTicker(since, typed = () => "") {
   const showCursor = () => writeControl("\x1b[?25h");
   writeControl("\x1b[?25l");
   process.once("exit", showCursor);
+  // A signal skips "exit": the cursor comes back first, and with no one else to handle it the signal ends us as it would have (Codex).
+  const onSignal = (/** @type {NodeJS.Signals} */ sig) => {
+    showCursor();
+    if (process.listenerCount(sig) === 0) process.kill(process.pid, sig);
+  };
+  const onInt = () => onSignal("SIGINT");
+  const onTerm = () => onSignal("SIGTERM");
+  process.once("SIGINT", onInt);
+  process.once("SIGTERM", onTerm);
   const timer = setInterval(draw, 250);
   draw();
   let stopped = false;
@@ -15823,6 +15832,8 @@ function startTicker(since, typed = () => "") {
     clear();
     showCursor();
     process.off("exit", showCursor);
+    process.off("SIGINT", onInt);
+    process.off("SIGTERM", onTerm);
     console.log = log;
   };
 }
@@ -18974,6 +18985,8 @@ async function* stdinMessages() {
 async function codeCmd(/** @type {string[]} */ positional, /** @type {Record<string, any>} */ flags, /** @type {any} */ layout) {
   const fmt = flags["output-format"];
   if (fmt !== "json" && fmt !== "stream-json") return codeCmdInner(positional, flags, layout, null);
+  // stdout is JSON only: no working line, whose controls would go past the redirect (Codex).
+  process.env.FOLDRUN_NO_TICKER = "1";
   const realWrite = process.stdout.write.bind(process.stdout);
   /** @type {Promise<void>} */
   let pending = Promise.resolve();
