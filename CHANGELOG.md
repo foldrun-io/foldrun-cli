@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.3.0] — 2026-11-25
+
+- fix(code): tables of many rows — no spread into Math.max (FOL-310, Codex) ([747de42](https://github.com/foldrun-io/foldrun-cli/commit/747de42))
+- fix(code): tables — water-fill columns never under the minimum, a wide character always fits its cut, huge tables, a trailing escaped bar (FOL-310, Codex) ([7f4102e](https://github.com/foldrun-io/foldrun-cli/commit/7f4102e))
+- feat(code): markdown tables drawn as columns, cells wrapped; one block per row when too narrow (FOL-310) ([aa87624](https://github.com/foldrun-io/foldrun-cli/commit/aa87624))
+
 ## [32.2.0] — 2026-11-25
 
 - fix(code): bypass ends with /permissions reset and with a new or resumed conversation; the list ticks it (FOL-308, Codex) ([509a7ac](https://github.com/foldrun-io/foldrun-cli/commit/509a7ac))
