@@ -18234,7 +18234,10 @@ async function codeLocalTurn(s, text) {
       // without a question — as Claude Code's sandbox does (owner, 24 Nov
       // 2026). /permissions strict asks; a sub-agent's are always asked.
       // A script's turn (-p) without --yes: a command may change files too, so it is refused below (Codex).
-      if (name === "Bash" && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current() && (!s.headless || s.headless.yes === true)) {
+      // A server left running outside the sandbox runs what changes in the folder (a reload): while one does, the
+      // agent's commands and changes here are asked, whatever was allowed before (FOL-296, Codex).
+      const outsideLive = s.outsideLive?.() === true && s.bypass !== true;
+      if (name === "Bash" && !outsideLive && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current() && (!s.headless || s.headless.yes === true)) {
         if (s.headless) s.headless.commands = true;
         return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       }
@@ -18259,7 +18262,7 @@ async function codeLocalTurn(s, text) {
       // Never for a command sent outside the sandbox: that one is asked every time.
       const byRule = !child && s.strict !== true && command !== null && scope === "command" && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout") && rulesAllow(command, folderRules(s.dir), s.dir, inFolder);
       // A script's turn takes no earlier yes: a folder rule ("always npm test") would run past --yes (Codex).
-      const allowedNow = !s.headless && (byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
+      const allowedNow = !s.headless && !(outsideLive && (scope === "changes" || scope === "command")) && (byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
       // /permissions bypass (owner, 25 Nov 2026, FOL-308): nothing is asked for this session — not outside the sandbox,
       // not a sub-agent's. Never a script's turn (-p has its own --yes), and never a /plan turn (refused above).
       if (allowedNow || (s.bypass === true && !s.headless)) {
@@ -18292,6 +18295,8 @@ async function codeLocalTurn(s, text) {
       try {
         if (child) console.log(`    ${c.grey(`the sub-agent ${plainText(child)} asks:`)}`);
         if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
+        if (outsideLive && (scope === "changes" || scope === "command" || scope === "job-input")) console.log(`    ${c.amber("a server started outside the sandbox is running — it can run what changes here as you, so this is asked")}`);
+        if (outside && input.run_in_background === true) console.log(`    ${c.amber("left running as you — while it runs, the agent's commands and file changes in this folder are asked too, since the server may run them outside the sandbox")}`);
         const width = Math.max(20, (process.stdout.columns || 80) - 10);
         if (name === MCP_START) {
           // A sub-agent's own MCP server (FOL-253): the yes is to this server for this sub-agent, as it is now.
@@ -18687,8 +18692,9 @@ async function codeLocalTurn(s, text) {
       if (!Bash) return { text: "a command left running outside the sandbox needs a newer foldrun — `foldrun update`", isError: true };
       if (input.run_in_background === true && !String(input.reason ?? "").trim()) return { text: "bash_outside needs reason: why it cannot run inside the sandbox", isError: true };
       const { reason: _reason, ...rest } = input;
-      return Bash.run(rest, { ...ctx, cwd: s.dir, env: own, sandbox: null, jobs: outsideJobs, jobPrefix: "o" });
+      return Bash.run(rest, { ...ctx, cwd: s.dir, env: own, sandbox: null, jobs: outsideJobs, jobPrefix: "o", shell: "/bin/bash" });
     };
+    s.outsideLive = () => [...outsideJobs.values()].some((/** @type {any} */ j) => !j.exit);
     // Right after each tool ran and before the next call: what the Write or
     // Edit left on disk settles its /rewind record. A sub-agent's too.
     const afterTool = async (/** @type {any} */ payload, /** @type {string} */ id) => {
