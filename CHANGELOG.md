@@ -12,6 +12,21 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.0.0] — 2026-11-25
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 29.2.0, a new major. (79d7f70)
+
+- fix(code): a cloud agent's question in a script's turn (-p, or no terminal) is told on stderr with the command that answers it, never a list (FOL-298) ([6c73734](https://github.com/foldrun-io/foldrun-cli/commit/6c73734))
+- fix(code-worker): lsof's mount warning compared case-folded on a Mac and by its name as written (Codex round 2) ([a984a54](https://github.com/foldrun-io/foldrun-cli/commit/a984a54))
+- fix(code-worker): a mount lsof cannot stat elsewhere is no doubt about the copy — with Docker running, a worker's slot never came back ([2f5bf56](https://github.com/foldrun-io/foldrun-cli/commit/2f5bf56))
+- test(code): the FOL-298 terminal tests end bounded — they hung CI and the release for hours; test steps get limits ([3857667](https://github.com/foldrun-io/foldrun-cli/commit/3857667))
+
+### deps
+
+- @foldrun/core ^29.2.0 ([79d7f70](https://github.com/foldrun-io/foldrun-cli/commit/79d7f70))
+
 ## [32.8.2] — 2026-11-25
 
 ### docs
