@@ -18309,8 +18309,11 @@ async function codeLocalTurn(s, text) {
       // A server left running outside the sandbox runs what changes in the folder (a reload): while one does, the
       // agent's commands and changes here are asked, whatever was allowed before (FOL-296, Codex).
       const outsideLive = s.outsideLive?.() === true && s.bypass !== true;
-      if (name === "Bash" && !outsideLive && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current() && (!s.headless || s.headless.yes === true)) {
-        if (s.headless) s.headless.commands = true;
+      // Symbols runs a language server inside the walls, which can write the folder as a command can: unasked exactly
+      // when a command inside the sandbox is (never while a server outside runs, never for a sub-agent) (Codex).
+      const symbolsHere = name === "Symbols" && typeof input.file_path === "string" && readableBy(s, input.file_path);
+      if ((name === "Bash" || symbolsHere) && !outsideLive && !child && s.strict !== true && s.sandboxOff !== true && s.box?.current() && (!s.headless || s.headless.yes === true)) {
+        if (s.headless && name === "Bash") s.headless.commands = true;
         return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       }
       // Sending the folder to cloud agents, and putting one's patch into
@@ -18599,10 +18602,9 @@ async function codeLocalTurn(s, text) {
       // The foldrun engine asks about every call: what only looks inside
       // the folder runs, as Claude Code would let it.
       // Each tool's own field, read as core reads it (Codex).
-      if (name === "Read" || name === "Glob" || name === "Grep" || name === "Symbols") {
+      if (name === "Read" || name === "Glob" || name === "Grep") {
         let ok;
-        // Symbols reads like Read (its server runs inside the walls; core shows only what readable allows).
-        if (name === "Read" || name === "Symbols") ok = typeof input.file_path === "string" && readableBy(s, input.file_path);
+        if (name === "Read") ok = typeof input.file_path === "string" && readableBy(s, input.file_path);
         else {
           const base = input.path === undefined ? s.dir : input.path;
           ok = typeof base === "string" && readableBy(s, base);
