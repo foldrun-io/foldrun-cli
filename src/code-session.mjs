@@ -46,7 +46,7 @@ export const CODE_GROUPS = [
   ] },
   { group: "App", commands: [
     ["/help", "these commands"],
-    ["/restart", "start foldrun again on this folder, place, account, agent and conversation — how a long session takes a newer foldrun it was told is ready (typed during a turn, it is queued for after it)"],
+    ["/update [now|check|auto on|off|restart]", "foldrun itself: now takes the latest release (a new major too) and starts again on this conversation; check only asks; auto on|off is whether it updates itself once a day; restart starts again on this folder, place, account, agent and conversation (typed during a turn, now and restart wait for it to end)"],
     ["/quit", "leave — exit or quit typed alone too (Ctrl-D too)"],
   ] },
 ];
@@ -104,7 +104,7 @@ export const CODE_TIPS = [
  * @param {{ thinking?: boolean, localOnly?: boolean, mode?: string, sandboxOff?: boolean, strict?: boolean,
  *   past?: Array<{ said: string, at?: string }>, turns?: Array<{ turn: number, label: string }>,
  *   todos?: Array<{ content: string, status?: string }>, queue?: string[], mcp?: Array<{ name: string, state: string, source?: string }>,
- *   explained?: boolean, tips?: boolean, repo?: boolean, line?: boolean, patch?: string, effort?: string }} st
+ *   explained?: boolean, tips?: boolean, repo?: boolean, line?: boolean, patch?: string, effort?: string, auto?: boolean, update?: string }} st
  * @returns {{ title: string, subtitle: string, choices: Array<{ v: string, name: string, note: string, ask?: string, optional?: boolean, path?: boolean }>, tick: string | null, start: string } | null}
  */
 
@@ -173,6 +173,22 @@ export function commandMenu(name, st) {
         })),
         tick: null,
         start: "/where",
+      };
+    case "/update":
+      // foldrun itself: update, check, auto-update, start again — one command (owner, 26 Nov 2026, FOL-335; /restart merged in).
+      return {
+        title: "Update foldrun",
+        subtitle: "/update now · check · auto on|off · restart types it straight away",
+        choices: [
+          { v: "/update now", name: st.update ? `Update to ${st.update}` : "Update to the latest", note: "a new major too — then this conversation starts again on it" },
+          { v: "/update check", name: "Check for a new release", note: "only asks npm; nothing is installed" },
+          st.auto === false
+            ? { v: "/update auto on", name: "Turn auto-update on", note: "now off · once a day, patches and features install themselves" }
+            : { v: "/update auto off", name: "Turn auto-update off", note: "now on · nothing installs by itself; /update now when you want it" },
+          { v: "/update restart", name: "Start again", note: "the same conversation, on the foldrun installed now" },
+        ],
+        tick: null,
+        start: "/update now",
       };
     case "/where": {
       // The three ways to work and one task sent to the cloud (FOL-263): one command, one list.
@@ -342,7 +358,7 @@ export function commandMenu(name, st) {
 }
 
 /** The commands that open a list when typed alone (FOL-259), as /help marks them. */
-export const MENU_COMMANDS = ["/where", "/model", "/permissions", "/setup", "/undo", "/resume", "/export", "/todos", "/status", "/sessions", "/help"];
+export const MENU_COMMANDS = ["/where", "/model", "/permissions", "/setup", "/undo", "/resume", "/export", "/todos", "/status", "/sessions", "/help", "/update"];
 
 /** @param {{ steers?: boolean, extra?: Array<{ name: string, hint?: string, desc: string }> }} [o] steers: Enter sends into a running turn (foldrun's own loop, FOL-213); extra: the folder's own commands and skills. */
 export function helpText({ steers = false, extra = [] } = {}) {

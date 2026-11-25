@@ -162,12 +162,18 @@ A CLI installed with `npm i -g foldrun` updates itself:
   version it runs.
 - A `foldrun code` session left open does the same look between turns
   (never during one), at most once a day. When a newer version is ready it
-  says once, after a turn: `foldrun 31.3.0 is ready — /restart to use it
-  (this conversation continues)`. `/restart` starts the installed foldrun
-  again on the same folder, place, account, agent and conversation; typed
-  while a turn runs, it is queued for after it, behind any message already
-  queued. The sandbox setting and strict approvals go on as they are. `/status` shows the version
+  says once, after a turn: `foldrun 31.3.0 is ready — /update restart to use it
+  (this conversation continues)`. `/update restart` starts the installed foldrun
+  again on the same folder, place, account, agent and conversation; `/update now`
+  installs the latest first, a new major too. Typed while a turn runs, they are
+  queued for after it, behind any message already queued. The sandbox setting
+  and strict approvals go on as they are. `/status` shows the version
   running and the one ready.
+- **Auto-update on or off**: `foldrun update --auto off` (or `/update auto off`
+  in `foldrun code`) stops the daily look and the background install for every
+  foldrun on this computer; `--auto on` starts them again. A version you took
+  with `foldrun update` or `/update now` still runs. `FOLDRUN_NO_AUTO_UPDATE=1`
+  turns off everything, the hand-over to a newer copy included, for one shell.
 - A newer **major** release can change what worked, so it is only
   announced, at most once, with the command that takes it.
 - A failed install is announced at most once, and you keep the version you

@@ -41,6 +41,27 @@ const RETIRED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 const OWN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** The person's choice, auto-update on or off (owner, 26 Nov 2026, FOL-335): kept with what they
+ *  write (the config folder), read by every start. */
+const settingFile = (env = process.env) => path.join(path.resolve(foldrunDirs(env).config), "update.json");
+
+/**
+ * Whether foldrun looks for and installs updates by itself. FOLDRUN_NO_AUTO_UPDATE=1 wins (and also
+ * stops the hand-over, the way back from a bad release); the setting only stops the daily check and
+ * the background install — a version `foldrun update` or `/update` took still runs.
+ * @returns {{ on: boolean, by: "env" | "setting" | "default" }}
+ */
+export function autoUpdateSetting(env = process.env) {
+  if (off(env)) return { on: false, by: "env" };
+  const auto = readJson(settingFile(env)).auto;
+  return auto === false ? { on: false, by: "setting" } : { on: true, by: auto === true ? "setting" : "default" };
+}
+
+/** Turn auto-update on or off for this computer's foldrun (throws when it could not be saved). */
+export function setAutoUpdate(/** @type {boolean} */ on, env = process.env) {
+  writeJsonOrThrow(settingFile(env), { ...readJson(settingFile(env)), auto: on });
+}
+
 /** Set by the global copy for the staged one it hands over to. */
 export const HANDED_OVER = "FOLDRUN_HANDED_OVER_FROM";
 
@@ -149,6 +170,7 @@ const off = (/** @type {NodeJS.ProcessEnv} */ env) => env.FOLDRUN_NO_AUTO_UPDATE
 /** Why no background check runs now, or null when one may. */
 export function skipReason({ env = process.env, tty = Boolean(process.stdout.isTTY && process.stderr.isTTY), now = Date.now(), pkgRoot = PKG_ROOT, state = readState(env, pkgRoot) } = {}) {
   if (off(env)) return "turned off";
+  if (!autoUpdateSetting(env).on) return "turned off (foldrun update --auto on)";
   if (env.CI && env.CI !== "0" && env.CI !== "false") return "CI";
   if (!tty) return "no terminal";
   if (!npmShaped(pkgRoot)) return "not an npm install";
@@ -440,7 +462,7 @@ export function sessionCheck(current, { env = process.env } = {}) {
 
 /**
  * A version newer than `current` that a session should hear about: the one
- * made active for this installation (`ready`: /restart takes it — a major
+ * made active for this installation (`ready`: /update restart takes it — a major
  * too, once `foldrun update` took it), or a major only announced. Null:
  * none, or updates are off.
  * @param {string} current
@@ -460,7 +482,7 @@ export function stagedUpdate(current, env = process.env, pkgRoot = PKG_ROOT) {
   }
 }
 
-/** The installed foldrun's own bin: what /restart starts, and it hands over to the staged version itself. */
+/** The installed foldrun's own bin: what /update restart starts, and it hands over to the staged version itself. */
 export const installedBin = (pkgRoot = PKG_ROOT) => path.join(pkgRoot, "bin", "foldrun.mjs");
 
 /** Start the background check in a detached child, marked now so two starts start one. */

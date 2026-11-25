@@ -2658,7 +2658,57 @@ test("--local: `foldrun use` in another terminal mid-session does not move this 
   }
 });
 
-test("/restart starts foldrun again on the same folder, place and conversation (FOL-261)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+test("/update: its list, check, and auto-update off and on, kept for every foldrun on this computer (FOL-335)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  // npm, as foldrun asks it: `view foldrun version` says a newer one is out.
+  const npmDir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-npm-"));
+  const npm = path.join(npmDir, "npm");
+  fs.writeFileSync(npm, `#!${process.execPath}\nif (process.argv[2] === "view") { console.log("999.0.0"); process.exit(0); }\nprocess.exit(1);\n`, { mode: 0o755 });
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\n", sha256: "x" }),
+    [`GET ${WS}/sessions/code-up/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme", actor: { kind: "key", id: "login-1", modelAccess: { capUsd: null, dailyUsd: 100, walletUsd: 0 } }, modelsUrl: s.url }),
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-up", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_NPM: npm, FOLDRUN_HOME: home });
+  try {
+    let at = await t.until(/session\s+code-up · new[\s\S]*\w ❯ /);
+    // Alone: its list; Esc changes nothing.
+    t.send("/update\r");
+    at = await t.until(/Update foldrun[\s\S]*Update to the latest[\s\S]*Check for a new release[\s\S]*Turn auto-update off\s+now on[\s\S]*Start again/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b");
+    at = await t.until(/nothing changed[\s\S]*\w ❯ /, at);
+    t.send("/update check\r");
+    at = await t.until(/foldrun 999\.0\.0 is out[^\n]*a major version[^\n]*\/update now takes it · auto-update on/, at);
+    t.send("/update auto off\r");
+    at = await t.until(/auto-update off — nothing installs by itself/, at);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "update.json"), "utf8")), { auto: false });
+    // The list says what it is now.
+    t.send("/update\r");
+    at = await t.until(/Turn auto-update on\s+now off/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\x1b");
+    at = await t.until(/nothing changed[\s\S]*\w ❯ /, at);
+    t.send("/update auto on\r");
+    at = await t.until(/auto-update on — foldrun looks for a newer release once a day/, at);
+    t.send("/update sideways\r");
+    at = await t.until(/\/update has no sideways — \/update now · check · auto on\|off · restart/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "update.json"), "utf8")), { auto: true });
+  // foldrun update reads the same setting.
+  const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "bin/foldrun.mjs"), "update", "--auto"], { encoding: "utf8", env: { ...process.env, FOLDRUN_HOME: home } });
+  assert.match(r.stdout, /auto-update is on/);
+});
+
+test("/update restart starts foldrun again on the same folder, place and conversation (FOL-261, FOL-335)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -2672,7 +2722,7 @@ test("/restart starts foldrun again on the same folder, place and conversation (
     "POST /v1/keys": (b) => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: JSON.parse(String(b)).dailyUsd }),
     "POST /v1/messages": (b) => {
       asked.push(JSON.parse(String(b)));
-      // The first turn runs a slow command, so /restart can be typed while it runs.
+      // The first turn runs a slow command, so /update restart can be typed while it runs.
       if (asked.length === 1) return sse([{ type: "tool_use", id: "q1", name: "Bash", input: { command: "sleep 3" } }]);
       return sse([{ type: "text", text: `answer ${asked.length - 1}` }]);
     },
@@ -2693,10 +2743,10 @@ test("/restart starts foldrun again on the same folder, place and conversation (
       await new Promise((r) => setTimeout(r, 60));
       t.send("\r");
     };
-    await typeThenEnter("/restart");
-    at = await t.until(/⏭ \/restart · queued for after this turn/, at);
-    await typeThenEnter("/restart");
-    at = await t.until(/\/restart is queued already/, at);
+    await typeThenEnter("/update restart");
+    at = await t.until(/⏭ \/update restart · queued for after this turn/, at);
+    await typeThenEnter("/update restart");
+    at = await t.until(/foldrun starts again after this turn already/, at);
     at = await t.until(/answer 1/, at, 30_000);
     at = await t.until(/starting foldrun again — the same conversation \(code-rs\)/, at);
     // A new process: its own box, the same session, and the turn before it is still in the conversation.
@@ -2708,7 +2758,7 @@ test("/restart starts foldrun again on the same folder, place and conversation (
     t.send("/permissions strict\r");
     at = await t.until(/the commands that only look are asked too/, at);
     at = await t.until(/\w ❯ /, at);
-    t.send("/restart\r");
+    t.send("/update restart\r");
     at = await t.until(/session\s+code-rs · continuing[\s\S]*\w ❯ /, at);
     const tree = spawnSync("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8" }).stdout;
     const ours = tree.split("\n").filter((l) => l.includes("code-rs") && l.includes("foldrun.mjs") && !l.includes("python"));
@@ -2724,7 +2774,7 @@ test("/restart starts foldrun again on the same folder, place and conversation (
     t.child.kill();
     s.close();
   }
-  assert.doesNotMatch(JSON.stringify(asked[1].messages), /\/restart/, "never words for the agent");
+  assert.doesNotMatch(JSON.stringify(asked[1].messages), /\/update restart/, "never words for the agent");
   assert.match(JSON.stringify(asked[2].messages), /first[\s\S]*answer 1[\s\S]*second/, "the conversation went on");
 });
 

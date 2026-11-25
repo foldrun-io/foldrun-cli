@@ -125,9 +125,35 @@ const [, , command, ...rest] = process.argv;
 // not for `update --help`, which the help below answers without running it
 // (the customer bench, 20 Nov 2026: `--help` installed the update).
 if (command === "update" && !rest.includes("--help") && !rest.includes("-h")) {
-  const { checkAndUpdate, announcement, isGlobalInstall } = await import("../src/self-update.mjs");
+  const { checkAndUpdate, announcement, isGlobalInstall, autoUpdateSetting, setAutoUpdate } = await import("../src/self-update.mjs");
   const current = ownVersion();
+  // `--auto on|off`: whether foldrun keeps itself current (owner, 26 Nov 2026, FOL-335). Only the setting.
+  const autoAt = rest.findIndex((a) => a === "--auto" || a.startsWith("--auto="));
+  if (autoAt >= 0) {
+    // --auto on, --auto=on: an argument it does not know never falls through to installing (Codex).
+    const given = rest[autoAt];
+    const want = given.startsWith("--auto=") ? given.slice(7) : rest[autoAt + 1];
+    if (want !== "on" && want !== "off") {
+      const a = autoUpdateSetting();
+      console.log(`\n  auto-update is ${a.on ? "on" : "off"}${a.by === "env" ? " (FOLDRUN_NO_AUTO_UPDATE is set)" : ""} — foldrun update --auto on|off changes it\n`);
+      process.exit(want === undefined ? 0 : 2);
+    }
+    try {
+      setAutoUpdate(want === "on");
+    } catch (err) {
+      console.error(`\n  the setting could not be saved: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+    const a = autoUpdateSetting();
+    console.log(`\n  auto-update ${want === "on" ? "on: foldrun looks for a newer release once a day and installs patches and features itself" : "off: foldrun no longer looks for updates by itself — foldrun update takes the latest when you ask"}${want === "on" && !a.on ? " (but FOLDRUN_NO_AUTO_UPDATE is set in this shell, and it wins)" : ""}\n`);
+    process.exit(0);
+  }
   const check = rest.includes("--check");
+  const unknown = rest.filter((a) => a !== "--check");
+  if (unknown.length) {
+    console.error(`\n  foldrun update takes --check or --auto on|off — not ${unknown.join(" ")}\n`);
+    process.exit(2);
+  }
   if (!check && !isGlobalInstall()) {
     console.error(`\n  this foldrun (${current}) is not the one npm i -g installed (a git checkout, an npx cache or a project's own copy), so it is not updated — npm i -g foldrun@latest installs one\n`);
     process.exit(1);
@@ -142,7 +168,8 @@ if (command === "update" && !rest.includes("--help") && !rest.includes("-h")) {
     updated: `foldrun updated ${current} → ${r.latest} — your next command runs it`,
     major: `foldrun ${r.latest} is out`,
   }[r.did];
-  console.log(`\n  ${String(say).replace(/[\u0000-\u001f\u007f-\u009f]/g, "")}\n`);
+  const auto = autoUpdateSetting();
+  console.log(`\n  ${String(say).replace(/[\u0000-\u001f\u007f-\u009f]/g, "")}${check ? `\n  auto-update is ${auto.on ? "on" : "off"} (foldrun update --auto on|off)` : ""}\n`);
   // updated: said now, not again at the next start.
   if (r.did === "updated") announcement(String(r.latest));
   process.exit(r.did === "failed" || r.did === "unreachable" || r.did === "busy" ? 1 : 0);
@@ -413,7 +440,7 @@ Signing in
   foldrun customers         your own users, by the id on their runs and gateway calls: the limits each is held to and who is blocked — block <id> [--reason], unblock <id>, usage [--days 7] (model spend per customer), limits --starts-per-minute N --max-open-runs N --gateway-rpm N --gateway-concurrency N --daily-model-usd D (default / none puts one back), --json
   foldrun audit             the account's audit log, newest first: sign-ins, keys, invites, secrets by name, deploys, support views (--since 7d, --action, --actor, --to, --all, --csv)
   foldrun --version         this CLI's version, offline (\`foldrun version\` also asks the platform)
-  foldrun update [--check]  take the latest foldrun now (a new major too); --check only asks. On its own the CLI updates itself once a day in the background to a newer minor or patch and announces a new major (FOLDRUN_NO_AUTO_UPDATE=1 turns it off)
+  foldrun update [--check]  take the latest foldrun now (a new major too); --check only asks. On its own the CLI updates itself once a day in the background to a newer minor or patch and announces a new major; --auto on|off turns that on or off (FOLDRUN_NO_AUTO_UPDATE=1 also turns it off)
   foldrun --help            everything; \`foldrun <command> --help\`, \`-h\` or \`foldrun help <command>\` for one (never runs it)
 
 Options
