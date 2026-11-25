@@ -3607,9 +3607,9 @@ test("f at a command's question keeps a rule for the folder: later sessions run 
     at = await t.until(/ 1 commands that start with  touch/, at);
     // Remove a rule… from /permissions' list asks for the rest of the line (FOL-259).
     t.send("/permissions\r");
-    at = await t.until(/What the agent may do without asking[\s\S]*Relaxed[^\n]*✔[\s\S]*4\. Remove a rule…[\s\S]*Esc to cancel/, at);
+    at = await t.until(/What the agent may do without asking[\s\S]*Relaxed[^\n]*✔[\s\S]*5\. Remove a rule…[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
-    t.send("4");
+    t.send("5");
     at = await t.until(/Remove a rule — the rule's number: /, at);
     t.send("1\r");
     at = await t.until(/removed: commands that start with  touch — it is asked again/, at);
