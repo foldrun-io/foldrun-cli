@@ -17974,14 +17974,18 @@ async function codeLocalTurn(s, text) {
     // while this turn runs. A no holds for this turn only.
     delete s.siteNo;
     // Live only while this turn is: a question still waiting, or answered, after it ends is a no (Codex).
-    const siteTurn = { live: true };
+    const siteTurn = { live: true, stop: new AbortController() };
+    // The turn's own stop withdraws a site question too.
+    abort.signal.addEventListener("abort", () => siteTurn.stop.abort(), { once: true });
     s.askSiteLive = (/** @type {string} */ host, /** @type {number} */ port) => {
-      const next = gate.then(() => (siteTurn.live ? decide(SITE_ASK, { host, port }, abort.signal) : { behavior: /** @type {const} */ ("deny"), message: "the turn ended" }));
+      const next = gate.then(() => (siteTurn.live ? decide(SITE_ASK, { host, port }, siteTurn.stop.signal) : { behavior: /** @type {const} */ ("deny"), message: "the turn ended" }));
       gate = next.then(() => undefined, () => undefined);
       return next.then((r) => siteTurn.live && r.behavior === "allow", () => false);
     };
     s.endSiteTurn = () => {
       siteTurn.live = false;
+      // A question still open is withdrawn, its keyboard given back — never left to take the next prompt's keys (Codex).
+      siteTurn.stop.abort();
     };
     /** One cloud_agents call, from either engine: the turn's Ctrl-C stops it too. */
     const cloudCall = (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ sig) => {
