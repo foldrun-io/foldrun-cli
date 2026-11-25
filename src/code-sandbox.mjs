@@ -40,20 +40,24 @@ export function packageCacheFor(dir, env = process.env, home = os.homedir()) {
 /** The tool that runs one command outside the walls. */
 export const OUTSIDE_TOOL = "bash_outside";
 export const OUTSIDE_DESCRIPTION =
-  "Run one shell command OUTSIDE the sandbox, as the person, with their full access. Only for a command that was refused inside it for a reason the task really needs — a write outside this folder, a program that needs the person's own keys (git push, a deploy, docker). The person is shown the command and asked every time; say in `reason` why it cannot run inside. Never use it for a command that works in Bash. Inside the sandbox, files that hold keys (~/.npmrc, ~/.ssh, ~/.aws, …) cannot be read — npm may print an EPERM about ~/.npmrc, which is not a failure when the command's own result is fine — and package managers keep downloads in a cache the sandbox provides, so npm install, npx and pip install work inside.";
+  "Run one shell command OUTSIDE the sandbox, as the person, with their full access. Only for a command that was refused inside it for a reason the task really needs — a write outside this folder, a program that needs the person's own keys (git push, a deploy, docker). The person is shown the command and asked every time; say in `reason` why it cannot run inside. A dev server goes here too, with run_in_background (the sandbox cannot listen on a port): it answers with a job id (o1), the browser then opens http://127.0.0.1:<port>, and bash_outside {job, stop: true} ends it. Never use it for a command that works in Bash. Inside the sandbox, files that hold keys (~/.npmrc, ~/.ssh, ~/.aws, …) cannot be read — npm may print an EPERM about ~/.npmrc, which is not a failure when the command's own result is fine — and package managers keep downloads in a cache the sandbox provides, so npm install, npx and pip install work inside.";
 export const OUTSIDE_SCHEMA = {
   type: "object",
   properties: {
     command: { type: "string", description: "The command, exactly as it should run." },
     reason: { type: "string", description: "Why it cannot run inside the sandbox, in a few words." },
     timeout: { type: "number", description: "Milliseconds before it is stopped (default 120000, at most 600000)." },
+    run_in_background: { type: "boolean", description: "Leave it running (a dev server to open in the browser): answers at once with a job id like o1" },
+    job: { type: "string", description: "A job started here, instead of command: read its new output, and with stdin, wait or stop act on it" },
+    stdin: { type: "string", description: "With job: text written to its input" },
+    wait: { type: "integer", description: "With job: wait up to this many milliseconds for it to finish" },
+    stop: { type: "boolean", description: "With job: stop it and everything it started" },
   },
-  required: ["command", "reason"],
 };
 
 /** What the agent is told when the walls are up. */
 export const SANDBOX_NOTE =
-  "Your Bash commands run inside a sandbox on this computer: they can write only inside this folder and $TMPDIR (never git's hooks or config), can read everything except the person's keys and credentials (the variables of their shell that hold keys are not set either), and reach the network at common package and code sites; any other site is asked of the person while the command runs (on a yes it goes through, inside the sandbox, and stays allowed this session — so just run the command; never send it outside the sandbox only to reach a site). A command inside it runs without the person being asked, so prefer it. When a command is refused for one of the other reasons and the task really needs it, use bash_outside, which asks the person first — do not try to get around the sandbox any other way.";
+  "Your Bash commands run inside a sandbox on this computer: they can write only inside this folder and $TMPDIR (never git's hooks or config), can read everything except the person's keys and credentials (the variables of their shell that hold keys are not set either), and reach the network at common package and code sites; any other site is asked of the person while the command runs (on a yes it goes through, inside the sandbox, and stays allowed this session — so just run the command; never send it outside the sandbox only to reach a site). A command inside it runs without the person being asked, so prefer it. When a command is refused for one of the other reasons and the task really needs it, use bash_outside, which asks the person first — do not try to get around the sandbox any other way. To test the app you are building in a browser: a command inside the sandbox cannot listen on a port, so start the dev server with bash_outside and run_in_background (asked), open http://127.0.0.1:<port> with the web tool's browse, and stop the job when done.";
 
 /** A site as the sandbox takes it: `api.example.com` or `*.example.com`; else null. */
 export function siteOf(/** @type {string} */ typed) {

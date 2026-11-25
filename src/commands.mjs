@@ -18219,7 +18219,7 @@ async function codeLocalTurn(s, text) {
       // A background job (FOL-293): reading what it printed, waiting for it or stopping it touches only a command
       // the person already let run, so it is not asked; text written to its input is a command of its own — shown
       // whole and asked every time outside the sandbox, never kept as an "always".
-      const jobInput = name === "Bash" && input.job !== undefined;
+      const jobInput = (name === "Bash" || name === OUTSIDE_TOOL) && input.job !== undefined;
       if (jobInput && input.stdin === undefined) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       const command = name === "Bash" || outside ? String((jobInput ? input.stdin : input.command) ?? "") : null;
       // A command that only looks (pwd, ls, git status…) runs without a
@@ -18675,6 +18675,20 @@ async function codeLocalTurn(s, text) {
     delete own.BASH_ENV;
     delete own.ENV;
     const engine = await import("@foldrun/core/engine-loop");
+    // Jobs started outside the sandbox (FOL-296: a dev server the agent then opens in the browser): their own
+    // list, ids o1, o2…, so Bash's job calls — unasked inside the walls — never reach one. They end with the turn.
+    const outsideJobs = new Map();
+    const outsideCall = async (/** @type {any} */ input, /** @type {any} */ ctx) => {
+      if (input?.job === undefined && (!String(input?.command ?? "").trim() || !String(input?.reason ?? "").trim())) return { text: "bash_outside needs command and reason (or job, for one started here in the background)", isError: true };
+      if (input?.job === undefined && input?.run_in_background !== true) {
+        return runOutside(String(input?.command ?? ""), { dir: s.dir, env: own, signal: ctx.signal, timeout: input?.timeout });
+      }
+      const Bash = /** @type {any} */ (engine).ENGINE_TOOLS?.Bash;
+      if (!Bash) return { text: "a command left running outside the sandbox needs a newer foldrun — `foldrun update`", isError: true };
+      if (input.run_in_background === true && !String(input.reason ?? "").trim()) return { text: "bash_outside needs reason: why it cannot run inside the sandbox", isError: true };
+      const { reason: _reason, ...rest } = input;
+      return Bash.run(rest, { ...ctx, cwd: s.dir, env: own, sandbox: null, jobs: outsideJobs, jobPrefix: "o" });
+    };
     // Right after each tool ran and before the next call: what the Write or
     // Edit left on disk settles its /rewind record. A sub-agent's too.
     const afterTool = async (/** @type {any} */ payload, /** @type {string} */ id) => {
@@ -18975,7 +18989,7 @@ async function codeLocalTurn(s, text) {
             tools: ENGINE_TOOLS_LOCAL,
             extraTools: [
               // The one way out of the sandbox: a command as the person, asked every time.
-              ...(walls ? [{ name: OUTSIDE_TOOL, description: OUTSIDE_DESCRIPTION, input_schema: OUTSIDE_SCHEMA, readOnly: false, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => runOutside(String(input?.command ?? ""), { dir: s.dir, env: own, signal: ctx.signal, timeout: input?.timeout }) }] : []),
+              ...(walls ? [{ name: OUTSIDE_TOOL, description: OUTSIDE_DESCRIPTION, input_schema: OUTSIDE_SCHEMA, readOnly: false, run: (/** @type {any} */ input, /** @type {any} */ ctx) => outsideCall(input, ctx) }] : []),
               // On this computer only: the agent has no way to send the folder, or a job, to the cloud.
               // Cloud jobs: with the folder (a copy, a patch back) or without it (a project agent); off with /where local.
               ...(s.localOnly === true ? [] : [{ name: CLOUD_AGENTS_TOOL, description: cloudTool.description, input_schema: cloudTool.schema, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {

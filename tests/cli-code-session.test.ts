@@ -3356,6 +3356,57 @@ test("/permissions bypass (FOL-308): nothing is asked for the session, outside t
   }
 });
 
+test("a dev server outside the sandbox (FOL-296): bash_outside run_in_background is asked, gives job o1; reading it is not asked, typing into it is; Bash's job calls cannot reach it", { skip: canSandbox ? false : "needs the sandbox", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "s1", name: "bash_outside", input: { command: "while read l; do echo srv-$l; done", reason: "a dev server: the sandbox cannot listen on a port", run_in_background: true } }]),
+    () => sse([{ type: "tool_use", id: "s2", name: "Bash", input: { job: "o1", stdin: "sneak\n" } }]),
+    () => sse([{ type: "tool_use", id: "s3", name: "bash_outside", input: { job: "o1", stdin: "hi\n" } }]),
+    () => sse([{ type: "tool_use", id: "s4", name: "bash_outside", input: { job: "o1", wait: 500 } }]),
+    () => sse([{ type: "tool_use", id: "s5", name: "bash_outside", input: { job: "o1", stop: true } }]),
+    () => sse([{ type: "text", text: "Server handled." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-o296/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-o296", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("run the server\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/OUTSIDE the sandbox[\s\S]*while read l[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
+    t.send("y\r");
+    at = await t.until(/OUTSIDE the sandbox[\s\S]*typed into the background job o1[\s\S]*> hi[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
+    t.send("y\r");
+    at = await t.until(/Server handled\./, at, 30_000);
+    const result = (n: number) => JSON.stringify((asked[n]?.messages ?? []).at(-1));
+    assert.match(result(1), /job o1 is running/);
+    assert.match(result(2), /no background job o1 in this step/, "Bash's jobs are not the outside ones");
+    assert.match(result(4), /srv-hi/, "the wait read it, unasked");
+    assert.doesNotMatch(result(4), /srv-sneak/);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("the sandbox on this computer: a command inside it runs unasked and cannot write outside the folder; bash_outside is asked every time; /permissions sandbox off goes back to asking each command", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
   const d = repo();
   const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-")));
