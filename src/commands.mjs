@@ -19043,7 +19043,12 @@ async function codeLocalTurn(s, text) {
             ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
             // Symbols' language servers: in this project's own package cache, writable inside the walls (FOL-297).
             toolsDir: path.join(packageCacheFor(s.dir), "lsp"),
-            readable: (/** @type {string} */ f) => readableBy(s, f),
+            // A location shown from outside the folder (an added one) is private, as Read's is: asked before it goes to the cloud (Codex).
+            readable: (/** @type {string} */ f) => {
+              const ok = readableBy(s, f);
+              if (ok && !bothInside(s.dir, f)) s.privateSeen = true;
+              return ok;
+            },
             maxTurns: Math.min(AGENT_TURNS_EACH, left),
             canUseTool: childCan,
             abortController: childAbort,
@@ -19179,7 +19184,12 @@ async function codeLocalTurn(s, text) {
             ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
             // Symbols' language servers: in this project's own package cache, writable inside the walls (FOL-297).
             toolsDir: path.join(packageCacheFor(s.dir), "lsp"),
-            readable: (/** @type {string} */ f) => readableBy(s, f),
+            // A location shown from outside the folder (an added one) is private, as Read's is: asked before it goes to the cloud (Codex).
+            readable: (/** @type {string} */ f) => {
+              const ok = readableBy(s, f);
+              if (ok && !bothInside(s.dir, f)) s.privateSeen = true;
+              return ok;
+            },
             maxTurns: 80,
             history,
             canUseTool,
