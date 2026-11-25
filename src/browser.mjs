@@ -487,7 +487,10 @@ export function localWebDefinition(browse, readFront) {
 }
 
 /** web.browse settings that run on this computer as in the cloud. */
-const BLOCK_HERE = ["user_agent", "device", "locale", "timezone", "allowed_domains", "deny", "boundaries", "webgpu", "ignore_https_errors", "video", "cookie_domain", "storage_origin"];
+// Read from gallery browse.mjs (24 Nov): a live session reuses the open browser's context and applies only
+// headers, permissions and geolocation to it, so the context's own settings (device, user_agent, locale,
+// timezone, video) are not applied to the window kept open here; the locks are, by request routing.
+const BLOCK_HERE = ["allowed_domains", "deny", "boundaries", "webgpu", "ignore_https_errors", "cookie_domain", "storage_origin"];
 /** Settings this computer cannot honour, and why: a call is refused while the agent's block names one. */
 const BLOCK_CLOUD = {
   cookies: "a vault secret's sign-in cookies — this computer has no vault; sign in in the window instead",
@@ -504,6 +507,12 @@ const BLOCK_NOTED = {
   live: "live: on this computer the page always stays open between calls",
   live_view: "live_view: the window on this computer is the view",
   identities: "identities: not used here (the identity option runs in the cloud)",
+  // The program does not apply these to a page kept open between calls, which this window always is (Codex).
+  device: "device: not applied to the window kept open on this computer",
+  user_agent: "user_agent: the window kept open on this computer keeps Chrome's own",
+  locale: "locale: the window kept open on this computer keeps Chrome's own",
+  timezone: "timezone: the window kept open on this computer keeps this computer's",
+  video: "video: not recorded for the window kept open on this computer",
 };
 
 /**

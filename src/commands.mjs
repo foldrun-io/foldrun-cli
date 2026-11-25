@@ -9765,7 +9765,9 @@ async function agentMedia(s) {
  */
 async function projectFront(s, file) {
   s.fronts ??= {};
-  if (s.fronts[file]) return s.fronts[file];
+  // Read again after 30 s: a lock tightened in the file holds without a restart (Codex).
+  const held = s.fronts[file];
+  if (held && Date.now() - held.at < 30_000) return held.front;
   let content = null;
   try {
     const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${encodeURIComponent(file)}`);
@@ -9784,7 +9786,7 @@ async function projectFront(s, file) {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
-  s.fronts[file] = front;
+  s.fronts[file] = { front, at: Date.now() };
   return front;
 }
 
@@ -9803,7 +9805,7 @@ async function localBrowseDefaults(s) {
     // The project's AGENTS.md over the account's, as the runner merges them (workspaceFrontmatter).
     project = { ...(await accountFront(s, said)), ...(await projectFront(s, "AGENTS.md")) };
   } catch (err) {
-    return { problem: `could not read this agent's file to apply its web.browse settings (${plainText(explain(err)).split("\n")[0]}) — try again` };
+    return { problem: `could not read the files that set this agent's web.browse settings (${plainText(explain(err)).split("\n")[0]})` };
   }
   const P = /** @type {any} */ (await import("@foldrun/core/providers"));
   if (typeof P.browseSettingsEnv !== "function") {
@@ -9812,7 +9814,10 @@ async function localBrowseDefaults(s) {
     if (raw !== undefined && raw !== null) return { problem: "this agent has a web.browse block, which needs a newer foldrun CLI to apply on this computer — `foldrun update`" };
     return { env: {}, notes: [] };
   }
-  const out = localBrowseBlock(P.readBrowseSettings(P.webConfig(agent, project).raw.browse), P.browseSettingsEnv);
+  const web = P.webConfig(agent, project);
+  // web.actions, as in the cloud: an agent that may not browse does not browse here either (Codex).
+  if (Array.isArray(web.actions) && !web.actions.includes("browse")) return { problem: `this agent's web.actions is [${web.actions.join(", ")}] — it may not browse` };
+  const out = localBrowseBlock(P.readBrowseSettings(web.raw.browse), P.browseSettingsEnv);
   return "problem" in out ? out : { env: out.env, notes: [...said, ...out.notes] };
 }
 
@@ -9822,7 +9827,7 @@ async function localBrowseDefaults(s) {
  * @param {any} s @param {string[]} said
  */
 async function accountFront(s, said) {
-  if (s.accountFront) {
+  if (s.accountFront && Date.now() - s.accountFront.at < 30_000) {
     if (s.accountFront.note) said.push(s.accountFront.note);
     return s.accountFront.front;
   }
@@ -9842,9 +9847,10 @@ async function accountFront(s, said) {
     }
   } catch (err) {
     if (!(err instanceof HttpError && (err.status === 403 || err.status === 404))) throw err;
-    if (err.status === 403) note = "the account's AGENTS.md (this key may not read it): any web.browse defaults it sets";
+    // Its locks (allowed_domains, deny) cannot be skipped because this key may not read them (Codex).
+    if (err.status === 403) throw new Error("this key may not read the account's AGENTS.md, where browse limits can be set — sign in with `foldrun login` as someone who reads the whole account");
   }
-  s.accountFront = { front, note };
+  s.accountFront = { front, note, at: Date.now() };
   if (note) said.push(note);
   return front;
 }
@@ -18932,6 +18938,10 @@ async function codeLocalTurn(s, text) {
                       // The agent's web.browse block holds here as in the cloud, or the call says why not.
                       const block = await localBrowseDefaults(s);
                       if ("problem" in block) return { text: block.problem, isError: true };
+                      // Held to some sites: the open page may be one from before (or the person's), so each call names its page (Codex).
+                      if (block.env.FOLDRUN_BROWSER_ALLOWED_DOMAINS && !(typeof input?.url === "string" && input.url) && String(input?.live ?? "") !== "end") {
+                        return { text: `this agent's browser is held to ${block.env.FOLDRUN_BROWSER_ALLOWED_DOMAINS} — give url on every call, so the page acted on is one of those`, isError: true };
+                      }
                       const r = await runLocalWeb(webHere, call.argv, { signal: ctx.signal, env: block.env });
                       const files = /outputs\//.test(r.stdout + r.stderr) ? `\n(files named outputs/… are in ${path.join(webHere.paths.work, "outputs")})` : "";
                       const notes = block.notes.length ? `not kept on this computer — ${block.notes.join("; ")}\n` : "";

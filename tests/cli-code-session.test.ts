@@ -3917,8 +3917,8 @@ test("the agent's web.browse block holds on this computer as in the cloud: its d
     at = await t.until(/Done browsing\./, at, 30_000);
     const result = JSON.stringify((asked[1]?.messages ?? []).at(-1));
     // The agent's block, whole: the project's applies only when the agent has none (core webConfig), so no locale.
-    assert.match(result, /DEVICE=iPhone 15 DOMAINS=example\.com HEADLESS=0 LOCALE=undefined/, result.slice(0, 400));
-    assert.match(result, /not kept on this computer — headless: the window on this computer is always visible/);
+    assert.match(result, /DEVICE=undefined DOMAINS=example\.com HEADLESS=0 LOCALE=undefined/, result.slice(0, 400));
+    assert.match(result, /not kept on this computer — device: not applied to the window kept open on this computer; headless: the window on this computer is always visible/);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
   } finally {
