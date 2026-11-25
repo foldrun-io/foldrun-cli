@@ -143,7 +143,7 @@ export function sandboxFor(o) {
       const saved = { ...process.env };
       let got;
       try {
-        got = await core.openLocalSandbox({ cwd: o.dir, sites: [...new Set([...trusted, ...sites])], denyRead: o.denyRead?.() ?? [], cache: packageCacheFor(o.dir, hostEnv()) }, o.askSite ? { askSite: o.askSite } : {});
+        got = await core.openLocalSandbox({ cwd: o.dir, sites: [...new Set([...trusted, ...sites])], denyRead: o.denyRead?.() ?? [], cache: packageCacheFor(o.dir, hostEnv()) }, {}, o.askSite);
       } catch (err) {
         got = { refused: `the sandbox did not start: ${err instanceof Error ? err.message : String(err)}` };
       }
