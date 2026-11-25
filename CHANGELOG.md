@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [32.8.2] — 2026-11-25
+
+### docs
+
+- sync (FOL-215) ([3caf75a](https://github.com/foldrun-io/foldrun-cli/commit/3caf75a))
+
 ## [32.8.1] — 2026-11-25
 
 - fix(code): a cloud question waiting behind another is asked only while still open; cleanup runs however following ends; the Esc hint names the question (Codex, FOL-298) ([22ca952](https://github.com/foldrun-io/foldrun-cli/commit/22ca952))
