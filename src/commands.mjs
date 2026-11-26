@@ -13,7 +13,6 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, shapeOutput as browseOutput } from "./browser.mjs";
 import { CLOUD_WEB_DEFINITION, cloudBrowse, cloudBrowseBlock, cloudBrowseBody } from "./browse-cloud.mjs";
-import { SEARCH_HERE, FETCH_HERE, SEARCH_HERE_DEFINITION, FETCH_HERE_DEFINITION, searchHere, fetchHere } from "./web-here.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu, commandDuringTurn, COMMAND_LINE } from "./code-session.mjs";
 import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
@@ -1635,6 +1634,9 @@ async function checkHooks(workspace, agents, libraryRoot, platform, note) {
 /** The web tool the platform's gallery serves: built in, and the only
  *  built-in that takes a provider. */
 const WEB_TOOL = "web";
+/** Search and fetch on this computer (FOL-383): the cloud's names; src/web-here.mjs loads only when they are offered. */
+const SEARCH_HERE = "web_search";
+const FETCH_HERE = "web_fetch";
 
 /** What the platform's gallery ships to every account (foldrun-platform
  *  src/gallery.ts): granted by name with nothing installed — tools with
@@ -10178,7 +10180,16 @@ async function webGrant(s) {
   let agent;
   let project;
   try {
-    agent = await projectFront(s, `agents/${s.agent}/agent.md`);
+    // A file whose settings never say "web" grants none: answered without loading the frontmatter reader, so a turn
+    // of an agent with no web stays light (FOL-265).
+    const file = `agents/${s.agent}/agent.md`;
+    const key = `${readerOf(s)}\n${s.url}\n${s.ws}\n${file}`;
+    if (!s.fronts?.[key]) {
+      const { content } = await readSourceAt(s, file);
+      const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content ?? "")?.[1] ?? "";
+      if (!/\bweb\b/.test(head)) return null;
+    }
+    agent = await projectFront(s, file);
     project = { ...(await accountFront(s, [])), ...(await projectFront(s, "AGENTS.md")) };
   } catch {
     return null;
@@ -20062,6 +20073,8 @@ async function codeLocalTurn(s, text) {
     const webCloud = webPlace(s) === "cloud";
     // Search and fetch on this computer (FOL-383, /where web here): the same names and shapes as in the cloud.
     const webMay = await webGrant(s);
+    // Loaded only for a turn that offers them, so a session that never uses them stays light (FOL-265).
+    const here = !webCloud && (webMay?.("search") || webMay?.("fetch")) ? await import("./web-here.mjs") : null;
     // Search and fetch on foldrun's servers (FOL-304): only where the gateway said it runs them, and the agent may.
     // A /plan turn sends nothing anywhere: no search or fetch, which run on foldrun's servers before anyone could be asked (Codex).
     const serverTools = s.planOnly ? [] : await localServerTools(s, { url: engineKey.gatewayUrl, key: engineKey.key });
@@ -20092,8 +20105,8 @@ async function codeLocalTurn(s, text) {
                 const job = cloudJobWithoutFolder(input);
                 return "problem" in job ? Promise.resolve({ text: job.problem, isError: true }) : agentCall(job, ctx.signal);
               } }]),
-              ...(!webCloud && webMay?.("search") ? [{ name: SEARCH_HERE, description: SEARCH_HERE_DEFINITION.description, input_schema: SEARCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => searchHere(input, { signal: ctx.signal }) }] : []),
-              ...(!webCloud && webMay?.("fetch") ? [{ name: FETCH_HERE, description: FETCH_HERE_DEFINITION.description, input_schema: FETCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => fetchHere(input, { signal: ctx.signal, userAgent: USER_AGENT }) }] : []),
+              ...(here && webMay?.("search") ? [{ name: SEARCH_HERE, description: here.SEARCH_HERE_DEFINITION.description, input_schema: here.SEARCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => here.searchHere(input, { signal: ctx.signal }) }] : []),
+              ...(here && webMay?.("fetch") ? [{ name: FETCH_HERE, description: here.FETCH_HERE_DEFINITION.description, input_schema: here.FETCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => here.fetchHere(input, { signal: ctx.signal, userAgent: USER_AGENT }) }] : []),
               // Browse only for an agent whose file grants it (tools: [web], web.actions), in either place (Codex).
               ...(!webMay?.("browse", true) ? [] : webCloud
                 ? [{
