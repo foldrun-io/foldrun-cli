@@ -12,6 +12,18 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.3.0] — 2026-11-26
+
+- feat(code): the running-turn screen drawn in place, roomier, setup reads in parallel (FOL-342); background jobs under the working line, /status jobs on|off (FOL-343) ([e714991](https://github.com/foldrun-io/foldrun-cli/commit/e714991))
+
+### deps
+
+- @foldrun/core 29.5.0 (jobs option, FOL-343; sandbox git scan, FOL-334) ([2f83b33](https://github.com/foldrun-io/foldrun-cli/commit/2f83b33))
+
+### docs
+
+- sync cli.md (/status jobs, FOL-343) ([c666cb5](https://github.com/foldrun-io/foldrun-cli/commit/c666cb5))
+
 ## [33.2.0] — 2026-11-26
 
 - fix(code): the lead on a running turn's input line is joined by a no-break space, so it is never taken for the idle prompt (FOL-339) ([72f8417](https://github.com/foldrun-io/foldrun-cli/commit/72f8417))
