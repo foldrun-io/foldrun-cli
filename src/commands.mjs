@@ -10146,7 +10146,18 @@ async function resourcesReport(s) {
  * @param {any} s @returns {"cloud" | "here"}
  */
 function webPlace(s) {
+  // A session working in the cloud runs its web there, whatever /where web said before it moved (Codex).
+  if (s.mode === "cloud") return "cloud";
   return s.web === "here" || s.localOnly === true ? "here" : "cloud";
+}
+
+/** What /permissions web ask covers where the web is now, said the same in every place (Codex). @param {any} s */
+function webAskSaid(s) {
+  if (s.bypass === true) return "nothing is asked this session (/permissions bypass)";
+  if (!webAsks(s)) return "web calls run without asking — search, fetch and a cloud browse; a browse on this computer is still asked";
+  return webPlace(s) === "cloud"
+    ? "web calls are asked first — a browse in the cloud; search and fetch run on foldrun's servers inside the model's answer and cannot be asked there (/where web here asks for each)"
+    : "web calls are asked first — each search, fetch and browse on this computer";
 }
 
 /** Whether web calls are asked first (/permissions web ask): this session's word, else the kept one (Codex). @param {any} s */
@@ -19243,6 +19254,12 @@ async function codeLocalTurn(s, text) {
             console.log(`      ${c.amber(`a call too long to show whole (${lines.length} lines) — not run`)}`);
             return { behavior: /** @type {const} */ ("deny"), message: "the call was too long to show the person whole — split it into smaller calls" };
           }
+        } else if (name === SEARCH_HERE || name === FETCH_HERE) {
+          // Search and fetch from this computer (FOL-383): the whole query or address, wrapped — what leaves is seen (Codex).
+          const what = plainText(String((name === SEARCH_HERE ? input.query : input.url) ?? ""));
+          console.log(`      ${c.white(name === SEARCH_HERE ? "a web search from this computer, for:" : "a page read from this computer:")}`);
+          for (let i = 0; i < Math.max(1, Math.min(what.length, 4000)); i += width) console.log(`      ${c.grey(what.slice(i, i + width))}`);
+          if (what.length > 4000) return { behavior: /** @type {const} */ ("deny"), message: "the query or address was too long to show the person whole" };
         } else {
           const shown = plainText(JSON.stringify(input)).slice(0, 400);
           console.log(`      ${c.grey(clipCells(shown, width))}`);
@@ -22817,7 +22834,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       if (wa) {
         const how = wa[1]?.toLowerCase();
         if (!how) {
-          say(`web calls ${webAsks(s) ? "are asked first" : "run without asking"} — /permissions web ask · bypass`);
+          say(`${webAskSaid(s)} — /permissions web ask · bypass`);
           continue;
         }
         // This session holds the word even when it cannot be kept on disk (Codex).
@@ -22825,9 +22842,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const kept = writeCodePrefs({ ...readCodePrefs(), webAsk: how === "ask" });
         // Search and fetch in the cloud run on foldrun's servers inside the model's answer: nothing here can stop
         // them before they run, so asking reaches them only with the web on this computer (Codex).
-        say(how === "ask"
-          ? `web calls are asked first — a browse${webPlace(s) === "cloud" ? " in the cloud; search and fetch run on foldrun's servers inside the model's answer and cannot be asked there (/where web here asks for each)" : ", search and fetch on this computer"}${kept ? " · kept for you, every session" : " · this session only: it could not be saved"}`
-          : `web calls run without asking — search, fetch and a cloud browse; a browse on this computer is still asked${kept ? " · kept for you, every session" : " · this session only: it could not be saved"}`);
+        say(`${webAskSaid(s)}${kept ? " · kept for you, every session" : " · this session only: it could not be saved"}`);
         continue;
       }
       if (rest === "bypass") {

@@ -266,7 +266,7 @@ export function commandMenu(name, st) {
           // Web calls (FOL-383; owner, 26 Nov 2026): unasked by default, asked on request.
           st.webAsk === true
             ? { v: "/permissions web bypass", name: "Web calls without asking", note: "search, fetch and cloud browse run unasked (the default)" }
-            : { v: "/permissions web ask", name: "Ask before web calls", note: "each search, fetch and cloud browse is asked first" },
+            : { v: "/permissions web ask", name: "Ask before web calls", note: st.web === "here" ? "each search, fetch and browse is asked first" : "a cloud browse is asked first; search and fetch in the cloud cannot be (/where web here)" },
         ],
         tick: st.bypass === true ? "/permissions bypass" : st.strict === true ? "/permissions strict" : "/permissions relaxed",
         start: "/permissions ",

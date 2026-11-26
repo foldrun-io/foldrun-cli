@@ -107,6 +107,9 @@ function publicLookup(/** @type {string} */ host, /** @type {any} */ opts, /** @
  * @returns {Promise<{ status: number, url: string, type: string, body: Buffer, cut: boolean }>}
  */
 export async function requestHere(url, o = {}) {
+  // One deadline over every hop: a slow redirect chain cannot outlive the call (Codex).
+  const deadline = AbortSignal.timeout(TIMEOUT_MS);
+  const signal = o.signal ? AbortSignal.any([o.signal, deadline]) : deadline;
   let at = url;
   let method = o.method ?? "GET";
   let body = o.body;
@@ -126,14 +129,18 @@ export async function requestHere(url, o = {}) {
       const lib = u.protocol === "https:" ? https : http;
       const req = lib.request(u, {
         method,
+        // Its own direct connection: never a proxy from the environment, which would resolve the name itself and
+        // so pass by the address check (Codex).
+        agent: u.protocol === "https:" ? new https.Agent({ keepAlive: false }) : new http.Agent({ keepAlive: false }),
         lookup: publicLookup,
         headers: { "user-agent": o.userAgent ?? "foldrun-code", accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5", ...(body !== undefined ? { "content-type": "application/x-www-form-urlencoded", "content-length": String(Buffer.byteLength(body)) } : {}), ...(o.headers ?? {}) },
-        signal: o.signal,
+        signal,
         timeout: TIMEOUT_MS,
       }, (r) => {
         const loc = r.headers.location;
         if (r.statusCode && r.statusCode >= 300 && r.statusCode < 400 && loc) {
-          r.resume();
+          // The redirect's own body is never read: the connection goes now (Codex).
+          r.destroy();
           // A Location that does not parse is the page's error, never a crash of koder (Codex).
           try {
             return resolve({ redirect: new URL(loc, u).toString(), status: r.statusCode });
