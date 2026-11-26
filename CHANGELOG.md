@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.1.2] — 2026-11-26
+
+### deps
+
+- @foldrun/core ^29.2.2 ([7657323](https://github.com/foldrun-io/foldrun-cli/commit/7657323))
+
 ## [33.1.1] — 2026-11-26
 
 - build(deps): bump actions/create-github-app-token (#244) ([03b3f90](https://github.com/foldrun-io/foldrun-cli/commit/03b3f90))
