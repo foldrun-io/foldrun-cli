@@ -253,7 +253,7 @@ export function commandMenu(name, st) {
           { v: "/permissions relaxed", name: "Relaxed", note: "commands that only look are not asked" },
           { v: "/permissions strict", name: "Strict", note: "every command is asked, even one that only looks" },
           // Owner, 25 Nov 2026 (FOL-308): nothing asked, for this session only.
-          { v: "/permissions bypass", name: "Bypass", note: "nothing is asked this session, outside the sandbox too" },
+          { v: "/permissions bypass", name: "Bypass", note: "nothing is asked, outside the sandbox too — kept for next sessions" },
           { v: "/permissions rm ", name: "Remove a rule…", note: "by its number in the list", ask: "the rule's number" },
           { v: "/permissions reset", name: "Forget this session's yeses", note: "every change, command and send is asked again" },
           // The sandbox is one of the things the agent may or may not do (FOL-263: /sandbox went into /permissions).
@@ -1447,7 +1447,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, cloudAsk?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, cloudAsk?: boolean, resources?: string, permissions?: "bypass" | "strict", files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
@@ -1461,13 +1461,14 @@ function filesPref(v) {
 /**
  * What the person chose for `foldrun code` on this computer, whichever
  * folder they are in: whether the model's thinking is shown, and whether token hints are (FOL-262: off only when said);
- * what a named file becomes, by kind, when kept "every time" (FOL-268).
+ * what a named file becomes, by kind, when kept "every time" (FOL-268);
+ * the last /permissions mode, bypass or strict (relaxed is no entry), which a new session at a terminal starts in (FOL-397).
  * @returns {CodePrefs}
  */
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(doc.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(doc.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...(doc.permissions === "bypass" || doc.permissions === "strict" ? { permissions: doc.permissions } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
@@ -1477,7 +1478,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...(prefs.permissions === "bypass" || prefs.permissions === "strict" ? { permissions: prefs.permissions } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;

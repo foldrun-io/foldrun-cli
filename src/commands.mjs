@@ -21098,6 +21098,19 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   if (flags["no-sandbox"] === true || flags.sandbox === false || process.env.FOLDRUN_CODE_SANDBOX === "off") /** @type {any} */ (s).sandboxOff = true;
   // A restart (/update restart or now) hands strict approvals on (FOL-261): only ever stricter, so the variable cannot loosen anything.
   if (process.env.FOLDRUN_CODE_STRICT === "1") /** @type {any} */ (s).strict = true;
+  // The last /permissions mode is kept for this computer (owner, 27 Nov 2026, FOL-397: "it needs to remember the
+  // last choice"): a session at a terminal starts in it, and so do /resume new and a resumed conversation. Never a
+  // script's turn (-p has its own --yes), and a restart handed on as strict stays strict.
+  const keptModeHere = typeof flags.task !== "string" && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const keptMode = () => (keptModeHere ? readCodePrefs().permissions : undefined);
+  /** @param {"bypass" | "strict" | null} m */
+  const keepMode = (m) => {
+    const { permissions: _was, ...rest } = readCodePrefs();
+    return writeCodePrefs(m ? { ...rest, permissions: m } : rest);
+  };
+  const startMode = keptMode();
+  if (startMode === "bypass" && /** @type {any} */ (s).strict !== true) /** @type {any} */ (s).bypass = true;
+  else if (startMode === "strict") /** @type {any} */ (s).strict = true;
   // One session, two places (24 Nov 2026): what was said on one side goes
   // ahead of the next message on the other, once.
   // Restored before anything is kept: the first save must not wipe what a
@@ -21321,7 +21334,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
   ])}`);
   const cloudNote = /** @type {any} */ (s).localOnly === true ? (repo ? " · the agent sends nothing to the cloud (/where)" : " · the agent sends nothing to the cloud; this folder has no git, which the cloud needs (/where offers to set it up)") : ` · agents in the cloud may take heavy jobs, ${cloudAsks(s) ? "each asked first" : "started without a question"} (/where, /permissions cloud)`;
-  console.log(`    ${c.grey(mode === "local" ? `${/** @type {any} */ (s).sandboxOff === true ? "the agent works in this folder on your foldrun plan, with no sandbox (--no-sandbox); it asks before every change and command" : "the agent works in this folder on your foldrun plan; its commands run in a sandbox (/permissions sandbox), and it asks before every change to a file"}${cloudNote}` : "each message takes your folder to the agent; you apply what comes back")}`);
+  if (/** @type {any} */ (s).bypass !== true) console.log(`    ${c.grey(mode === "local" ? `${/** @type {any} */ (s).sandboxOff === true ? "the agent works in this folder on your foldrun plan, with no sandbox (--no-sandbox); it asks before every change and command" : "the agent works in this folder on your foldrun plan; its commands run in a sandbox (/permissions sandbox), and it asks before every change to a file"}${cloudNote}` : "each message takes your folder to the agent; you apply what comes back")}`);
+  if (/** @type {any} */ (s).bypass === true) console.log(`    ${c.red("BYPASS")} ${c.grey("nothing is asked, outside the sandbox and for cloud jobs too — your last /permissions choice; /permissions relaxed turns it off")}`);
   console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
   // The folder's own commands and skills (24 Nov 2026): read at the start
@@ -21675,8 +21689,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     delete s.lastWhere;
     s.context = newContext();
     delete s.localAllow;
-    // Bypass was given in the conversation being left (FOL-308, Codex).
+    // Bypass was given in the conversation being left (FOL-308, Codex) — unless it is the kept mode (FOL-397).
     delete s.bypass;
+    if (keptMode() === "bypass" && s.strict !== true) s.bypass = true;
     delete s.localHistory;
     delete s.lastReply;
     delete s.cloudBriefed;
@@ -21702,6 +21717,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     // What was allowed with "always" was allowed in the conversation being left (Codex) — bypass too (FOL-308).
     delete s.localAllow;
     delete s.bypass;
+    if (keptMode() === "bypass" && s.strict !== true) s.bypass = true;
     if (s.mode === "local") s.engine = "foldrun";
     delete s.localHistory;
     delete s.lastReply;
@@ -23146,10 +23162,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         delete s.bypass;
         delete s.siteYes;
         s.uploadAgreed?.delete(dir);
-        // What named files become (FOL-268) is asked again too.
-        if (readCodePrefs().files) {
-          const { files: _gone, ...prefs } = readCodePrefs();
-          writeCodePrefs(prefs);
+        // What named files become (FOL-268) is asked again too, and the kept /permissions mode is forgotten (FOL-397).
+        if (readCodePrefs().files || readCodePrefs().permissions) {
+          const { files: _gone, permissions: _mode, ...prefs } = readCodePrefs();
+          if (!writeCodePrefs(prefs)) say(c.yellow(`could not forget the kept choices (${homeTilde(configDir())} is not writable) — your next sessions start as before`));
         }
         const kept = folderRules(dir).length;
         say(`forgotten — every change, command and send is asked again${kept ? ` (the ${kept} rule${kept === 1 ? "" : "s"} kept for this folder stay${kept === 1 ? "s" : ""}: /permissions rm <n>)` : ""}`);
@@ -23204,12 +23220,14 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       if (rest === "bypass") {
         s.bypass = true;
         s.strict = false;
-        say(`${c.red("bypass on")} — for this session nothing is asked: changes, commands, and commands outside the sandbox run as you, with your full access. The sandbox stays ${s.sandboxOff === true ? "off" : "on"} for commands that use it. /permissions relaxed or strict turns it off; a new session starts without it`);
+        const kept = keepMode("bypass");
+        say(`${c.red("bypass on")} — nothing is asked: changes, commands, commands outside the sandbox and cloud jobs run as you, with your full access. The sandbox stays ${s.sandboxOff === true ? "off" : "on"} for commands that use it. ${kept ? "Kept for your next sessions on this computer; " : ""}/permissions relaxed or strict turns it off`);
         continue;
       }
       if (rest === "strict" || rest === "relaxed") {
         const was = s.bypass === true;
         delete s.bypass;
+        if (!keepMode(rest === "strict" ? "strict" : null)) say(c.yellow(`could not keep this for your next sessions (${homeTilde(configDir())} is not writable) — they start as the last choice that was kept`));
         if (was && rest === "relaxed") {
           say("bypass off — changes and commands outside the sandbox are asked again");
           continue;
@@ -23218,7 +23236,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         say(s.strict ? `the commands that only look are asked too${s.localAllow?.commands?.size || s.localAllow?.kinds?.size ? " — what you allowed with \"always\" stays allowed (/permissions reset asks again)" : ""}` : `commands that only look run without a question: ${READ_ONLY_SAID}`);
         continue;
       }
-      if (s.bypass === true) console.log(`  ${c.red("!")} ${c.white("bypass: nothing is asked this session, outside the sandbox too")} ${c.dim("— /permissions relaxed turns it off")}`);
+      if (s.bypass === true) console.log(`  ${c.red("!")} ${c.white(`bypass: nothing is asked, outside the sandbox too${keptMode() === "bypass" ? " — kept for your next sessions" : ""}`)} ${c.dim("— /permissions relaxed turns it off")}`);
       console.log(cloudAsks(s) ? `  ${c.dim("·")} ${c.white("cloud jobs are asked about before they start")} ${c.dim("— /permissions cloud bypass starts them unasked")}` : `  ${c.green("✓")} ${c.white("cloud jobs start without a question")} ${c.dim("— a job's changes are still asked before they go into the folder; /permissions cloud ask asks first")}`);
       if (s.strict !== true) console.log(`  ${c.green("✓")} ${c.white(`commands that only look: ${READ_ONLY_SAID}`)} ${c.dim("— plain forms, inside this folder; /permissions strict asks for these too")}`);
       const rows = [];

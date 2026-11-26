@@ -3683,7 +3683,7 @@ test("/permissions bypass (FOL-308): nothing is asked for the session, outside t
   try {
     let at = await t.until(/\w ❯ /);
     t.send("/permissions bypass\r");
-    at = await t.until(/bypass on — for this session nothing is asked/, at);
+    at = await t.until(/bypass on — nothing is asked[\s\S]*Kept for your next sessions/, at);
     t.send("do it\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
@@ -3713,6 +3713,73 @@ test("/permissions bypass (FOL-308): nothing is asked for the session, outside t
     assert.equal(await t.done, 0);
   } finally {
     t.child.kill();
+    s.close();
+  }
+});
+
+test("/permissions remembers the last choice (FOL-397): bypass is kept for the next session at a terminal and said at the start; relaxed and reset forget it", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const prefs = () => { try { return JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")); } catch { return {}; } };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-kept/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": () => sse([{ type: "text", text: "ok" }]),
+  });
+  let t: ReturnType<typeof onTerminal> | undefined;
+  const open = () => (t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-kept", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_SANDBOX: "" }));
+  try {
+    t = open();
+    let at = await t.until(/\w ❯ /);
+    assert.doesNotMatch(t.out(), /BYPASS/, "nothing kept yet");
+    t.send("/permissions bypass\r");
+    at = await t.until(/Kept for your next sessions/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    assert.equal(prefs().permissions, "bypass", "kept for this computer");
+
+    t = open();
+    at = await t.until(/\w ❯ /);
+    assert.match(t.out(), /BYPASS nothing is asked[\s\S]*your last \/permissions choice/, "a new session starts in bypass and says so");
+    at = await alone(t, "/permissions", at);
+    at = await t.until(/bypass: nothing is asked, outside the sandbox too — kept for your next sessions/, at);
+    // /resume new keeps the kept mode (it is the person's choice, not the old conversation's).
+    t.send("hi\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/\bok\b/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/resume new\r");
+    at = await t.until(/a fresh conversation/, at);
+    at = await t.until(/\w ❯ /, at);
+    at = await alone(t, "/permissions", at);
+    at = await t.until(/bypass: nothing is asked/, at);
+    t.send("/permissions relaxed\r");
+    at = await t.until(/bypass off/, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+    assert.equal(prefs().permissions, undefined, "relaxed forgets it");
+
+    t = open();
+    at = await t.until(/\w ❯ /);
+    assert.doesNotMatch(t.out(), /BYPASS/);
+    t.send("/permissions strict\r");
+    at = await t.until(/asked too/, at);
+    assert.equal(prefs().permissions, "strict");
+    t.send("/permissions reset\r");
+    at = await t.until(/forgotten/, at);
+    assert.equal(prefs().permissions, undefined, "reset forgets it");
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t?.child.kill();
     s.close();
   }
 });
