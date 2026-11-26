@@ -14800,6 +14800,8 @@ async function agreeToUpload(s, p, dest, ask, cancelled = () => false) {
   // its output and the patch it gets back is still only applied with --yes.
   // A terminal asks, --task included (Codex).
   if (s.flags?.yes === true || !process.stdin.isTTY) return true;
+  // Bypass sends it without keeping the yes: once bypass ends, what is new is asked about again.
+  if (bypassYes(s, "send it?")) return true;
   // Only keys pressed after it asks answer it: a "y" typed earlier is
   // dropped, not taken as the yes (Codex).
   await dropTypedAhead();
@@ -15433,7 +15435,7 @@ every path as snapshot/….
  * when it was made now.
  */
 /** @param {boolean} [chosen] picked as "+ New project" from the list: made without asking again */
-async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
+async function ensureCodeProject(url, flags, ws, agent, chosen = false, /** @type {any} */ by = null) {
   try {
     await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}`);
     return false;
@@ -15444,7 +15446,7 @@ async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
   if (agent !== "coder") throw new Error(`no project "${ws}" on ${url}, so no agent "${agent}" in it — leave out --agent and foldrun code offers to make the project with a coder agent`);
   console.log(`\n  ${c.amber("!")} there is no project ${c.bold(ws)} on ${url}.`);
   console.log(`  ${c.dim("foldrun code can make it — blank, with a coder agent (agents/coder/agent.md: tools [write, code], model default) to edit like any other.")}`);
-  if (!chosen && !(await confirmed(flags, "foldrun code", `create ${ws}? [y/N] `))) throw new Error(`nothing created — \`foldrun workspaces new ${ws} --platform\` makes it, or name one that exists with --to`);
+  if (!chosen && !bypassYes(by, `create ${ws}?`) && !(await confirmed(flags, "foldrun code", `create ${ws}? [y/N] `))) throw new Error(`nothing created — \`foldrun workspaces new ${ws} --platform\` makes it, or name one that exists with --to`);
   try {
     await remoteCall(url, flags, "/v1/workspaces", { method: "POST", body: JSON.stringify({ name: ws, template: true, ifAbsent: true }) });
   } catch (err) {
@@ -15458,7 +15460,7 @@ async function ensureCodeProject(url, flags, ws, agent, chosen = false) {
 /** @param {boolean} [fresh] the project was made this moment: add the agent without asking twice */
 /** @type {Set<string>} */
 const coderLooked = new Set();
-async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
+async function ensureCodeAgent(url, flags, ws, agent, fresh = false, /** @type {any} */ by = null) {
   const r = await remoteCall(url, flags, `/v1/workspaces/${enc(ws)}/agents`);
   if ((r.agents ?? []).some((a) => a.name === agent)) {
     // A coder still exactly as an earlier foldrun code made it gets what was
@@ -15482,7 +15484,7 @@ async function ensureCodeAgent(url, flags, ws, agent, fresh = false) {
   if (!fresh) {
     console.log(`\n  ${c.amber("!")} ${ws} has no ${c.bold("coder")} agent yet.`);
     console.log(`  ${c.dim("foldrun code can add one (agents/coder/agent.md: tools [write, code], model default) — edit it afterwards like any agent.")}`);
-    if (!(await confirmed(flags, "foldrun code", `add it to ${ws}? [y/N] `))) throw new Error(`nothing started — add an agent with \`foldrun agent new\`, or name one with --agent <name>`);
+    if (!bypassYes(by, `add it to ${ws}?`) && !(await confirmed(flags, "foldrun code", `add it to ${ws}? [y/N] `))) throw new Error(`nothing started — add an agent with \`foldrun agent new\`, or name one with --agent <name>`);
   }
   // Create-only (ifMatch: null): a coder written meanwhile — another
   // session, or someone while this one waited for the yes — is used, never
@@ -15537,7 +15539,7 @@ async function messagesForTurn(s, interactive) {
   // the agent, so an empty line, Ctrl-D or no terminal never includes it
   // (Codex, 19 Nov 2026).
   if (interactive && process.stdin.isTTY) {
-    const answer = (await promptVisible(`  include ${shown.length === 1 ? "it" : `these ${shown.length}`} in this turn? [y/N] `)).trim();
+    const answer = bypassYes(s, "include them in this turn?") ? "y" : (await promptVisible(`  include ${shown.length === 1 ? "it" : `these ${shown.length}`} in this turn? [y/N] `)).trim();
     yes = /^y(es)?$/i.test(answer);
   } else {
     yes = flags["include-messages"] === true;
@@ -15653,7 +15655,7 @@ async function codeTurn(s, task, include = []) {
       await keyboardBack();
       let answer;
       try {
-        answer = await cancellablePrompt(`    ${plainText(extra.file)} is not part of the folder's upload — send its text (${extra.lines} line${extra.lines === 1 ? "" : "s"}) to the cloud with this message? [y/N] `, cancel);
+        answer = bypassYes(s, `send the text of ${plainText(extra.file)} too?`) ? "y" : await cancellablePrompt(`    ${plainText(extra.file)} is not part of the folder's upload — send its text (${extra.lines} line${extra.lines === 1 ? "" : "s"}) to the cloud with this message? [y/N] `, cancel);
       } finally {
         if (!cancel.asked) {
           typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
@@ -15843,7 +15845,7 @@ async function codeTurn(s, task, include = []) {
         console.log(`  ${c.dim(stoppedByYou ? "it had changed some files before you stopped it:" : "it changed some files before it ended:")}`);
         /** @type {{ patch?: Buffer | string, taken?: string[], refused?: string[] }} */
         const part = {};
-        if (await applyPatch(dir, left.patch, { ...flags, yes: false }, runId, cancel, part)) {
+        if (await applyPatch(dir, left.patch, { ...flags, yes: bypassYes(s, "apply what it changed?") }, runId, cancel, part)) {
           (s.applied ??= []).push({ patch: part.patch ?? String(left.patch), runId });
           if (part.refused?.length) {
             (s.cloudOwed ??= []).push(partNote(part.taken ?? [], part.refused));
@@ -15872,7 +15874,7 @@ async function codeTurn(s, task, include = []) {
       console.log();
       /** @type {{ patch?: Buffer | string, taken?: string[], refused?: string[] }} */
       const part = {};
-      if (await applyPatch(dir, p.patch, flags, runId, cancel, part)) {
+      if (await applyPatch(dir, p.patch, flags.yes !== true && bypassYes(s, "apply it?") ? { ...flags, yes: true } : flags, runId, cancel, part)) {
         s.patchHandled = !cancel.asked;
         // Exactly what went in: /undo takes back that and no more.
         (s.applied ??= []).push({ patch: part.patch ?? String(p.patch), runId });
@@ -15997,13 +15999,13 @@ export function offerGitCheck(/** @type {string} */ dir) {
  * Set up git where the cloud was chosen and there is none (FOL-274): asked, never assumed.
  * @returns {Promise<boolean>} whether the folder is in a repository now
  */
-async function offerGit(/** @type {string} */ dir) {
+async function offerGit(/** @type {string} */ dir, /** @type {any} */ s = null) {
   const no = offerGitCheck(dir);
   if (no) {
     console.log(`  ${c.dim(no)}`);
     return false;
   }
-  const yes = /^y(es)?$/i.test((await promptVisible(`  the cloud needs git to send a copy and bring changes back. Set it up here (git init)? [y/N] `)).trim());
+  const yes = bypassYes(s, "set up git here (git init)?") || /^y(es)?$/i.test((await promptVisible(`  the cloud needs git to send a copy and bring changes back. Set it up here (git init)? [y/N] `)).trim());
   if (!yes) return false;
   const made = spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf8" });
   if (made.status !== 0) {
@@ -16117,6 +16119,16 @@ function boxOf(/** @type {any} */ s) {
 
 /** The question's own name for a site a command inside the sandbox reaches that is not on its list (FOL-312; never a tool the model calls). */
 const SITE_ASK = "sandbox_site";
+
+/** /permissions bypass (owner, 27 Nov 2026, FOL-411: "the bypass is a yes it shouldnt ask any question"): a
+ *  yes/no koder would ask of its own is answered yes, and one grey line says which. At a terminal only, never
+ *  headless; and never a question the agent asks the person (ask), which needs a real answer, not a yes.
+ *  @param {any} s the session, or { bypass: true } before one exists */
+export function bypassYes(s, /** @type {string} */ question) {
+  if (s?.bypass !== true || s?.headless || !process.stdin.isTTY || !process.stdout.isTTY) return false;
+  console.log(`    ${c.dim(`${question} yes — /permissions bypass asks nothing`)}`);
+  return true;
+}
 
 /**
  * A command inside the sandbox reached a site not on its list (FOL-312): asked of the person while it runs, so one
@@ -17667,7 +17679,7 @@ async function localKeyFor(s, cancel) {
     // It keeps working; the person is asked once whether to swap it (Codex).
     console.log(`  ${c.violet("◆")} ${c.bold("This computer's model key is the older kind: $20 in all, whoever pays")}`);
     console.log(`    ${c.grey(`a new one is paid by the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all); the old one is revoked`)}`);
-    const swap = ((await cancellablePrompt(`    swap it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
+    const swap = bypassYes(s, "swap it?") ? "y" : ((await cancellablePrompt(`    swap it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
     if (cancel.asked) return null;
     const yes = swap === "y" || swap === "yes";
     // Every check-then-write of the kept keys under one lock, and only of
@@ -17701,7 +17713,7 @@ async function localKeyFor(s, cancel) {
   }
   console.log(`  ${c.violet("◆")} ${c.bold("The agent's model calls are paid by your foldrun plan or credits")}`);
   sayUnder("    ", `with a key made for this computer — the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all), kept only here; foldrun keys ls shows what it spent`, c.grey);
-  const yes = ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
+  const yes = bypassYes(s, "make it?") ? "y" : ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
   if (cancel.asked) return null;
   if (yes !== "y" && yes !== "yes") {
     sayUnder("  ", "nothing made — the agent needs it to work on this computer; foldrun code --cloud works without one, and `foldrun login` (an admin, with model access ticked) makes your sign-in the model key too", c.dim);
@@ -17714,7 +17726,7 @@ async function localKeyFor(s, cancel) {
   // A platform from before plan-first keys: the older kind is asked about
   // on its own terms, outside the lock (an unanswered question never holds
   // other sessions up), then made under it if the slot is still empty (Codex).
-  if (!(await askOlderKind(cancel))) return null;
+  if (!(await askOlderKind(cancel, s))) return null;
   return withLocalKeyLock(file, cancel, async () => readLocalKey(file, s.keySlot) ?? mintOlderLocalKey(s, file));
 }
 
@@ -17896,10 +17908,10 @@ async function withLocalKeyLock(file, cancel, fn) {
 
 /** The key a platform from before plan-first keys makes: $20 in all, from
  *  bought credits. Kept as asked about, so no swap is offered for it. */
-async function askOlderKind(cancel) {
+async function askOlderKind(cancel, /** @type {any} */ s = null) {
   console.log(`  ${c.violet("◆")} ${c.bold("This platform makes only the older kind of key")}`);
   console.log(`    ${c.grey(`its calls are paid from your bought credits (the plan does not pay them), at most $${LOCAL_OLDER_KEY_CAP_USD} in all`)}`);
-  const yes = ((await cancellablePrompt(`    make that instead? [y/N] `, cancel)) ?? "").trim().toLowerCase();
+  const yes = bypassYes(s, "make that instead?") ? "y" : ((await cancellablePrompt(`    make that instead? [y/N] `, cancel)) ?? "").trim().toLowerCase();
   if (cancel?.asked) return false;
   if (yes !== "y" && yes !== "yes") {
     console.log(`  ${c.dim("nothing made — foldrun code --cloud works without one")}\n`);
@@ -18466,6 +18478,7 @@ async function localMessagesBlock(/** @type {any} */ s) {
   const answer = fresh.every((/** @type {any} */ m) => pre.has(m.id)) ? "y" : await (async () => {
     console.log(`\n  ${c.amber(`${fresh.length} message${fresh.length === 1 ? "" : "s"} from other sessions`)}`);
     for (const m of fresh) console.log(sessionMessageLine(m));
+    if (bypassYes(s, "include them in this turn?")) return "y";
     return (await promptVisible(`  include ${fresh.length === 1 ? "it" : `these ${fresh.length}`} in this turn? [y/N] `)).trim();
   })();
   // Shown once, whatever the answer: /messages still lists them.
@@ -18600,7 +18613,7 @@ async function nameOnPlatform(/** @type {any} */ s, /** @type {string} */ name) 
  */
 async function renameProjectFromSession(/** @type {any} */ s, /** @type {string} */ to) {
   console.log(`\n  ${c.yellow("!")} renaming ${c.bold(plainText(s.ws))} to ${c.bold(plainText(to))} changes every webhook URL it has — anything posting to the old ones is refused`);
-  const yes = /^y(es)?$/i.test((await promptVisible("  Rename it? [y/N] ")).trim());
+  const yes = bypassYes(s, "rename it?") || /^y(es)?$/i.test((await promptVisible("  Rename it? [y/N] ")).trim());
   if (!yes) {
     console.log(`  ${c.dim("nothing renamed")}\n`);
     return;
@@ -19484,6 +19497,7 @@ async function codeLocalTurn(s, text) {
       // files once, FOL-212), and a job's changes still need a yes before they go into the folder.
       const cloudUnasked = cloud && !child && s.strict !== true && !cloudAsks(s);
       const allowedNow = !s.headless && !outsideLive && (byRule || cloudUnasked || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
+      // Every other yes/no koder asks goes through bypassYes (FOL-411).
       // /permissions bypass (owner, 25 Nov 2026, FOL-308): nothing is asked for this session — not outside the sandbox,
       // not a sub-agent's. Never a script's turn (-p has its own --yes), and never a /plan turn (refused above).
       if (allowedNow || (s.bypass === true && !s.headless)) {
@@ -21070,13 +21084,16 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     }
   }
   mode ??= "cloud";
+  // A kept /permissions bypass (FOL-397) answers the questions asked before the session exists too (FOL-411):
+  // at a terminal, not a script's turn, and not under a strict handover — as the session itself starts in it below.
+  const bypassAtStart = () => typeof flags.task !== "string" && Boolean(process.stdin.isTTY && process.stdout.isTTY) && process.env.FOLDRUN_CODE_STRICT !== "1" && readCodePrefs().permissions === "bypass";
   // Refused before git is offered: a yes would leave a .git behind for a start that cannot run (Codex).
   if (flags.engine !== undefined && mode !== "local") throw new Error("--engine is for work on this computer (--local); in the cloud the platform runs the agent");
   // The cloud needs git (FOL-274): asked once, at a terminal, when the session works in the cloud; "no"
   // stays on this computer. Working here with agents in the cloud is not asked at the start: git is
   // offered when a cloud job would take the folder (/where cloud), never before anything uses it (the report).
   if (!repo && mode === "cloud") {
-    repo = asking ? await offerGit(dir) : false;
+    repo = asking ? await offerGit(dir, bypassAtStart() ? { bypass: true } : null) : false;
     if (!repo) {
       // A script's one task cannot fall back; at a terminal, even after --cloud, "no" works on this computer (Codex).
       if (mode === "cloud" && (!asking || typeof flags.task === "string")) throw new Error(`${dir} is not a git repository — the cloud needs git to send a copy and bring changes back (git init sets it up)`);
@@ -21106,7 +21123,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     console.log(`  ${c.dim("project")}  ${c.cyan(plainText(ws))}${p.isNew ? c.grey(" · new") : ""}\n`);
   }
   ws ??= platformWorkspace(flags, layout, "code");
-  await ensureCodeAgent(url, flags, ws, agent, await ensureCodeProject(url, flags, ws, agent, picked));
+  await ensureCodeAgent(url, flags, ws, agent, await ensureCodeProject(url, flags, ws, agent, picked, bypassAtStart() ? { bypass: true } : null), bypassAtStart() ? { bypass: true } : null);
   const newContext = () => `code-${crypto.randomBytes(8).toString("hex")}`;
   // --continue: the last conversation of this folder (19 Nov 2026).
   // --continue with a conversation named: the folder's saved one when it is that one (what `foldrun sessions
@@ -21205,11 +21222,13 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     const ask = (await r.R.agentAsks(front)).ask;
     const rows = r.R.resolveLocal({ budget: r.budget, session: /** @type {any} */ (s).resCeiling ?? null, ask });
     const over = rows.filter((/** @type {any} */ x) => x.over);
+    let byYes = false;
     if (over.length) {
       const fig = (/** @type {any} */ x, /** @type {number} */ v) => (x.resource === "cpu" ? r.R.formatCpu(v) : r.R.formatMi(v));
       const line = over.map((/** @type {any} */ x) => `${fig(x, x.asked)} of ${x.resource === "cpu" ? "CPU" : "memory"}, this computer allows ${fig(x, x.allowed)}`).join("; ");
+      byYes = atTerminal && bypassYes(s, "run it at what this computer allows?");
       const yes = atTerminal
-        ? await pickOne({ title: `${s.agent} asks ${line}`, subtitle: "its size: / resources: — run it at what this computer allows?", choices: [{ v: "yes", name: "Yes, at what this computer allows", note: "for this session" }, { v: "no", name: "No — not this turn", note: "/permissions resources raises the limit" }], tick: "yes" })
+        ? byYes ? "yes" : await pickOne({ title: `${s.agent} asks ${line}`, subtitle: "its size: / resources: — run it at what this computer allows?", choices: [{ v: "yes", name: "Yes, at what this computer allows", note: "for this session" }, { v: "no", name: "No — not this turn", note: "/permissions resources raises the limit" }], tick: "yes" })
         : null;
       if (yes !== "yes") {
         console.log(`  ${c.amber("■")} ${c.grey(`not run — ${plainText(s.agent)} asks ${line}${atTerminal ? "" : "; a script is not asked: raise the limit with FOLDRUN_CODE_RESOURCES"}`)}`);
@@ -21217,7 +21236,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       }
     }
     /** @type {any} */ (s).resAsk = ask;
-    /** @type {any} */ (s).resAskRead = true;
+    // A bypass yes is not kept (Codex): after bypass ends the agent's size is asked about again.
+    if (!byYes) /** @type {any} */ (s).resAskRead = true;
     return true;
   };
 
@@ -21580,7 +21600,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     let at = Date.parse(plan.freeAt);
     const when = () => new Date(at).toLocaleString();
     const ceilingSaid = where === "local" ? ` ${c.dim("(y 2: stop that turn at about $2, an estimate at listed prices)")}` : "";
-    const typed = await promptVisible(`  ${c.bold(c.white(`wait here and carry on at ${when()}`))}${c.grey(`, in ${waitLeft(at - Date.now())}? [y/N]`)}${ceilingSaid} `);
+    const typed = bypassYes(s, "wait here and carry on?") ? "y" : await promptVisible(`  ${c.bold(c.white(`wait here and carry on at ${when()}`))}${c.grey(`, in ${waitLeft(at - Date.now())}? [y/N]`)}${ceilingSaid} `);
     const go = waitAnswer(typed);
     if (!go) {
       console.log("");
@@ -21697,15 +21717,20 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       // folder is marked; whether its words may go to the cloud is the
       // person's call, asked once and kept with the exchange (Codex) — a
       // failed send, a retry or --continue does not ask again or forget a no.
+      /** @type {Set<any>} */
+      const sharedNow = new Set();
       const waiting = where === "cloud" ? s.transcript.slice(s.told.cloud).filter((/** @type {any} */ e) => e.where === "local" && e.private === true && typeof e.share !== "boolean") : [];
       if (waiting.length) {
         console.log(`  ${c.amber("!")} ${c.grey(`the cloud agent is told what was said in the turns on this computer. ${waiting.length === 1 ? "One of them" : `${waiting.length} of them`} used an MCP server or a folder you added, so the agent's answers there — and the todo list — may quote what it read.`)}`);
-        const yes = /^y(es)?$/i.test((await promptVisible("    send those answers and the todo list along? [y/N] (no: the cloud agent gets your message without them) ")).trim());
-        for (const e of waiting) e.share = yes;
+        // A bypass yes sends them this time and keeps nothing (Codex): a retry after bypass ends asks again.
+        const byYes = bypassYes(s, "send those answers and the todo list along?");
+        if (byYes) for (const e of waiting) sharedNow.add(e);
+        const yes = byYes || /^y(es)?$/i.test((await promptVisible("    send those answers and the todo list along? [y/N] (no: the cloud agent gets your message without them) ")).trim());
+        if (!byYes) for (const e of waiting) e.share = yes;
         if (!yes && Array.isArray(s.todos) && s.todos.length) s.todosWithheld = true;
         remember();
       }
-      let carry = carryNote(s.transcript.filter((/** @type {any} */ e, /** @type {number} */ i) => i < s.told[where] || !(where === "cloud" && e.private === true && e.share !== true)), where, s.told[where]);
+      let carry = carryNote(s.transcript.filter((/** @type {any} */ e, /** @type {number} */ i) => i < s.told[where] || !(where === "cloud" && e.private === true && e.share !== true && !sharedNow.has(e))), where, s.told[where]);
       const todoNote = where === "cloud" && s.todosWithheld !== true ? todosForCloud(Array.isArray(s.todos) ? s.todos : []) : "";
       // With nothing private read here, a list that is empty may be started by the cloud agent.
       s.cloudBriefDue = where === "cloud" && s.cloudBriefed !== s.context;
@@ -22403,7 +22428,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           // The person's command, shown whole and agreed to once for this goal:
           // it is run again each time the agent says the goal is met.
           console.log(`      ${c.white(`$ ${plainText(withCheck.check)}`)}`);
-          const yes = /^y(es)?$/i.test((await promptVisible(`    run this in ${plainText(homeTilde(dir))} each time the agent says the goal is met, and take the goal as met only when it exits 0? [y/N] `)).trim());
+          const yes = bypassYes(s, "run this check each time?") || /^y(es)?$/i.test((await promptVisible(`    run this in ${plainText(homeTilde(dir))} each time the agent says the goal is met, and take the goal as met only when it exits 0? [y/N] `)).trim());
           if (!yes) {
             say(typeof s.goal === "string" ? "not changed — the goal you had stays as it was" : "no goal set");
             continue;
@@ -22689,7 +22714,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       }
       const to = past[n - 1];
       // A conversation worked in the cloud goes on there: the cloud needs git (FOL-274, Codex). Asked before anything moves.
-      if (to.mode !== "local" && !inGitRepo(dir) && !(await offerGit(dir))) {
+      if (to.mode !== "local" && !inGitRepo(dir) && !(await offerGit(dir, s))) {
         say("not gone back — that conversation is in the cloud, which needs git; this one stays");
         continue;
       }
@@ -22716,7 +22741,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         continue;
       }
       for (const ch of p.changes) console.log(`  ${c.white(plainText(ch.path))} ${c.dim(ch.done ? "— already back" : ch.op === "remove" ? "— removed (the agent created it)" : "— put back as it was before")}`);
-      const yes = /^y(es)?$/i.test((await promptVisible(`  take back turn ${n}${turns.some((t) => t.turn > n) ? " and the turns after it" : ""}: ${p.changes.length} file${p.changes.length === 1 ? "" : "s"}? what commands changed stays as it is [y/N] `)).trim());
+      const yes = bypassYes(s, `take back turn ${n}?`) || /^y(es)?$/i.test((await promptVisible(`  take back turn ${n}${turns.some((t) => t.turn > n) ? " and the turns after it" : ""}: ${p.changes.length} file${p.changes.length === 1 ? "" : "s"}? what commands changed stays as it is [y/N] `)).trim());
       if (!yes) {
         say("nothing changed");
         continue;
@@ -22805,7 +22830,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       const sites = (s.sandboxSites ??= []);
       if (verb === "off") {
         if (s.sandboxOff === true) say("already off — every command is asked, and runs as you");
-        else if (/^y(es)?$/i.test((await promptVisible(`  ${c.amber("!")} without the sandbox the agent's commands run as you: they can write anywhere you can, read your keys and reach any site. Each one is asked first. Turn it off for this session? [y/N] `)).trim())) {
+        else if (bypassYes(s, "turn the sandbox off?") || /^y(es)?$/i.test((await promptVisible(`  ${c.amber("!")} without the sandbox the agent's commands run as you: they can write anywhere you can, read your keys and reach any site. Each one is asked first. Turn it off for this session? [y/N] `)).trim())) {
           await s.mcp?.closeAll?.().catch(() => undefined);
           await s.box?.close?.().catch(() => undefined);
           s.sandboxOff = true;
@@ -23032,9 +23057,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         if (row.state === "on") say("already running");
         else if (row.state === "waiting") {
           show(row);
-          const yes = /^y(es)?$/i.test((await promptVisible(`    start ${plainText(row.name)} now, and in later sessions of this folder while none of the above changes? [y/N] `)).trim());
+          // A bypass yes starts it for this session only (Codex): later sessions ask as before.
+          const byYes = bypassYes(s, `start ${plainText(row.name)}?`);
+          const yes = byYes || /^y(es)?$/i.test((await promptVisible(`    start ${plainText(row.name)} now, and in later sessions of this folder while none of the above changes? [y/N] `)).trim());
           if (!yes) say("not started");
-          else started(await m.approve(row, soon()), row.name);
+          else started(await (byYes ? m.approveForSession(row, soon()) : m.approve(row, soon())), row.name);
         } else {
           m.turnOn(row.name);
           started(await m.restart(row, soon()), row.name);
@@ -23147,7 +23174,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           say("/where send <task> — the task runs on a copy in the cloud; you stay where you are");
           continue;
         }
-        if (!inGitRepo(dir) && !(await offerGit(dir))) {
+        if (!inGitRepo(dir) && !(await offerGit(dir, s))) {
           say("not sent — the cloud needs git");
           continue;
         }
@@ -23159,7 +23186,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       let want = word === "cloud" ? "cloud" : word === "local+cloud" ? "local" : "local-only";
       // Only working in the cloud needs git now; agents in the cloud from here are asked about it when a
       // job would take the folder, and a job without the folder needs none (Codex).
-      if (want === "cloud" && !inGitRepo(dir) && !(await offerGit(dir))) {
+      if (want === "cloud" && !inGitRepo(dir) && !(await offerGit(dir, s))) {
         say("staying where you are — the cloud needs git");
         continue;
       }
@@ -23903,7 +23930,7 @@ async function messagesAtPrompt(/** @type {any} */ s) {
   }
   console.log(`\n  ${c.amber(`${shown.length} message${shown.length === 1 ? "" : "s"} from other sessions`)}`);
   for (const m of shown) console.log(sessionMessageLine(m));
-  const yes = /^y(es)?$/i.test((await promptVisible(`  take ${shown.length === 1 ? "it" : `these ${shown.length}`} into a turn now? [y/N] `)).trim());
+  const yes = bypassYes(s, "take them into a turn?") || /^y(es)?$/i.test((await promptVisible(`  take ${shown.length === 1 ? "it" : `these ${shown.length}`} into a turn now? [y/N] `)).trim());
   if (!yes) {
     console.log(`  ${c.dim("left waiting — /sessions read lists them")}\n`);
     return false;
@@ -24241,7 +24268,7 @@ async function undoLastPatch(s) {
     return;
   }
   for (const l of String(git("--stat").stdout).trimEnd().split("\n")) if (l.trim()) console.log(`  ${l.trim()}`);
-  if (!/^y(es)?$/i.test((await promptVisible(`  take back the last change you applied? [y/N] `)).trim())) {
+  if (!bypassYes(s, "take back the last change you applied?") && !/^y(es)?$/i.test((await promptVisible(`  take back the last change you applied? [y/N] `)).trim())) {
     console.log(`  ${c.dim("left as it is")}\n`);
     return;
   }

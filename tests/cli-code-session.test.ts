@@ -3782,8 +3782,7 @@ test("/permissions bypass (FOL-308): nothing is asked for the session, outside t
     t.send("/permissions bypass\r");
     at = await t.until(/bypass on — nothing is asked[\s\S]*Kept for your next sessions/, at);
     t.send("do it\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/make it\? yes — \/permissions bypass asks nothing/, at); // FOL-411: not asked
     at = await t.until(/Both done\./, at, 60_000);
     at = await t.until(/\w ❯ /, at);
     assert.doesNotMatch(t.out(), /allow\?/, "nothing was asked");
@@ -3848,10 +3847,11 @@ test("/permissions remembers the last choice (FOL-397): bypass is kept for the n
     at = await alone(t, "/permissions", at);
     at = await t.until(/bypass: nothing is asked, outside the sandbox too — kept for your next sessions/, at);
     // /resume new keeps the kept mode (it is the person's choice, not the old conversation's).
+    // Bypass asks nothing (FOL-411): the computer's model key is made without "make it?".
     t.send("hi\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/make it\? yes — \/permissions bypass asks nothing/, at);
     at = await t.until(/\bok\b/, at, 30_000);
+    assert.doesNotMatch(t.out(), /make it\? \[y\/N\]/, "not asked");
     at = await t.until(/\w ❯ /, at);
     t.send("/resume new\r");
     at = await t.until(/a fresh conversation/, at);
@@ -3877,6 +3877,38 @@ test("/permissions remembers the last choice (FOL-397): bypass is kept for the n
     assert.equal(await t.done, 0);
   } finally {
     t?.child.kill();
+    s.close();
+  }
+});
+
+test("/permissions bypass asks no question (FOL-411): a cloud turn's files go and its changes go in unasked, said in a grey line; after relaxed, send it? is asked again", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  fs.writeFileSync(path.join(home, "code-prefs.json"), JSON.stringify({ permissions: "bypass" }));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-by", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    assert.match(t.out(), /BYPASS/, "the kept bypass is on");
+    t.send("add b\r");
+    at = await t.until(/send it\? yes — \/permissions bypass asks nothing/, at);
+    at = await t.until(/apply it\? yes — \/permissions bypass asks nothing/, at, 30_000);
+    at = await t.until(/\/undo takes it back/, at);
+    assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n", "applied without a question");
+    assert.doesNotMatch(t.out(), /send it\? \[y\]es|apply it to/, "neither question was asked");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/permissions relaxed\r");
+    at = await t.until(/bypass off/, at);
+    at = await t.until(/\w ❯ /, at);
+    // A yes given by bypass is not kept: the same files are asked about once bypass is off.
+    t.send("add c\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    t.send("n\r");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.ended(), 0);
+  } finally {
+    t.child.kill();
     s.close();
   }
 });
