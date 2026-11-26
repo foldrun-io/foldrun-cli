@@ -195,6 +195,29 @@ test("the status line under the prompt (FOL-269): the conversation, its id and w
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).statusLine, undefined, "on again: nothing kept");
 });
 
+test("/status jobs off hides the background jobs' rows under the working line, for the person; on again keeps nothing (FOL-343)", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-jb", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1", NO_COLOR: "1", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/status jobs\r");
+    at = await t.until(/background jobs under the working line are shown · \/status jobs off/, at);
+    t.send("/status jobs off\r");
+    at = await t.until(/background jobs hidden/, at);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).jobs, false, "kept for the person");
+    t.send("/status jobs on\r");
+    at = await t.until(/background jobs shown/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).jobs, undefined, "on again: nothing kept");
+});
+
 test("a bracketed paste is one message however slowly it arrives; Enter after it sends it; the terminal's paste mode is off again after", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
@@ -334,6 +357,17 @@ test("the CLI's own controls pass the terminal guard; nothing else does through 
   again();
   stream.write("\x1b[1G");
   assert.equal(got, "\x1b[1G", "unguarded only until put back");
+});
+
+test("a working frame is one write: its text made safe as the guard makes it, only the CLI's own controls between the rows (owner, 26 Nov 2026)", async () => {
+  const { writeFrame, guardStream } = await import("../src/terminal.mjs");
+  const writes: string[] = [];
+  const stream = { write: (x: string) => (writes.push(x), true) } as unknown as NodeJS.WriteStream;
+  guardStream(stream);
+  writeFrame([{ control: "\x1b[?2026h\r\x1b[3A" }, "  working\x1b]52;c;eA==\x07", { control: "\x1b[K" }, "\n", "  desk\u00a0❯ typed\x1b[1G", { control: "\x1b[K\x1b[J\x1b[?2026l" }], stream);
+  assert.equal(writes.length, 1, "one write, never a half-drawn frame");
+  assert.equal(writes[0], "\x1b[?2026h\r\x1b[3A  working\x1b[K\n  desk\u00a0❯ typed\x1b[K\x1b[J\x1b[?2026l", "what the agent or the person typed loses its controls");
+  assert.throws(() => writeFrame([{ control: "\x1b[1G" }], stream), /not one of the CLI's own controls/);
 });
 
 test("/model: shows the agent's model; /model max changes its file's model: line, with the version it read", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {

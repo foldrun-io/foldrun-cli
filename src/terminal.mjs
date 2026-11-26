@@ -139,8 +139,10 @@ export function writeExact(chunk, stream = process.stdout) {
  *  go to the line's start, clear the line, bracketed paste on and off. */
 // Carriage return, clear the line, bracketed paste on/off, and — for a
 // picker drawn in place (/model) — cursor up n rows and clear to the end;
-// the cursor hidden and shown again around the working line.
-const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[\?2004[hl]|\u001b\[\?25[hl]|\u001b\[\d{1,2}A|\u001b\[J)+$/;
+// the cursor hidden and shown again around the working line; erase to the
+// row's end and synchronized output (DEC 2026), so the working rows are
+// drawn over in place, never cleared to a blank frame first.
+const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[K|\u001b\[\?2004[hl]|\u001b\[\?2026[hl]|\u001b\[\?25[hl]|\u001b\[\d{1,2}A|\u001b\[J)+$/;
 
 /**
  * One of the CLI's own terminal controls (OUR_CONTROLS), past the guard —
@@ -151,6 +153,25 @@ const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[\?2004[hl]|\u001b\[\?25[hl]|\u00
 export function writeControl(seq, stream = process.stdout) {
   if (!OUR_CONTROLS.test(seq)) throw new Error("writeControl: not one of the CLI's own controls");
   return (stream.__foldrunRawWrite ?? stream.write.bind(stream))(seq);
+}
+
+/**
+ * Several rows and the CLI's own controls between them as ONE write: the text made safe as the guard makes
+ * it, each control checked as writeControl checks it. A frame drawn in several writes can be shown half
+ * drawn by a terminal that does not hold output for synchronized updates (owner, 26 Nov 2026: "it looks
+ * glitchy"). Parts alternate freely: `{ control }` for a control, a string for text.
+ * @param {Array<string | { control: string }>} parts
+ * @param {Guardable} [stream]
+ */
+export function writeFrame(parts, stream = process.stdout) {
+  const out = parts
+    .map((part) => {
+      if (typeof part === "string") return terminalSafe(part);
+      if (!OUR_CONTROLS.test(part.control)) throw new Error("writeFrame: not one of the CLI's own controls");
+      return part.control;
+    })
+    .join("");
+  return (stream.__foldrunRawWrite ?? stream.write.bind(stream))(out);
 }
 
 /**

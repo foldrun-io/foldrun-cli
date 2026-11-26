@@ -41,7 +41,7 @@ export const CODE_GROUPS = [
     ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
   ] },
   { group: "Status", commands: [
-    ["/status [cost|explain|usage|context|tips on|off|line on|off]", "this session: turns, model, where it works, the account — cost: what it spent; explain: where it went, row by row; usage: your foldrun plan and the credit left; context: what fills the agent's context; tips on|off: a line before a turn that re-reads the whole conversation; line on|off: the status line under the prompt"],
+    ["/status [cost|explain|usage|context|tips on|off|line on|off|jobs on|off]", "this session: turns, model, where it works, the account — cost: what it spent; explain: where it went, row by row; usage: your foldrun plan and the credit left; context: what fills the agent's context; tips on|off: a line before a turn that re-reads the whole conversation; line on|off: the status line under the prompt; jobs on|off: a row with a spinner for each background job (here, outside the sandbox, cloud) under the working line, on by default"],
     ["/sessions [send <id> <text>|read]", "this session's id and the other sessions of this project on this computer — send messages one (the agent can too, when you ask it); read shows what they sent this one"],
   ] },
   { group: "App", commands: [
@@ -235,7 +235,7 @@ export function commandMenu(name, st) {
       // One command for what the session is, has spent and holds (FOL-263: /cost, /usage, /context went in).
       return {
         title: "This session",
-        subtitle: "/status cost · explain · usage · context · tips on|off · line on|off types it straight away",
+        subtitle: "/status cost · explain · usage · context · tips on|off · line on|off · jobs on|off types it straight away",
         choices: [
           { v: "/status", name: "The session", note: "turns, model, where it works, the account" },
           { v: "/status cost", name: "What it spent", note: "turns here and in the cloud" },
@@ -244,6 +244,7 @@ export function commandMenu(name, st) {
           { v: "/status context", name: "What fills the context", note: "instructions, skills, the conversation" },
           { v: st.tips === false ? "/status tips on" : "/status tips off", name: st.tips === false ? "Token hints on" : "Token hints off", note: "a line before a turn that re-reads the conversation" },
           { v: st.line === false ? "/status line on" : "/status line off", name: st.line === false ? "Status line on" : "Status line off", note: "the line under the prompt" },
+          { v: st.jobs === false ? "/status jobs on" : "/status jobs off", name: st.jobs === false ? "Background jobs on" : "Background jobs off", note: "a row each, with a spinner, under the working line" },
         ],
         tick: null,
         start: "/status",
@@ -1291,7 +1292,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
@@ -1311,7 +1312,7 @@ function filesPref(v) {
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
@@ -1321,7 +1322,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;

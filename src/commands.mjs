@@ -1,7 +1,7 @@
 // CLI commands. Kept separate from bin/ so the environment is set before the
 // core is imported — single-workspace mode is read at module load.
 
-import { writeExact, writeControl, unguardedWhile, HUE, SWEEP_STEPS, rgbSgr, sweepShade } from "./terminal.mjs";
+import { writeExact, writeControl, writeFrame, unguardedWhile, HUE, SWEEP_STEPS, rgbSgr, sweepShade } from "./terminal.mjs";
 import dns from "node:dns";
 import fs from "node:fs";
 import http from "node:http";
@@ -3224,11 +3224,13 @@ async function renewedToken(url, flags) {
  * that is down — and used to be read as {} and reported as a bare "HTTP
  * 403". Now the status, the content-type and the first line say so.
  * @param {string} url @param {Record<string, any>} flags @param {string} apiPath @param {RequestInit} [init]
- * @param {{ seconds?: number }} [opts]
+ * @param {{ seconds?: number, sent?: { token?: string } }} [opts] sent: filled with the token the call went as
  * @returns {Promise<any>}
  */
-async function remoteCall(url, flags, apiPath, init = {}, { seconds } = {}) {
+async function remoteCall(url, flags, apiPath, init = {}, { seconds, sent } = {}) {
   const token = await renewedToken(url, flags);
+  // Which sign-in the call went as, for a caller that keeps the answer for it (a renewal may change it).
+  if (sent) sent.token = String(token ?? "");
   const res = await remoteFetch(
     url,
     apiPath,
@@ -9859,6 +9861,89 @@ async function agentMedia(s) {
 }
 
 /**
+ * The reads a turn on this computer waits for, started side by side the moment Enter sends it: the agent
+ * file (its model and effort), the plan, and the project's and account's AGENTS.md (browse limits). Each is
+ * the same read the turn makes later, so nothing is read twice; a failure here is the turn's to report.
+ * @param {any} s
+ */
+function warmCodeTurn(s) {
+  if (s.mode !== "local") return;
+  readSource(s, `agents/${s.agent}/agent.md`).catch(() => {});
+  codingPlanOf(s).catch(() => {});
+  // The text only, nothing parsed: reading the files loads nothing more (the light-session ceilings).
+  readSource(s, "AGENTS.md").catch(() => {});
+  if (!s.accountAgentsRead || Date.now() - s.accountAgentsRead.at >= 10_000) {
+    /** @type {{ token?: string }} */
+    const sent = {};
+    const read = remoteCall(s.url, s.flags, "/v1/account/agents-md", {}, { sent });
+    read.catch(() => {});
+    s.accountAgentsRead = { read, sent, at: Date.now(), reader: readerOf(s), url: s.url };
+  }
+}
+
+/**
+ * What a session's first turn on this computer looks up once — who this sign-in is, the account's credits,
+ * the project's agents — read while the person types the first message, so that turn starts as fast as the
+ * next (it waited 4 s on them, one after another, 26 Nov 2026). Read-only; a failed read is read again by
+ * the turn itself.
+ * @param {any} s
+ */
+function warmCodeSession(s) {
+  if (s.mode !== "local") return;
+  meOf(s).catch(() => {});
+  if (!s.creditsOk && !s.usageRead) {
+    const read = remoteCall(s.url, s.flags, "/v1/account/usage");
+    read.catch(() => {});
+    s.usageRead = { read, at: Date.now(), reader: readerOf(s), url: s.url };
+  }
+  if (s.localOnly !== true) cloudAgentNames(s).catch(() => {});
+}
+
+/**
+ * A project file's text as the platform has it now (null: there is none), read once for this turn however
+ * many places ask: the turn starts the reads it will need the moment Enter sends it, side by side, and the
+ * gate, the model lookup and the browse limits take the same answer (owner, 26 Nov 2026: the lookups before
+ * a turn ran one after another, 4 s on a first turn). A failed read is not kept: the next asker tries again.
+ * @param {any} s @param {string} file @returns {Promise<string | null>}
+ */
+function readSource(s, file) {
+  return readSourceAt(s, file).then((r) => r.content);
+}
+
+/** Who reads now: the sign-in's token, so a read made for one sign-in is never handed to another. */
+function readerOf(/** @type {any} */ s) {
+  try {
+    return String(tokenFor(s.url, { ...s.flags, quiet: true }) ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * readSource, with when the read was asked for: a cache built on it (the browse limits) counts its 30 s from
+ * then, not from when it was parsed (Codex). Held 10 s at most — the lookups of one turn, never a later
+ * turn's — and only for the same sign-in, project and file.
+ * @param {any} s @param {string} file @returns {Promise<{ content: string | null, at: number }>}
+ */
+function readSourceAt(s, file) {
+  s.turnSources ??= new Map();
+  const key = `${readerOf(s)}\n${s.url}\n${s.ws}\n${file}`;
+  const held = s.turnSources.get(key);
+  if (held && Date.now() - held.at < 10_000) return held.read;
+  const at = Date.now();
+  const read = remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${encodeURIComponent(file)}`).then(
+    (got) => ({ content: typeof got?.content === "string" ? got.content : null, at }),
+    (err) => {
+      if (err instanceof HttpError && err.status === 404) return { content: null, at };
+      if (s.turnSources?.get(key)?.read === read) s.turnSources.delete(key);
+      throw err;
+    },
+  );
+  s.turnSources.set(key, { read, at });
+  return read;
+}
+
+/**
  * A project file's frontmatter, read with core's own YAML reader as the runner reads it (quoted keys and all),
  * once a session: {} when the file is not there; throws when it could not be read (FOL-267: a lock in it must
  * not be skipped because the platform did not answer).
@@ -9866,18 +9951,14 @@ async function agentMedia(s) {
  */
 async function projectFront(s, file) {
   s.fronts ??= {};
-  // Read again after 30 s: a lock tightened in the file holds without a restart (Codex).
-  const held = s.fronts[file];
+  // Read again after 30 s: a lock tightened in the file holds without a restart (Codex). Kept per sign-in,
+  // platform and project: another account's limits are never this one's (Codex, 26 Nov 2026).
+  const key = `${readerOf(s)}\n${s.url}\n${s.ws}\n${file}`;
+  const held = s.fronts[key];
   if (held && Date.now() - held.at < 30_000) return held.front;
-  let content = null;
-  try {
-    const got = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${encodeURIComponent(file)}`);
-    content = typeof got?.content === "string" ? got.content : null;
-  } catch (err) {
-    if (!(err instanceof HttpError && err.status === 404)) throw err;
-  }
+  const { content, at } = await readSourceAt(s, file);
   const front = content !== null ? await frontOfText(content) : {};
-  s.fronts[file] = { front, at: Date.now() };
+  s.fronts[key] = { front, at };
   return front;
 }
 
@@ -10102,22 +10183,64 @@ async function cloudBrowseDefaults(s) {
  * @param {any} s @param {string[]} said
  */
 async function accountFront(s, said) {
+  // Per sign-in and platform, like the project's (Codex, 26 Nov 2026).
+  const who = `${readerOf(s)}\n${s.url}`;
+  if (s.accountFront && s.accountFront.who !== who) s.accountFront = null;
+  if (s.accountFrontReading && s.accountFrontReadingWho !== who) s.accountFrontReading = null;
   if (s.accountFront && Date.now() - s.accountFront.at < 30_000) {
     if (s.accountFront.note) said.push(s.accountFront.note);
     return s.accountFront.front;
   }
+  // One read at a time: the turn starts it early, and whoever asks meanwhile waits for that one.
+  if (!s.accountFrontReading) {
+    const reading = accountFrontRead(s, who);
+    s.accountFrontReading = reading;
+    s.accountFrontReadingWho = who;
+    const done = () => {
+      if (s.accountFrontReading === reading) s.accountFrontReading = null;
+    };
+    reading.then(done, done);
+  }
+  let front;
+  try {
+    front = await s.accountFrontReading;
+  } catch (err) {
+    // A refusal for the sign-in that asked is not this one's (Codex round 4).
+    if (`${readerOf(s)}\n${s.url}` !== who) return accountFront(s, said);
+    throw err;
+  }
+  // Signed in as someone else meanwhile, or the call went as someone else: read again for whoever asks now (Codex).
+  if (`${readerOf(s)}\n${s.url}` !== who || s.accountFront?.who !== who) return accountFront(s, said);
+  if (s.accountFront?.note) said.push(s.accountFront.note);
+  return front;
+}
+
+async function accountFrontRead(/** @type {any} */ s, /** @type {string} */ asked) {
+  let who = asked;
   let front = {};
   let note = /** @type {string | null} */ (null);
+  // When the text was read: the 30 s the limits are held count from then (Codex).
+  let readAt = Date.now();
   try {
-    const got = await remoteCall(s.url, s.flags, "/v1/account/agents-md");
+    // The read this turn started at Enter — when it is that recent and for the same sign-in; else read now.
+    const warm = s.accountAgentsRead;
+    s.accountAgentsRead = null;
+    const early = warm && Date.now() - warm.at < 10_000 && warm.reader === readerOf(s) && warm.url === s.url ? warm : null;
+    if (early) readAt = early.at;
+    /** @type {{ token?: string }} */
+    const sent = early ? early.sent : {};
+    const got = await (early?.read ?? remoteCall(s.url, s.flags, "/v1/account/agents-md", {}, { sent }));
+    // Kept under the sign-in the call actually went as: a renewal or a switch in between makes it someone
+    // else's answer (Codex round 4).
+    if (typeof sent.token === "string") who = `${sent.token}\n${s.url}`;
     if (typeof got?.content === "string" && got.content) front = await frontOfText(got.content);
   } catch (err) {
     if (!(err instanceof HttpError && (err.status === 403 || err.status === 404))) throw err;
     // Its locks (allowed_domains, deny) cannot be skipped because this key may not read them (Codex).
     if (err.status === 403) throw new Error("this key may not read the account's AGENTS.md, where browse limits can be set — sign in with `foldrun login` as someone who reads the whole account");
   }
-  s.accountFront = { front, note, at: Date.now() };
-  if (note) said.push(note);
+  // Kept under the sign-in that asked, never under one that took over while it was read (Codex).
+  s.accountFront = { front, note, at: readAt, who };
   return front;
 }
 
@@ -15228,6 +15351,12 @@ async function codeTurn(s, task, include = []) {
   // typed while the folder packs, uploads or runs waits in the terminal for
   // a prompt to read later (Codex).
   let typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
+  // The getting-ready rows show what is typed while the folder is packed and sent (Codex).
+  readyInput = { typed: () => typeAhead.text(), hint: () => (typeAhead.running() ? QUEUE_HINT : "") };
+  /** The getting-ready rows again after a question, while the folder goes up and the run starts (Codex). */
+  const readyAgain = () => {
+    if (readySince !== null && !readyTicker && !cancel.asked) readyTicker = startTicker(readySince, () => readyInput.typed(), () => readyInput.hint(), { input: Boolean(process.stdin.isTTY) });
+  };
   /** Hands the keyboard back, keys already pressed taken in first. */
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
@@ -15253,7 +15382,10 @@ async function codeTurn(s, task, include = []) {
       try {
         return await cancellablePrompt(q, cancel);
       } finally {
-        if (!cancel.asked) typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
+        if (!cancel.asked) {
+          typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
+          readyAgain();
+        }
       }
     }, () => cancel.asked);
     if (cancel.asked) return "cancelled";
@@ -15268,7 +15400,10 @@ async function codeTurn(s, task, include = []) {
       try {
         answer = await cancellablePrompt(`    ${plainText(extra.file)} is not part of the folder's upload — send its text (${extra.lines} line${extra.lines === 1 ? "" : "s"}) to the cloud with this message? [y/N] `, cancel);
       } finally {
-        if (!cancel.asked) typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
+        if (!cancel.asked) {
+          typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
+          readyAgain();
+        }
       }
       if (cancel.asked) return "cancelled";
       if (!/^y(es)?$/i.test(String(answer ?? "").trim())) {
@@ -15320,7 +15455,7 @@ async function codeTurn(s, task, include = []) {
     const view = { skipResult: true, quiet: flags.verbose !== true };
     codeView = { agent };
     bareRow = null;
-    stopTicker = startTicker(Date.now(), () => typeAhead.text(), typeAhead.running() ? QUEUE_HINT : "");
+    stopTicker = startTicker(Date.now(), () => typeAhead.text(), () => (typeAhead.running() ? QUEUE_HINT : ""), { input: Boolean(process.stdin.isTTY) });
     printNew(run, seen, open, view);
     // A question the cloud agent asks (tools: [ask], FOL-298): put here, as a local one is, and the answer sent to
     // the run, which waits for it. In a script's turn it is said on stderr with the command that answers it.
@@ -15363,7 +15498,7 @@ async function codeTurn(s, task, include = []) {
         live = null;
         if (!cancel.asked) {
           typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
-          stopTicker = startTicker(Date.now(), () => typeAhead.text(), typeAhead.running() ? QUEUE_HINT : "");
+          stopTicker = startTicker(Date.now(), () => typeAhead.text(), () => (typeAhead.running() ? QUEUE_HINT : ""), { input: Boolean(process.stdin.isTTY) });
         }
       }
       if (cancel.asked) return;
@@ -15918,6 +16053,7 @@ async function runCloudSub(s, job, signal, h) {
       unsure = true;
       throw new Error(`${url} started no run it could name`);
     }
+    liveCloudRuns.set(id, { label: `cloud sub-agent ${job.agent}: ${job.description}`, startedAt: Date.now() });
     console.log(`  ${c.violet("☁")} ${c.white(`cloud sub-agent ${plainText(job.agent)}`)} ${c.grey(`· ${id} ·`)} ${c.grey(clipLine(plainText(job.description)))}`);
     const t0 = Date.now();
     tick = startTicker(t0, h.typed, h.hint?.() ?? "");
@@ -15956,6 +16092,7 @@ async function runCloudSub(s, job, signal, h) {
     if (id) return { text: `The cloud sub-agent's run ${id} was started, but its result could not be had (${plainText(explain(err))}).${await stop()} Tell the person; \`foldrun runs ${id} --to ${ws}\` shows what it did. Do not start it again unless they ask.`, isError: true };
     return { text: `The cloud sub-agent could not be run: ${plainText(explain(err))}.${unsure ? ` A run may have started without its id reaching here (foldrun runs --to ${ws}).` : ""} Do the job here, or say what you wanted it for.`, isError: true };
   } finally {
+    if (id) liveCloudRuns.delete(id);
     tick();
     h.resume();
   }
@@ -16389,6 +16526,12 @@ function queueOf(/** @type {any} */ s) {
 let readyTicker = null;
 /** When the getting-ready line started: the turn's ticker counts from there, never back to 0. @type {number | null} */
 let readySince = null;
+/**
+ * What is typed while a turn gets ready, and its hint: the turn sets these the moment it reads the keyboard,
+ * so the getting-ready rows show typing as the turn's own do (owner, 26 Nov 2026: "it takes a couple of
+ * seconds for everything" — typing stood still until the turn's ticker took over).
+ */
+let readyInput = { typed: () => "", hint: () => "" };
 /** Take the getting-ready line down (before a question, or when the turn's own ticker starts). */
 function holdReadyTicker() {
   const stop = readyTicker;
@@ -16396,21 +16539,56 @@ function holdReadyTicker() {
   stop?.();
 }
 
+/** The prompt's lead (account · project) for the input line under a running turn; set by the prompt loop. */
+let tickerLead = "";
+
+/**
+ * Background work the turn has going, drawn as a row each under the working row (FOL-343, owner 26 Nov 2026:
+ * "show background agents local or in cloud … on by default … a command to turn it off" — /status jobs off).
+ * The turn's Bash jobs lists (inside the sandbox, and bash_outside's), replaced by each turn on this computer,
+ * and the cloud agents running now, by run id.
+ * @type {Array<{ where: string, jobs: Map<string, any> }>}
+ */
+let jobSources = [];
+/** @type {Map<string, { label: string, startedAt: number }>} */
+const liveCloudRuns = new Map();
+
+/** The jobs to draw now: running ones only, oldest first. */
+function liveJobs() {
+  /** @type {Array<{ where: string, id: string, label: string, startedAt: number }>} */
+  const out = [];
+  for (const src of jobSources) for (const j of src.jobs.values()) if (j && !j.exit) out.push({ where: src.where, id: String(j.id ?? ""), label: String(j.command ?? ""), startedAt: Number(j.startedAt) || Date.now() });
+  for (const [id, r] of liveCloudRuns) out.push({ where: "cloud", id, label: r.label, startedAt: r.startedAt });
+  return out.sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** At most this many job rows; the rest are counted on one more. */
+const JOB_ROWS_MAX = 3;
+
 /**
  * @param {number} since
  * @param {() => string} [typed] what is being typed for the next message
- * @param {string} [hint] when given, the turn takes typing: an input line is
+ * @param {string | (() => string)} [hint] when given, the turn takes typing: an input line is
  *   drawn under the working row from the start, as in Claude Code — this hint
  *   (dim) while it is empty, the text as it is typed (FOL-325, owner 25 Nov
  *   2026: "allow us to still write and go to queue like claude code does").
+ * @param {{ input?: boolean }} [opts] input: the input line drawn even with no hint (the getting-ready rows,
+ *   a turn that reads the keyboard), so the rows never jump from three to one.
  */
-/** The prompt's lead (account · project) for the input line under a running turn; set by the prompt loop. */
-let tickerLead = "";
-function startTicker(since, typed = () => "", hint = "") {
-  // The turn's own ticker takes over from the getting-ready one, its clock with it.
-  if (readyTicker && readySince !== null) since = Math.min(since, readySince);
+function startTicker(since, typed = () => "", hint = /** @type {string | (() => string)} */ (""), { input = false } = {}) {
+  // One clock from Enter: the turn's ticker, and one started again after a question, count from when the
+  // message was sent, never from later (the clock was seen going back, 2.7s → 1.9s, 26 Nov 2026).
+  if (readySince !== null) since = Math.min(since, readySince);
+  /** The hint, read on every draw (the getting-ready rows learn it once the turn reads the keyboard). */
+  const hintNow = typeof hint === "function" ? hint : () => hint;
   holdReadyTicker();
   if (!process.stdout.isTTY || process.env.FOLDRUN_NO_TICKER) return () => {};
+  // A terminal that cannot move its cursor (TERM=dumb) keeps the one row it had: no blank rows, no input line
+  // the hint did not ask for — rows it cannot go back up to would stay on the screen.
+  const roomy = process.env.TERM !== "dumb";
+  if (!roomy) input = false;
+  // The background jobs' rows (FOL-343): on unless the person turned them off (/status jobs off).
+  const jobsOn = roomy && readCodePrefs().jobs !== false;
   const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
   const log = console.log;
   let shown = false;
@@ -16420,11 +16598,30 @@ function startTicker(since, typed = () => "", hint = "") {
   /** @type {number[]} */
   let drawn = [];
   let i = 0;
-  const draw = () => {
-    // The guard on stdout strips every control but colours: the CLI's own
-    // line-clear goes past it, the text through it.
-    if (shown) clear();
-    else writeControl("\r\x1b[2K");
+  /** What is typed, as last drawn: a key shows at once, not on the next frame. */
+  let lastTyped = "";
+  let lastHint = "";
+  /**
+   * The rows written over the ones drawn last, in place: each row then the rest of it erased, then whatever
+   * is below cleared — never a cleared, blank frame between two draws (the owner saw it flicker, 26 Nov
+   * 2026), and inside synchronized output where the terminal has it. The guard on stdout strips every control
+   * but colours: the CLI's own controls go past it, the text through it.
+   * @param {string[]} rows
+   */
+  const paint = (rows) => {
+    /** @type {Array<string | { control: string }>} */
+    const parts = [{ control: `\x1b[?2026h${shown ? upToFirst() : "\r"}` }];
+    rows.forEach((row, k) => {
+      // One physical row each, whatever a label holds: a line break in it would add a row never counted (Codex).
+      if (row) parts.push(row.replace(/[\r\n\t\v\f]+/g, " "));
+      parts.push({ control: k < rows.length - 1 ? "\x1b[K" : "\x1b[K\x1b[J" });
+      // A newline on a terminal goes down a row and back to its start; the guard keeps \n as it is.
+      if (k < rows.length - 1) parts.push("\n");
+    });
+    parts.push({ control: "\x1b[?2026l" });
+    writeFrame(parts);
+  };
+  const draw = (advance = true) => {
     const cols = (process.stdout.columns || 80) - 1;
     const secs = formatSecs((Date.now() - since) / 1000);
     // Everything on one row, measured (Codex): spinner, word, time first;
@@ -16433,7 +16630,7 @@ function startTicker(since, typed = () => "", hint = "") {
     const doingFull = bareRow ? ` · ${bareRow.label}${bareRow.n > 1 ? ` ×${bareRow.n}` : ""}` : "";
     const doing = doingFull && left > 12 ? clipCells(doingFull, Math.min(displayWidth(doingFull), left - 12)) : "";
     left -= displayWidth(doing);
-    const frame = i++;
+    const frame = advance ? i++ : Math.max(0, i - 1);
     // A scanner sweeping across a rail: still at work, at a glance.
     const rail = 10;
     const at = frame % (rail * 2 - 2);
@@ -16442,8 +16639,26 @@ function startTicker(since, typed = () => "", hint = "") {
     if (bar) left -= rail + 1;
     const head = `  ${c.sweep(frames[frame % frames.length], HUE.violet, HUE.cyan, (frame % 10) / 5)} ${c.cyan("working")} ${bar ? `${bar} ` : ""}${c.grey(`${secs}${doing}`)}`;
     const t = typed();
+    lastTyped = t;
+    const hintText = hintNow();
+    lastHint = hintText;
     const waiting = queuedNow ? ` · ${queuedNow} queued` : "";
-    if (hint) {
+    // A blank row above the working row, and one between it and the input line (owner, 26 Nov 2026: "we
+    // need to add some spaces above where we write").
+    // One row per background job, each with its own spinner, under the working row (FOL-343).
+    const jobs = jobsOn ? liveJobs() : [];
+    const jobLines = jobs.slice(0, JOB_ROWS_MAX).map((j, k) => {
+      const spin = c.sweep(frames[(frame + k * 3) % frames.length], HUE.violet, HUE.cyan, ((frame + k * 3) % 10) / 5);
+      const when = formatSecs((Date.now() - j.startedAt) / 1000);
+      const tail = ` · ${when}${j.id ? ` · ${j.id}` : ""}`;
+      const room = cols - displayWidth(`    ⠋ ${j.where} · `) - displayWidth(tail);
+      const label = room > 8 ? clipCells(oneLine(j.label), room) : "";
+      return `    ${spin} ${c.cyan(j.where)}${label ? `${c.grey(" · ")}${label}` : ""}${c.grey(tail)}`;
+    });
+    if (jobs.length > JOB_ROWS_MAX) jobLines.push(`      ${c.grey(`+${jobs.length - JOB_ROWS_MAX} more · /status jobs off hides these`)}`);
+    const jobWidths = jobLines.map((l) => displayWidth(plainText(l)));
+    // (TERM=dumb: the two rows it always had when a hint asked for them, no blank rows.)
+    if (hintText || input) {
       // Two rows: the working row, then the input line — what is typed, its
       // end in view, or the hint while it is empty; each clipped to one row
       // so neither wraps (the clear below goes up exactly one).
@@ -16455,10 +16670,11 @@ function startTicker(since, typed = () => "", hint = "") {
       // terminal tests wait for), so nothing takes a running turn for one.
       const lead = tickerLead && full - displayWidth(`${tickerLead} `) >= 20 ? tickerLead : "";
       const room = full - (lead ? displayWidth(`${lead} `) : 0);
-      const input = t ? clipCellsEnd(t, Math.max(1, room)) : c.dim(clipCells(hint, Math.max(1, room)));
-      const second = `  ${lead ? `${lead}\u00a0` : ""}❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hint, Math.max(1, room))}${waiting}`;
-      process.stdout.write(`${head}\n  ${lead ? `${c.bold(c.cyan(lead))}\u00a0` : ""}${c.violet("❯")} ${input}${waiting ? c.cyan(waiting) : ""}`);
-      drawn = [displayWidth(plainText(head)), displayWidth(second)];
+      const typedText = t ? clipCellsEnd(t, Math.max(1, room)) : c.dim(clipCells(hintText, Math.max(1, room)));
+      const second = `  ${lead ? `${lead}\u00a0` : ""}❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hintText, Math.max(1, room))}${waiting}`;
+      const inputRow = `  ${lead ? `${c.bold(c.cyan(lead))}\u00a0` : ""}${c.violet("❯")} ${typedText}${waiting ? c.cyan(waiting) : ""}`;
+      paint(roomy ? ["", head, ...jobLines, "", inputRow] : [head, inputRow]);
+      drawn = roomy ? [0, displayWidth(plainText(head)), ...jobWidths, 0, displayWidth(second)] : [displayWidth(plainText(head)), displayWidth(second)];
       shown = true;
       return;
     }
@@ -16466,31 +16682,49 @@ function startTicker(since, typed = () => "", hint = "") {
     left -= displayWidth(waiting);
     const room = left - displayWidth(" · next: ");
     const shownText = t && room > 8 ? clipCellsEnd(t, room) : "";
-    process.stdout.write(`${head}${waiting ? c.cyan(waiting) : ""}${shownText ? `${c.dim(" · next: ")}${shownText}` : ""}`);
-    drawn = [displayWidth(plainText(`${head}${waiting}${shownText ? ` · next: ${shownText}` : ""}`))];
+    const row = `${head}${waiting ? c.cyan(waiting) : ""}${shownText ? `${c.dim(" · next: ")}${shownText}` : ""}`;
+    const rowWidth = displayWidth(plainText(`${head}${waiting}${shownText ? ` · next: ${shownText}` : ""}`));
+    paint(roomy ? ["", row, ...jobLines] : [row]);
+    drawn = roomy ? [0, rowWidth, ...jobWidths] : [rowWidth];
     shown = true;
   };
+  /** Back to the first row drawn, counted at the width there is now (a narrower terminal wraps them). */
+  const upToFirst = () => {
+    const cols = Math.max(1, process.stdout.columns || 80);
+    const up = drawn.reduce((n, w) => n + Math.max(1, Math.ceil(w / cols)), 0) - 1;
+    // In steps of at most 99 rows (the controls the guard lets through), however far it reflowed (Codex).
+    let moves = "";
+    for (let left = up; left > 0; left -= 99) moves += `\x1b[${Math.min(left, 99)}A`;
+    return `\r${moves}`;
+  };
   const clear = () => {
-    if (shown) {
-      const cols = Math.max(1, process.stdout.columns || 80);
-      const up = drawn.reduce((n, w) => n + Math.max(1, Math.ceil(w / cols)), 0) - 1;
-      // Back to the first row drawn, then everything below it cleared.
-      writeControl(up > 0 ? `\r\x1b[${up}A\x1b[J` : "\r\x1b[J");
-    }
+    // Back to the first row drawn, then everything below it cleared.
+    if (shown) writeControl(`${upToFirst()}\x1b[J`);
     shown = false;
   };
   console.log = (...args) => {
+    // The line printed and the rows drawn again under it as one update, where the terminal has it.
+    writeControl("\x1b[?2026h");
     clear();
     log(...args);
-    draw();
+    draw(false);
   };
-  // The cursor hidden while the line redraws, so it does not jump along it; shown again however the process ends.
+  // The cursor hidden while the line redraws, so it does not jump along it; shown again however the process ends,
+  // and the rows taken down with it, so none is left above the shell's prompt (Codex).
   const showCursor = () => writeControl("\x1b[?25h");
+  const onExit = () => {
+    try {
+      clear();
+    } catch {
+      /* the terminal is gone */
+    }
+    showCursor();
+  };
   writeControl("\x1b[?25l");
-  process.once("exit", showCursor);
+  process.once("exit", onExit);
   // A signal skips "exit": the cursor comes back first, and with no one else to handle it the signal ends us as it would have (Codex).
   const onSignal = (/** @type {NodeJS.Signals} */ sig) => {
-    showCursor();
+    onExit();
     if (process.listenerCount(sig) === 0) process.kill(process.pid, sig);
   };
   const onInt = () => onSignal("SIGINT");
@@ -16498,15 +16732,26 @@ function startTicker(since, typed = () => "", hint = "") {
   process.once("SIGINT", onInt);
   process.once("SIGTERM", onTerm);
   const timer = setInterval(draw, 250);
+  // A key typed shows within a few hundredths of a second, not on the next frame (owner, 26 Nov 2026).
+  let lastJobs = "";
+  const jobsKey = () => (jobsOn ? liveJobs().map((j) => `${j.where}${j.id}`).join(",") : "");
+  const keys = setInterval(() => {
+    const k = jobsKey();
+    if (typed() !== lastTyped || hintNow() !== lastHint || k !== lastJobs) {
+      lastJobs = k;
+      draw(false);
+    }
+  }, 40);
   draw();
   let stopped = false;
   return () => {
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
+    clearInterval(keys);
     clear();
     showCursor();
-    process.off("exit", showCursor);
+    process.off("exit", onExit);
     process.off("SIGINT", onInt);
     process.off("SIGTERM", onTerm);
     console.log = log;
@@ -17093,7 +17338,7 @@ async function localKeyFor(s, cancel) {
     s.signInRefused = false;
   }
   if (!s.keySlot || s.signInModels === undefined) {
-    const me = await remoteCall(s.url, s.flags, "/v1/me");
+    const me = await meOf(s);
     if (typeof me?.account !== "string" || !me.account) throw new Error("could not tell which account this is — foldrun whoami");
     s.keySlot = `${s.url}#${me.account}`;
     // One key (22 Nov 2026): a sign-in that may call foldrun's models is the
@@ -17512,6 +17757,8 @@ function engineModelError(/** @type {unknown} */ err, s) {
     // The sign-in itself: nothing kept here is dropped. Asked again next
     // turn — its model access may have been taken away, or the key renewed.
     s.signInModels = undefined;
+    // …from the platform, not from the answer kept for this token (Codex).
+    s.meRead = null;
     if (status === 401) return `your sign-in was refused for model calls (${said}) — foldrun login signs this machine in again`;
     // Refused for models though the platform said it may: for the rest of
     // this session the machine key path is used instead (Codex review).
@@ -17634,6 +17881,21 @@ const PLAN_TIERS = { ANTHROPIC_DEFAULT_HAIKU_MODEL: "foldrun/fast", ANTHROPIC_DE
  * reported (a platform without plans); a failed read keeps the last answer.
  */
 async function codingPlanOf(/** @type {any} */ s, fresh = false) {
+  // One read at a time: a turn starts it early, beside the agent file's (owner, 26 Nov 2026: the lookups
+  // before a turn ran one after another, 2.5 s), and the plan check then waits for that same read.
+  if (!fresh && s.planReading) return s.planReading;
+  const read = codingPlanRead(s, fresh);
+  if (!fresh) {
+    s.planReading = read;
+    const done = () => {
+      if (s.planReading === read) s.planReading = null;
+    };
+    read.then(done, done);
+  }
+  return read;
+}
+
+async function codingPlanRead(/** @type {any} */ s, fresh = false) {
   // "No plan" is kept a few seconds only: a plan bought mid-session is
   // seen on the next turn (Codex review).
   if (!fresh && s.planReadAt && Date.now() - s.planReadAt < (s.codingPlan ? 60_000 : 10_000)) return s.codingPlan ?? null;
@@ -17751,10 +18013,23 @@ async function walletReady(/** @type {any} */ s, /** @type {string | null} */ ti
   if (s.creditsOk) return true;
   /** @type {any} */
   let cr;
+  // Read while the first message was typed, when it was (warmCodeSession); taken once, and not one older
+  // than a minute. It may let a turn go on; it never refuses one — that is read again first (Codex).
+  const early = s.usageRead && Date.now() - s.usageRead.at < 60_000 && s.usageRead.reader === readerOf(s) && s.usageRead.url === s.url ? s.usageRead.read : null;
+  s.usageRead = null;
   try {
-    cr = (await remoteCall(s.url, s.flags, "/v1/account/usage"))?.credits;
+    cr = (await (early ?? remoteCall(s.url, s.flags, "/v1/account/usage")))?.credits;
   } catch {
-    return true;
+    cr = undefined;
+    if (!early) return true;
+  }
+  const refuses = (/** @type {any} */ x) => Boolean(x && typeof x === "object" && typeof x.pots?.boughtUsd === "number" && x.pots.boughtUsd <= 0 && x.plan?.paysForTokens === false);
+  if (early && (cr === undefined || refuses(cr))) {
+    try {
+      cr = (await remoteCall(s.url, s.flags, "/v1/account/usage"))?.credits;
+    } catch {
+      return true;
+    }
   }
   if (!cr || typeof cr !== "object") {
     s.creditsOk = true;
@@ -18120,6 +18395,19 @@ export function cloudTasks(/** @type {unknown} */ input) {
  * @returns {Promise<{ text: string, isError?: boolean }>}
  */
 async function runCloudAgents(s, input, signal, h) {
+  // Every run this call started is off the job rows when it returns, however it ends (FOL-343) — its own
+  // runs only: a call cut off by the turn's end may return after the next turn's runs are on the rows (Codex).
+  /** @type {Set<string>} */
+  const mine = new Set();
+  try {
+    return await runCloudAgentsInner(s, input, signal, { ...h, mine });
+  } finally {
+    for (const id of mine) liveCloudRuns.delete(id);
+  }
+}
+
+/** @param {any} s @param {unknown} input @param {AbortSignal} signal @param {any} h @returns {Promise<{ text: string, isError?: boolean }>} */
+async function runCloudAgentsInner(s, input, signal, h) {
   const chosen = cloudTasks(input);
   if (!chosen.tasks) return { text: chosen.error ?? "no tasks", isError: true };
   const tasks = chosen.tasks;
@@ -18222,6 +18510,8 @@ async function runCloudAgents(s, input, signal, h) {
         throw new Error(`${url} started no run it could name — ${plainText(JSON.stringify(started ?? null).slice(0, 200))}`);
       }
       runs.push({ n: i + 1, task, id, run: null, done: false, counted: false });
+      liveCloudRuns.set(id, { label: `cloud agent ${i + 1}: ${task}`, startedAt: Date.now() });
+      h.mine?.add(id);
       console.log(`  ${c.violet("☁")} ${c.white(`cloud agent ${i + 1}`)} ${c.grey(`· ${id} ·`)} ${c.grey(clipLine(task))}`);
     }
     if (signal.aborted) return stoppedText(await stopAll());
@@ -18247,6 +18537,7 @@ async function runCloudAgents(s, input, signal, h) {
       if (signal.aborted || closed) return;
       r.run = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}`);
       r.done = true;
+      liveCloudRuns.delete(r.id);
       const cost = (r.run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
       counted(r);
       if (signal.aborted || closed) return;
@@ -18337,6 +18628,15 @@ async function runCloudAgents(s, input, signal, h) {
  * answers a question it did not see.
  */
 async function codeLocalTurn(s, text) {
+  // The reads Enter started a moment ago are this turn's; any other turn (a script's, stream-json's, /review,
+  // a goal's next round) starts its own — never an agent file read before a /model change (Codex).
+  const warmed = typeof s.turnWarmAt === "number" && s.turnWarmAt > 0 && Date.now() - s.turnWarmAt < 5_000;
+  s.turnWarmAt = 0;
+  if (!warmed) {
+    s.turnSources = new Map();
+    s.accountAgentsRead = null;
+    warmCodeTurn(s);
+  }
   await costAccount(s);
   const started = Date.now();
   const abort = new AbortController();
@@ -18400,6 +18700,8 @@ async function codeLocalTurn(s, text) {
   const inputHint = () => (typeAhead.running() ? (onSend ? STEER_HINT : QUEUE_HINT) : "");
   // What is typed shows on the working line as it is typed, on every turn on this computer (FOL-306).
   const typedNow = () => typeAhead.text();
+  // The getting-ready rows show it too, while the turn's lookups run (owner, 26 Nov 2026).
+  readyInput = { typed: typedNow, hint: inputHint };
   // The unfinished line a prompt interrupted: given back to the keyboard after it, not moved aside (FOL-306, Codex).
   let draft = "";
   const keyboardBack = async () => {
@@ -18523,8 +18825,12 @@ async function codeLocalTurn(s, text) {
     let model = "default";
     /** The agent's `effort:` (FOL-256), the same field a cloud turn runs with; null: the model's own default. */
     let effort = /** @type {string | null} */ (null);
+    // The agent file and the plan read side by side, not one after the other (owner, 26 Nov 2026).
+    const agentFile = readSource(s, `agents/${s.agent}/agent.md`).then((content) => (content === null ? null : { content }), () => null);
+    codingPlanOf(s).catch(() => {});
     try {
-      const cur = await remoteCall(s.url, s.flags, `/v1/workspaces/${enc(s.ws)}/source?path=${enc(`agents/${s.agent}/agent.md`)}`);
+      const cur = await agentFile;
+      if (cur === null) throw new Error("not read");
       model = frontmatterModel(String(cur?.content ?? "")) ?? "default";
       effort = frontmatterEffort(String(cur?.content ?? ""), (await modelNames()).resolveEffort);
     } catch {
@@ -18566,7 +18872,7 @@ async function codeLocalTurn(s, text) {
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
-    stopTicker = startTicker(started, typedNow, inputHint());
+    stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
     /** This turn's MCP tools by name, its sub-agents, and the project's agents a job may be run as in the cloud. */
     /** @type {Map<string, any>} */
     let turnMcp = new Map();
@@ -18600,7 +18906,7 @@ async function codeLocalTurn(s, text) {
           return { behavior: /** @type {const} */ ("allow"), updatedInput: { question: q.question, options: q.options, answer: answer ?? "", answeredBy: ASK_MARK } };
         } finally {
           keyboardOn();
-          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
+          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
       }
       // A sub-agent that only reads, on this computer, reads what the agent
@@ -18934,7 +19240,7 @@ async function codeLocalTurn(s, text) {
         return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
       } finally {
         keyboardOn();
-        if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
+        if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
       }
     };
     // This conversation's /rewind journal; a turn's number is one past the last recorded.
@@ -19049,7 +19355,7 @@ async function codeLocalTurn(s, text) {
         pause: () => stopTicker(),
         resume: () => {
           stopTicker();
-          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
+          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         },
         approveApply: (n, lines, patch) => {
           // The patch's own bytes go with it: taken file by file, it is cut and joined as bytes.
@@ -19104,6 +19410,12 @@ async function codeLocalTurn(s, text) {
     // Jobs started outside the sandbox (FOL-296: a dev server the agent then opens in the browser): their own
     // list, ids o1, o2…, so Bash's job calls — unasked inside the walls — never reach one. They end with the turn.
     const outsideJobs = new Map();
+    // Bash's own background jobs, kept here so the working line can show them (FOL-343); an older core keeps its own.
+    const sandboxJobs = new Map();
+    jobSources = [
+      { where: "here", jobs: sandboxJobs },
+      { where: "outside the sandbox", jobs: outsideJobs },
+    ];
     /** @type {Set<number>} */
     const outsidePgids = new Set();
     const outsideCall = async (/** @type {any} */ input, /** @type {any} */ ctx) => {
@@ -19169,7 +19481,7 @@ async function codeLocalTurn(s, text) {
     const said = (/** @type {() => void} */ print) => {
       stopTicker();
       print();
-      if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
+      if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
     };
     // The sites of the remote MCP servers this turn will start are added
     // first, so the walls are put up once — never reopened (and the handle
@@ -19395,7 +19707,7 @@ async function codeLocalTurn(s, text) {
           pause: () => stopTicker(),
           resume: () => {
             stopTicker();
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
           },
         });
       }
@@ -19524,6 +19836,10 @@ async function codeLocalTurn(s, text) {
       /** @type {any} */
       let res = null;
       try {
+        // Its own Bash jobs, apart from the parent's: neither reads nor stops the other's by id, nor spends its
+        // job limit; both are on the rows (Codex, FOL-343).
+        const childJobs = new Map();
+        jobSources.push({ where: `here · ${def.name}`, jobs: childJobs });
         const child = engine.foldrunQuery({
           prompt: job.prompt,
           options: {
@@ -19554,6 +19870,7 @@ async function codeLocalTurn(s, text) {
             ...(walls ? { localSandbox: walls } : { engineHostShell: true, sandbox: { enabled: false } }),
             // Symbols' language servers: in this project's own package cache, writable inside the walls (FOL-297).
             toolsDir: path.join(packageCacheFor(s.dir), "lsp"),
+            jobs: childJobs,
             // A location shown from outside the folder (an added one) is private, as Read's is: asked before it goes to the cloud (Codex).
             readable: (/** @type {string} */ f) => {
               const ok = readableBy(s, f);
@@ -19713,6 +20030,7 @@ async function codeLocalTurn(s, text) {
             ...(serverTools.length ? { serverTools } : {}),
             // Symbols' language servers: in this project's own package cache, writable inside the walls (FOL-297).
             toolsDir: path.join(packageCacheFor(s.dir), "lsp"),
+            jobs: sandboxJobs,
             // A location shown from outside the folder (an added one) is private, as Read's is: asked before it goes to the cloud (Codex).
             readable: (/** @type {string} */ f) => {
               const ok = readableBy(s, f);
@@ -19758,7 +20076,7 @@ async function codeLocalTurn(s, text) {
         lastSteer = null;
         stopTicker();
         console.log(`  ${c.dim("⋯ the conversation was getting long: its older part was summarised")}`);
-        stopTicker = startTicker(started, typedNow, inputHint());
+        stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) {
         // The model is answering: what was sent into the turn reached it.
@@ -19778,7 +20096,7 @@ async function codeLocalTurn(s, text) {
           const q = /** @type {any} */ (b).input ?? {};
           const what = typeof q.query === "string" ? q.query : typeof q.url === "string" ? q.url : "";
           console.log(`  ${c.cyan("●")} ${c.bold(c.white(String(/** @type {any} */ (b).name) === "web_fetch" ? "Fetch" : String(/** @type {any} */ (b).name) === "web_browse" ? "Browse" : "Search"))}${what ? ` ${c.grey(clipLine(plainText(what)))}` : ""} ${c.dim("· on foldrun's servers")}`);
-          stopTicker = startTicker(started, typedNow, inputHint());
+          stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
         if (showThinking) {
           const summary = content.filter((b) => b.type === "thinking").map((b) => plainText(String(b.thinking ?? "")).trim()).filter(Boolean).join("\n\n");
@@ -19789,7 +20107,7 @@ async function codeLocalTurn(s, text) {
             console.log(`\n  ${c.dim("✻ thinking")}`);
             for (const l of lines) console.log(`    ${c.dim(l)}`);
             if (more) console.log(`    ${c.dim(`… ${more} more line${more === 1 ? "" : "s"} (/export --thinking writes all of it)`)}`);
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint());
+            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
           }
         }
         if (calls.length) {
@@ -19800,7 +20118,7 @@ async function codeLocalTurn(s, text) {
             const what = localCallSummary(String(b.name), /** @type {Record<string, unknown>} */ (b.input ?? {}), s.dir);
             console.log(`  ${toolHue(label)("●")} ${c.bold(c.white(clipLine(label)))}${what ? ` ${c.grey(clipLine(what))}` : ""}`);
           }
-          stopTicker = startTicker(started, typedNow, inputHint());
+          stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         } else if (words) reply = words;
       }
       if (m.type === "user" && !m.parent_tool_use_id) {
@@ -19815,7 +20133,7 @@ async function codeLocalTurn(s, text) {
           stopTicker();
           console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}\n`);
           reply = "";
-          stopTicker = startTicker(started, typedNow, inputHint());
+          stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
         for (const b of /** @type {any[]} */ (content)) {
           const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");
@@ -19890,6 +20208,8 @@ async function codeLocalTurn(s, text) {
     if (cloudBusy.size) abort.abort();
     if (cloudBusy.size) await Promise.race([Promise.all([...cloudBusy].map((p) => p.catch(() => null))), new Promise((r) => setTimeout(r, timeoutSeconds(s.flags) * 1000))]);
     stopTicker();
+    // This turn's job lists are let go with it: a job its end killed is never drawn by a later ticker (Codex).
+    jobSources = [];
     // The keyboard first (an Enter in its last moments still queues), then
     // what was sent and not taken (the turn ended first, or failed): not
     // lost — it starts the next message, before what was typed after it.
@@ -20592,6 +20912,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     const last = /** @type {any} */ (s).measure?.[where]?.at;
     if (typeof last === "number" && Date.now() - last > (Number(process.env.FOLDRUN_CODE_CACHE_TTL_MS) || CACHE_TTL_MS)) await hint("break", { minutes: (Date.now() - last) / 60_000 }, where);
     await hint("paste", { tokens: Math.round(said.length / 4) }, where);
+    // A turn Enter did not start (/review, a goal's next round, a command's): its own clock, never the last
+    // turn's seconds (Codex). Its reads are its own too: codeLocalTurn decides that for itself.
+    if (s.enterTurn === true) s.enterTurn = false;
+    else if (readySince !== null) readySince = Date.now();
     delete s.allowanceStop;
     delete s.turnShown;
     const notes = Array.isArray(s.notes) ? s.notes.slice() : [];
@@ -20608,6 +20932,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     if (!go) return;
     // The ceiling agreed is for the turn sent now, whichever it is.
     if (go.ceilingUsd !== undefined) s.turnCeilingUsd = go.ceilingUsd;
+    // Sent again after the wait: its clock starts now, not when the first was sent (Codex round 4).
+    if (readySince !== null) readySince = Date.now();
     try {
       // The turn that stopped was not kept as an exchange: what the person asked stays what the record says they asked.
       if (stop.sent) await runTurnOnce(where, RESUME_PROMPT, `${typed}\n(carried on after the allowance reset)`);
@@ -21009,6 +21335,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       if (waiting.length || ready) say(`MCP servers: ${[ready ? `${ready} start with your first message on this computer` : "", waiting.length ? `${waiting.map((/** @type {string} */ n) => plainText(n)).join(", ")} wait${waiting.length === 1 ? "s" : ""} for your yes — /setup mcp on <name>` : ""].filter(Boolean).join("; ")}`);
     }
   }
+  // What the first turn on this computer looks up once, read while the first message is typed (owner, 26 Nov 2026).
+  warmCodeSession(s);
   for (;;) {
     /** @type {string | null} */
     let fromQueue = null;
@@ -21081,7 +21409,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const last = s.applied?.at(-1);
         return { turns: rewindTurns(rewindOf(s)), patch: last ? `${last.files?.length ?? "its"} file${last.files?.length === 1 ? "" : "s"}${last.runId ? ` · run ${String(last.runId)}` : ""}` : undefined };
       }
-      if (cmd === "/status") return { tips: readCodePrefs().tips !== false, line: readCodePrefs().statusLine !== false };
+      if (cmd === "/status") return { tips: readCodePrefs().tips !== false, line: readCodePrefs().statusLine !== false, jobs: readCodePrefs().jobs !== false };
       if (cmd === "/todos") return { todos: Array.isArray(s.todos) ? s.todos : [] };
       if (cmd === "/setup mcp") {
         const m = await mcpOf(s).catch(() => null);
@@ -21188,8 +21516,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       else if (name === "/setup" && w0 === "check" && !after) [name, rest] = ["#doctor", ""];
     }
     // Words a command does not take are said back, never dropped (Codex).
-    if (name === "/status" && rest && !/^line(?:\s+(?:on|off))?$/i.test(rest)) {
-      say(`/status has no ${plainText(rest)} — /status cost · explain · usage · context · tips on|off · line on|off`);
+    if (name === "/status" && rest && !/^(?:line|jobs)(?:\s+(?:on|off))?$/i.test(rest)) {
+      say(`/status has no ${plainText(rest)} — /status cost · explain · usage · context · tips on|off · line on|off · jobs on|off`);
       continue;
     }
     if (name === "/sessions" && rest) {
@@ -21364,6 +21692,15 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
       }
+      continue;
+    }
+    if (name === "/status" && /^jobs(\s|$)/i.test(rest)) {
+      // The background jobs' rows under the working line (FOL-343): a choice of /status, as line and tips are.
+      const want = /^jobs\s+(on|off)$/i.exec(rest)?.[1]?.toLowerCase();
+      const prefs = readCodePrefs();
+      if (!want) say(`the background jobs under the working line are ${prefs.jobs === false ? "hidden" : "shown"} · /status jobs ${prefs.jobs === false ? "on" : "off"}`);
+      else if (!writeCodePrefs({ ...prefs, jobs: want === "on" })) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
+      else say(want === "on" ? "background jobs shown — a row each under the working line: where it runs (here, outside the sandbox, cloud), what, for how long" : "background jobs hidden — for you, in every folder; the agent still has them");
       continue;
     }
     if (name === "/status" && /^line(\s|$)/i.test(rest)) {
@@ -22448,7 +22785,14 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     const typedLine = line.startsWith("\\/") ? line.slice(1) : line;
     // Something moves the moment Enter sends it: the setup before the model call is round trips to the platform.
     readySince = Date.now();
-    readyTicker = startTicker(readySince);
+    // This turn's reads, started together now; the turn takes their answers (owner, 26 Nov 2026).
+    s.turnSources = new Map();
+    warmCodeTurn(s);
+    s.turnWarmAt = Date.now();
+    s.enterTurn = true;
+    // The same rows as the turn's own, input line included, from the moment Enter sends it: the layout does
+    // not jump from one row to three when the turn's ticker takes over.
+    readyTicker = startTicker(readySince, () => readyInput.typed(), () => readyInput.hint(), { input: Boolean(process.stdin.isTTY) });
     try {
       // Files named in it (FOL-268): read into text on foldrun's servers first, as the person chooses.
       const withFiles = await filesForTurn(s, typedLine, dir);
@@ -22457,6 +22801,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     } finally {
       holdReadyTicker();
       readySince = null;
+      readyInput = { typed: () => "", hint: () => "" };
+      // The reads Enter started belong to that message's turn alone, run or skipped (Codex).
+      s.turnWarmAt = 0;
+      s.enterTurn = false;
       // Images for this message only: never carried into a later turn (FOL-268).
       delete s.turnImages;
     }
@@ -23178,6 +23526,31 @@ const localPayer = (/** @type {any} */ s) =>
   s.engineKeyMade === true && s.engineKeyKind === undefined ? "bought credits (this key is the older kind: the plan does not pay its calls)" : (s.onPlan && s.planLabel ? `${plainText(String(s.planLabel))}'s allowance where it covers the model and has room, else credits` : "the account's credits");
 
 /**
+ * GET /v1/me for the sign-in this session sends now, read once and shared: the key lookup and the account
+ * the cost rows are kept under both ask it, and the session reads it while the first message is typed.
+ * A new token (renewed, signed in again) is asked about afresh; a failed read is not kept.
+ * @param {any} s @returns {Promise<any>}
+ */
+function meOf(s) {
+  let token = null;
+  try {
+    token = tokenFor(s.url, { ...s.flags, quiet: true });
+  } catch {
+    /* none: the call says so */
+  }
+  if (s.meRead && s.meRead.token === token) return s.meRead.read;
+  const read = remoteCall(s.url, s.flags, "/v1/me");
+  const held = { token, read };
+  s.meRead = held;
+  // Kept only when it names the account: an empty answer is asked again next time (Codex).
+  const drop = () => {
+    if (s.meRead === held) s.meRead = null;
+  };
+  read.then((me) => (typeof me?.account === "string" && me.account ? undefined : drop()), drop);
+  return read;
+}
+
+/**
  * Which account the session's rows are kept under: the one the key in use
  * was made for, where a turn on this computer has found it (it follows a
  * new sign-in); else asked once — and asked again while it cannot be told,
@@ -23186,7 +23559,7 @@ const localPayer = (/** @type {any} */ s) =>
 async function costAccount(/** @type {any} */ s) {
   if (accountOfSlot(s) !== null || (typeof s.costAccount === "string" && s.costAccount)) return;
   try {
-    const me = await remoteCall(s.url, s.flags, "/v1/me");
+    const me = await meOf(s);
     if (typeof me?.account === "string" && me.account) s.costAccount = me.account;
   } catch {
     /* asked again at the next turn */
