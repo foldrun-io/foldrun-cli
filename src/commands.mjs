@@ -10174,32 +10174,45 @@ function webAsks(s) {
  * it has no web. A provider or settings chosen for an action (exclude_engines, a vendor) is not something the
  * door takes: that action is not offered rather than run without them (Codex) — unless `settings` is true, as for
  * browse, whose web.browse block the browse code reads and applies or names.
- * @param {any} s @returns {Promise<((action: string, settings?: boolean) => boolean) | null>}
+ * Why there is none is put in `why` (FOL-332: a grant that was not there said nothing): the file it reads is the
+ * platform's copy of the project's agent, which a folder's own edit does not reach until it is deployed.
+ * @param {any} s @param {string[]} [why] @returns {Promise<((action: string, settings?: boolean) => boolean) | null>}
  */
-async function webGrant(s) {
+async function webGrant(s, why = []) {
   let agent;
   let project;
+  const file = `agents/${s.agent}/agent.md`;
+  const there = `${file} in the project ${s.ws} on the platform (the platform's copy: a change in this folder reaches it with foldrun deploy)`;
   try {
     // A file whose settings never say "web" grants none: answered without loading the frontmatter reader, so a turn
     // of an agent with no web stays light (FOL-265).
-    const file = `agents/${s.agent}/agent.md`;
     const key = `${readerOf(s)}\n${s.url}\n${s.ws}\n${file}`;
     if (!s.fronts?.[key]) {
       const { content } = await readSourceAt(s, file);
       const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content ?? "")?.[1] ?? "";
-      if (!/\bweb\b/.test(head)) return null;
+      if (!/\bweb\b/.test(head)) {
+        why.push(content === null ? `there is no ${there}` : `${there} does not name web in its settings — it needs tools: [web]`);
+        return null;
+      }
     }
     agent = await projectFront(s, file);
     project = { ...(await accountFront(s, [])), ...(await projectFront(s, "AGENTS.md")) };
-  } catch {
+  } catch (err) {
+    why.push(`${there} could not be read: ${plainText(explain(err)).split("\n")[0]}`);
     return null;
   }
   const tools = Array.isArray(agent?.tools) ? agent.tools.map(String) : [];
-  if (!tools.includes("web")) return null;
+  if (!tools.includes("web")) {
+    why.push(`${there} has tools: [${tools.join(", ")}] — web is not in it`);
+    return null;
+  }
   const P = /** @type {any} */ (await import("@foldrun/core/providers"));
   const web = P.webConfig(agent, project);
   // A web block that does not read is no grant (Codex).
-  if (Array.isArray(web.problems) && web.problems.length) return null;
+  if (Array.isArray(web.problems) && web.problems.length) {
+    why.push(`its web: block does not read — ${web.problems.join(" ")}`);
+    return null;
+  }
   const actions = web.actions;
   return (/** @type {string} */ a, settings = false) => (!Array.isArray(actions) || actions.includes(a)) && (settings || web.raw?.[a] === undefined || web.raw?.[a] === null);
 }
@@ -10211,6 +10224,16 @@ async function webGrant(s) {
  * @param {any} s @returns {Promise<{ type: string, name: string }[]>}
  */
 async function localServerTools(s, gateway = /** @type {{ url: string, key: string } | null} */ (null)) {
+  /** @type {string[]} */
+  const why = [];
+  const out = await serverToolsFor(s, gateway, why);
+  // What /where web says about the last turn (FOL-332): offered, or the reasons it was not.
+  s.serverToolsNote = { names: out.map((t) => t.name), why };
+  return out;
+}
+
+/** @param {any} s @param {{ url: string, key: string } | null} gateway @param {string[]} why @returns {Promise<{ type: string, name: string }[]>} */
+async function serverToolsFor(s, gateway, why) {
   if (webPlace(s) !== "cloud") return [];
   // What one gateway said holds for that gateway alone: a sign-in that moved the session to another asks again (Codex).
   if (gateway && s.gatewayRunsFor !== gateway.url) {
@@ -10218,25 +10241,36 @@ async function localServerTools(s, gateway = /** @type {{ url: string, key: stri
     s.gatewayAsked = false;
     s.gatewayRunsFor = gateway.url;
   }
-  // Not yet heard from this gateway: asked once, so a session's first turn (and a -p turn) knows too (Codex).
+  // Not yet heard from this gateway: asked once it has answered, so a session's first turn (and a -p turn) knows too
+  // (Codex). An ask that got no answer is made again at the next message, not given up for the session (FOL-332).
   if (!Array.isArray(s.gatewayRuns) && gateway && !s.gatewayAsked) {
-    s.gatewayAsked = true;
     // Only an engine that can send server tools needs to know (a core from before FOL-304 has no serverToolsOf).
     const spec = "@foldrun/core/engine-loop";
     const common = /** @type {any} */ (await import(spec).catch(() => null));
-    if (typeof common?.serverToolsOf !== "function") return [];
+    if (typeof common?.serverToolsOf !== "function") {
+      s.gatewayAsked = true;
+      why.push("this foldrun's engine cannot send server tools — `foldrun update`");
+      return [];
+    }
     try {
       // The key as the engine sends it (ANTHROPIC_AUTH_TOKEN): one way of signing in to the gateway, not two.
       const res = await fetch(`${gateway.url.replace(/\/+$/, "")}/v1/models`, { headers: { authorization: `Bearer ${gateway.key}`, "user-agent": USER_AGENT }, redirect: "error", signal: AbortSignal.timeout(5000) });
       const said = res.headers.get("foldrun-server-tools");
       void res.body?.cancel();
       if (said !== null) s.gatewayRuns = said.split(",").map((x) => x.trim()).filter((x) => /^[a-z_]+_\d{8}$/.test(x));
-    } catch {
-      /* not known: none offered until a model answer says */
+      // An answer that carries no list from a gateway that is up is an older gateway's: not asked again. One that
+      // is not (an error page, an edge's 5xx) is a failed ask.
+      if (said !== null || res.ok) s.gatewayAsked = true;
+      else why.push(`the gateway answered GET /v1/models with ${res.status} and did not say what it runs — asked again at the next message`);
+    } catch (err) {
+      why.push(`the gateway did not answer GET /v1/models (${err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError") ? "no answer in 5 s" : plainText(explain(err)).split("\n")[0]}) — asked again at the next message`);
     }
   }
-  if (!Array.isArray(s.gatewayRuns)) return [];
-  const may = await webGrant(s);
+  if (!Array.isArray(s.gatewayRuns)) {
+    if (!why.length) why.push("the gateway did not say it runs search and fetch itself (an older gateway) — none is offered to it");
+    return [];
+  }
+  const may = await webGrant(s, why);
   if (!may) return [];
   /** @type {{ type: string, name: string }[]} */
   const out = [];
@@ -10244,6 +10278,7 @@ async function localServerTools(s, gateway = /** @type {{ url: string, key: stri
   const fetchType = s.gatewayRuns.find((/** @type {string} */ t) => /^web_fetch_\d{8}$/.test(t));
   if (search && may("search")) out.push({ type: search, name: "web_search" });
   if (fetchType && may("fetch")) out.push({ type: fetchType, name: "web_fetch" });
+  if (!out.length) why.push(`the gateway runs ${s.gatewayRuns.join(", ") || "nothing"}; the agent's web: block ${search || fetchType ? "leaves out search and fetch (web.actions) or names a provider for them" : "has nothing to offer there"}`);
   return out;
 }
 
@@ -22648,6 +22683,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const to = bw[1]?.toLowerCase();
         if (!to) {
           say(`the web ${webPlace(s) === "cloud" ? "in the cloud" : "on this computer"} — /where web here · cloud`);
+          // What the last turn offered of search and fetch, and why not (FOL-332).
+          const note = webPlace(s) === "cloud" ? s.serverToolsNote : null;
+          if (note) say(note.names.length ? `last turn offered ${note.names.join(" and ")}` : `last turn offered no search or fetch — ${note.why.join("; ")}`);
+          else if (webPlace(s) === "cloud") say("search and fetch are offered from the first message on, when the gateway and the agent's file allow them");
           continue;
         }
         if (to === "cloud" && s.localOnly === true) {
