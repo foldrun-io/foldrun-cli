@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { privateAddress, htmlText, parseResults, requestHere, fetchHere, searchHere, decodeEntities } from "../src/web-here.mjs";
+import { privateAddress, htmlText, parseResults, requestHere, fetchHere, searchHere, decodeEntities, decodeBody } from "../src/web-here.mjs";
 
 test("privateAddress: this computer, its network and special ranges are private; public addresses are not", () => {
   for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "::1", "::", "fc00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:7f00:1", "::ffff:a00:1", "::7f00:1", "192.0.2.5", "192.0.0.8"]) assert.equal(privateAddress(ip), true, ip);
@@ -63,4 +63,11 @@ test("parseResults reads DuckDuckGo's HTML results, real addresses out of its re
 test("searchHere and fetchHere say what is missing", async () => {
   assert.deepEqual(await searchHere({}), { text: "web_search needs query", isError: true });
   assert.deepEqual(await fetchHere({}), { text: "web_fetch needs url", isError: true });
+});
+
+test("decodeBody reads the charset the type or the page names", () => {
+  const cafe = Buffer.from([0x63, 0x61, 0x66, 0xe9]);
+  assert.equal(decodeBody(cafe, "text/html; charset=windows-1252"), "café");
+  assert.equal(decodeBody(Buffer.concat([Buffer.from('<meta charset="iso-8859-1">'), cafe]), "text/html").endsWith("café"), true);
+  assert.equal(decodeBody(Buffer.from("café"), "text/plain"), "café");
 });

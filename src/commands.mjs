@@ -10154,6 +10154,8 @@ function webPlace(s) {
 /** What /permissions web ask covers where the web is now, said the same in every place (Codex). @param {any} s */
 function webAskSaid(s) {
   if (s.bypass === true) return "nothing is asked this session (/permissions bypass)";
+  // A session working in the cloud asks nothing here: its agent runs there (Codex).
+  if (s.mode === "cloud") return `${webAsks(s) ? "web calls are asked first" : "web calls run without asking"} on turns on this computer; this session works in the cloud, where its agent's web runs unasked`;
   if (!webAsks(s)) return "web calls run without asking — search, fetch and a cloud browse; a browse on this computer is still asked";
   return webPlace(s) === "cloud"
     ? "web calls are asked first — a browse in the cloud; search and fetch run on foldrun's servers inside the model's answer and cannot be asked there (/where web here asks for each)"
@@ -19260,6 +19262,8 @@ async function codeLocalTurn(s, text) {
           console.log(`      ${c.white(name === SEARCH_HERE ? "a web search from this computer, for:" : "a page read from this computer:")}`);
           for (let i = 0; i < Math.max(1, Math.min(what.length, 4000)); i += width) console.log(`      ${c.grey(what.slice(i, i + width))}`);
           if (what.length > 4000) return { behavior: /** @type {const} */ ("deny"), message: "the query or address was too long to show the person whole" };
+          // The sites it is held to or kept from go with the query (one allowed site is added to it as site:) (Codex).
+          for (const k of ["allowed_domains", "blocked_domains"]) if (Array.isArray(input[k]) && input[k].length) console.log(`      ${c.grey(`${k === "allowed_domains" ? "only from" : "never from"}: ${plainText(input[k].map(String).join(", ")).slice(0, 1000)}`)}`);
         } else {
           const shown = plainText(JSON.stringify(input)).slice(0, 400);
           console.log(`      ${c.grey(clipCells(shown, width))}`);

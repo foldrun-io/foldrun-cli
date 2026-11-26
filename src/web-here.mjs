@@ -232,6 +232,20 @@ export function htmlText(html, base) {
   return title ? `# ${decodeEntities(title).replace(/\s+/g, " ").trim()}\n\n${s}` : s;
 }
 
+/** A body as text in the charset its type or page names, else UTF-8 (Codex). @param {Buffer} body @param {string} type */
+export function decodeBody(body, type) {
+  const head = body.subarray(0, 2048).toString("latin1");
+  const named = /charset\s*=\s*["']?([\w-]+)/i.exec(type)?.[1] ?? /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i.exec(head)?.[1];
+  if (named) {
+    try {
+      return new TextDecoder(named.toLowerCase()).decode(body);
+    } catch {
+      /* a name this Node does not know: UTF-8 */
+    }
+  }
+  return body.toString("utf8");
+}
+
 /** Whether a host is one of the sites listed, or under one. @param {string} host @param {string[]} list */
 function onSite(host, list) {
   const h = host.toLowerCase().replace(/^www\./, "");
@@ -252,9 +266,10 @@ export async function fetchHere(input, o = {}) {
   try {
     const r = await requestHere(url, o);
     const type = r.type.toLowerCase();
+    const raw = decodeBody(r.body, type);
     let text;
-    if (/html|xml/.test(type) || (!type && /^\s*</.test(r.body.subarray(0, 200).toString("utf8")))) text = htmlText(r.body.toString("utf8"), r.url);
-    else if (/^text\/|json|javascript|csv|yaml|markdown/.test(type) || !type) text = r.body.toString("utf8");
+    if (/html|xml/.test(type) || (!type && /^\s*</.test(raw.slice(0, 200)))) text = htmlText(raw, r.url);
+    else if (/^text\/|json|javascript|csv|yaml|markdown/.test(type) || !type) text = raw;
     else return { text: `${r.url} is ${type || "not text"} (${r.body.length} bytes) — web_fetch reads text pages; this one is not read here`, isError: true };
     const more = text.length > max ? `\n\n[cut at ${max} of ${text.length} characters — ask again with a larger max_chars]` : r.cut ? "\n\n[the page was larger than 5 MB; only its start was read]" : "";
     const head = `${r.url} · ${r.status}${r.url !== url ? ` (from ${url})` : ""}\n\n`;
