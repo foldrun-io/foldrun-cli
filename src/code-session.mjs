@@ -80,6 +80,42 @@ export function isLeave(/** @type {string | null} */ line) {
   return /^(\/quit|exit|quit)$/i.test(line.trim());
 }
 
+/** A line that is a /command: "/name" then, after a space, its words — as the prompt's dispatcher reads one.
+ *  "/Users/x/a.ts fix this" is a message (a path, no space after the name), and so is "\/…". */
+export const COMMAND_LINE = /^(\/[\w:?-]*)(?:\s+([\s\S]*))?$/;
+
+/**
+ * What a /command typed while a turn runs does (FOL-380) — this is the one list. It is never sent to the agent:
+ * - "beside": it runs now, beside the turn. Only what reads and shows (/help, /status, /sessions but send, /queue,
+ *   /todos and /goal alone), or a setting of your own screen (/status
+ *   line|tips|jobs). Nothing here asks a question, opens a list, changes what the running turn reads (the
+ *   approval for a web call reads /where browser: it waits), or runs git over the folder — a blocked event loop
+ *   starves the sandbox's proxy, so /diff, /where and /status context wait (Codex).
+ * - "after": held in the session's queue and run as typed once the turn has finished, like a queued message
+ *   (Tab on an empty line takes it back, /queue rm|clear drops it; a turn that stops or fails puts it on the line).
+ *   That is every command that changes the conversation, the session or the agent's file (/model, /compact,
+ *   /undo, /resume, /where, /todos add, /goal <goal>, /quit, …), opens a list, or starts a turn
+ *   (/plan, /review, the folder's own commands and skills).
+ * A name that is no command is "beside": it gets the same "not a command" answer as when no turn runs.
+ * null: not a command at all — a message.
+ * @param {string} line
+ * @param {(name: string) => boolean} known whether "/name" is a command of this session (foldrun code's or the folder's)
+ * @returns {"beside" | "after" | null}
+ */
+export function commandDuringTurn(line, known) {
+  const m = COMMAND_LINE.exec(String(line).trim());
+  if (!m) return null;
+  const name = /** @type {string} */ (m[1]).toLowerCase();
+  const rest = (m[2] ?? "").trim();
+  if (!known(name)) return "beside";
+  if (name === "/status") return /^context\b/i.test(rest) ? "after" : "beside";
+  // /sessions send writes to another session: it waits, as a message would (Codex).
+  if (name === "/sessions") return /^send(?:\s|$)/i.test(rest) ? "after" : "beside";
+  if (["/help", "/queue"].includes(name)) return "beside";
+  if ((name === "/todos" || name === "/goal") && !rest) return "beside";
+  return "after";
+}
+
 /** The tips under the commands. */
 export const CODE_TIPS = [
   "/           type it and the commands show under the line: ↑ ↓ choose, Tab completes, Enter runs",
@@ -88,7 +124,7 @@ export const CODE_TIPS = [
   "\\ at the end of a line goes on to the next; a paste of many lines is one message",
   "↑ ↓         what you typed before, in this folder and others",
   "Ctrl-R      search what you typed before (Ctrl-R again: older; Enter: put it on the line)",
-  "typing while a turn runs: the line under \"working\" shows it; Enter or Tab queues it to be sent when the turn has finished (/queue)",
+  "typing while a turn runs: the line under \"working\" shows it; Enter or Tab queues it to be sent when the turn has finished (/queue); a /command is never sent: it runs beside the turn (/status, /help …), or after it when it changes the session",
 ];
 
 /**
@@ -365,7 +401,7 @@ export const MENU_COMMANDS = ["/where", "/model", "/permissions", "/setup", "/un
 export function helpText({ steers = false, extra = [] } = {}) {
   const own = extra.map((x) => [`${x.name}${x.hint ? ` ${x.hint}` : ""}`, x.desc]);
   const w = Math.min(30, Math.max(...[...CODE_COMMANDS, ...own].map(([c]) => c.length)));
-  const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now; Tab queues it as a message of its own for after the turn (/queue)" : t)) : CODE_TIPS;
+  const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now; Tab queues it as a message of its own for after the turn (/queue); a /command is never sent: it runs beside the turn (/status, /help …), or after it when it changes the session" : t)) : CODE_TIPS;
   const rows = (/** @type {string[][]} */ list) => list.map(([c, d]) => `${c.padEnd(w)}  ${d}`);
   const mark = (/** @type {string} */ c) => (MENU_COMMANDS.includes(String(c).split(" ")[0] ?? "") ? `▸ ${c}` : `  ${c}`);
   // In groups, by what the person is doing (FOL-263).

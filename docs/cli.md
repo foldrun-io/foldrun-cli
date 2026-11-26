@@ -948,7 +948,7 @@ it takes, as before (also when the output goes to a file).
 | `/export copy`, `/export [--thinking] [file]` | the last reply to the clipboard; the session's messages and replies to a file (never over one that is there; `--thinking` adds the summaries `/model thinking` showed) |
 | `/todos` | the session's todo list. The agent keeps it (`todo_write`) when a job has several steps, and it is shown as it changes; `/todos add <step>`, `done <n>`, `rm <n>`, `clear` are yours. It is one list on both sides: a cloud turn is handed it and ends its answer with it as it then stands. Kept for `--continue`; 50 steps at most |
 | (the agent asks) | on this computer the agent may ask you something mid-turn with `ask_person`, the tool a deployed agent's `tools: [ask]` gives: the question, then its choices as a list (↑/↓, Enter or a number, "type my own answer" last) or a line to type. Refused in a `-p` turn and for a sub-agent. In a cloud turn, an agent with `tools: [ask]` asks the same way: its question appears here as a list, and your answer goes to the run, which carries on; answered elsewhere (the dashboard, `foldrun answer`) it is taken off the screen. In a `-p` cloud turn the question is written to stderr with the `foldrun answer <run> --question <id>` that answers it, and the turn waits for it. |
-| `/queue [rm <n>\|clear]` | messages waiting for the turn to end. While a turn runs, type a message and press **Tab**: it is queued, shown on the working line (`2 queued`), and sent as a message of its own when that turn has finished — the next one after that turn, in the order queued. Tab on an empty line takes the last one back to edit. It is the same on this computer and in the cloud (Enter is different: on this computer it sends what you typed *into* the running turn; in the cloud it queues it, as Tab does). A turn that was stopped or failed — or, in the cloud, whose patch you did not apply — sends nothing: what was queued is put on your line instead. A queued `/command` runs as if typed, except the queue's own: `/queue`, `/queue rm <n>` and `/queue clear` typed with Tab during a turn act at once. Tab counts only as a key pressed on its own — a tab inside pasted text queues nothing. With a `/goal` set, what you queued goes before the next turn the session would send by itself. At most 20; not kept when the session ends |
+| `/queue [rm <n>\|clear]` | messages waiting for the turn to end. While a turn runs, type a message and press **Tab**: it is queued, shown on the working line (`2 queued`), and sent as a message of its own when that turn has finished — the next one after that turn, in the order queued. Tab on an empty line takes the last one back to edit. It is the same on this computer and in the cloud (Enter is different: on this computer it sends what you typed *into* the running turn; in the cloud it queues it, as Tab does). A turn that was stopped or failed — or, in the cloud, whose patch you did not apply — sends nothing: what was queued is put on your line instead. A queued `/command` runs as if typed, except the queue's own: `/queue`, `/queue rm <n>` and `/queue clear` typed during a turn act at once. A `/command` typed with Enter during a turn is never sent to the agent: what only shows or reads runs at once beside the turn, and the rest waits for the turn to end, as a queued message does (see below). Tab counts only as a key pressed on its own — a tab inside pasted text queues nothing. With a `/goal` set, what you queued goes before the next turn the session would send by itself. At most 20; not kept when the session ends |
 
 | Type | What it does |
 |---|---|
@@ -1022,7 +1022,19 @@ prompt, which only reads keys pressed after it asks. On this computer
 (`--local`), Enter sends it into the running turn instead: the agent reads
 it after the calls it is making, or, about to finish, reads it and goes on;
 one it did not get to is on the line at the next prompt. Tab queues it there
-as a message of its own. What you are typing
+as a message of its own. A line that is a `/command` is never sent to the
+agent, here or in the cloud. With Enter, `/help`, `/status` (any of its
+choices but `context`), `/sessions` (but `send`), `/queue`, and `/todos` and `/goal`
+typed alone run at once, beside the turn; a name that is no command is said
+back, as at the prompt. Every other command — `/model`, `/where`, `/diff`,
+`/compact`, `/undo`, `/resume`, `/todos add`, `/quit`, the folder's own
+commands and skills — waits for the turn to end (`runs after this turn`)
+and then runs as typed, in the queue's order: Tab on an empty line takes it
+back and `/queue rm|clear` drops it. A turn that stops or fails runs none of
+them: a command queued alone is put back on your line, one queued beside
+messages is kept for ↑ on an empty line (or Ctrl-R). A `/command` typed as the answer to the agent's
+question is not taken as the answer either. A path (`/src/a.ts fix this`)
+is a message, and `\/` in front sends a line that starts with `/` as one. What you are typing
 stays on the working line through a permission question and comes back after
 it, and keys typed before a question is shown never answer it. Ctrl-C still stops the
 turn. At the apply prompt `d` shows the whole diff before you answer. A turn you
