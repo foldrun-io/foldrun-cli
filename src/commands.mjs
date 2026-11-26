@@ -16404,6 +16404,8 @@ function holdReadyTicker() {
  *   (dim) while it is empty, the text as it is typed (FOL-325, owner 25 Nov
  *   2026: "allow us to still write and go to queue like claude code does").
  */
+/** The prompt's lead (account · project) for the input line under a running turn; set by the prompt loop. */
+let tickerLead = "";
 function startTicker(since, typed = () => "", hint = "") {
   // The turn's own ticker takes over from the getting-ready one, its clock with it.
   if (readyTicker && readySince !== null) since = Math.min(since, readySince);
@@ -16445,10 +16447,14 @@ function startTicker(since, typed = () => "", hint = "") {
       // Two rows: the working row, then the input line — what is typed, its
       // end in view, or the hint while it is empty; each clipped to one row
       // so neither wraps (the clear below goes up exactly one).
-      const room = cols - displayWidth(`  ❯ ${waiting}`);
+      // The same lead as the prompt (account · project), so the line reads as
+      // the prompt it is (owner, 26 Nov 2026); dropped when the row is too narrow.
+      const full = cols - displayWidth(`  ❯ ${waiting}`);
+      const lead = tickerLead && full - displayWidth(`${tickerLead} `) >= 20 ? tickerLead : "";
+      const room = full - (lead ? displayWidth(`${lead} `) : 0);
       const input = t ? clipCellsEnd(t, Math.max(1, room)) : c.dim(clipCells(hint, Math.max(1, room)));
-      const second = `  ❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hint, Math.max(1, room))}${waiting}`;
-      process.stdout.write(`${head}\n  ${c.violet("❯")} ${input}${waiting ? c.cyan(waiting) : ""}`);
+      const second = `  ${lead ? `${lead} ` : ""}❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hint, Math.max(1, room))}${waiting}`;
+      process.stdout.write(`${head}\n  ${lead ? `${c.bold(c.cyan(lead))} ` : ""}${c.violet("❯")} ${input}${waiting ? c.cyan(waiting) : ""}`);
       drawn = [displayWidth(plainText(head)), displayWidth(second)];
       shown = true;
       return;
@@ -22879,6 +22885,7 @@ async function readCodeMessage(state, completer, s) {
   // The project's name, then a chevron (owner, 19 Nov 2026): where you are
   // talking, which tells two open sessions apart.
   const ask = `${c.bold(c.cyan(promptLead(s)))} ${c.violet("❯")} `;
+  tickerLead = promptLead(s);
   return new Promise((resolve) => {
     // A copy: readline adds every line it reads, a paste's included; the
     // history kept is one entry per message, added by the caller.
