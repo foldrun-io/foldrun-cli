@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.6.1] — 2026-11-26
+
+### deps
+
+- @foldrun/core 29.6.1 ([c699299](https://github.com/foldrun-io/foldrun-cli/commit/c699299))
+
 ## [33.6.0] — 2026-11-26
 
 - feat(code): cloud jobs take many tasks on both paths, start at once and return as each finishes; the platform's room is the limit (FOL-382) ([ad0a8c7](https://github.com/foldrun-io/foldrun-cli/commit/ad0a8c7))
