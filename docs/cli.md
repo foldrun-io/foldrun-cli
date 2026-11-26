@@ -140,8 +140,8 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `foldrun export [workspace]` | a deployed project as a `.zip` — agents, flows, tools, skills, scripts, evals, knowledge; never memory, state, storage or a secret's value. `--flow <name>` exports that flow with every flow and agent it runs and the tools, skills and scripts they grant; `--agent <name>` that agent and what it grants. Written under the name the platform gives it (`<ws>.zip`, `<ws>-flow-<name>.zip`); `--file <path>` (`-` for stdout), `--force` to replace (`GET …/export`) |
 | `foldrun import <file.zip>` | take a package in: first shows what it adds, what is identical, what it would replace and what it still needs (secrets, tools, skills, scripts, agents, flows), then asks. Never deletes; replacing a file needs `--overwrite`. `--to <workspace>` (a name that does not exist makes it, from a project package), `--dry-run` previews only (`--json` for the plan), `--yes` with no terminal (`POST …/import`) |
 | `foldrun snapshot push [dir]` | send a folder for an agent on foldrun to work on (a snapshot). What goes is what git would commit — tracked files and untracked ones `.gitignore` does not exclude, as they are on disk; links and submodules are left out and named. A secret in any file stops it before anything leaves the machine (remove it, or leave the file out with `.gitignore`); the platform checks again. Answers the snapshot id, kept 7 days from the last send and while a run uses it. `--to <workspace>`, `--dry-run` packs and checks only, `--out <file.tar.gz>` keeps the archive (`--force` over a file that is there), `--json` (`POST …/snapshots`) |
-| `foldrun code [dir] --local` → `cloud_jobs` | on this computer, the agent may start **cloud jobs**, up to four at once. With the folder (the default) each runs on a copy of the folder sent as a snapshot, and its patch comes back; without it (`folder: false`) one task runs as one of the project's agents with its own tools and only its answer comes back. Each is asked first (y / a / n); a copy of the folder is shown before it goes (`send it?`), and each patch is asked again (git's stat, d for the diff) before `git apply`. Ctrl-C tells the runs to stop. `/where local` takes the tool away. See [Cloud jobs, from this computer](#cloud-jobs-from-this-computer) |
-| `foldrun code [dir] --local-only` / `--local` / `--cloud` | answer the start question ahead, one of its three answers: **This computer only** (`--local-only`: the agent sends nothing to the cloud), **This computer, agents in the cloud** (`--local`: the agent may send heavy jobs to the cloud, each asked first) or **The cloud** (`--cloud`: each message works on a copy there). `/where` changes it mid-session. On this computer any folder works. Working in the cloud needs git: outside a repository foldrun code offers `git init` when **The cloud** is picked — never in your home folder or a folder that holds repositories of its own — and without it stays on this computer (a script's `--cloud --task` there is refused). With agents in the cloud nothing is asked at the start: a job that would take the folder needs git and says so; one without the folder needs none |
+| `foldrun code [dir] --local` → `cloud_jobs` | on this computer, the agent may start **cloud jobs**, many in one call (up to 16 a call; the account's compute pool decides how many run at once, and the rest wait their turn). With the folder (the default) each runs on a copy of the folder sent as a snapshot, and its patch comes back; without it (`folder: false`) each task runs as one of the project's agents with its own tools and only its answer comes back. The call answers at once and the turn goes on; each job's result reaches the agent as it finishes. Starting is not asked unless `/permissions cloud ask`; a copy of the folder is shown before it goes (`send it?`), and each patch is asked (git's stat, d for the diff) before `git apply`. Ctrl-C tells the runs to stop. `/where local` takes the tool away. See [Cloud jobs, from this computer](#cloud-jobs-from-this-computer) |
+| `foldrun code [dir] --local-only` / `--local` / `--cloud` | answer the start question ahead, one of its three answers: **This computer only** (`--local-only`: the agent sends nothing to the cloud), **This computer, agents in the cloud** (`--local`: the agent may send heavy jobs to the cloud as cloud jobs) or **The cloud** (`--cloud`: each message works on a copy there). `/where` changes it mid-session. On this computer any folder works. Working in the cloud needs git: outside a repository foldrun code offers `git init` when **The cloud** is picked — never in your home folder or a folder that holds repositories of its own — and without it stays on this computer (a script's `--cloud --task` there is refused). With agents in the cloud nothing is asked at the start: a job that would take the folder needs git and says so; one without the folder needs none |
 | `koder [dir]` | the short name for `foldrun code`: the same flags and the same session. Installed with `npm i -g foldrun`. `koder --version` says `koder (foldrun code) <version>`; if another program called koder comes first on your PATH, `foldrun doctor` and `/setup check` say so — use `foldrun code`, or put npm's global folder first |
 | `foldrun code [dir]` | code with an agent that works in a sandbox on the platform, not on this computer — see [Coding in a sandbox](#coding-in-a-sandbox). Each message sends the folder as a snapshot (as `snapshot push` does), runs the agent on it in its own sandbox as a turn of one conversation, prints what it does as it does it (its tool calls and words, and any refusal or failure; the platform's other notes on the step stay on the run page, `--verbose` shows them too), and offers the patch it hands back: `git apply --check`, git's stat, a yes, then `git apply`. Ctrl-C stops the run; a dropped connection is followed again, not the end of the turn. After each turn a session line gives the turns so far, the spend, the model, how many tokens the agent read last turn, the time and the conversation id; `/status` prints it, `/resume new` starts a fresh conversation (and count), `/quit` leaves, `--continue` picks up the folder's last conversation; `/help` lists the rest ([in the session](#in-the-session)). `/sessions send <conversation> <text>` messages another session; before each turn, messages other sessions sent this one are shown and you are asked whether to include them — only `y` does (with `--task`, only `--include-messages` includes them — `--yes` does not); those that do not fit in one turn wait for the next, and `/sessions read` shows what waits. `--to <workspace>` (a project that does not exist is made, blank with its `coder` agent, after a yes), `--agent <name>` (default `coder`, added to the project on first use after a yes), `--task "…"` one turn and exit (for scripts), `--yes` sends the folder and applies without asking (required with no terminal), `--test`, `--context <id>`, `--verbose` |
 | `foldrun status [workspace]` | per workspace: what is added, changed and only-on-the-platform, plus which files moved there since your last deploy from here. Reads only |
@@ -618,8 +618,8 @@ ticked so Enter keeps it, and the first time in a folder which project:
 1. **Where should this session work?** Two answers (`--local` or `--cloud`
    answers ahead):
    - **On this computer**: foldrun's own agent works in your folder (below).
-     It may also start [cloud jobs](#cloud-jobs-from-this-computer), each
-     shown and asked first, on foldrun credits — unless cloud jobs are off
+     It may also start [cloud jobs](#cloud-jobs-from-this-computer), on
+     foldrun credits (asked first with `/permissions cloud ask`) — unless cloud jobs are off
      for this folder (`/where local`, or `--local-only`), and then it is
      given no way to send anything of the folder: no cloud job, no messages
      to other sessions. Its model calls leave, paid as below, and so does
@@ -719,38 +719,67 @@ and fix, or two approaches to compare. Your code stays on your computer,
 and the agent keeps working in your folder. Only the jobs run in the cloud,
 on foldrun credits.
 
+One call starts **several jobs side by side**: the agent puts each task in
+the call's list (up to 16 a call, a guard against a model that loops; another
+call starts more). How many run at once is the platform's: the account's
+compute pool. A job past it waits for room and starts in turn — it is not
+refused. The call tells the agent what the account holds now (from
+`GET /v1/account/usage/compute`, what `foldrun usage compute` shows). When
+you ask for work in parallel, for many agents, or to see how the cloud acts
+under load, the agent splits the work into independent tasks and starts them
+in one call.
+
+**The call answers at once** with each job's run id, and the turn goes on:
+the agent keeps working, and what you type with Enter still reaches it
+between its tool calls. Each job's result comes to the agent as it finishes,
+summary first (a line per job: its status, cost and what became of its
+changes; then each report, cut short when many come together —
+`foldrun report <run-id> --to <project>` has all of it). Before it ends its
+reply the agent collects the rest (`cloud_jobs` with `wait: true`). Jobs
+still running when the reply ends are waited for under the working line, and
+their results go with your next message. Each job has its own row under the
+working line while it runs (`/status jobs off` hides them).
+
+**Starting is not asked** by default (owner, 26 Nov 2026). `/permissions
+cloud ask` makes every call ask first, one question for the whole call: how
+many jobs, where they run, each task, and the credits — a guess from what
+this session's earlier cloud jobs cost, or that it is known only as they run.
+**y** starts them, **n** starts nothing, **a** allows cloud jobs for the rest
+of the session. `/permissions cloud bypass` goes back to unasked; the choice
+is kept for you, every session (`code-prefs.json`). Under `/permissions strict`,
+and while a server the agent left running outside the sandbox lives, starting
+is asked whatever the choice. Unasked, the call still shows what it sends
+(how many jobs, where, each task) before it starts, and it makes nothing on
+the platform: the project and its agent must be there already (the start
+question, or `/where cloud`, offers to make them; an asked call may too).
+
 A job **with the folder** (the default) is what follows. A job **without
-the folder** (`folder: false`, one task per call) runs as one of the
-project's agents, with that agent's own tools — the web, its MCP servers
-and APIs. Only the task is sent, no file of the folder; it is shown whole
-and asked (**a** allows such jobs for the rest of the session), and its
-answer comes back to the agent here; what it made in the sandbox stays
+the folder** (`folder: false`) runs as one of the project's agents (one
+agent for every task of the call), with that agent's own tools — the web,
+its MCP servers and APIs. Only the tasks are sent, no file of the folder;
+each answer comes back to the agent here; what it made in the sandbox stays
 there. That is the cloud as compute for a local session.
 
-1. **You are asked first.** The question shows each task (its first 12
-   lines; the rest are counted) and says that a copy of the folder goes to
-   the project and costs credits.
-   **y** sends it, **n** sends nothing, and **a** allows cloud jobs for
-   the rest of the session.
-2. **The folder goes once, as a snapshot.** It is what git would commit,
+1. **The folder goes once, as a snapshot.** It is what git would commit,
    checked for secrets, as a cloud turn sends it, and shown before it goes
-   (see below). Up to four runs of the
-   project's agent (`coder`) start on it at the same time. Each run works
-   in its own sandbox and its own conversation. It sees the folder, not
-   your conversation, so the agent writes each task to stand alone.
-3. **Each one's changes are asked about again** before they go into the
-   folder. The question shows git's own stat of the exact patch, after
-   `git apply --check`; **d** shows the whole diff, and **y** applies it.
-   **f** takes it file by file (see `/undo` below).
+   (see below — files the cloud has not had before are asked about once).
+   Every job of the call starts on it at the same time, a run of the
+   project's agent (`coder`) each. Each run works in its own sandbox and its
+   own conversation. It sees the folder, not your conversation, so the agent
+   writes each task to stand alone.
+2. **Each one's changes are asked about** before they go into the folder,
+   as each job finishes. The question shows git's own stat of the exact
+   patch, after `git apply --check`; **d** shows the whole diff, and **y**
+   applies it. **f** takes it file by file (see `/undo` below).
    **a** allows cloud jobs' changes for the rest of the session. A yes
    to the agent's own edits does not cover them. A patch that no longer
-   applies (an earlier agent's patch, or a change since, touched the same
+   applies (another job's patch, or a change since, touched the same
    lines) is kept in a file, not forced, and the agent is told where.
-4. **The agent hears what happened:** each cloud agent's report, its cost
+3. **The agent hears what happened:** each job's report, its cost
    and run id, and whether its changes went in. It reads changed files
    again before it edits them. `/diff` and `/undo` cover applied patches.
 
-Ctrl-C tells every cloud run to stop, and nothing more is applied. A stop
+Ctrl-C tells every cloud run of the turn to stop, and nothing more is applied; so does a turn that fails. A stop
 the platform does not confirm is named with its run id, and so is a start
 whose answer never arrived. `foldrun runs --to <project>` shows what is
 still going, and `foldrun report <run-id> --to <project>` shows any run step
@@ -896,7 +925,7 @@ it takes, as before (also when the output goes to a file).
 | Type | What it does |
 |---|---|
 | **Where & how** | |
-| `/where`, `/where local\|local+cloud\|cloud` | where this session works, the same three answers as the start question: **This computer only** (`local`: the agent sends nothing to the cloud; `/where send` does when you ask), **This computer, agents in the cloud** (`local+cloud`: your files stay here; the agent may send a heavy job to the cloud, each asked first) and **The cloud** (`cloud`: each message works on a copy of your folder there; you apply what comes back). The same session either way: the side you move to is told what the last turns did. Outside a git repository `cloud` offers `git init` (not in your home folder or a folder of repositories); no keeps you where you are. `local+cloud` asks nothing: a cloud job that would take the folder needs git and says so |
+| `/where`, `/where local\|local+cloud\|cloud` | where this session works, the same three answers as the start question: **This computer only** (`local`: the agent sends nothing to the cloud; `/where send` does when you ask), **This computer, agents in the cloud** (`local+cloud`: your files stay here; the agent may send heavy jobs to the cloud as cloud jobs) and **The cloud** (`cloud`: each message works on a copy of your folder there; you apply what comes back). The same session either way: the side you move to is told what the last turns did. Outside a git repository `cloud` offers `git init` (not in your home folder or a folder of repositories); no keeps you where you are. `local+cloud` asks nothing: a cloud job that would take the folder needs git and says so |
 | `/where web here\|cloud` | where the agent's web — search, fetch and browse — runs on this computer's turns, for this session. **cloud** (the default): search and fetch on foldrun's servers (below), and each browse in a fresh browser in foldrun's cloud, through the API's `POST /v1/foldrun/browse` with the session's key, paid per call. In the cloud nothing stays open between calls and no sign-in is kept; up to 5 steps (click, fill, press, wait …) run before the page is read, as markdown, text or a screenshot (saved on this computer, its path given). The agent's `web.browse` `allowed_domains` goes with every call (written `*.example.com`: the cloud browser lets a site's sub-domains through, so a lock to one host alone is refused rather than widened), and a step its `deny` names is not run; its other settings are named as not applied. A call whose outcome is unknown is never repeated by itself. **here**: search and fetch from this computer's own connection, under the same names (`web_search`, `web_fetch`; search through DuckDuckGo's HTML page, a page read as text, public addresses only — this computer's own services and its local network are refused at the moment of connecting, every redirect too), and browse in the Chrome window set up with `foldrun browser setup`. `/where local` keeps the web here too. Search, fetch and a cloud browse are not asked by default (`/permissions web ask` asks); a browse on this computer acts as you, in your Chrome with its sign-ins, and is asked every time. |
 | `/permissions resources` · `memory <4Gi>` · `cpu <n>` · `off` · `save` | the CPU and memory this computer allows foldrun, for every open session, its agents and their commands. Asked once per computer, at the first session on this computer at a terminal: **Light**, **Balanced** (ticked), **Most** or **No limit**, each shown in this computer's figures. A script is never asked: it uses `FOLDRUN_CODE_RESOURCES` (`cpu=2,memory=4Gi`, `balanced`, or `off`) or the kept answer, else no limit. The agent's own `size:` and `resources:` say what it asks, read as in the cloud; the limit in force is the lower of the two, and an ask over what this computer allows is named. `memory`/`cpu` set a lower ceiling for this session; `off` drops it; `save` keeps the session's figures for this computer. An agent that asks for more than this computer allows runs at the lower figure only after a yes (a script is refused; raise `FOLDRUN_CODE_RESOURCES`). With **No limit** foldrun holds nothing here, the agent's own ask included. Memory on macOS is **sampled**: about once a second foldrun adds up the memory of everything it started for this session and, when the total is over, stops the largest command and tells the agent why — a burst between two samples is not caught. CPU on macOS is held **by priority**: when foldrun's processes use more cores than allowed for about three seconds running, the busiest command is moved to macOS's background band (low priority) and the agent is told — it is never stopped for CPU, it gives way to the rest of the computer, so on an idle computer it still runs at full speed. Linux holds neither yet. What you run yourself (`!cmd`) is never counted or stopped. |
 | web search and fetch on this computer's turns | when the agent has `tools: [web]`, a turn on this computer can search the web and read a page through foldrun's own search and fetch, run on foldrun's servers by the API's `/v1/messages` server tools (`web_search`, `web_fetch`), never by the model's provider. They are offered only once the API has said it runs them itself (its `foldrun-server-tools` answer header, asked for before a session's first message — again at the next message if that got no answer — and read from every model answer), only as the agent's `web.actions` allows, and only while the web is in the cloud (the default; not with `/where web here` or `/where local`, which search and fetch from this computer instead). `tools: [web]` and `web.actions` are read from the agent's file **on the platform**, in the project the session uses — not from a copy in this folder, which reaches it with `foldrun deploy`. `/where web` says what the last turn offered and, when nothing, why. Each shows as `● Search …` or `● Fetch …` · on foldrun's servers, and is priced per call as on the API. |

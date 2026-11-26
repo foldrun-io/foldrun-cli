@@ -218,6 +218,37 @@ test("/status jobs off hides the background jobs' rows under the working line, f
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).jobs, undefined, "on again: nothing kept");
 });
 
+test("/permissions cloud ask|bypass (FOL-382): starting cloud jobs is unasked until the person asks to be asked; kept for the person, a job's changes always asked", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-cj", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1", NO_COLOR: "1", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/permissions cloud\r");
+    at = await t.until(/cloud jobs start without a question — \/permissions cloud ask · bypass \(a job's changes are asked/, at);
+    t.send("/permissions cloud ask\r");
+    at = await t.until(/cloud jobs are asked about before they start: one question for each call · kept for you, every session/, at);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).cloudAsk, true, "kept for the person");
+    // The list has the choice, the other way round now; its first row shows what is allowed.
+    t.send("/permissions\r");
+    at = await t.until(/Cloud jobs without asking\s+they start unasked[\s\S]*Esc to cancel/, at);
+    await new Promise((r) => setTimeout(r, 100));
+    t.send("\r");
+    at = await t.until(/cloud jobs are asked about before they start — \/permissions cloud bypass/, at);
+    t.send("/permissions cloud bypass\r");
+    at = await t.until(/cloud jobs start without a question \(what is sent is still shown, and a job's changes are asked/, at);
+    t.send("/permissions cloud\r");
+    at = await t.until(/cloud jobs start without a question — \/permissions cloud ask/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).cloudAsk, undefined, "bypass again: nothing kept (the default)");
+});
+
 test("a bracketed paste is one message however slowly it arrives; Enter after it sends it; the terminal's paste mode is off again after", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
@@ -1673,14 +1704,18 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
   }
 });
 
-test("--local, cloud_jobs: sending the folder is asked (no sends nothing); after a yes the run's patch is asked again and put into the folder; the agent hears what became of it", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+test("--local, cloud_jobs with /permissions cloud ask: starting is asked (no sends nothing); after a yes the run's patch is asked again and put into the folder; the agent hears what became of it", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  // Asking first is the person's choice (FOL-382): off unless set.
+  fs.writeFileSync(path.join(home, "code-prefs.json"), JSON.stringify({ cloudAsk: true }));
   const asked: any[] = [];
   const turns = [
     () => sse([{ type: "tool_use", id: "c1", name: "cloud_jobs", input: { tasks: ["add b"] } }]),
     () => sse([{ type: "text", text: "Fine, not then." }]),
     () => sse([{ type: "tool_use", id: "c2", name: "cloud_jobs", input: { tasks: ["add b to a.txt\nthen run the tests"] } }]),
+    // The call answered at once (FOL-382): the agent collects the job.
+    () => sse([{ type: "tool_use", id: "c3", name: "cloud_jobs", input: { wait: true } }]),
     () => sse([{ type: "text", text: "The cloud agent added b." }]),
   ];
   const s = await serve({
@@ -1708,7 +1743,7 @@ test("--local, cloud_jobs: sending the folder is asked (no sends nothing); after
       t.send("use the cloud\r");
       at = await t.until(/make it\? \[y\/N\]/, at);
       t.send("y\r");
-      at = await t.until(/Cloud agents[\s\S]*sends a copy of this folder to desk[\s\S]*1\. add b[\s\S]*\[a\]lways for cloud agents this session[\s\S]*allow\?|allow\?[\s\S]*cloud agents this session/, at);
+      at = await t.until(/1 cloud job: sends a copy of this folder to desk[^\n]*no cloud job has finished[\s\S]*1\. add b[\s\S]*\/permissions cloud ask is on[\s\S]*\[a\]lways for cloud jobs this session[\s\S]*allow\?|allow\?[\s\S]*cloud jobs this session/, at);
       t.send("n\r");
       at = await t.until(/Fine, not then\./, at);
       assert.equal(s.seen.filter((x: any) => x.url === `${WS}/snapshots`).length, 0, "no: nothing sent");
@@ -1718,8 +1753,8 @@ test("--local, cloud_jobs: sending the folder is asked (no sends nothing); after
       t.send("y\r");
       at = await t.until(/send it\? \[y\]es/, at);
       t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
-      at = await t.until(/sent the folder to desk[\s\S]*cloud agent 1 · run-sess-1/, at);
-      at = await t.until(/✓ cloud agent 1 · completed[\s\S]*cloud agent 1's changes, into this folder:[\s\S]*a\.txt \|\s+1 \+[\s\S]*\[a\]lways for cloud agents' changes this session[\s\S]*\[d\]iff/, at);
+      at = await t.until(/sent the folder to desk[\s\S]*cloud job #1 · run-sess-1/, at);
+      at = await t.until(/✓ cloud job #1 · completed[\s\S]*cloud job #1's changes, into this folder:[\s\S]*a\.txt \|\s+1 \+[\s\S]*\[a\]lways for cloud jobs' changes this session[\s\S]*\[d\]iff/, at);
       assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n", "nothing applied before the yes");
       t.send("d\r");
       at = await t.until(/\+b[\s\S]*allow\?/, at);
@@ -1734,8 +1769,9 @@ test("--local, cloud_jobs: sending the folder is asked (no sends nothing); after
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n");
     assert.ok(asked[0].tools.some((x: any) => x.name === "cloud_jobs"), "the model is offered the tool");
     assert.match(JSON.stringify(asked[1].messages), /person said no/);
-    const result = JSON.stringify(asked[3].messages.at(-1));
-    assert.match(result, /Cloud agent 1 \(run run-sess-1\): completed/);
+    assert.match(JSON.stringify(asked[3].messages.at(-1)), /Started 1 cloud job on a copy of this folder[\s\S]*#1 run run-sess-1/, "the call answers once the job has started");
+    const result = JSON.stringify(asked[4].messages.at(-1));
+    assert.match(result, /\[cloud jobs: 1 finished, none still running\][\s\S]*#1 run run-sess-1: completed/);
     assert.match(result, /Added b; tests pass\./);
     assert.match(result, /Put into the folder/);
     const runs = s.seen.filter((x: any) => x.method === "POST" && x.url === `${WS}/agents/coder/run`);
@@ -1804,6 +1840,7 @@ test("--local, cloud_jobs: Ctrl-C while they work stops every run on the platfor
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   let n = 0;
+  let calls = 0;
   const s = await serve({
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
@@ -1816,7 +1853,8 @@ test("--local, cloud_jobs: Ctrl-C while they work stops every run on the platfor
     [`GET ${WS}/runs/run-c-2`]: () => ({ timedOut: true }),
     [`POST ${WS}/runs/run-c-1/stop`]: () => ({ ok: true }),
     [`POST ${WS}/runs/run-c-2/stop`]: () => ({ ok: true }),
-    "POST /v1/messages": () => sse([{ type: "tool_use", id: "c1", name: "cloud_jobs", input: { tasks: ["one", "two"] } }]),
+    // Started once; then the agent waits for them (FOL-382: the call answers at once).
+    "POST /v1/messages": () => sse([++calls === 1 ? { type: "tool_use", id: "c1", name: "cloud_jobs", input: { tasks: ["one", "two"] } } : { type: "tool_use", id: `w${calls}`, name: "cloud_jobs", input: { wait: true } }]),
   });
   try {
     const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
@@ -1825,11 +1863,10 @@ test("--local, cloud_jobs: Ctrl-C while they work stops every run on the platfor
       t.send("go\r");
       at = await t.until(/make it\? \[y\/N\]/, at);
       t.send("y\r");
-      at = await t.until(/2 at once[\s\S]*allow\?/, at);
-      t.send("y\r");
+      // Not asked by default (FOL-382): only what leaves is shown, once.
       at = await t.until(/send it\? \[y\]es/, at);
       t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
-      at = await t.until(/cloud agent 2 · run-c-2/, at);
+      at = await t.until(/cloud job #2 · run-c-2/, at);
       await new Promise((r) => setTimeout(r, 300));
       t.send("\x03");
       at = await t.until(/stopping/, at);
@@ -1841,7 +1878,86 @@ test("--local, cloud_jobs: Ctrl-C while they work stops every run on the platfor
     }
     const stops = s.seen.filter((x: any) => x.method === "POST" && /\/runs\/run-c-\d\/stop$/.test(x.url)).map((x: any) => x.url).sort();
     assert.deepEqual(stops, [`${WS}/runs/run-c-1/stop`, `${WS}/runs/run-c-2/stop`]);
+    assert.equal(s.seen.filter((x: any) => x.method === "POST" && x.url === `${WS}/agents/coder/run`).length, 2, "started once, not again by the wait");
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\n");
+  } finally {
+    s.close();
+  }
+});
+
+test("--local, cloud_jobs (FOL-382): one call starts many jobs without the folder, unasked; the call answers at once and the turn goes on; the results come back summary first", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  let release: () => void = () => {};
+  const done = new Promise<void>((r) => (release = r));
+  let started = 0;
+  /** What the platform had seen when the agent's next model call came: the jobs still running. */
+  let runningAtNextCall = -1;
+  const record = (id: string) => ({ id, status: "completed", steps: [{ agent: "researcher", result: `report of ${id}`, costUsd: 0.02 }] });
+  const runRoutes: Record<string, any> = {};
+  for (const n of [1, 2, 3, 4, 5]) {
+    const id = `run-p-${n}`;
+    // Long-polled: "still running" until released, after a short wait as the platform's own wait does.
+    runRoutes[`GET ${WS}/runs/${id}`] = (_b: string, q: URLSearchParams) =>
+      q.get("wait") === "true" ? Promise.race([done.then(() => ({ id, status: "completed" })), new Promise((r) => setTimeout(() => r({ timedOut: true }), 300))]) : record(id);
+  }
+  const turns = [
+    () => sse([{ type: "tool_use", id: "c1", name: "cloud_jobs", input: { folder: false, agent: "researcher", description: "load test", tasks: ["one", "two", "three", "four", "five"] } }]),
+    () => {
+      runningAtNextCall = started;
+      release();
+      return sse([{ type: "tool_use", id: "c2", name: "cloud_jobs", input: { wait: true } }]);
+    },
+    () => sse([{ type: "text", text: "All five reported." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }, { name: "researcher" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    "GET /v1/account/usage/compute": () => ({ compute: { vcpu: 16, stepVcpu: 2 }, inUse: { vcpu: 4, memGiB: 8, diskGiB: 0, steps: 2 }, waiting: [], runsWaiting: { waiting: 0, limit: 50 } }),
+    [`POST ${WS}/agents/researcher/run`]: () => ({ ok: true, runId: `run-p-${++started}` }),
+    ...runRoutes,
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  try {
+    const t = onTerminal(["code", d, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("launch as many agents as you can in the cloud\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      // Unasked, still shown before anything goes: how many, where, each task whole.
+      at = await t.until(/5 cloud jobs, side by side in desk on [^\n]* as its agent researcher[\s\S]*1\. one[\s\S]*5\. five[\s\S]*started without a question — \/permissions cloud ask asks first/, at);
+      at = await t.until(/cloud job #5 · run-p-5/, at);
+      at = await t.until(/All five reported\.[\s\S]*✓ done/, at);
+      assert.doesNotMatch(t.out(), /allow\?/, "not asked: cloud jobs start without a question unless /permissions cloud ask");
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    // Many in one call, both ways: five runs of the project's agent, the tasks alone sent.
+    const runs = s.seen.filter((x: any) => x.method === "POST" && x.url === `${WS}/agents/researcher/run`);
+    assert.deepEqual(runs.map((x: any) => JSON.parse(x.body).task).sort(), ["five", "four", "one", "three", "two"]);
+    assert.ok(runs.every((x: any) => JSON.parse(x.body).snapshot === undefined), "no folder sent");
+    // Not blocked: the agent's next call came while all five were still running.
+    assert.equal(runningAtNextCall, 5);
+    const first = JSON.stringify(asked[1].messages.at(-1));
+    assert.match(first, /Started 5 cloud jobs[\s\S]*#1 run run-p-1[\s\S]*#5 run run-p-5/);
+    assert.match(first, /2 steps running on the account, holding 4 of its 16 vCPU; room for about 6 more/, "the platform's room, from GET /v1/account/usage/compute");
+    // The results: summary first, one line a job, then each report.
+    // As each finished: to the wait, or between calls after it — every one reaches the agent, none twice.
+    const back = JSON.stringify(asked.slice(1).map((x) => x.messages.at(-1)));
+    for (const n of [1, 2, 3, 4, 5]) assert.equal(back.split(`--- #${n} (run run-p-${n})`).length, 2, `#${n} once`);
+    assert.match(back, /\[cloud jobs: \d finished/);
+    for (const n of [1, 2, 3, 4, 5]) assert.match(back, new RegExp(`#${n} run run-p-${n}: completed, \\$0\\.02[\\s\\S]*report of run-p-${n}`));
   } finally {
     s.close();
   }
@@ -3339,6 +3455,8 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     () => sse([{ type: "tool_use", id: "c1", name: "Read", input: { file_path: path.join(d, "a.txt") } }, { type: "tool_use", id: "c2", name: "Read", input: { file_path: "/etc/hosts" } }]),
     () => sse([{ type: "text", text: "a.txt holds one line." }]),
     () => sse([{ type: "tool_use", id: "a2", name: "cloud_jobs", input: { folder: false, description: "the answer", tasks: ["What is six times seven?"] } }]),
+    // It answered at once (FOL-382): the agent collects the job.
+    () => sse([{ type: "tool_use", id: "a3", name: "cloud_jobs", input: { wait: true } }]),
     () => sse([{ type: "text", text: "All done: 42." }]),
     // the added folder
     () => sse([{ type: "tool_use", id: "r9", name: "Read", input: { file_path: path.join(other, "notes.txt") } }]),
@@ -3395,11 +3513,9 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     at = await t.until(/▸ look at a\.txt[\s\S]*○ ask the cloud/, at);
     at = await t.until(/sub-agent explore · read a\.txt/, at);
     at = await t.until(/sub-agent explore answered/, at);
-    // The cloud sub-agent: asked, with exactly what is sent.
-    at = await t.until(/runs in desk on [^\n]* as its agent coder[^\n]*Only this text is sent; no file of this folder[\s\S]*What is six times seven\?[\s\S]*allow\?[^\n]*lways for cloud jobs without the folder, this session/, at);
-    t.send("y\r");
-    at = await t.until(/cloud sub-agent coder · run-sub-1/, at);
-    at = await t.until(/✓ cloud sub-agent coder · completed/, at);
+    // The cloud job without the folder: started without a question (FOL-382), only the task sent.
+    at = await t.until(/cloud job #1 · run-sub-1 · What is six times seven\?/, at);
+    at = await t.until(/✓ cloud job #1 · completed/, at);
     at = await t.until(/All done: 42\./, at);
     at = await t.until(/\w ❯ /, at);
     at = await alone(t, "/todos", at);
@@ -3455,10 +3571,12 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
   const run = s.seen.find((x) => x.method === "POST" && x.url === `${WS}/agents/coder/run`);
   assert.deepEqual(JSON.parse(run!.body), { task: "What is six times seven?" });
   assert.equal(s.seen.some((x) => /snapshots/.test(x.url)), false);
-  assert.match(JSON.stringify(asked[5].messages.at(-1)), /Six times seven is 42\.[\s\S]*saw none of this folder/);
+  // The call answered once it had started; the result came between calls or to the wait (FOL-382).
+  assert.match(JSON.stringify(asked[5].messages.at(-1)), /Started 1 cloud job[\s\S]*#1 run run-sub-1/);
+  assert.match(JSON.stringify([asked[5].messages.at(-1), asked[6].messages.at(-1)]), /Six times seven is 42\.[\s\S]*saw none of this folder/);
   // The person's own change to the todo list reaches the agent as a note; the added folder is named.
-  assert.match(JSON.stringify(asked[6].messages.at(-1)), /The person changed the session's todo list themselves/);
-  assert.match(JSON.stringify(asked[6].system), /also added these folders for you to read/);
+  assert.match(JSON.stringify(asked[7].messages.at(-1)), /The person changed the session's todo list themselves/);
+  assert.match(JSON.stringify(asked[7].system), /also added these folders for you to read/);
 });
 
 // Whether this machine can put the walls up at all (CI runners have no
@@ -3775,7 +3893,7 @@ test("three ways to work (FOL-258, FOL-263): /where local takes the agent's clou
     at = await t.until(/Which project\?/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\r");
-    at = await t.until(/works\s+on this computer · cloud jobs on[\s\S]*agents in the cloud may take heavy jobs, each asked first \(\/where\)/, at);
+    at = await t.until(/works\s+on this computer · cloud jobs on[\s\S]*agents in the cloud may take heavy jobs, started without a question \(\/where, \/permissions cloud\)/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/where local\r");
     at = await t.until(/✓ This computer only from here on — the agent sends nothing to the cloud/, at);

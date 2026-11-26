@@ -156,7 +156,7 @@ export function whereChoices(repo) {
   const git = "needs git — offered when you pick it";
   return [
     { v: "local-only", name: "This computer only", note: "the agent sends nothing to the cloud (/where send does, when you ask)" },
-    { v: "local", name: "This computer, agents in the cloud", note: repo ? "your files stay here; heavy jobs go to the cloud, each asked first" : git },
+    { v: "local", name: "This computer, agents in the cloud", note: repo ? "your files stay here; heavy jobs go to the cloud as cloud jobs" : git },
     { v: "cloud", name: "The cloud", note: repo ? "works on a copy there; you apply what comes back" : git },
   ];
 }
@@ -247,7 +247,7 @@ export function commandMenu(name, st) {
     case "/permissions":
       return {
         title: "What the agent may do without asking",
-        subtitle: "/permissions strict · relaxed · bypass · web ask|bypass · sandbox on|off · resources · rm <n> · reset types it straight away",
+        subtitle: "/permissions strict · relaxed · bypass · web ask|bypass · cloud ask|bypass · sandbox on|off · resources · rm <n> · reset types it straight away",
         choices: [
           { v: "/permissions ", name: "Show them", note: "what is allowed ahead, and the rules kept for this folder" },
           { v: "/permissions relaxed", name: "Relaxed", note: "commands that only look are not asked" },
@@ -267,6 +267,10 @@ export function commandMenu(name, st) {
           st.webAsk === true
             ? { v: "/permissions web bypass", name: "Web calls without asking", note: "search, fetch and cloud browse run unasked (the default)" }
             : { v: "/permissions web ask", name: "Ask before web calls", note: st.web === "here" ? "each search, fetch and browse is asked first" : "a cloud browse is asked first; search and fetch in the cloud cannot be (/where web here)" },
+          // Starting cloud jobs (FOL-382; owner, 26 Nov 2026): unasked by default, asked on request. Last, so the rows before keep their numbers.
+          st.cloudAsk === true
+            ? { v: "/permissions cloud bypass", name: "Cloud jobs without asking", note: "they start unasked (the default); a job's changes are still asked" }
+            : { v: "/permissions cloud ask", name: "Ask before cloud jobs", note: "each call is asked first; a job's changes are asked either way" },
         ],
         tick: st.bypass === true ? "/permissions bypass" : st.strict === true ? "/permissions strict" : "/permissions relaxed",
         start: "/permissions ",
@@ -1342,7 +1346,7 @@ export function localPrompt(/** @type {string} */ dir, /** @type {string} */ abo
     "Work in that folder. Read before you change; make the smallest change that does the job; run the project's own checks (tests, a build, a quick run) when there are any, and say what you ran and what it showed.",
     "Every change and command is shown to the person and may need their yes; if they say no, do not try the same thing another way — say what you wanted and why.",
     "Never read or print secrets (.env files, keys, tokens), and do not run commands that delete outside the folder, push, deploy or publish unless the person asked for exactly that.",
-    ...(cloudAgents ? ["For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can start cloud jobs with the cloud_jobs tool: each works on a copy of this folder, and its changes come back for the person to accept (folder: false runs a task as one of the project's agents, with its own tools, without the folder). Give each a complete task; it does not see this conversation."] : []),
+    ...(cloudAgents ? ["For long or heavy work that can be done on its own (a refactor across many files, an upgrade, a slow test suite to run and fix, two approaches to compare), you can start cloud jobs with the cloud_jobs tool: each works on a copy of this folder, and its changes come back for the person to accept (folder: false runs a task as one of the project's agents, with its own tools, without the folder). Give each a complete task; it does not see this conversation. Several at once go in one call; it answers at once and their results come to you as each finishes, so go on working meanwhile."] : []),
     "When you finish, say in a few plain sentences what you changed and how they can see it. Name files by their path inside the folder.",
     "Answer in the language the person wrote their message in — English to an English message — whatever language the folder's own instructions and files are written in. Only a person asking for another language changes that.",
     ...(about ? ["", about] : []),
@@ -1379,9 +1383,11 @@ export function localCallSummary(/** @type {string} */ name, /** @type {Record<s
   if (name === "foldrun_docs") return `${String(input.page ?? "the list of pages")}${input.find ? ` · ${String(input.find)}` : ""}`;
   if (name === "session_send") return String(input.to ?? "");
   if (name === "cloud_jobs") {
-    if (input.folder === false) return `cloud · ${String(input.agent ?? "")} · ${String(input.description ?? "")}`.replace(/ ·  · /, " · ");
+    if (input.wait === true) return "waiting for the ones running";
     const n = Array.isArray(input.tasks) ? input.tasks.length : 0;
-    return `${n} task${n === 1 ? "" : "s"} in the cloud`;
+    const jobs = `${n} job${n === 1 ? "" : "s"}`;
+    if (input.folder === false) return `${jobs} · cloud · ${String(input.agent ?? "")} · ${String(input.description ?? "")}`.replace(/ ·  · /g, " · ").replace(/ · $/, "");
+    return `${jobs} in the cloud${input.description ? ` · ${String(input.description)}` : ""}`;
   }
   return "";
 }
@@ -1441,7 +1447,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, cloudAsk?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
@@ -1461,7 +1467,7 @@ function filesPref(v) {
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(doc.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
@@ -1471,7 +1477,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;
