@@ -12,6 +12,19 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.2.0] — 2026-11-26
+
+- fix(code): the lead on a running turn's input line is joined by a no-break space, so it is never taken for the idle prompt (FOL-339) ([72f8417](https://github.com/foldrun-io/foldrun-cli/commit/72f8417))
+- feat(code): the input line under a running turn carries the prompt's lead, account · project (FOL-339) ([775ec97](https://github.com/foldrun-io/foldrun-cli/commit/775ec97))
+
+### deps
+
+- @foldrun/core 29.4.0, pinned exactly — a core release no longer breaks a fresh install ([5dd9671](https://github.com/foldrun-io/foldrun-cli/commit/5dd9671))
+
+### docs
+
+- sync (FOL-337, FOL-338, FOL-340) ([b932fee](https://github.com/foldrun-io/foldrun-cli/commit/b932fee))
+
 ## [33.1.2] — 2026-11-26
 
 ### deps
