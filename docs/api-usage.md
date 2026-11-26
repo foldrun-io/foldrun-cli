@@ -258,6 +258,36 @@ curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-
   -d '{"model": "openai/gpt-5", "max_tokens": 200, "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
+### Headers: what goes on to the provider
+
+Every header the provider sees is the gateway's own: the key it chose, its
+user agent, `anthropic-version: 2023-06-01` for a provider that speaks the
+Anthropic format, and its own content type and accept. Nothing a caller sends
+is copied. A caller's `anthropic-beta` is read as a request: a beta that
+changes how the model answers one call (thinking, context size and editing,
+caching, tool search and streaming, effort, structured output, Claude Code's
+own) goes on; one that would run, store or bill something on the provider's
+side (files, MCP servers, the provider's web search, managed agents, fast
+mode, the advisor tool), or that names the caller, is left out, and the call
+goes on without it. A call on a Claude plan key may not ask for fast mode, a
+service tier other than `standard_only`, or an inference region other than
+`global`: they are priced above the standard rate, and the gateway answers
+`400`.
+
+### Claude Code on the gateway
+
+| Set | |
+|---|---|
+| `ANTHROPIC_BASE_URL=<gateway>`, `ANTHROPIC_AUTH_TOKEN=<key>` | the whole setup |
+| `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` | `/model` lists the models the key can call |
+| `ANTHROPIC_CUSTOM_HEADERS="x-foldrun-customer: <id>"` | only for a key that requires an end customer; the gateway reads it and sends it nowhere |
+
+Not needed: `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` — the gateway already
+leaves out the betas it does not send, and this would also turn off the ones
+it does. Everything else on Claude Code's [environment variables
+page](https://code.claude.com/docs/en/env-vars) is your own machine's
+choice.
+
 ### Server tools: web search and fetch
 
 Anthropic's web tools work on the gateway as written for Anthropic, with any
