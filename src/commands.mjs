@@ -16450,11 +16450,14 @@ function startTicker(since, typed = () => "", hint = "") {
       // The same lead as the prompt (account · project), so the line reads as
       // the prompt it is (owner, 26 Nov 2026); dropped when the row is too narrow.
       const full = cols - displayWidth(`  ❯ ${waiting}`);
+      // A no-break space joins the lead to the chevron: it looks the same,
+      // but it is not the idle prompt ("<project> ❯ ", which scripts and the
+      // terminal tests wait for), so nothing takes a running turn for one.
       const lead = tickerLead && full - displayWidth(`${tickerLead} `) >= 20 ? tickerLead : "";
       const room = full - (lead ? displayWidth(`${lead} `) : 0);
       const input = t ? clipCellsEnd(t, Math.max(1, room)) : c.dim(clipCells(hint, Math.max(1, room)));
-      const second = `  ${lead ? `${lead} ` : ""}❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hint, Math.max(1, room))}${waiting}`;
-      process.stdout.write(`${head}\n  ${lead ? `${c.bold(c.cyan(lead))} ` : ""}${c.violet("❯")} ${input}${waiting ? c.cyan(waiting) : ""}`);
+      const second = `  ${lead ? `${lead}\u00a0` : ""}❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hint, Math.max(1, room))}${waiting}`;
+      process.stdout.write(`${head}\n  ${lead ? `${c.bold(c.cyan(lead))}\u00a0` : ""}${c.violet("❯")} ${input}${waiting ? c.cyan(waiting) : ""}`);
       drawn = [displayWidth(plainText(head)), displayWidth(second)];
       shown = true;
       return;

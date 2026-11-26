@@ -3882,10 +3882,10 @@ test("on a turn on this computer what is typed shows on the working line — aft
     // its hint saying Enter reaches the agent (FOL-325); what is typed now
     // is shown on it as it is typed.
     // The line carries the prompt's lead, the project (owner, 26 Nov 2026).
-    at = await t.until(/desk ❯ Enter: tell the agent now · Tab: queue it for after the turn/, at, 5_000);
+    at = await t.until(/desk\u00a0❯ Enter: tell the agent now · Tab: queue it for after the turn/, at, 5_000);
     await new Promise((r) => setTimeout(r, 300));
     t.send("also check the readme");
-    at = await t.until(/desk ❯ also check the readme/, at, 5_000);
+    at = await t.until(/desk\u00a0❯ also check the readme/, at, 5_000);
     t.send("\r");
     at = await t.until(/Finished\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
