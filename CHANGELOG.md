@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.7.0] — 2026-11-26
+
+### New in the public API
+
+- the `--resources` flag
+- the `--no-resources` flag
+
+- fix(code): --resources and --no-resources set this session's budget, a value that cannot be read is refused (FOL-330) ([b026060](https://github.com/foldrun-io/foldrun-cli/commit/b026060))
+
 ## [33.6.1] — 2026-11-26
 
 ### deps
