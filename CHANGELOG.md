@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.2.0] — 2026-11-26
+
+- chore(hooks): hooks synced from foldrun-infra — CircleCI removed (FOL-404) ([3d24d17](https://github.com/foldrun-io/foldrun-cli/commit/3d24d17))
+- feat(code): /permissions bypass asks no question — every yes/no koder asks is answered yes (FOL-411) ([bfb7b61](https://github.com/foldrun-io/foldrun-cli/commit/bfb7b61))
+
 ## [34.1.1] — 2026-11-26
 
 ### docs
