@@ -1008,7 +1008,7 @@ test("the reply: markdown drawn, wrapped to the screen, words already shown left
   assert.match(lines[1]!, /^ {4}instead of/, "a list item's next line sits under its text");
   for (const l of lines) assert.ok(l.replace(/<\/?[bcd]>/g, "").length <= 38, `within the screen: ${l}`);
   assert.ok(lines.includes("  <b>Next</b>"), "a heading is bold, its # gone");
-  assert.ok(lines.includes("    <d>x = 1</d>") && !out.includes("```"), "fenced code kept, its fences gone");
+  assert.ok(lines.includes("  <d>│</d> <d>x = 1</d>") && !out.includes("```"), "fenced code kept in the coding's gutter, its fences gone");
   assert.ok(lines.includes("  lone * star"), "a lone mark is shown as written");
   const said = "The folder holds one file with an obvious bug. I'll fix it.";
   assert.equal(withoutSaid(`${said}\nI fixed the bug.`, [said]), "I fixed the bug.");
@@ -1017,6 +1017,83 @@ test("the reply: markdown drawn, wrapped to the screen, words already shown left
   assert.equal(replyPaths("wrote /work/agents/coder/snapshot/test.py"), "wrote test.py");
   assert.equal(replyPaths("see https://example.com/snapshot/report"), "see https://example.com/snapshot/report", "a web address is left alone");
   assert.equal(replyPaths("```\ncd snapshot/site\n```"), "```\ncd snapshot/site\n```", "fenced code is left as written");
+});
+
+test("the transcript's three kinds have their own marks, with colour and without, and keep them when wrapped at 80 columns (FOL-356)", async () => {
+  const { sentBlock, formatAnswer, gutterPatch, gutterRows, cutRows, displayWidth, MARKS } = await import("../src/code-session.mjs");
+  const plain = (x: string) => x;
+  const none = { bold: plain, cyan: plain, dim: plain, green: plain, red: plain, head: plain, mark: plain, answer: plain, text: plain };
+  const tag = (t: string) => (x: string) => `<${t}>${x}</${t}>`;
+  const hued = { bold: tag("b"), cyan: tag("c"), dim: tag("d"), green: tag("g"), red: tag("r"), head: tag("h"), mark: tag("v"), answer: tag("a"), text: tag("b") };
+  const strip = (x: string) => x.replace(/<\/?[a-z]>/g, "");
+  const long = "please look at the failing test in calc.py and tell me why add returns the wrong number when both are negative, then fix it";
+  const reply = "The test fails because `add` subtracts. I changed it to return `a + b`, and the test passes now; nothing else in the folder needed a change.\n```\nreturn a + b  # " + "x".repeat(100) + "\n```";
+  const patch = `diff --git a/calc.py b/calc.py\n--- a/calc.py\n+++ b/calc.py\n@@ -1 +1 @@\n-    return a - b\n+    return a + b  # ${"y".repeat(100)}\n`;
+  for (const c of [none, hued]) {
+    const sent = sentBlock(long, 80, c).map(strip);
+    const answer = formatAnswer(reply, 80, c).split("\n").map(strip);
+    const coding = gutterPatch(patch, 80, c).split("\n").map(strip);
+    assert.ok(sent.length >= 2, "the message wraps at 80 columns");
+    assert.match(sent[0]!, /^ {2}❯ please look/, "the message starts with ❯");
+    for (const l of sent.slice(1)) assert.match(l, /^ {2}┃ \S/, `a wrapped row of the message keeps its bar: ${l}`);
+    assert.match(answer[0]!, /^◆ The test fails/, "the answer starts with ◆");
+    for (const l of answer.slice(1).filter((x) => x.trim() && !x.includes(MARKS.gutter))) assert.match(l, /^ {2}\S/, `the answer's next rows sit in its margin: ${l}`);
+    const code = answer.filter((l) => l.includes(MARKS.gutter));
+    assert.ok(code.length >= 2 && code.every((l) => l.startsWith("  │ ")), "code in the answer is in the gutter, a long line cut with the gutter kept");
+    assert.ok(coding.length > patch.trimEnd().split("\n").length, "a long diff line is cut into rows");
+    for (const l of coding) assert.match(l, /^ {2}│( |$)/, `every diff row is in the gutter: ${l}`);
+    for (const l of [...sent, ...answer, ...coding]) assert.ok(displayWidth(l) < 80, `inside 80 columns: ${l}`);
+    // Each kind's first mark is its own: none of them stands for another.
+    assert.equal(new Set([sent[0]!.trim()[0], answer[0]![0], coding[0]!.trim()[0]]).size, 3);
+  }
+  // With colour, the marks are painted and a cut diff row keeps its line's colour.
+  assert.match(sentBlock("hi", 80, hued)[0]!, /^ {2}<v>❯<\/v> <b>hi<\/b>$/);
+  assert.match(formatAnswer("Done.", 80, hued), /^<a>◆<\/a> Done\.$/);
+  const added = gutterPatch(patch, 80, hued).split("\n").filter((l) => l.includes("<g>"));
+  assert.ok(added.length >= 2 && added.every((l) => l.startsWith("  <d>│</d> <g>")), "the rows of a cut + line are all green, in the gutter");
+  // No colour at all: nothing but the marks and the text.
+  for (const l of [...sentBlock(long, 80, none), ...formatAnswer(reply, 80, none).split("\n"), ...gutterPatch(patch, 80, none).split("\n")]) assert.doesNotMatch(l, /\x1b|</);
+  // Wide characters count as two cells: cut, never past the edge.
+  for (const r of cutRows("漢".repeat(50), 20)) assert.ok(displayWidth(r) <= 20);
+  assert.deepEqual(gutterRows([{ text: "" }], 80, plain), ["  │"], "an empty row is the gutter alone");
+  // A whitespace-only change is seen: trailing spaces and tabs on a changed line as · and → (Codex).
+  const ws = gutterPatch("@@ -1 +1 @@\n-x\n+x \n+\ty\t\n same \n", 80, none).split("\n");
+  assert.ok(ws.includes("  │ -x") && ws.includes("  │ +x·") && ws.includes("  │ +  y→") && ws.includes("  │  same"), JSON.stringify(ws));
+  // A body row that itself starts ++ (an edit to ++i) is marked too; the file header is not touched.
+  const pp = gutterPatch("+++ b/a.c\n@@ -1 +1 @@\n-++i;\n+++i; \n", 80, none).split("\n");
+  assert.ok(pp.includes("  │ +++ b/a.c") && pp.includes("  │ +++i;·"), JSON.stringify(pp));
+  // For a script (--print): marks: false is the answer as before FOL-356 — no ◆, code indented, no gutter.
+  const scripted = formatAnswer("Done.\n\n```\nx = 1\n```", 80, { ...none, marks: false });
+  assert.ok(!scripted.includes(MARKS.answer) && !scripted.includes(MARKS.gutter) && scripted.includes("    x = 1"), scripted);
+});
+
+test("a session on a terminal leaves what was sent as a ❯ block, the answer under ◆ and the diff in the │ gutter, with NO_COLOR (FOL-356)", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  // A terminal that moves its cursor: readline's echo of the message is taken off and drawn again as the block.
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-me", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", COLUMNS: "80" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("add b\r");
+    at = await t.until(/send it\? \[y\]es/, at);
+    assert.match(t.out(), /\x1b\[1A\r?\x1b\[J\r?\n {2}❯ add b\r?\n/, "the echo taken off, the message drawn as its own block after a blank line");
+    t.send("y\r");
+    at = await t.until(/apply it to/, at);
+    assert.match(t.out(), /\n◆ Added b\./, "the answer under its own mark");
+    assert.doesNotMatch(t.out(), /\x1b\[[0-9;]*m/, "NO_COLOR: marks only, no colour");
+    t.send("d\r");
+    at = await t.until(/ {2}│ \+b/, at);
+    assert.match(t.out(), / {2}│ @@ -1 \+1,2 @@/, "the diff in the gutter");
+    at = await t.until(/apply it to/, at);
+    t.send("n\r");
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
 });
 
 test("a markdown table is drawn as columns, wrapped to the screen; too narrow, one block per row (FOL-310)", async () => {

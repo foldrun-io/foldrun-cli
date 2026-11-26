@@ -514,7 +514,18 @@ export function withNotes(notes, task) {
  * @param {{ green: (s: string) => string, red: (s: string) => string, cyan?: (s: string) => string, bold: (s: string) => string, dim: (s: string) => string }} c
  */
 export function colorPatch(patch, c) {
+  return patchRows(patch, c).map(({ text, paint }) => paint(text)).join("\n");
+}
+
+/**
+ * A patch's lines as shown, each with its paint: kept apart so a line cut
+ * into rows (FOL-356) paints every row as its line.
+ * @param {string} patch @param {{ dim: (s: string) => string, bold: (s: string) => string, green: (s: string) => string, red: (s: string) => string, cyan?: (s: string) => string }} c
+ * @returns {Array<{ text: string, paint: (s: string) => string }>}
+ */
+function patchRows(patch, c) {
   const cyan = c.cyan ?? c.dim;
+  const same = (/** @type {string} */ x) => x;
   // A binary file's body is base85 — noise on a screen: one line instead.
   let binary = false;
   return patch
@@ -524,19 +535,114 @@ export function colorPatch(patch, c) {
       else if (l === "GIT binary patch" || /^Binary files .* differ$/.test(l)) {
         if (binary) return [];
         binary = true;
-        return [c.dim("  (a binary file — not shown)")];
+        return [{ text: "  (a binary file — not shown)", paint: c.dim }];
       }
       if (binary) return [];
-      return [l];
-    })
-    .map((l) => {
-      if (/^(diff --git|index |--- |\+\+\+ |new file mode|deleted file mode|similarity|rename )/.test(l)) return c.bold(l);
-      if (l.startsWith("@@")) return cyan(l);
-      if (l.startsWith("+")) return c.green(l);
-      if (l.startsWith("-")) return c.red(l);
-      return l;
-    })
-    .join("\n");
+      if (/^(diff --git|index |--- |\+\+\+ |new file mode|deleted file mode|similarity|rename )/.test(l)) return [{ text: l, paint: c.bold }];
+      if (l.startsWith("@@")) return [{ text: l, paint: cyan }];
+      // Trailing spaces and tabs on a changed line drawn as · and →: a whitespace-only change is seen at approval (Codex).
+      const ws = (/** @type {string} */ x) => x.replace(/[ \t]+$/, (m) => m.replace(/ /g, "·").replace(/\t/g, "→"));
+      // A body row may itself start "+++"/"---" (an edit to ++i): only the file header is ws-free (Codex).
+      if (l.startsWith("+")) return [{ text: l.startsWith("+++ ") ? l : ws(l), paint: c.green }];
+      if (l.startsWith("-")) return [{ text: l.startsWith("--- ") ? l : ws(l), paint: c.red }];
+      return [{ text: l, paint: same }];
+    });
+}
+
+// ---------------------------------------------------------- the transcript
+
+/**
+ * The marks that tell a code session's three kinds of text apart (FOL-356),
+ * with colour or without it (NO_COLOR, a log): what the person sent (❯ on
+ * its first row, ┃ on the rest), koder's answer (◆), and the coding under
+ * it — code, diffs, what a change touched — in a dim gutter (│).
+ */
+export const MARKS = Object.freeze({ sent: "❯", sentBar: "┃", answer: "◆", gutter: "│" });
+
+/**
+ * A line cut into rows of at most `room` cells, every character kept and
+ * none moved: code and diffs are not re-flowed by words as prose is.
+ * @param {string} line @param {number} room
+ * @returns {string[]}
+ */
+export function cutRows(line, room) {
+  const max = Math.max(2, Math.floor(room));
+  const text = line.replace(/\t/g, "  ").trimEnd();
+  if (displayWidth(text) <= max) return [text];
+  /** @type {string[]} */
+  const rows = [];
+  let cur = "";
+  let used = 0;
+  for (const ch of text) {
+    const w = cells(ch);
+    if (used + w > max && cur) {
+      rows.push(cur);
+      cur = "";
+      used = 0;
+    }
+    cur += ch;
+    used += w;
+  }
+  if (cur) rows.push(cur);
+  return rows;
+}
+
+/**
+ * What the person sent, left on screen as its own block: ❯ before its first
+ * row and a bar before every other, wrapped by words inside the screen so a
+ * long message keeps its bar on every row. The caller puts a blank line
+ * before it: each message starts a section.
+ * @param {string} text plain text, no terminal control in it
+ * @param {number} columns
+ * @param {{ mark: (s: string) => string, text: (s: string) => string }} c
+ * @returns {string[]}
+ */
+export function sentBlock(text, columns, c) {
+  // "  ❯ " is four cells; one more kept free, so the last column is never written (a terminal wraps there).
+  const rows = marginLines(text, Math.max(10, columns - 5));
+  if (!rows.length) rows.push("");
+  return rows.map((r, k) => `  ${c.mark(k === 0 ? MARKS.sent : MARKS.sentBar)}${r ? ` ${c.text(r)}` : ""}`);
+}
+
+/**
+ * koder's answer (FOL-356): the reply drawn as formatReply draws it, ◆ in
+ * the margin of its first row — the margin is two cells either way, so
+ * nothing moves and nothing gets wider.
+ * @param {string} text @param {number} columns
+ * @param {Parameters<typeof formatReply>[2] & { answer?: (s: string) => string }} c
+ */
+export function formatAnswer(text, columns, c) {
+  if (c.marks === false) return formatReply(text, columns, c);
+  const lines = formatReply(text, columns, c).split("\n");
+  const at = lines.findIndex((l) => l.trim());
+  if (at < 0) return lines.join("\n");
+  const first = /** @type {string} */ (lines[at]);
+  lines[at] = `${(c.answer ?? ((/** @type {string} */ x) => x))(MARKS.answer)} ${first.startsWith("  ") ? first.slice(2) : first}`;
+  return lines.join("\n");
+}
+
+/**
+ * Rows in the coding's gutter (FOL-356): `indent`, a dim │, a space, then
+ * the row; a row wider than the screen is cut into more rows, each with the
+ * gutter, never running past the edge.
+ * @param {Array<{ text: string, paint?: (s: string) => string }>} rows plain text, each with its paint
+ * @param {number} columns @param {(s: string) => string} dim @param {string} [indent]
+ * @returns {string[]}
+ */
+export function gutterRows(rows, columns, dim, indent = "  ") {
+  // The gutter's cells, and one free at the edge.
+  const room = Math.max(10, columns - displayWidth(indent) - 3);
+  const bar = `${indent}${dim(MARKS.gutter)}`;
+  return rows.flatMap(({ text, paint }) => cutRows(text, room).map((r) => (r ? `${bar} ${(paint ?? ((/** @type {string} */ x) => x))(r)}` : bar)));
+}
+
+/**
+ * A patch in the coding's gutter: coloured as colorPatch colours it, a long
+ * line cut into rows that keep its colour and the gutter.
+ * @param {string} patch @param {number} columns @param {Parameters<typeof colorPatch>[1]} c @param {string} [indent]
+ */
+export function gutterPatch(patch, columns, c, indent = "  ") {
+  return gutterRows(patchRows(patch, c), columns, c.dim, indent).join("\n");
 }
 
 // --------------------------------------------------------------- sessions
@@ -734,7 +840,8 @@ export function withoutSaid(/** @type {string} */ reply, /** @type {string[]} */
  * (FOL-310), or one block per row when the screen is too narrow for them.
  * @param {string} text plain text, no terminal control in it
  * @param {number} columns
- * @param {{ bold: (s: string) => string, cyan: (s: string) => string, dim: (s: string) => string, head?: (s: string) => string, mark?: (s: string) => string }} c
+ * @param {{ bold: (s: string) => string, cyan: (s: string) => string, dim: (s: string) => string, head?: (s: string) => string, mark?: (s: string) => string, marks?: boolean }} c
+ *   `marks: false` draws code as before FOL-356, with no gutter: for output read by a script (--print).
  */
 export function formatReply(text, columns, c) {
   const width = Math.max(20, columns - 4);
@@ -748,7 +855,9 @@ export function formatReply(text, columns, c) {
       continue;
     }
     if (fenced) {
-      out.push(`    ${c.dim(raw)}`);
+      // Code in the coding's gutter (FOL-356), cut to the screen with the gutter on every row; a script's output as before.
+      if (c.marks === false) out.push(`    ${c.dim(raw)}`);
+      else for (const row of gutterRows([{ text: raw, paint: c.dim }], width + 2, c.dim)) out.push(row);
       continue;
     }
     if (/^\s*\|/.test(raw)) {

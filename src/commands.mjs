@@ -25,7 +25,7 @@ import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
-import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, colorPatch, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatReply, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
+import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
 import { koderLine } from "./koder-path.mjs";
 import { createRequire } from "node:module";
@@ -3306,6 +3306,9 @@ export const plainText = (text) =>
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]|\x1b[@-Z\\-_]|\x9b[0-?]*[ -\/]*[@-~]/g, "")
     .replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
 
+/** plainText for code and diffs (FOL-356): tabs kept, so a change to one can be drawn (Codex). */
+const codeText = (/** @type {unknown} */ text) => plainText(String(text).replace(/\t/g, "\uE000")).replace(/\uE000/g, "\t");
+
 /** An event's first physical line, clipped to fit a terminal row. */
 const clipLine = (text) => plainText(String(text).split("\n")[0]).slice(0, 140);
 
@@ -3352,6 +3355,37 @@ function statLine(/** @type {string} */ line) {
   const m = /^(.*?)(\s*\|\s*)(\d+|Bin[^]*?)\s*(\+*)(-*)$/.exec(line);
   if (!m) return c.grey(line);
   return `${c.white(m[1] ?? "")}${c.grey(m[2] ?? "")}${c.white(m[3] ?? "")} ${c.green(m[4] ?? "")}${c.red(m[5] ?? "")}`;
+}
+
+/** A git --stat line in the coding's gutter (FOL-356), cut to the screen: colour only when it fits whole. */
+function gutterStat(/** @type {string} */ raw) {
+  const line = plainText(raw.trim());
+  // Four cells more kept free: the apply question shows these rows indented again (Codex).
+  const room = Math.max(10, (process.stdout.columns || 80) - 9);
+  if (displayWidth(line) <= room) return `  ${c.grey("│")} ${statLine(line)}`;
+  // Too wide: the path gives way from its start, the counts stay (Codex: they were lost to the …).
+  const bar = line.indexOf(" | ");
+  if (bar > 0) {
+    const tail = line.slice(bar);
+    const keep = room - displayWidth(tail);
+    if (keep >= 8) return `  ${c.grey("│")} ${statLine(`${clipCellsEnd(line.slice(0, bar), keep)}${tail}`)}`;
+    // Very narrow: the counts alone, the path given up.
+    if (displayWidth(tail) + 1 <= room) return `  ${c.grey("│")} ${c.grey(`…${tail}`)}`;
+  }
+  return `  ${c.grey("│")} ${c.grey(clipCells(line, room))}`;
+}
+
+/** koder's answer (FOL-356): its markdown drawn, ◆ before it in the brand's colour — no tool's mark has it. */
+const ANSWER_STYLE = { bold: (/** @type {string} */ x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (/** @type {string} */ x) => c.bold(c.sweep(x)), mark: c.violet, answer: (/** @type {string} */ x) => c.bold(c.sweep(x)) };
+
+/** The answer as the screen shows it; a session run from a script (--print, no terminal) prints it with no marks, as before (Codex, FOL-356). */
+function answerFor(/** @type {any} */ s, /** @type {string} */ text) {
+  return formatAnswer(text, process.stdout.columns || 80, s?.headless || typeof s?.flags?.task === "string" || !process.stdout.isTTY ? { ...ANSWER_STYLE, marks: false } : ANSWER_STYLE);
+}
+
+/** What the person sent, as its own section (FOL-356): a blank line, then ❯ and a violet bar down its rows. */
+function sentMessage(/** @type {string} */ text) {
+  return `\n${sentBlock(plainText(text), process.stdout.columns || 80, { mark: c.violet, text: (x) => c.bold(c.white(x)) }).join("\n")}`;
 }
 
 /** One tool call, the code view's way. */
@@ -14777,7 +14811,7 @@ function patchPreview(/** @type {string} */ dir, /** @type {Buffer | string} */ 
   if (check.status !== 0 || check.error) return { error: plainText(String(check.stderr || check.error?.message || "")).trim() };
   const odd = patchTypeProblems(String(patch));
   if (odd.length) return { error: `it makes or changes a link, a submodule, a rename or a copy: ${oneLine(odd.slice(0, 5).join("; "))}` };
-  return { stat: String(git("--stat").stdout).trimEnd().split("\n").filter((l) => l.trim()).map((l) => `  ${statLine(plainText(l.trim()))}`) };
+  return { stat: String(git("--stat").stdout).trimEnd().split("\n").filter((l) => l.trim()).map((l) => gutterStat(l)) };
 }
 
 /** `git apply <args>` reading a patch, from the repository's top as applyPatch runs it; null when the folder is in no repository or git cannot read it. */
@@ -14852,7 +14886,7 @@ async function choosePatchFiles(dir, patch, ask, pad = "  ") {
       if (answer === null) return { none: "stopped" };
       const a = answer.trim().toLowerCase();
       if (a === "d" || a === "diff") {
-        console.log(`\n${colorPatch(plainText(bytes.toString("utf8")), c).split("\n").map((l) => `${pad}${l}`).join("\n")}\n`);
+        console.log(`\n${gutterPatch(codeText(bytes.toString("utf8")), process.stdout.columns || 80, c, pad)}\n`);
         continue;
       }
       if (a === "y" || a === "yes") {
@@ -14923,7 +14957,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null, /** @type {{ 
   if (odd.length) {
     throw new Error(`the patch makes or changes a link, a submodule, a rename or a copy, which foldrun's patches never do — not applied:\n${plainText(odd.join("\n"))}\nThe patch is kept at ${keepPatch(patch, label)}`);
   }
-  for (const line of String(git("--stat").stdout).trimEnd().split("\n")) if (line.trim()) console.log(`  ${statLine(plainText(line.trim()))}`);
+  for (const line of String(git("--stat").stdout).trimEnd().split("\n")) if (line.trim()) console.log(gutterStat(line));
   if (flags.yes !== true && !process.stdin.isTTY) {
     console.log(`  ${c.dim(`not applied — no terminal to ask, and --yes applies without asking. The patch is at ${keepPatch(patch, label)}`)}`);
     return false;
@@ -14964,7 +14998,7 @@ async function applyPatch(dir, patch, flags, label, cancel = null, /** @type {{ 
         break;
       }
       if (!/^d(iff)?$/i.test(answer)) break;
-      console.log(`\n${colorPatch(plainText(String(patch)), c).split("\n").map((l) => `  ${l}`).join("\n")}\n`);
+      console.log(`\n${gutterPatch(codeText(String(patch)), process.stdout.columns || 80, c)}\n`);
     }
     if (!/^y(es)?$/i.test(answer)) {
       console.log(`  ${c.dim(`not applied — the patch is at ${keepPatch(patch, label)}`)}`);
@@ -15558,7 +15592,7 @@ async function codeTurn(s, task, include = []) {
     // screen with its markdown drawn (19 Nov 2026: raw **, edge wraps).
     if (reply) {
       const text = replyPaths(withoutSaid(plainText(String(reply)).trim(), codeView?.said ?? []));
-      if (text) console.log(`\n${formatReply(text, process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}`);
+      if (text) console.log(`\n${answerFor(s, text)}`);
     }
     const cost = (run.steps ?? []).reduce((sum, x) => sum + (x.costUsd ?? 0), 0);
     noteSessionTurn(s, run, cost);
@@ -19041,8 +19075,14 @@ async function codeLocalTurn(s, text) {
           for (const l of stat.slice(0, 40)) console.log(`    ${l}`);
           if (stat.length > 40) console.log(`      ${c.grey(`… ${stat.length - 40} more lines — d shows the whole diff`)}`);
         } else if (name === "Edit") {
-          const show = (/** @type {unknown} */ t, /** @type {string} */ sign, /** @type {(x: string) => string} */ paint) =>
-            String(t ?? "").split("\n").slice(0, 6).map((l) => `      ${paint(`${sign} ${clipCells(plainText(l), width)}`)}`).join("\n");
+          // In the coding's gutter, cut into rows rather than clipped: a change near a long line's end is seen;
+          // trailing spaces and tabs drawn as · and → (Codex, FOL-356).
+          const show = (/** @type {unknown} */ t, /** @type {string} */ sign, /** @type {(x: string) => string} */ paint) => {
+            const all = String(t ?? "").split("\n");
+            const rows = all.slice(0, 6).map((l) => ({ text: `${sign} ${codeText(l).replace(/[ \t]+$/, (m) => m.replace(/ /g, "·").replace(/\t/g, "→"))}`, paint }));
+            const more = all.length > 6 ? [`      ${c.grey(`  … ${all.length - 6} more line${all.length - 6 === 1 ? "" : "s"}`)}`] : [];
+            return [...gutterRows(rows, process.stdout.columns || 80, c.grey, "      "), ...more].join("\n");
+          };
           if (many) {
             // Every change of the list, under its file: all of them are applied, or none (FOL-294).
             const list = /** @type {any[]} */ (input.edits);
@@ -19212,7 +19252,7 @@ async function codeLocalTurn(s, text) {
             }
             // d: the whole patch, as git will apply it, then the question again.
             if (!(isApply && (answer === "d" || answer === "diff") && !cancel.asked && !signal?.aborted)) break;
-            console.log(`\n${colorPatch(plainText(String(input.patch ?? "")), c).split("\n").map((l) => `    ${l}`).join("\n")}\n`);
+            console.log(`\n${gutterPatch(codeText(String(input.patch ?? "")), process.stdout.columns || 80, c, "    ")}\n`);
           }
         } finally {
           signal?.removeEventListener("abort", settle);
@@ -20131,7 +20171,7 @@ async function codeLocalTurn(s, text) {
         // sent meanwhile: that answer is shown now, not overwritten (Codex).
         if (reply && !content.some((/** @type {any} */ b) => b.type === "tool_result")) {
           stopTicker();
-          console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}\n`);
+          console.log(`\n${answerFor(s, replyPaths(plainText(reply)))}\n`);
           reply = "";
           stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
@@ -20253,7 +20293,7 @@ async function codeLocalTurn(s, text) {
     const gives = typeof engineOwn.showsThinking === "function" ? engineOwn.showsThinking(String(s.model ?? "")) : true;
     console.log(`  ${c.dim(gives ? "(/model thinking is on: the model did not think aloud on this one — a short task often needs none)" : `(/model thinking is on, but ${plainText(String(s.model ?? "this model"))} returns no summary of its thinking)`)}`);
   }
-  if (reply) console.log(`\n${formatReply(replyPaths(plainText(reply)), process.stdout.columns || 80, { bold: (x) => c.bold(c.white(x)), cyan: c.cyan, dim: c.grey, head: (x) => c.bold(c.sweep(x)), mark: c.violet })}`);
+  if (reply) console.log(`\n${answerFor(s, replyPaths(plainText(reply)))}`);
   const secs = (Date.now() - started) / 1000;
   s.turns = (s.turns ?? 0) + 1;
   s.secs = secs;
@@ -21380,6 +21420,18 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       line = "Read the message from the other session and answer it.";
     }
     if (!line) continue;
+    // What the person sent stays on screen as its own section (FOL-356): a message, not a /command or a !command.
+    // On a terminal that moves its cursor, readline's echo of it is taken off and drawn again as the block;
+    // with no echo (input not a terminal) the block is all there is; elsewhere (TERM=dumb) the echo stays, ❯ and all.
+    if (!fromQueue && !forMessages && !line.startsWith("!") && !/^\/[\w:?-]*(?:\s|$)/.test(line)) {
+      const rows = Number(/** @type {any} */ (prompt).echoRows) || 0;
+      const erase = rows > 0 && rows <= 99 && rows < (process.stdout.rows || 24) && process.stdin.isTTY === true && process.stdout.isTTY === true && process.env.TERM !== "dumb";
+      if (erase) writeControl(`\x1b[${rows}A\r\x1b[J`);
+      if (erase || !process.stdin.isTTY) console.log(sentMessage(line.startsWith("\\/") ? line.slice(1) : line));
+      // Too tall to take back (it scrolled past the top): the echo stays, and the message's end is marked so the
+      // answer does not run on from it (Codex, FOL-356).
+      else if (rows > 1 && process.stdout.isTTY === true && process.env.TERM !== "dumb") console.log(`  ${c.violet("┃")} ${c.grey(`(${rows} lines sent)`)}`);
+    }
     // `/setup mcp add` is where a token gets pasted by mistake: refused there, and never kept (Codex).
     // Anywhere in the line: a stopped turn puts what was queued back joined into one (Codex).
     const keepLine = !forMessages && !/(?:^|\s)\/(?:setup\s+)?mcp\s+add\b/i.test(line);
@@ -23294,6 +23346,9 @@ async function readCodeMessage(state, completer, s) {
     let settled = false;
     let lastInterrupt = 0;
     let redrawDue = false;
+    // What readline echoed of the message, in rows (FOL-356): taken off again when it is redrawn as its own block.
+    let echoRows = 0;
+    let prompted = true;
     // Bracketed paste: the terminal marks where a paste starts and ends, so
     // a paste of many lines is one message however slowly it arrives (over
     // ssh the 30 ms grouping alone can split it). On only while this prompt
@@ -23350,6 +23405,8 @@ async function readCodeMessage(state, completer, s) {
       // that too, and every closed prompt went on echoing what was typed.
       rl.off("close", onClose);
       rl.close();
+      // Known only where readline drew it (a terminal); a search leaves the prompt on the same rows.
+      state.echoRows = v !== null && tty ? echoRows : 0;
       resolve(v);
     };
     const schedule = () => {
@@ -23359,6 +23416,7 @@ async function readCodeMessage(state, completer, s) {
         if (msg === null) {
           rl.setPrompt(c.dim("    … "));
           rl.prompt();
+          prompted = true;
           return;
         }
         finish(msg);
@@ -23366,6 +23424,11 @@ async function readCodeMessage(state, completer, s) {
     };
     rl.on("line", (l) => {
       lines.push(l);
+      // The rows readline left on screen for it (FOL-356): the prompt is on the first line after one is drawn only.
+      const cols = Math.max(1, process.stdout.columns || 80);
+      // A row filled to the last column moves the cursor to the next one: floor + 1, not ceil (Codex).
+      echoRows += Math.floor(((prompted ? displayWidth(plainText(rl.getPrompt())) : 0) + displayWidth(l.replace(/\t/g, "        "))) / cols) + 1;
+      prompted = false;
       clearTimeout(timer);
       if (!pasting) schedule();
     });
@@ -23380,6 +23443,8 @@ async function readCodeMessage(state, completer, s) {
         process.stdout.write("\n");
         rl.setPrompt(ask);
         rl.prompt();
+        echoRows = 0;
+        prompted = true;
         lastInterrupt = 0;
         return;
       }
@@ -23468,8 +23533,8 @@ function showFolderDiff(dir) {
   const run = (/** @type {string[]} */ args) => spawnSync("git", ["-C", dir, "--no-pager", "diff", ...args, "--", "."], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   const head = spawnSync("git", ["-C", dir, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" }).status === 0;
   const diff = head ? run(["HEAD"]) : { stdout: `${run(["--cached"]).stdout ?? ""}${run([]).stdout ?? ""}` };
-  const text = plainText(String(diff.stdout)).trimEnd();
-  if (text) console.log(`\n${colorPatch(text, c).split("\n").map((l) => `  ${l}`).join("\n")}`);
+  const text = codeText(String(diff.stdout)).replace(/\n+$/, "");
+  if (text) console.log(`\n${gutterPatch(text, process.stdout.columns || 80, c)}`);
   const untracked = String(status.stdout).split("\n").filter((l) => l.startsWith("??")).map((l) => l.slice(3));
   if (untracked.length) console.log(`\n  ${c.dim("new, not yet in git:")} ${plainText(untracked.join(", "))}`);
   console.log();
