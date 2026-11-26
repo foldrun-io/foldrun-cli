@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.4.1] — 2026-11-26
+
+- test(code): FOL-380's terminal tests in their own file — cli-code-session.test.ts ran past the 180 s per-file limit on CI with them ([27e8d3e](https://github.com/foldrun-io/foldrun-cli/commit/27e8d3e))
+- fix(code): a slash command typed during a turn runs beside it or after it, never sent to the agent (FOL-380) ([7ed4ea0](https://github.com/foldrun-io/foldrun-cli/commit/7ed4ea0))
+
 ## [33.4.0] — 2026-11-26
 
 - feat(code): the transcript tells apart what the person sent (❯/┃), koder's answer (◆) and the coding (│ gutter); scripts' output unchanged; whitespace-only edits shown (FOL-356) ([dea47e3](https://github.com/foldrun-io/foldrun-cli/commit/dea47e3))
