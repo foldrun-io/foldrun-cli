@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.5.0] — 2026-11-26
+
+- perf(code): FOL-383 — the local web module and the frontmatter reader load only when the agent has web (FOL-265 ceilings) ([303e51d](https://github.com/foldrun-io/foldrun-cli/commit/303e51d))
+- fix(code): FOL-383 Codex round 3 — the site limits shown with a search, asking said for this computer's turns, a page read in its own charset ([5f3a8b0](https://github.com/foldrun-io/foldrun-cli/commit/5f3a8b0))
+- fix(code): FOL-383 Codex round 2 — direct connections only, the whole query or address shown, the web follows a cloud session, one wording for web asking, one deadline over redirects ([44f3d28](https://github.com/foldrun-io/foldrun-cli/commit/44f3d28))
+- fix(code): FOL-383 Codex round 1 — web needs the agent's grant, no server tools on plan turns, scripts do not drive a browser unasked, mapped IPv6 and redirect checks ([0187523](https://github.com/foldrun-io/foldrun-cli/commit/0187523))
+- feat(code): the web in the cloud by default, search, fetch and browse here with /where web here; web calls unasked unless /permissions web ask (FOL-383) ([78ac822](https://github.com/foldrun-io/foldrun-cli/commit/78ac822))
+
 ## [33.4.1] — 2026-11-26
 
 - test(code): FOL-380's terminal tests in their own file — cli-code-session.test.ts ran past the 180 s per-file limit on CI with them ([27e8d3e](https://github.com/foldrun-io/foldrun-cli/commit/27e8d3e))
