@@ -1594,7 +1594,9 @@ test("a folder that works on this computer is never sent to the cloud by a scrip
     assert.match(r.stderr + r.stdout, /works on this computer — say where this script's turn runs: --local -p[\s\S]*--cloud -p/);
     assert.equal(s.seen.length, 0, "nothing reached the platform");
     // --cloud --task is one turn: the folder still works on this computer after.
-    spawnSync(process.execPath, [cli, "code", d, "--cloud", "--task", "do it", "--url", s.url, "--token", "k"], { encoding: "utf8", env: { ...process.env, FOLDRUN_HOME: home, NO_COLOR: "1" } });
+    // The stub has no cloud turn to give, so the call waits out its timeout:
+    // 2 s, not the default 30 s that put this file over its 180 s cap on CI.
+    spawnSync(process.execPath, [cli, "code", d, "--cloud", "--task", "do it", "--url", s.url, "--token", "k"], { encoding: "utf8", env: { ...process.env, FOLDRUN_HOME: home, NO_COLOR: "1", FOLDRUN_TIMEOUT: "2" } });
     assert.equal(Object.values(JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8")) as any[])[0].mode, "local");
   } finally {
     s.close();
