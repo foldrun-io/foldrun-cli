@@ -3752,7 +3752,7 @@ test("a dev server outside the sandbox (FOL-296): bash_outside run_in_background
     t.send("run the server\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
-    at = await t.until(/left running as you — while it runs, the agent's commands and file changes in this folder are asked too[\s\S]*OUTSIDE the sandbox[\s\S]*while read l[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
+    at = await t.until(/runs as you until this turn ends, not after — while it runs, the agent's commands and file changes in this folder are asked too[\s\S]*OUTSIDE the sandbox[\s\S]*while read l[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     t.send("y\r");
     // Commands inside the sandbox — unasked otherwise — are asked while the server runs.
     at = await t.until(/a server started outside the sandbox is running[\s\S]*echo while-live[\s\S]*allow\?/, at, 60_000);
