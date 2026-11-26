@@ -34,6 +34,7 @@ import { StringDecoder } from "node:string_decoder";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { packageCacheFor, sandboxFor, sandboxEnv, hostEnv, runOutside, siteOf, OUTSIDE_TOOL, OUTSIDE_DESCRIPTION, OUTSIDE_SCHEMA, SANDBOX_NOTE } from "./code-sandbox.mjs";
 import { mcpManager, connectServer, resolveAgentServer, approveServer, forgetServersNamed, readApprovals, parseMcpAdd, editMcpFile, mcpFiles, MCP_TOOLS_MAX, allowSiteFor, remoteSiteProblem } from "./code-mcp.mjs";
+import { CLOUD_JOBS_CEILING, CLOUD_WAIT_MS, cloudTasks, cloudJobsInput, cloudRoomText, cloudEstimate, cloudAskLine, cloudStartedText, cloudNewsBlock, cloudStillRunningText } from "./code-cloud-jobs.mjs";
 import { AGENT_TOOL, AGENT_CALLS_A_TURN, AGENT_TURNS_A_TURN, AGENT_TURNS_EACH, AGENT_ANSWER_MAX, readAgents, agentActs, agentTool, agentJob, TODO_WRITE, TODO_READ, TODO_WRITE_DESCRIPTION, TODO_READ_DESCRIPTION, TODO_WRITE_SCHEMA, TODOS_MAX, cleanTodos, todosText, todosForCloud, todosFromReply, addableFolder } from "./code-agents.mjs";
 import { openJournal, nextTurn as rewindNextTurn, capture as rewindCapture, settle as rewindSettle, turnsOf as rewindTurns, plan as rewindPlan, apply as rewindApply } from "./code-rewind.mjs";
 import { defaultPlatform, saveCredential, removeCredential, normaliseUrl, profileByName, currentProfile, useProfile, listProfiles, credentialsDir, configDir, cacheDir, setProfileWorkspace } from "./credentials.mjs";
@@ -10174,6 +10175,11 @@ function webAskSaid(s) {
     : "web calls are asked first — each search, fetch and browse on this computer";
 }
 
+/** Whether starting cloud jobs is asked first (/permissions cloud ask, FOL-382): this session's word, else the kept one. @param {any} s */
+function cloudAsks(s) {
+  return typeof s.cloudAsk === "boolean" ? s.cloudAsk : readCodePrefs().cloudAsk === true;
+}
+
 /** Whether web calls are asked first (/permissions web ask): this session's word, else the kept one (Codex). @param {any} s */
 function webAsks(s) {
   return typeof s.webAsk === "boolean" ? s.webAsk : readCodePrefs().webAsk === true;
@@ -16411,7 +16417,7 @@ function statusBlock(s, url) {
     typeof s.effort === "string" ? row("effort", `${s.effort === "default" ? "the model's default" : s.effort} (/model effort changes it)`) : null,
     s.contextTokens !== undefined ? row("last turn", `${readTokens(s)}${s.secs !== undefined ? ` · ${formatSecs(s.secs)}` : ""}`) : null,
     row("works", s.mode === "local" ? "on this computer" : "in the cloud"),
-    row("cloud jobs", `${s.localOnly === true ? "off — the agent starts none" : "on — the agent may start them, each asked first"} (/where)`),
+    row("cloud jobs", `${s.localOnly === true ? "off — the agent starts none" : `on — the agent may start them, ${cloudAsks(s) ? "each call asked first" : "without a question"}`} (/where, /permissions cloud)`),
     typeof s.goal === "string" ? row("goal", `${plainText(s.goal)} (/goal clear drops it)`) : null,
     s.account ? row("account", plainText(s.account.label)) : null,
     row("foldrun", (() => {
@@ -18210,8 +18216,8 @@ const FILE_CHANGES = new Set(["Write", "Edit"]);
 /**
  * cloud_agents: the agent on this computer hands work to agents on the
  * platform (20 Nov 2026). The folder goes once, as `foldrun code`'s cloud
- * turns send it (what git would commit, secret-scanned); up to
- * CLOUD_AGENTS_MAX runs of the session's agent start on it side by side,
+ * turns send it (what git would commit, secret-scanned); runs of the
+ * session's agent start on it side by side (as many as a call names, FOL-382),
  * each in its own sandbox and its own conversation; each one's patch comes
  * back and is put into the folder only after a yes (or "always for changes
  * in this folder"), checked by `git apply --check` first. The tool's answer
@@ -18220,48 +18226,37 @@ const FILE_CHANGES = new Set(["Write", "Edit"]);
  */
 /** One kind of cloud work, a "cloud job" (FOL-258): with the folder (a copy, its changes back as a patch), or without it (a project agent's own tools, only the task sent). */
 const CLOUD_AGENTS_TOOL = "cloud_jobs";
-const CLOUD_AGENTS_MAX = 4;
-const CLOUD_TASK_CHARS = 20_000;
 /**
  * The one cloud tool the agent on this computer has (FOL-258: it was two —
  * cloud_agents, and the agent tool's where: "cloud"). `cloud` names the
- * project's agents a job without the folder can run as.
+ * project's agents a job without the folder can run as. FOL-382: both ways
+ * take a list, the call answers at once, and the platform's room is the limit.
  * @param {{ agents: string[], own: string, project: string } | null} cloud
+ * @param {boolean} [asks] whether the person asked to be asked before cloud jobs start (/permissions cloud ask)
  */
-function cloudJobsTool(cloud) {
+export function cloudJobsTool(cloud, asks = false) {
   return {
     description: [
-      `Run work on the foldrun platform as cloud jobs, each in its own cloud sandbox. Up to ${CLOUD_AGENTS_MAX} at once.`,
-      "With the folder (folder: true, the default): each job gets a copy of this folder as it is now (what git would commit; ignored files never go, and a folder holding a secret is refused). For long or heavy work that can be done on its own: a refactor across many files, a dependency upgrade, running and fixing a slow test suite, two approaches side by side. When they finish you get each job's report and the files it changed; its changes are put into the folder only if the person says yes — read changed files again before you edit them.",
+      "Start work on the foldrun platform as cloud jobs, each in its own cloud sandbox, side by side. The call answers at once with each job's run id; you go on working, and each job's result comes to you as it finishes (between your tool calls), or when you call cloud_jobs with wait: true. Before you end your reply, call it with wait: true to collect what is still running.",
+      `Several jobs: put them all in one call, one task each (up to ${CLOUD_JOBS_CEILING} a call; another call starts more). The platform runs as many as the account's compute has room for and lines up the rest — it does not refuse them. When the person asks for work in parallel, for many agents, or to see how the cloud acts under load, split the work into independent, self-contained tasks and start them together in one call; do not run them one by one.`,
+      "With the folder (folder: true, the default): each job gets a copy of this folder as it is now (what git would commit; ignored files never go, and a folder holding a secret is refused). For long or heavy work that can be done on its own: a refactor across many files, a dependency upgrade, running and fixing a slow test suite, two approaches side by side. Each job's report and the files it changed come back; its changes are put into the folder only if the person says yes — read changed files again before you edit them.",
       cloud
-        ? `Without the folder (folder: false, one task per call): the task runs as one of the project ${cloud.project}'s agents (agent: ${cloud.agents.join(", ")}; default ${cloud.own}), with that agent's own tools — the web, the MCP servers and APIs its definition names. Nothing of this folder is sent, only the task; only its answer comes back.`
+        ? `Without the folder (folder: false): each task runs as one of the project ${cloud.project}'s agents (agent: ${cloud.agents.join(", ")}; default ${cloud.own}), with that agent's own tools — the web, the MCP servers and APIs its definition names. Nothing of this folder is sent, only the tasks; only their answers come back.`
         : "Without the folder (folder: false) is not available: the project has no agents yet.",
-      "Each task must stand alone: a cloud job does not see this conversation. Say what to do, how to check it, and what to report. It costs foldrun credits and takes minutes; make small changes yourself. Every call is asked of the person first.",
+      `Each task must stand alone: a cloud job does not see this conversation. Say what to do, how to check it, and what to report. Jobs cost foldrun credits; a small change you can make yourself is quicker here. ${asks ? "The person has asked to be asked before cloud jobs start: one question for each call." : "They start without asking the person."}`,
     ].join(" "),
     schema: {
       type: "object",
       properties: {
-        tasks: { type: "array", minItems: 1, maxItems: CLOUD_AGENTS_MAX, items: { type: "string", description: "One complete, self-contained instruction" } },
-        folder: { type: "boolean", description: "true (default): each job works on a copy of this folder and its changes come back as a patch. false: one task, run as a project agent, no folder sent." },
-        ...(cloud ? { agent: { type: "string", enum: cloud.agents, description: `For folder: false — which agent of the project. Default: ${cloud.own}.` } } : {}),
-        description: { type: "string", description: "For folder: false — the job in three to six words, shown to the person." },
+        tasks: { type: "array", minItems: 1, maxItems: CLOUD_JOBS_CEILING, items: { type: "string", description: "One complete, self-contained instruction" } },
+        folder: { type: "boolean", description: "true (default): each job works on a copy of this folder and its changes come back as a patch. false: each task runs as a project agent, no folder sent." },
+        ...(cloud ? { agent: { type: "string", enum: cloud.agents, description: `For folder: false — which agent of the project runs every task of the call. Default: ${cloud.own}.` } } : {}),
+        description: { type: "string", description: "The jobs in three to six words, shown to the person." },
+        wait: { type: "boolean", description: "true, alone: wait for the jobs already started in this turn and get the results not yet given to you. It answers when one or more have finished, or after a few minutes with what is still running." },
       },
-      required: ["tasks"],
       additionalProperties: false,
     },
   };
-}
-
-/**
- * A cloud job without the folder, as the agent tool's cloud path reads it;
- * or why it cannot be one.
- * @returns {{ where: "cloud", cloud_agent?: unknown, description: string, prompt: string } | { problem: string }}
- */
-export function cloudJobWithoutFolder(/** @type {unknown} */ input) {
-  const i = /** @type {any} */ (input ?? {});
-  const tasks = Array.isArray(i.tasks) ? i.tasks : [];
-  if (tasks.length !== 1 || typeof tasks[0] !== "string" || !tasks[0].trim()) return { problem: "cloud_jobs with folder: false takes one task per call — call it again for another" };
-  return { where: "cloud", ...(i.agent === undefined ? {} : { cloud_agent: i.agent }), description: typeof i.description === "string" ? i.description : "", prompt: tasks[0] };
 }
 
 /** Whether a tool call is cloud_agents. */
@@ -18509,242 +18504,344 @@ export const isCloudAgents = (/** @type {unknown} */ name) => name === CLOUD_AGE
 /** A run id as the platform names one; anything else is never used in a path. */
 const RUN_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
-/** The tasks a cloud_agents call names, or why they cannot be run. */
-export function cloudTasks(/** @type {unknown} */ input) {
-  const raw = /** @type {{ tasks?: unknown }} */ (input ?? {}).tasks;
-  const tasks = Array.isArray(raw) ? raw.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
-  if (!tasks.length || tasks.length > CLOUD_AGENTS_MAX || (Array.isArray(raw) && tasks.length !== raw.length)) return { error: `cloud_jobs needs tasks: 1 to ${CLOUD_AGENTS_MAX} instructions, none empty` };
-  if (tasks.some((t) => t.length > CLOUD_TASK_CHARS)) return { error: `each task must be under ${CLOUD_TASK_CHARS} characters` };
-  return { tasks };
+/**
+ * The cloud jobs of one turn on this computer (FOL-382): started by
+ * cloud_jobs calls, watched while the turn goes on, their results handed to
+ * the agent as each finishes. Every run is off the job rows once it is done
+ * or stopped (FOL-343), and stopped when the turn is (Ctrl-C, a failure).
+ * @typedef {{ n: number, id: string, task: string, folder: boolean, agent: string, done: boolean, settled: boolean, counted: boolean, run: any, finished: Promise<void> }} CloudJob
+ * @typedef {{ jobs: CloudJob[], results: import("./code-cloud-jobs.mjs").CloudResult[], closed?: boolean, next: number, nudged: boolean, wake: Set<() => void>, stopped: Set<string>, unsure: boolean, unsureSaid: boolean }} CloudPool
+ * @returns {CloudPool}
+ */
+function cloudPool() {
+  return { jobs: [], results: [], next: 1, nudged: false, wake: new Set(), stopped: new Set(), unsure: false, unsureSaid: false };
+}
+
+/** Jobs of the turn whose result is not in yet (running, or its changes being asked about). @param {CloudPool} pool */
+const cloudRunning = (pool) => pool.jobs.filter((j) => !j.settled).length;
+
+/** The results not yet given to the agent, as one bounded block (summary first); only those in it are taken. @param {CloudPool} pool @param {string} ws */
+function takeCloudNews(pool, ws) {
+  if (!pool.results.length) return "";
+  const b = cloudNewsBlock(pool.results, { running: cloudRunning(pool), ws });
+  pool.results.splice(0, b.used);
+  return b.text;
 }
 
 /**
- * Run a cloud_agents call. `h` is the turn's: pause/resume its ticker, ask
- * whether to put a patch into the folder, note changed files.
- * @param {any} s
- * @param {unknown} input
- * @param {AbortSignal} signal
- * @param {{ pause: () => void, resume: () => void, typed?: () => string, hint?: () => string, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
- * @returns {Promise<{ text: string, isError?: boolean }>}
+ * Until a result waits to be read, none is running, `ms` passed, or the turn stopped.
+ * @param {CloudPool} pool @param {AbortSignal} signal @param {number} ms
  */
-async function runCloudAgents(s, input, signal, h) {
-  // Every run this call started is off the job rows when it returns, however it ends (FOL-343) — its own
-  // runs only: a call cut off by the turn's end may return after the next turn's runs are on the rows (Codex).
-  /** @type {Set<string>} */
-  const mine = new Set();
-  try {
-    return await runCloudAgentsInner(s, input, signal, { ...h, mine });
-  } finally {
-    for (const id of mine) liveCloudRuns.delete(id);
-  }
+function waitCloudJobs(pool, signal, ms) {
+  if (pool.results.length || !cloudRunning(pool) || signal.aborted) return Promise.resolve();
+  return new Promise((res) => {
+    const done = () => {
+      clearTimeout(timer);
+      pool.wake.delete(done);
+      signal.removeEventListener("abort", done);
+      res(undefined);
+    };
+    const timer = setTimeout(done, ms);
+    pool.wake.add(done);
+    signal.addEventListener("abort", done, { once: true });
+  });
 }
 
-/** @param {any} s @param {unknown} input @param {AbortSignal} signal @param {any} h @returns {Promise<{ text: string, isError?: boolean }>} */
-async function runCloudAgentsInner(s, input, signal, h) {
-  const chosen = cloudTasks(input);
-  if (!chosen.tasks) return { text: chosen.error ?? "no tasks", isError: true };
-  const tasks = chosen.tasks;
-  const { url, flags, ws, agent, dir } = s;
-  /** @type {Array<{ n: number, task: string, id: string, run: any, done: boolean, counted: boolean }>} */
-  const runs = [];
-  const base = `/v1/workspaces/${enc(ws)}`;
-  /** A start whose answer was lost: the run may exist without an id here. */
-  let unsure = false;
-  // A run's cost is counted once, when its record is read, against the turn and the conversation
-  // that started it: a sibling that is stopped or fails does not lose it, and a record that
-  // arrives late is never put on a later turn or another conversation (Codex).
-  // (A cloud agent's run is the session's spend too: /cost left it out before FOL-249.)
-  const turnAt = costTurn(s);
-  const tidAt = s.turnId;
-  const contextAt = s.context;
-  const counted = (/** @type {typeof runs[number]} */ r) => {
-    if (r.counted || !r.run || s.context !== contextAt) return;
-    r.counted = true;
-    const cost = (r.run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
-    s.costUsd = (s.costUsd ?? 0) + (Number.isFinite(cost) ? cost : 0);
-    s.here.cloudAgents = (s.here.cloudAgents ?? 0) + 1;
-    const row = cloudRow({ kind: "cloud-agent", turn: turnAt, label: `#${r.n}`, run: r.run });
-    if (typeof tidAt === "string") row.tid = tidAt;
-    (s.ledger ??= []).push(row);
-    if (costScope(s).account) keepRow(costScope(s), row);
-  };
-  /** What the runs not yet counted had used: their records, read once more, briefly, each on its own. */
-  const reconcile = () =>
-    Promise.all(
-      runs.filter((r) => !r.counted).map(async (r) => {
+/**
+ * A job's cost, counted once, against the turn and the conversation that
+ * started it: a run stopped or failed does not lose it, and a record that
+ * arrives late is never put on a later turn or another conversation (Codex).
+ * @param {any} s @param {CloudJob} r @param {{ turn: number, tid: unknown, context: unknown }} at
+ */
+function countCloudJob(s, r, at) {
+  if (r.counted || !r.run || s.context !== at.context) return;
+  r.counted = true;
+  const cost = runCost(r.run);
+  s.costUsd = (s.costUsd ?? 0) + (Number.isFinite(cost) ? cost : 0);
+  (s.cloudJobCosts ??= []).push(cost);
+  s.here.cloudAgents = (s.here.cloudAgents ?? 0) + 1;
+  const row = cloudRow({ kind: "cloud-agent", turn: at.turn, label: `#${r.n}`, run: r.run });
+  if (typeof at.tid === "string") row.tid = at.tid;
+  (s.ledger ??= []).push(row);
+  if (costScope(s).account) keepRow(costScope(s), row);
+}
+
+/**
+ * Stop every job of the turn still going, all at once, each once; their costs read.
+ * Answers the ids whose stop the platform did not take.
+ * @param {any} s @param {CloudPool} pool @param {{ turn: number, tid: unknown, context: unknown }} at
+ */
+function stopCloudPool(s, pool, at) {
+  const base = `/v1/workspaces/${enc(s.ws)}`;
+  // Each job once: a job started after an earlier stop (its start was on its way) is stopped by the next call.
+  const live = pool.jobs.filter((x) => !x.done && !pool.stopped.has(x.id));
+  for (const r of live) pool.stopped.add(r.id);
+  return (async () => {
+    const failed = (await Promise.all(live.map((r) => remoteCall(s.url, s.flags, `${base}/runs/${enc(r.id)}/stop`, { method: "POST", body: "{}" }).then(() => null, () => r.id)))).filter((x) => x !== null);
+    for (const r of live) liveCloudRuns.delete(r.id);
+    if (live.length) console.log(`  ${c.amber("■")} ${c.grey(`${live.length} cloud job${live.length === 1 ? " was" : "s were"} told to stop`)}`);
+    if (failed.length) console.log(`  ${c.amber("!")} ${c.grey(`the platform did not take the stop for ${failed.join(", ")} — foldrun stop <run-id> --to ${plainText(s.ws)}`)}`);
+    if (pool.unsure && !pool.unsureSaid) {
+      pool.unsureSaid = true;
+      console.log(`  ${c.amber("!")} ${c.grey(`a cloud run may have started without its id reaching here — foldrun runs --to ${plainText(s.ws)} shows it`)}`);
+    }
+    // A stopped run's cost is still read, each briefly and on its own.
+    await Promise.all(
+      live.filter((r) => !r.counted).map(async (r) => {
         try {
-          r.run = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}`, {}, { seconds: 8 });
-          counted(r);
+          r.run = await remoteCall(s.url, s.flags, `${base}/runs/${enc(r.id)}`, {}, { seconds: 8 });
+          countCloudJob(s, r, at);
         } catch {
           /* foldrun usage has it from the platform's side */
         }
       }),
     );
-  /** Stop every run still going; answers the ids whose stop the platform did not take. */
-  const stopAll = async () => {
-    // All at once: one slow stop never holds back the others (Codex).
-    const failed = (
-      await Promise.all(
-        runs.filter((x) => !x.done).map((r) => remoteCall(url, flags, `${base}/runs/${enc(r.id)}/stop`, { method: "POST", body: "{}" }).then(() => null, () => r.id)),
-      )
-    ).filter((x) => x !== null);
-    if (failed.length) console.log(`  ${c.amber("!")} ${c.grey(`the platform did not take the stop for ${failed.join(", ")} — foldrun stop <run-id> --to ${plainText(ws)}`)}`);
-    if (unsure) console.log(`  ${c.amber("!")} ${c.grey(`a cloud run may have started without its id reaching here — foldrun runs --to ${plainText(ws)} shows it`)}`);
-    // Whatever way out led here (a stop, a launch that failed, an interruption between launches): a started run's cost is still read.
-    await reconcile();
     return failed;
-  };
-  const stoppedText = (/** @type {string[]} */ failed) => ({
-    text: `Stopped by the person.${runs.length ? ` The cloud runs were told to stop: ${runs.map((r) => r.id).join(", ")}.` : " Nothing was started."}${failed.length ? ` The platform did not confirm the stop for ${failed.join(", ")}.` : ""}${unsure ? " One start went unanswered and may be running." : ""} Nothing was put into the folder.`,
-    isError: true,
-  });
-  let tick = () => {};
-  /** Set once the waiting is over: a poll still on its way prints nothing after (Codex). */
-  let closed = false;
-  if (signal.aborted) return stoppedText([]);
-  h.pause();
+  })();
+}
+
+/** The account's room on the platform now, for the agent; "" when it cannot be read in a few seconds. */
+async function cloudRoom(/** @type {any} */ s) {
   try {
-    const fresh = await ensureCodeProject(url, flags, ws, agent, true);
-    void fresh;
-    await ensureCodeAgent(url, flags, ws, agent, true);
-    if (signal.aborted) return stoppedText([]);
-    const pack = await packFolder(dir);
-    const { packed } = pack;
-    if (signal.aborted) return stoppedText([]);
-    // Asked before anything leaves (FOL-212), with the bytes that go.
-    if (!(await h.approveUpload(pack, `${ws} on ${url.replace(/^https?:\/\//, "")}`))) {
-      if (signal.aborted) return stoppedText([]);
-      return { text: "The person said no to sending the folder: nothing was sent and nothing was started. Do not try another way to send it; do the work here, or say what you wanted to send and why.", isError: true };
+    return cloudRoomText(await remoteCall(s.url, s.flags, "/v1/account/usage/compute", {}, { seconds: 6 }));
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Start one cloud_jobs call's jobs, and answer at once (FOL-382): each one is
+ * watched from here on, its result put in the turn's pool when it finishes —
+ * for a job with the folder, after its patch was asked about and applied or
+ * kept. `signal` is the turn's own: it stops them all.
+ * @param {any} s
+ * @param {{ folder: boolean, tasks: string[], agent: string | null, description: string }} job
+ * @param {AbortSignal} signal
+ * @param {{ pool: CloudPool, asked: boolean, at: { turn: number, tid: unknown, context: unknown }, say: (print: () => void) => void, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
+ * @returns {Promise<{ text: string, isError?: boolean }>}
+ */
+async function startCloudJobs(s, job, signal, h) {
+  const { url, flags, ws, dir } = s;
+  const agent = job.folder ? String(s.agent) : String(job.agent);
+  const base = `/v1/workspaces/${enc(ws)}`;
+  const { pool } = h;
+  // Counted against the turn that started them, however late a record comes (Codex).
+  void h.at.turn;
+  if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+  /** @type {string | undefined} */
+  let snapshot;
+  try {
+    if (job.folder) {
+      if (h.asked) {
+        // The person said yes to these jobs: a missing project or coder is made, as before (FOL-212).
+        await ensureCodeProject(url, flags, ws, agent, true);
+        await ensureCodeAgent(url, flags, ws, agent, true);
+      } else {
+        // Started unasked: nothing is made on the platform for it (Codex) — the project and its agent must be there.
+        let names = [];
+        try {
+          const got = await remoteCall(url, flags, `${base}/agents`);
+          names = (Array.isArray(got?.agents) ? got.agents : []).map((/** @type {any} */ a) => String(a?.name ?? ""));
+        } catch (err) {
+          if (err instanceof HttpError && err.status === 404) return { text: `There is no project ${ws} on the platform, so no cloud job was started (one started without asking makes nothing there). Tell the person: foldrun code's start, or /where cloud, offers to make it.`, isError: true };
+          throw err;
+        }
+        if (!names.includes(agent)) return { text: `The project ${ws} has no agent ${agent}, so no cloud job was started (one started without asking makes nothing there). Tell the person: /permissions cloud ask lets the next call offer to add it, or \`foldrun agent new\` adds one.`, isError: true };
+      }
+      if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+      const pack = await packFolder(dir);
+      if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+      // Asked before anything leaves (FOL-212), with the bytes that go — once a session for the same files.
+      if (!(await h.approveUpload(pack, `${ws} on ${url.replace(/^https?:\/\//, "")}`))) {
+        if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+        return { text: "The person said no to sending the folder: nothing was sent and nothing was started. Do not try another way to send it; do the work here, or say what you wanted to send and why.", isError: true };
+      }
+      if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+      const snap = await pushPacked(url, flags, ws, pack.packed, signal);
+      snapshot = String(snap.snapshotId);
+      h.say(() => console.log(`  ${c.cyan("↑")} ${c.grey(`sent the folder to ${plainText(ws)} · ${pack.packed.files} file${pack.packed.files === 1 ? "" : "s"} · ${formatBytes(pack.packed.bytes)}`)}`));
     }
-    if (signal.aborted) return stoppedText([]);
-    const snap = await pushPacked(url, flags, ws, packed, signal);
-    console.log(`  ${c.cyan("↑")} ${c.grey(`sent the folder to ${plainText(ws)} · ${packed.files} file${packed.files === 1 ? "" : "s"} · ${formatBytes(packed.bytes)}`)}`);
-    for (let i = 0; i < tasks.length && !signal.aborted; i++) {
-      const task = /** @type {string} */ (tasks[i]);
-      let started;
+  } catch (err) {
+    if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+    return { text: `cloud_jobs failed before any job started: ${plainText(explain(err))}`, isError: true };
+  }
+  const room = await cloudRoom(s);
+  if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+  // All at once: the platform lines up what it has no room for (FOL-382). Each run is the turn's as soon as its
+  // id is read — a slow sibling never hides it from a stop (Codex).
+  const numbers = job.tasks.map(() => pool.next++);
+  /** @type {Array<{ n: number, id: string, task: string }>} */
+  const started = [];
+  /** @type {Array<{ n: number, task: string, why: string }>} */
+  const refused = [];
+  let unsureHere = false;
+  await Promise.all(
+    job.tasks.map(async (task, k) => {
+      const n = /** @type {number} */ (numbers[k]);
       try {
-        started = await remoteCall(url, flags, `${base}/agents/${enc(agent)}/run`, /** @type {RequestInit} */ ({
+        const got = await remoteCall(url, flags, `${base}/agents/${enc(agent)}/run`, /** @type {RequestInit} */ ({
           method: "POST",
-          body: JSON.stringify({ task, snapshot: String(snap.snapshotId), ...(flags.test === true ? { test: true } : {}) }),
-          // Not sent after a stop; once sent, its answer is read, so the run
-          // it started is known and can be stopped (Codex).
+          body: JSON.stringify({ task, ...(snapshot ? { snapshot } : {}), ...(flags.test === true ? { test: true } : {}) }),
+          // Not sent after a stop; once sent, its answer is read, so the run it started is known and can be stopped (Codex).
           stopBefore: signal,
         }));
+        const id = got?.runId;
+        if (typeof id !== "string" || !RUN_ID_SHAPE.test(id)) {
+          pool.unsure = unsureHere = true;
+          refused.push({ n, task, why: `the platform started no run it could name (${plainText(JSON.stringify(got ?? null).slice(0, 120))})` });
+          return;
+        }
+        /** @type {CloudJob} */
+        const j = { n, id, task, folder: job.folder, agent, done: false, settled: false, counted: false, run: null, finished: Promise.resolve() };
+        pool.jobs.push(j);
+        started.push({ n, id, task });
+        liveCloudRuns.set(id, { label: `cloud job #${n}${job.folder ? "" : ` (${agent})`}: ${task}`, startedAt: Date.now() });
+        // Started after the turn's stop: stopped now (the stop already sent named only the runs known then).
+        if (signal.aborted) {
+          await stopCloudPool(s, pool, h.at);
+          return;
+        }
+        j.finished = watchCloudJob(s, j, signal, h);
       } catch (err) {
-        // Refused outright (4xx), or stopped before it was sent, started
-        // nothing; anything else may have.
+        // Refused outright (4xx), or stopped before it was sent, started nothing; anything else may have.
         const before = /^stopped before /.test(String(/** @type {any} */ (err)?.message));
-        if (!before && !(err instanceof HttpError && err.status >= 400 && err.status < 500)) unsure = true;
-        throw err;
+        const no = before || (err instanceof HttpError && err.status >= 400 && err.status < 500);
+        if (!no) pool.unsure = unsureHere = true;
+        refused.push({ n, task, why: plainText(explain(err)) });
       }
-      const id = started?.runId;
-      if (typeof id !== "string" || !RUN_ID_SHAPE.test(id)) {
-        unsure = true;
-        throw new Error(`${url} started no run it could name — ${plainText(JSON.stringify(started ?? null).slice(0, 200))}`);
-      }
-      runs.push({ n: i + 1, task, id, run: null, done: false, counted: false });
-      liveCloudRuns.set(id, { label: `cloud agent ${i + 1}: ${task}`, startedAt: Date.now() });
-      h.mine?.add(id);
-      console.log(`  ${c.violet("☁")} ${c.white(`cloud agent ${i + 1}`)} ${c.grey(`· ${id} ·`)} ${c.grey(clipLine(task))}`);
-    }
-    if (signal.aborted) return stoppedText(await stopAll());
-    const t0 = Date.now();
-    tick = startTicker(t0, h.typed, h.hint?.() ?? "");
-    /** Wait for one run, in short pieces as `agent run --wait` does; a few network faults in a row are retried. */
-    const waitOne = async (/** @type {typeof runs[number]} */ r) => {
-      let faults = 0;
-      while (!signal.aborted && !closed) {
-        try {
-          const body = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}?wait=true&timeout=25`);
-          if (body?.timedOut === true) continue;
-        } catch (err) {
-          // A run that failed answers 500 with its record on older platforms: it ended.
-          if (!(/** @type {any} */ (err)?.body?.runId)) {
-            if (++faults > 5) throw err;
-            await new Promise((res) => setTimeout(res, 2000 * faults));
-            continue;
-          }
-        }
-        break;
-      }
-      if (signal.aborted || closed) return;
-      r.run = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}`);
-      r.done = true;
-      liveCloudRuns.delete(r.id);
-      const cost = (r.run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
-      counted(r);
-      if (signal.aborted || closed) return;
-      tick();
-      const ok = r.run.status === "completed";
-      console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.white(`cloud agent ${r.n}`)} ${c.grey(`· ${plainText(String(r.run.status))} · ${formatSecs((Date.now() - t0) / 1000)} · ${formatCost(cost)}`)}`);
-      tick = startTicker(t0, h.typed, h.hint?.() ?? "");
-    };
-    const aborted = new Promise((res) => {
-      if (signal.aborted) res("stopped");
-      signal.addEventListener("abort", () => res("stopped"), { once: true });
-    });
-    let how;
-    try {
-      how = await Promise.race([Promise.all(runs.map(waitOne)).then(() => "done"), aborted]);
-    } finally {
-      closed = true;
-      tick();
-    }
-    if (how === "stopped") return stoppedText(await stopAll());
+    }),
+  );
+  started.sort((a, b) => a.n - b.n);
+  refused.sort((a, b) => a.n - b.n);
+  if (signal.aborted) {
+    // A start sent before the stop whose answer never came may have started a run: said, with how to find it (Codex).
+    await stopCloudPool(s, pool, h.at);
+    return { text: `Stopped by the person.${started.length ? ` The cloud runs were told to stop: ${started.map((r) => r.id).join(", ")}.` : unsureHere ? " A start whose answer did not come may have started a run: foldrun runs shows it." : " Nothing was started."} Nothing was put into the folder.`, isError: true };
+  }
+  h.say(() => {
+    for (const r of started) console.log(`  ${c.violet("☁")} ${c.white(`cloud job #${r.n}`)} ${c.grey(`· ${r.id} ·`)} ${c.grey(clipLine(plainText(r.task)))}`);
+    for (const r of refused) console.log(`  ${c.red("✗")} ${c.white(`cloud job #${r.n}`)} ${c.grey(`not started: ${clipLine(r.why)}`)}`);
+  });
+  const text = cloudStartedText({ started, refused, unsure: unsureHere, room, folder: job.folder, running: cloudRunning(pool), ws: String(ws) });
+  return started.length ? { text } : { text, isError: true };
+}
 
-    const parts = [];
-    for (const r of runs) {
-      const run = r.run;
-      const own = (run.steps ?? []).filter((/** @type {any} */ x) => !x.subagentOf);
-      const reply = plainText(String(own.at(-1)?.result ?? "")).trim();
-      const cost = (run.steps ?? []).reduce((/** @type {number} */ sum, /** @type {any} */ x) => sum + (x.costUsd ?? 0), 0);
-      /** @type {any} */
-      let p;
+/**
+ * Watch one job to its end: the result goes into the pool (and wakes a
+ * wait); a folder job's patch is asked about first. Never throws.
+ * @param {any} s @param {CloudJob} r @param {AbortSignal} signal @param {Parameters<typeof startCloudJobs>[3]} h
+ */
+async function watchCloudJob(s, r, signal, h) {
+  const { url, flags, ws } = s;
+  const base = `/v1/workspaces/${enc(ws)}`;
+  const t0 = Date.now();
+  /** @param {import("./code-cloud-jobs.mjs").CloudResult} res */
+  const deliver = (res) => {
+    // Kept after a stop too: the turn's end carries it to the next message (Codex).
+    r.settled = true;
+    // Later than the turn's end: straight to the next message, of the same conversation (Codex).
+    if (pool.closed) {
+      if (s.context === h.at.context) (s.notes ??= []).push(`[A cloud job that finished after the turn ended:]\n${cloudNewsBlock([res], { running: 0, ws: String(ws) }).text}`);
+      return;
+    }
+    pool.results.push(res);
+    for (const f of [...pool.wake]) f();
+  };
+  const { pool } = h;
+  try {
+    let faults = 0;
+    while (!signal.aborted) {
       try {
-        p = await runPatch(url, flags, ws, run, agent);
+        const body = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}?wait=true&timeout=25`);
+        if (body?.timedOut === true) continue;
       } catch (err) {
-        p = { status: "unavailable", reason: explain(err) };
-      }
-      let changes;
-      if (p.status === "unchanged") changes = "It changed no files.";
-      else if (p.status !== "changed") changes = `No changes came back: ${plainText(String(p.reason ?? p.status))}.`;
-      else {
-        const files = [...(p.meta?.modified ?? []), ...(p.meta?.added ?? []), ...(p.meta?.deleted ?? [])].map((f) => plainText(typeof f === "string" ? f : String(f?.path ?? ""))).filter(Boolean);
-        const named = files.length ? files.slice(0, 30).map(oneLine).join(", ") + (files.length > 30 ? ` and ${files.length - 30} more` : "") : "some files";
-        const preview = patchPreview(dir, p.patch);
-        const yes = "stat" in preview && !signal.aborted && (await h.approveApply(r.n, preview.stat, p.patch));
-        if ("error" in preview) changes = `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; an earlier agent's patch or another change may touch the same lines): ${preview.error}. The patch is kept at ${keepPatch(p.patch, r.id)} — read it and make the changes yourself if they are still wanted.`;
-        else if (signal.aborted) changes = `It changed ${named}. Not put into the folder: the person stopped the turn. The patch is kept at ${keepPatch(p.patch, r.id)}.`;
-        else if (!yes) changes = `It changed ${named}. Not put into the folder: the person said no. The patch is kept at ${keepPatch(p.patch, r.id)}.`;
-        else {
-          try {
-            // The turn's stop reaches the last check before git writes (Codex).
-            // Taken file by file: only the files the person took are applied, kept for /undo, and said to be in the folder.
-            const picked = typeof yes === "object" ? yes : null;
-            // The whole patch is kept before git writes: a full disk then stops the apply, never follows it.
-            const wholeAt = picked ? keepPatch(p.patch, r.id) : "";
-            const applied = await applyPatch(dir, picked ? picked.patch : p.patch, { ...flags, yes: true }, r.id, { get asked() { return signal.aborted; }, onAsk: new Set() });
-            if (applied) {
-              (s.applied ??= []).push({ patch: picked ? picked.patch : String(p.patch), runId: r.id });
-              h.changed((picked ? picked.taken : files).map(oneLine));
-              changes = picked ? `It changed ${named}. ${partNote(picked.taken.map(oneLine), picked.refused.map(oneLine))} Read the files that went in again before you edit them. The whole patch is kept at ${wholeAt}.` : `It changed ${named}. Put into the folder — read these files again before you edit them.`;
-            } else changes = `It changed ${named}. Not put into the folder: the person stopped the turn.`;
-          } catch (err) {
-            changes = `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; an earlier agent's patch or another change may touch the same lines). ${plainText(explain(err))}`;
-          }
+        // A run that failed answers 500 with its record on older platforms: it ended.
+        if (!(/** @type {any} */ (err)?.body?.runId)) {
+          if (++faults > 5) throw err;
+          await new Promise((res) => setTimeout(res, 2000 * faults));
+          continue;
         }
       }
-      parts.push([`Cloud agent ${r.n} (run ${r.id}): ${plainText(String(run.status))}, ${formatCost(cost)}.`, `Task: ${r.task.length > 300 ? `${r.task.slice(0, 300)}…` : r.task}`, `Report:\n${reply ? (reply.length > 6000 ? `${reply.slice(0, 6000)}\n[report cut — foldrun report ${r.id} --to ${ws} has all of it]` : reply) : "(none)"}`, changes].join("\n"));
+      break;
     }
-    return { text: parts.join("\n\n") };
+    if (signal.aborted) return;
+    r.run = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}`);
+    if (signal.aborted) return;
+    r.done = true;
+    liveCloudRuns.delete(r.id);
+    countCloudJob(s, r, h.at);
+    const cost = runCost(r.run);
+    const status = plainText(String(r.run.status));
+    const ok = r.run.status === "completed";
+    h.say(() => console.log(`  ${ok ? c.green("✓") : c.red("✗")} ${c.white(`cloud job #${r.n}`)} ${c.grey(`· ${status} · ${formatSecs((Date.now() - t0) / 1000)} · ${formatCost(cost)}`)}`));
+    const own = (r.run.steps ?? []).filter((/** @type {any} */ x) => !x.subagentOf);
+    const reply = plainText(String(own.at(-1)?.result ?? "")).trim();
+    if (r.folder) deliver({ n: r.n, id: r.id, task: r.task, status, cost, reply, ...(await cloudJobChanges(s, r, signal, h)) });
+    else deliver({ n: r.n, id: r.id, task: r.task, status, cost, reply, note: "It ran in the project's sandbox and saw none of this folder; anything it made there stayed there." });
   } catch (err) {
-    const failed = await stopAll();
-    if (signal.aborted) return stoppedText(failed);
-    return { text: `cloud_jobs failed: ${plainText(explain(err))}${failed.length ? ` The platform did not confirm the stop for ${failed.join(", ")}.` : ""}${unsure ? ` A run may have started anyway: foldrun runs --to ${ws} shows it.` : ""}`, isError: true };
+    if (signal.aborted) return;
+    r.done = true;
+    liveCloudRuns.delete(r.id);
+    // Lost sight of: stopped, so the job is not paid for twice.
+    let stopped = "";
+    try {
+      await remoteCall(url, flags, `${base}/runs/${enc(r.id)}/stop`, { method: "POST", body: "{}" });
+      stopped = " It was told to stop.";
+    } catch {
+      stopped = ` The platform did not confirm its stop (foldrun stop ${r.id} --to ${ws}).`;
+    }
+    // What it used is still counted, against the turn that started it, when its record can be read now (Codex).
+    try {
+      r.run = await remoteCall(url, flags, `${base}/runs/${enc(r.id)}`, {}, { seconds: 8 });
+      countCloudJob(s, r, h.at);
+    } catch {
+      /* foldrun usage has it from the platform's side */
+    }
+    h.say(() => console.log(`  ${c.red("✗")} ${c.white(`cloud job #${r.n}`)} ${c.grey(`· its result could not be had: ${clipLine(plainText(explain(err)))}`)}`));
+    deliver({ n: r.n, id: r.id, task: r.task, status: "lost", cost: r.counted ? runCost(r.run) : NaN, reply: "", note: `Its result could not be had (${plainText(explain(err))}).${stopped} \`foldrun runs ${r.id} --to ${ws}\` shows what it did. Do not start it again unless the person asks.` });
   } finally {
-    closed = true;
-    tick();
-    h.resume();
+    r.settled = true;
+    liveCloudRuns.delete(r.id);
+  }
+}
+
+/**
+ * What became of a folder job's changes: none, or its patch asked about and
+ * put into the folder on a yes (taken file by file when the person picks),
+ * else kept on disk with where.
+ * @param {any} s @param {CloudJob} r @param {AbortSignal} signal @param {Parameters<typeof startCloudJobs>[3]} h
+ */
+async function cloudJobChanges(s, r, signal, h) {
+  const { url, flags, ws, dir } = s;
+  /** @type {any} */
+  let p;
+  try {
+    p = await runPatch(url, flags, ws, r.run, r.agent);
+  } catch (err) {
+    p = { status: "unavailable", reason: explain(err) };
+  }
+  if (p.status === "unchanged") return { outcome: "no files changed", changes: "It changed no files." };
+  if (p.status !== "changed") return { outcome: "no changes came back", changes: `No changes came back: ${plainText(String(p.reason ?? p.status))}.` };
+  const files = [...(p.meta?.modified ?? []), ...(p.meta?.added ?? []), ...(p.meta?.deleted ?? [])].map((f) => plainText(typeof f === "string" ? f : String(f?.path ?? ""))).filter(Boolean);
+  const named = files.length ? files.slice(0, 30).map(oneLine).join(", ") + (files.length > 30 ? ` and ${files.length - 30} more` : "") : "some files";
+  const preview = patchPreview(dir, p.patch);
+  const yes = "stat" in preview && !signal.aborted && (await h.approveApply(r.n, preview.stat, p.patch));
+  if ("error" in preview) return { outcome: "its patch does not apply — kept in a file", changes: `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; another job's patch or another change may touch the same lines): ${preview.error}. The patch is kept at ${keepPatch(p.patch, r.id)} — read it and make the changes yourself if they are still wanted.` };
+  if (signal.aborted) return { outcome: "not put in: the turn was stopped", changes: `It changed ${named}. Not put into the folder: the person stopped the turn. The patch is kept at ${keepPatch(p.patch, r.id)}.` };
+  if (!yes) return { outcome: "not put in: the person said no", changes: `It changed ${named}. Not put into the folder: the person said no. The patch is kept at ${keepPatch(p.patch, r.id)}.` };
+  try {
+    // Taken file by file: only the files the person took are applied, kept for /undo, and said to be in the folder.
+    const picked = typeof yes === "object" ? yes : null;
+    // The whole patch is kept before git writes: a full disk then stops the apply, never follows it.
+    const wholeAt = picked ? keepPatch(p.patch, r.id) : "";
+    // The turn's stop reaches the last check before git writes (Codex).
+    const applied = await applyPatch(dir, picked ? picked.patch : p.patch, { ...flags, yes: true }, r.id, { get asked() { return signal.aborted; }, onAsk: new Set() });
+    if (!applied) return { outcome: "not put in: the turn was stopped", changes: `It changed ${named}. Not put into the folder: the person stopped the turn.` };
+    (s.applied ??= []).push({ patch: picked ? picked.patch : String(p.patch), runId: r.id });
+    h.changed((picked ? picked.taken : files).map(oneLine));
+    return picked ? { outcome: `partly put into the folder (${picked.taken.length} of ${picked.taken.length + picked.refused.length} files)`, changes: `It changed ${named}. ${partNote(picked.taken.map(oneLine), picked.refused.map(oneLine))} Read the files that went in again before you edit them. The whole patch is kept at ${wholeAt}.` } : { outcome: "put into the folder", changes: `It changed ${named}. Put into the folder — read these files again before you edit them.` };
+  } catch (err) {
+    return { outcome: "its patch did not apply", changes: `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; another job's patch or another change may touch the same lines). ${plainText(explain(err))}` };
   }
 }
 
@@ -18885,29 +18982,83 @@ async function codeLocalTurn(s, text) {
   /** cloud_agents calls still on their way: waited for before the turn ends, so their stops are sent. */
   /** @type {Set<Promise<unknown>>} */
   const cloudBusy = new Set();
+  /** The cloud jobs this turn started (FOL-382): they run while it goes on, their results handed in as each finishes. */
+  const cloudJobs = cloudPool();
+  // The turn's stop (Ctrl-C, its end, a failure) stops every job of it still running, and the turn's end
+  // waits for those stops to be sent (FOL-343: none is left on the platform or on the rows).
+  abort.signal.addEventListener("abort", () => {
+    if (cloudJobs.jobs.some((j) => !j.done)) cloudBusy.add(stopCloudPool(s, cloudJobs, cloudAt));
+  }, { once: true });
+  /** Which turn and conversation their costs count against: read at the first start. */
+  /** @type {{ turn: number, tid: unknown, context: unknown }} */
+  /** @type {{ turn: number, tid: unknown } | null} */
+  let cloudTurnAt = null;
+  const cloudAt = {
+    get turn() {
+      return (cloudTurnAt ??= { turn: costTurn(s), tid: s.turnId }).turn;
+    },
+    get tid() {
+      return (cloudTurnAt ??= { turn: costTurn(s), tid: s.turnId }).tid;
+    },
+    context: s.context,
+  };
+  /** The agent's last message ended its reply (no tool call): the engine's next steer read is the turn's end. */
+  let replyEnding = false;
+  /** Questions on the screen now: a line printed from the background (a cloud job finishing) waits for them (FOL-382). */
+  let questionOpen = 0;
+  /** @type {Array<() => void>} */
+  const heldNotices = [];
+  /** What waited for a question, printed once none is open. */
+  const flushNotices = () => {
+    if (questionOpen) return;
+    for (const print of heldNotices.splice(0)) print();
+  };
+  /**
+   * What the engine takes between tool calls besides the person's messages (FOL-382): the results of cloud
+   * jobs that finished, summary first; and once, when the reply ends with jobs still running, a reminder to
+   * collect them — as a message sent into the turn, so the agent goes on.
+   * @returns {string[]}
+   */
+  const cloudSteer = () => {
+    const news = takeCloudNews(cloudJobs, String(s.ws));
+    if (news) {
+      cloudHanded.push(news);
+      return [news];
+    }
+    const running = cloudRunning(cloudJobs);
+    if (replyEnding && running && !cloudJobs.nudged) {
+      cloudJobs.nudged = true;
+      return [cloudStillRunningText(running)];
+    }
+    return [];
+  };
+  /** Results handed to the engine and not yet seen in a message of the conversation: a turn stopped before the
+   *  engine wrote them in loses nothing — they go with the next message (Codex). @type {string[]} */
+  const cloudHanded = [];
   /** Set when the turn is over: nothing it started draws on the screen after. */
   let turnOver = false;
   /** Yeses to cloud_agents given and not yet used, by the task list they
    *  were given for: the tool runs only on a yes to exactly its tasks (Codex). */
   /** @type {Map<string, Set<object>>} */
   const cloudTickets = new Map();
-  const ticketKey = (/** @type {unknown} */ input) => JSON.stringify(cloudTasks(input).tasks ?? null);
+  const ticketKey = (/** @type {unknown} */ input) => JSON.stringify([cloudTasks(input).tasks ?? null, /** @type {any} */ (input)?.folder !== false, /** @type {any} */ (input)?.agent ?? null]);
   /** A yes for these tasks; withdrawn with the request it answered (Codex). */
-  const grantTicket = (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ signal) => {
+  const grantTicket = (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ signal, asked = false) => {
     const key = ticketKey(input);
-    const grant = {};
+    // Whether the person said yes to it (now, or "always" earlier), as against started unasked: what may be made for it (Codex).
+    const grant = { asked };
     const set = cloudTickets.get(key) ?? new Set();
     set.add(grant);
     cloudTickets.set(key, set);
     signal?.addEventListener("abort", () => set.delete(grant), { once: true });
   };
-  /** Use one yes for these tasks; whether there was one. */
+  /** Use one yes for these tasks: the yes, or null when there was none. @returns {{ asked: boolean } | null} */
   const takeTicket = (/** @type {unknown} */ input) => {
     const set = cloudTickets.get(ticketKey(input));
     const grant = set?.values().next().value;
-    if (!set || !grant) return false;
+    if (!set || !grant) return null;
     set.delete(grant);
-    return true;
+    return /** @type {{ asked: boolean }} */ (grant);
   };
   /** The conversation as the engine compacted it part-way, if it did (FOL-213). */
   /** @type {any[] | null} */
@@ -19017,6 +19168,50 @@ async function codeLocalTurn(s, text) {
     /** @type {{ agents: string[], own: string, project: string } | null} */
     let turnCloud = null;
     /** @param {string} name @param {Record<string, unknown>} input @param {AbortSignal} [signal] @param {string} [child] a sub-agent's name, when it is the one asking */
+    /**
+     * What a cloud_jobs call sends, on the screen before it starts — asked or not (FOL-382, Codex): how many,
+     * where, each task (whole when nothing else goes with it), the credits. A denial when it cannot be shown.
+     * @param {Record<string, any>} input
+     * @returns {{ behavior: "deny", message: string } | null}
+     */
+    const showCloudJobs = (input) => {
+      const width = Math.max(20, (process.stdout.columns || 80) - 8);
+      // One view of the whole call (FOL-382): how many, where, what goes, what it may cost.
+      const list = cloudTasks(input).tasks ?? [];
+      const folderGoes = /** @type {any} */ (input).folder !== false;
+      const who = folderGoes ? String(s.agent) : String(/** @type {any} */ (input).agent ?? turnCloud?.own ?? "");
+      console.log(`      ${c.grey(cloudAskLine({ n: list.length, folder: folderGoes, ws: plainText(s.ws), host: plainText(s.url.replace(/^https?:\/\//, "")), agent: plainText(who), estimate: cloudEstimate(Array.isArray(s.cloudJobCosts) ? s.cloudJobCosts : [], list.length) }))}`);
+      // What leaves this computer is shown whole when nothing else goes with it (Codex, FOL-258); a folder job's task, its start.
+      // Counted as the rows it takes on this screen, wrapped as it is printed below (Codex).
+      // Cut by the cells a character takes (a wide one two), so what is counted is what is printed.
+      const wrap = (/** @type {string} */ l) => {
+        const out = [""];
+        let used = 0;
+        for (const ch of l) {
+          const w = displayWidth(ch);
+          if (used + w > width - 3) {
+            out.push("");
+            used = 0;
+          }
+          out[out.length - 1] += ch;
+          used += w;
+        }
+        return out;
+      };
+      const rows = (/** @type {string} */ t) => plainText(t).split("\n").reduce((n, l) => n + wrap(l).length, 0);
+      if (!folderGoes && list.some((t) => rows(t) > 200)) {
+        console.log(`      ${c.amber("a task too long to show whole — not sent")}`);
+        return { behavior: /** @type {const} */ ("deny"), message: "A task was too long for the person to read before it leaves this computer. Send less: say what is needed in fewer words." };
+      }
+      list.forEach((t, i) => {
+        const lines = plainText(t).split("\n");
+        const shown = folderGoes ? lines.slice(0, 12) : lines;
+        if (folderGoes) shown.forEach((l, k) => console.log(`      ${c.white(`${k === 0 ? `${i + 1}.` : "  "} ${clipCells(l, width - 3)}`)}`));
+        else shown.forEach((l, k) => wrap(l).forEach((part, j) => console.log(`      ${c.white(`${k === 0 && j === 0 ? `${i + 1}.` : "  "} ${part}`)}`)));
+        if (lines.length > shown.length) console.log(`         ${c.grey(`… ${lines.length - shown.length} more line${lines.length - shown.length === 1 ? "" : "s"}`)}`);
+      });
+      return null;
+    };
     const decide = async (name, input, signal, child, toolUseID = /** @type {string | undefined} */ (undefined)) => {
       if (cancel.asked || signal?.aborted || s.headless?.stopped === true) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
       // foldrun's own docs pages: text this CLI shipped with, nothing of the
@@ -19033,13 +19228,16 @@ async function codeLocalTurn(s, text) {
         if ("problem" in q) return { behavior: /** @type {const} */ ("deny"), message: String(q.problem) };
         stopTicker();
         await keyboardBack();
+        questionOpen++;
         try {
           const answer = (await askAtTerminal(q, (t) => cancellablePrompt(t, cancel), signal)) ?? "";
           if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
           return { behavior: /** @type {const} */ ("allow"), updatedInput: { question: q.question, options: q.options, answer: answer ?? "", answeredBy: ASK_MARK } };
         } finally {
+          questionOpen--;
           keyboardOn();
-          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+          flushNotices();
+          if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
       }
       // The web (FOL-383): search and fetch only read, and a cloud browser holds nothing of the person's, so they run
@@ -19124,11 +19322,24 @@ async function codeLocalTurn(s, text) {
       const byRule = !child && s.strict !== true && command !== null && scope === "command" && Object.keys(input).every((k) => k === "command" || k === "description" || k === "timeout") && rulesAllow(command, folderRules(s.dir), s.dir, inFolder);
       // A script's turn takes no earlier yes: a folder rule ("always npm test") would run past --yes (Codex).
       // While a server runs outside the sandbox no earlier "always" stands: every call that is asked at all is asked (Codex).
-      const allowedNow = !s.headless && !outsideLive && (byRule || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
+      // Cloud jobs start without a question unless the person asked to be asked (owner, 26 Nov 2026, FOL-382:
+      // "can it be switched off by default"; /permissions cloud ask). What leaves is still shown (the folder's
+      // files once, FOL-212), and a job's changes still need a yes before they go into the folder.
+      const cloudUnasked = cloud && !child && s.strict !== true && !cloudAsks(s);
+      const allowedNow = !s.headless && !outsideLive && (byRule || cloudUnasked || !child && (allowed || (scope === "mcp" && allow.mcp?.has(/** @type {any} */ (mcpTool).key) === true) || (scope === "cloud-sub" && allow.kinds.has("cloud-sub"))));
       // /permissions bypass (owner, 25 Nov 2026, FOL-308): nothing is asked for this session — not outside the sandbox,
       // not a sub-agent's. Never a script's turn (-p has its own --yes), and never a /plan turn (refused above).
       if (allowedNow || (s.bypass === true && !s.headless)) {
-        if (cloud) grantTicket(input, signal);
+        // Started unasked: still shown before it goes, and refused when it cannot be (Codex).
+        if (cloud) {
+          stopTicker();
+          const shown = showCloudJobs(input);
+          if (!shown && !allowedNow) console.log(`      ${c.dim("bypass: started without a question")}`);
+          else if (!shown) console.log(`      ${c.dim("started without a question — /permissions cloud ask asks first")}`);
+          if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+          if (shown) return shown;
+        }
+        if (cloud) grantTicket(input, signal, !s.headless && !outsideLive && !child && allowed === true);
         if (scope === "changes") noteChanged();
         return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       }
@@ -19154,6 +19365,7 @@ async function codeLocalTurn(s, text) {
       }
       stopTicker();
       await keyboardBack();
+      questionOpen++;
       try {
         if (child) console.log(`    ${c.grey(`the sub-agent ${plainText(child)} asks:`)}`);
         if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
@@ -19167,15 +19379,11 @@ async function codeLocalTurn(s, text) {
           showMcpServer(row, s, String(child));
           console.log(`      ${c.grey(`yes is for this job. Always keeps the yes for this server of this sub-agent, on this computer, until the entry, the program or a script of it changes — /setup mcp forget ${plainText(String(child))}:${plainText(row.name)} takes it back`)}`);
         } else if (cloud) {
-          const list = cloudTasks(input).tasks ?? [];
-          console.log(`      ${c.grey(`sends a copy of this folder to ${plainText(s.ws)} on ${plainText(s.url.replace(/^https?:\/\//, ""))} and runs ${plainText(s.agent)} there, ${list.length === 1 ? "once" : `${list.length} at once`} — costs foldrun credits`)}`);
-          list.forEach((t, i) => {
-            const lines = plainText(t).split("\n");
-            lines.slice(0, 12).forEach((l, k) => console.log(`      ${c.white(`${k === 0 ? `${i + 1}.` : "  "} ${clipCells(l, width - 3)}`)}`));
-            if (lines.length > 12) console.log(`         ${c.grey(`… ${lines.length - 12} more line${lines.length - 12 === 1 ? "" : "s"}`)}`);
-          });
+          const shown = showCloudJobs(input);
+          if (shown) return shown;
+          console.log(`      ${c.dim("asked because /permissions cloud ask is on — /permissions cloud bypass starts them without a question")}`);
         } else if (isApply) {
-          console.log(`      ${c.white(typeof input.who === "string" ? `sub-agent ${plainText(input.who)}'s changes (made in its own sandbox), into this folder:` : `cloud agent ${Number(input.n) || "?"}'s changes, into this folder:`)}`);
+          console.log(`      ${c.white(typeof input.who === "string" ? `sub-agent ${plainText(input.who)}'s changes (made in its own sandbox), into this folder:` : `cloud job #${Number(input.n) || "?"}'s changes, into this folder:`)}`);
           const stat = /** @type {string[]} */ (Array.isArray(input.lines) ? input.lines : []);
           for (const l of stat.slice(0, 40)) console.log(`    ${l}`);
           if (stat.length > 40) console.log(`      ${c.grey(`… ${stat.length - 40} more lines — d shows the whole diff`)}`);
@@ -19289,7 +19497,7 @@ async function codeLocalTurn(s, text) {
           const shown = plainText(JSON.stringify(input)).slice(0, 400);
           console.log(`      ${c.grey(clipCells(shown, width))}`);
         }
-        const alwaysFor = scope === "mcp" ? "]lways for this tool, this session · [" : scope === "cloud-sub" ? "]lways for cloud jobs without the folder, this session · [" : scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud agents this session · [" : scope === "cloud-changes" ? "]lways for cloud agents' changes this session · [" : null;
+        const alwaysFor = scope === "mcp" ? "]lways for this tool, this session · [" : scope === "cloud-sub" ? "]lways for cloud jobs without the folder, this session · [" : scope === "changes" ? "]lways for changes in this folder · [" : scope === "command" ? "]lways for this command · [" : scope === "cloud" ? "]lways for cloud jobs this session · [" : scope === "cloud-changes" ? "]lways for cloud jobs' changes this session · [" : null;
         const always = name === MCP_START ? "]lways for this server of this sub-agent · [" : child ? "" : alwaysFor;
         // "always in this folder": kept for every later session here. Only
         // for a command that rules can match at all, and not under strict.
@@ -19379,7 +19587,7 @@ async function codeLocalTurn(s, text) {
         if (answer === "y" || answer === "yes" || (always && (answer === "a" || answer === "always"))) {
           // A sub-agent's server: whether the yes is kept is told to the one who starts it.
           if (name === MCP_START) return { behavior: /** @type {const} */ ("allow"), updatedInput: { ...input, keep: answer.startsWith("a") } };
-          if (cloud) grantTicket(input, signal);
+          if (cloud) grantTicket(input, signal, true);
           if (answer.startsWith("a")) {
             if (scope === "changes" || scope === "cloud" || scope === "cloud-changes" || scope === "cloud-sub") allow.kinds.add(scope);
             else if (scope === "command") allow.commands.add(/** @type {string} */ (command));
@@ -19392,8 +19600,10 @@ async function codeLocalTurn(s, text) {
         if (!/^(n|no|)$/.test(answer)) return { behavior: /** @type {const} */ ("deny"), message: `The person said no to this, and said: ${JSON.stringify(words.slice(0, 2_000))}. Do what they said; do not try the same thing another way.` };
         return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
       } finally {
+        questionOpen--;
         keyboardOn();
-        if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+        flushNotices();
+        if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
       }
     };
     // This conversation's /rewind journal; a turn's number is one past the last recorded.
@@ -19433,13 +19643,12 @@ async function codeLocalTurn(s, text) {
       }
       // FOL-258: the cloud is reached by cloud_jobs only; a job without the folder is asked as a cloud job of a project agent.
       if (!child && name === AGENT_TOOL && input?.where === "cloud") return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "A job in the cloud is a cloud job: call cloud_jobs with folder: false." });
-      if (!child && name === CLOUD_AGENTS_TOOL && input?.folder !== undefined && typeof input.folder !== "boolean") return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "folder must be true or false (true: a copy of the folder goes; false: only the task)" });
-      if (!child && name === CLOUD_AGENTS_TOOL && input?.folder === false) {
-        const job = cloudJobWithoutFolder(input);
+      if (!child && name === CLOUD_AGENTS_TOOL) {
+        // Read as the tool reads it: a call it would refuse is refused before any question (FOL-382).
+        const job = cloudJobsInput(input, turnCloud);
         if ("problem" in job) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: job.problem });
-        const asked = gate.then(() => decide(AGENT_TOOL, job, opts?.signal, child)).then((r) => (r.behavior === "allow" ? { behavior: /** @type {const} */ ("allow"), updatedInput: input } : r));
-        gate = asked.then(() => undefined, () => undefined);
-        return asked;
+        // Collecting the jobs already started starts nothing and sends nothing: never asked.
+        if ("wait" in job) return Promise.resolve({ behavior: /** @type {const} */ ("allow"), updatedInput: input });
       }
       // A sub-agent that only reads never asks: what is not plainly inside is refused (Codex).
       if (readsOnly) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: "That is outside the folders you may read, or a pattern that could reach outside them. Stay inside the person's folder, with a plain pattern." });
@@ -19489,33 +19698,39 @@ async function codeLocalTurn(s, text) {
       return p.finally(() => cloudBusy.delete(p));
     };
     const cloudCallInner = async (/** @type {unknown} */ input, /** @type {AbortSignal | undefined} */ sig) => {
-      const signal = sig ? AbortSignal.any([abort.signal, sig]) : abort.signal;
+      void sig;
+      // The turn's own stop: a job outlives the call that started it (FOL-382), never the turn.
+      const signal = abort.signal;
+      const job = cloudJobsInput(input, turnCloud);
+      if ("problem" in job) return { text: job.problem, isError: true };
+      if ("wait" in job) return cloudWait(signal);
+      // A capped turn (FOL-252): a cloud agent's spend is its run's, outside the ceiling — refused, not left uncounted.
+      if (typeof s.turnCeilingUsd === "number") return { text: "This turn has a spend ceiling the person set, and a cloud job's cost is not counted in it — so no cloud job is started in this turn. Do the work here, or tell the person what is left for a cloud job.", isError: true };
       // The yes is checked where the work happens, not only where the
       // engine says it asked: a call that reached here without a yes to
-      // exactly these tasks asks now.
-      // A capped turn (FOL-252): a cloud agent's spend is its run's, outside the ceiling — refused, not left uncounted.
-      if (typeof s.turnCeilingUsd === "number") return { text: "This turn has a spend ceiling the person set, and a cloud agent's cost is not counted in it — so no cloud agent is started in this turn. Do the work here, or tell the person what is left for a cloud agent.", isError: true };
-      if (!takeTicket(input)) {
+      // exactly these tasks asks now (or starts, when the person did not ask to be asked).
+      let ticket = takeTicket(input);
+      if (!ticket) {
         // Asked here for this call alone: the yes is used at once.
         const next = gate.then(() => decide(CLOUD_AGENTS_TOOL, /** @type {Record<string, unknown>} */ (input ?? {}), signal));
         gate = next.then(() => undefined, () => undefined);
         const d = await next;
-        if (d.behavior !== "allow" || !takeTicket(input)) return { text: d.message ?? "The person said no.", isError: true };
+        ticket = d.behavior === "allow" ? takeTicket(input) : null;
+        if (!ticket) return { text: d.message ?? "The person said no.", isError: true };
       }
-      return runCloudAgents(s, input, signal, {
-        typed: typedNow,
-        hint: inputHint,
-        pause: () => stopTicker(),
-        resume: () => {
-          stopTicker();
-          if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
-        },
+      // Said yes to (now, or "always" earlier), as against started unasked by the default or a bypass.
+      const asked = ticket.asked;
+      return startCloudJobs(s, job, signal, {
+        pool: cloudJobs,
+        // Whether the person was asked to start them (or agreed to cloud jobs for the session): what may be made for them.
+        asked: Boolean(asked),
+        at: cloudAt,
+        say: said,
         approveApply: (n, lines, patch) => {
           // The patch's own bytes go with it: taken file by file, it is cut and joined as bytes.
           const next = gate.then(() => decide("cloud_apply", { n, lines, patch: String(patch), patchBytes: patch }, signal));
           gate = next.then(() => undefined, () => undefined);
           return next.then((d) => {
-            stopTicker();
             if (d.behavior !== "allow") return false;
             // Taken file by file: the patch of the files taken, and which were refused.
             const picked = /** @type {any} */ (d).updatedInput?.picked;
@@ -19526,21 +19741,44 @@ async function codeLocalTurn(s, text) {
           for (const f of files) changed.add(f);
         },
         approveUpload: (pack, dest) => {
-          const next = gate.then(() =>
-            agreeToUpload(s, pack, dest, async (q) => {
-              stopTicker();
-              await keyboardBack();
-              try {
-                return await cancellablePrompt(q, cancel);
-              } finally {
-                keyboardOn();
-              }
-            }, () => cancel.asked),
-          );
+          // Its preview and question own the screen: the ticker stops for them, background lines wait (FOL-382).
+          const next = gate.then(async () => {
+            stopTicker();
+            questionOpen++;
+            try {
+              return await agreeToUpload(s, pack, dest, async (q) => {
+                await keyboardBack();
+                try {
+                  return await cancellablePrompt(q, cancel);
+                } finally {
+                  keyboardOn();
+                }
+              }, () => cancel.asked);
+            } finally {
+              questionOpen--;
+              flushNotices();
+              if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+            }
+          });
           gate = next.then(() => undefined, () => undefined);
           return next;
         },
       });
+    };
+    /**
+     * cloud_jobs with wait: true (FOL-382): the results not yet given, once one or more are there, or what is
+     * still running after a few minutes — so the person's messages are read in between.
+     * @param {AbortSignal} signal
+     */
+    const cloudWait = async (signal) => {
+      if (!cloudJobs.jobs.length) return { text: "No cloud jobs were started in this turn: nothing to wait for." };
+      await waitCloudJobs(cloudJobs, signal, CLOUD_WAIT_MS);
+      if (signal.aborted) return { text: "Stopped by the person.", isError: true };
+      const news = takeCloudNews(cloudJobs, String(s.ws));
+      const running = cloudRunning(cloudJobs);
+      if (news) cloudHanded.push(news);
+      if (news) return { text: news };
+      return { text: running ? `[cloud jobs: ${running} still running; nothing new has finished in the last ${Math.round(CLOUD_WAIT_MS / 60_000)} minutes. Call cloud_jobs with wait: true again to go on waiting.]` : "[cloud jobs: none running, and every result was already given to you.]" };
     };
     const history = (s.localHistory ??= readEngineConversation(s));
     /** @type {Array<{ role: string, content: Array<Record<string, unknown>> }>} */
@@ -19632,9 +19870,14 @@ async function codeLocalTurn(s, text) {
       return note ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note } } : {};
     };
     const said = (/** @type {() => void} */ print) => {
+      // A question is on the screen: the line waits for it, never drawn into it, and no ticker starts under it.
+      if (questionOpen) {
+        heldNotices.push(print);
+        return;
+      }
       stopTicker();
       print();
-      if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+      if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
     };
     // The sites of the remote MCP servers this turn will start are added
     // first, so the walls are put up once — never reopened (and the handle
@@ -19683,7 +19926,7 @@ async function codeLocalTurn(s, text) {
     if (cancel.asked) return;
     // The agent tool is for sub-agents on this computer; a job in the cloud is a cloud job (cloud_jobs, folder: false).
     const sub = agentTool(turnAgents, null);
-    const cloudTool = cloudJobsTool(turnCloud);
+    const cloudTool = cloudJobsTool(turnCloud, cloudAsks(s));
     let agentCalls = 0;
     let agentTurns = 0;
     /**
@@ -19860,7 +20103,7 @@ async function codeLocalTurn(s, text) {
           pause: () => stopTicker(),
           resume: () => {
             stopTicker();
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+            if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
           },
         });
       }
@@ -20108,12 +20351,12 @@ async function codeLocalTurn(s, text) {
               // On this computer only: the agent has no way to send the folder, or a job, to the cloud.
               // Cloud jobs: with the folder (a copy, a patch back) or without it (a project agent); off with /where local.
               ...(s.localOnly === true ? [] : [{ name: CLOUD_AGENTS_TOOL, description: cloudTool.description, input_schema: cloudTool.schema, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => {
-                if (input?.folder !== undefined && typeof input.folder !== "boolean") return Promise.resolve({ text: "folder must be true or false", isError: true });
+                const job = cloudJobsInput(input, turnCloud);
+                if ("problem" in job) return Promise.resolve({ text: job.problem, isError: true });
                 // The folder goes by git (a copy out, the changes back): none here, and the job is refused with how to go on (FOL-274).
-                if (input?.folder !== false && !inGitRepo(s.dir)) return Promise.resolve({ text: "This folder has no git, which an agent in the cloud needs to take a copy of it and bring the changes back. Send the job without the folder (folder: false), or tell the person: /where cloud offers to set git up.", isError: true });
-                if (input?.folder !== false) return cloudCall(input, ctx.signal);
-                const job = cloudJobWithoutFolder(input);
-                return "problem" in job ? Promise.resolve({ text: job.problem, isError: true }) : agentCall(job, ctx.signal);
+                if (!("wait" in job) && job.folder && !inGitRepo(s.dir)) return Promise.resolve({ text: "This folder has no git, which an agent in the cloud needs to take a copy of it and bring the changes back. Send the jobs without the folder (folder: false), or tell the person: /where cloud offers to set git up.", isError: true });
+                // Both ways, and a wait, go through one door (FOL-382): it answers once the jobs have started.
+                return cloudCall(input, ctx.signal);
               } }]),
               ...(here && webMay?.("search") ? [{ name: SEARCH_HERE, description: here.SEARCH_HERE_DEFINITION.description, input_schema: here.SEARCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => here.searchHere(input, { signal: ctx.signal }) }] : []),
               ...(here && webMay?.("fetch") ? [{ name: FETCH_HERE, description: here.FETCH_HERE_DEFINITION.description, input_schema: here.FETCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => here.fetchHere(input, { signal: ctx.signal, userAgent: USER_AGENT }) }] : []),
@@ -20205,7 +20448,8 @@ async function codeLocalTurn(s, text) {
             // Messages sent with Enter while it works (FOL-213).
             // Not while /compact writes its summary: a message taken then
             // would be answered, and that answer kept as the summary (Codex).
-            ...(s.noSteer ? {} : { steer: takeSent }),
+            // …and the results of the cloud jobs this turn started, as each finishes (FOL-382).
+            ...(s.noSteer ? {} : { steer: () => [...takeSent(), ...cloudSteer()] }),
             // /model thinking on: the model's own summary of its thinking, on the models that give one.
             ...(showThinking ? { thinkingDisplay: "summarized" } : {}),
             // How hard it thinks: the agent's effort:, fitted to the model by the engine (FOL-256).
@@ -20237,7 +20481,7 @@ async function codeLocalTurn(s, text) {
         lastSteer = null;
         stopTicker();
         console.log(`  ${c.dim("⋯ the conversation was getting long: its older part was summarised")}`);
-        stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+        if (!questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
       }
       if (m.type === "assistant" && !m.parent_tool_use_id) {
         // The model is answering: what was sent into the turn reached it.
@@ -20251,13 +20495,16 @@ async function codeLocalTurn(s, text) {
         else turn.push({ role: "assistant", content });
         const words = content.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
         const calls = content.filter((b) => b.type === "tool_use");
+        replyEnding = !calls.length;
+        // The model answered after what was handed to it: it has seen it (Codex).
+        cloudHanded.length = 0;
         // A search or fetch the gateway ran itself (FOL-304): shown, nothing to run here.
         for (const b of content.filter((/** @type {any} */ x) => x.type === "server_tool_use")) {
           stopTicker();
           const q = /** @type {any} */ (b).input ?? {};
           const what = typeof q.query === "string" ? q.query : typeof q.url === "string" ? q.url : "";
           console.log(`  ${c.cyan("●")} ${c.bold(c.white(String(/** @type {any} */ (b).name) === "web_fetch" ? "Fetch" : String(/** @type {any} */ (b).name) === "web_browse" ? "Browse" : "Search"))}${what ? ` ${c.grey(clipLine(plainText(what)))}` : ""} ${c.dim("· on foldrun's servers")}`);
-          stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+          if (!questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
         if (showThinking) {
           const summary = content.filter((b) => b.type === "thinking").map((b) => plainText(String(b.thinking ?? "")).trim()).filter(Boolean).join("\n\n");
@@ -20268,7 +20515,7 @@ async function codeLocalTurn(s, text) {
             console.log(`\n  ${c.dim("✻ thinking")}`);
             for (const l of lines) console.log(`    ${c.dim(l)}`);
             if (more) console.log(`    ${c.dim(`… ${more} more line${more === 1 ? "" : "s"} (/export --thinking writes all of it)`)}`);
-            if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+            if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
           }
         }
         if (calls.length) {
@@ -20279,7 +20526,7 @@ async function codeLocalTurn(s, text) {
             const what = localCallSummary(String(b.name), /** @type {Record<string, unknown>} */ (b.input ?? {}), s.dir);
             console.log(`  ${toolHue(label)("●")} ${c.bold(c.white(clipLine(label)))}${what ? ` ${c.grey(clipLine(what))}` : ""}`);
           }
-          stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+          if (!questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         } else if (words) reply = words;
       }
       if (m.type === "user" && !m.parent_tool_use_id) {
@@ -20294,7 +20541,7 @@ async function codeLocalTurn(s, text) {
           stopTicker();
           console.log(`\n${answerFor(s, replyPaths(plainText(reply)))}\n`);
           reply = "";
-          stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+          if (!questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
         for (const b of /** @type {any[]} */ (content)) {
           const said = Array.isArray(b.content) ? b.content.map((x) => x?.text ?? "").join(" ") : String(b.content ?? "");
@@ -20308,6 +20555,14 @@ async function codeLocalTurn(s, text) {
         }
       }
       if (m.type === "result") result = m;
+    }
+    // Cloud jobs still running when the reply ended (FOL-382): waited for here — Ctrl-C stops them — and what
+    // they found goes with the person's next message, since the agent has answered already.
+    // Only after a reply that finished: a failed turn (its turns used up, a cut reply) stops them in its end (Codex).
+    if (result?.subtype === "success" && !result?.is_error && cloudRunning(cloudJobs) && !cancel.asked && !abort.signal.aborted) {
+      const n = cloudRunning(cloudJobs);
+      said(() => console.log(`  ${c.violet("☁")} ${c.grey(`waiting for ${n} cloud job${n === 1 ? "" : "s"} still running — ${n === 1 ? "its result goes" : "their results go"} with your next message · Ctrl-C stops ${n === 1 ? "it" : "them"}`)}`));
+      await Promise.race([Promise.all(cloudJobs.jobs.map((j) => j.finished)), new Promise((res) => abort.signal.addEventListener("abort", res, { once: true }))]);
     }
     {
       // The conversation goes on from here: the whole turn when it
@@ -20366,11 +20621,28 @@ async function codeLocalTurn(s, text) {
     // Still going when the turn ends (an engine error, a withdrawn call):
     // stopped, then waited for so its stops are sent (Codex).
     turnOver = true;
-    if (cloudBusy.size) abort.abort();
+    if (cloudBusy.size || cloudRunning(cloudJobs)) abort.abort();
     if (cloudBusy.size) await Promise.race([Promise.all([...cloudBusy].map((p) => p.catch(() => null))), new Promise((r) => setTimeout(r, timeoutSeconds(s.flags) * 1000))]);
     stopTicker();
     // This turn's job lists are let go with it: a job its end killed is never drawn by a later ticker (Codex).
     jobSources = [];
+    // A job that finished and is being asked about (its patch) ends now the turn stopped: its result is waited
+    // for, briefly, so its report and the kept patch go with the next message (Codex).
+    const ending = cloudJobs.jobs.filter((j) => j.done && !j.settled).map((j) => j.finished);
+    if (ending.length) await Promise.race([Promise.all(ending), new Promise((r) => setTimeout(r, 10_000))]);
+    for (const j of cloudJobs.jobs) liveCloudRuns.delete(j.id);
+    if (cloudHanded.length) (s.notes ??= []).push(`[Cloud job results given to you as the turn stopped, which may not have reached you:]\n${cloudHanded.splice(0).join("\n\n")}`);
+    // Results the agent did not get to (its reply ended, the turn stopped or failed): with the next message, however
+    // the turn ended — a finished job's report and what became of its changes are never dropped (Codex).
+    let carried = s.notes?.some((/** @type {unknown} */ n) => String(n).startsWith("[Cloud job results given to you as the turn stopped")) ? 1 : 0;
+    while (cloudJobs.results.length) {
+      const left = takeCloudNews(cloudJobs, String(s.ws));
+      if (!left) break;
+      carried++;
+      (s.notes ??= []).push(`[Cloud jobs that finished after your last words this turn — the person has not seen you say anything about them yet.]\n${left}`);
+    }
+    cloudJobs.closed = true;
+    if (carried) console.log(`  ${c.dim("the cloud jobs' results go with your next message")}`);
     // The keyboard first (an Enter in its last moments still queues), then
     // what was sent and not taken (the turn ended first, or failed): not
     // lost — it starts the next message, before what was typed after it.
@@ -21011,7 +21283,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     ["works", mode === "local" ? c.green(`on this computer · cloud jobs ${/** @type {any} */ (s).localOnly === true ? "off" : "on"}`) : c.cyan("in the cloud"), mode === "local" ? `on this computer · cloud jobs ${/** @type {any} */ (s).localOnly === true ? "off" : "on"}` : "in the cloud"],
     ["session", `${c.white(plainText(s.context))} ${c.grey(resumed ? "· continuing" : "· new")}`, `${plainText(s.context)} ${resumed ? "· continuing" : "· new"}`],
   ])}`);
-  const cloudNote = /** @type {any} */ (s).localOnly === true ? (repo ? " · the agent sends nothing to the cloud (/where)" : " · the agent sends nothing to the cloud; this folder has no git, which the cloud needs (/where offers to set it up)") : " · agents in the cloud may take heavy jobs, each asked first (/where)";
+  const cloudNote = /** @type {any} */ (s).localOnly === true ? (repo ? " · the agent sends nothing to the cloud (/where)" : " · the agent sends nothing to the cloud; this folder has no git, which the cloud needs (/where offers to set it up)") : ` · agents in the cloud may take heavy jobs, ${cloudAsks(s) ? "each asked first" : "started without a question"} (/where, /permissions cloud)`;
   console.log(`    ${c.grey(mode === "local" ? `${/** @type {any} */ (s).sandboxOff === true ? "the agent works in this folder on your foldrun plan, with no sandbox (--no-sandbox); it asks before every change and command" : "the agent works in this folder on your foldrun plan; its commands run in a sandbox (/permissions sandbox), and it asks before every change to a file"}${cloudNote}` : "each message takes your folder to the agent; you apply what comes back")}`);
   console.log(`    ${[["/help", "commands"], ["!cmd", "shell"], ["@", "+ Tab a file"], ["Ctrl-C", "stops a turn"]].map(([k, v]) => `${c.cyan(String(k))} ${c.grey(String(v))}`).join(c.grey("  ·  "))}\n`);
   const historyFile = path.join(credentialsDir(), "code-history");
@@ -21606,7 +21878,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const rows = m ? (await m.look().catch(() => ({ rows: [] }))).rows : [];
         return { mcp: rows.map((/** @type {any} */ r) => ({ name: String(r.name), state: String(r.state), source: String(r.source ?? "") })) };
       }
-      return { localOnly: s.localOnly === true, mode: s.mode, web: webPlace(s), webAsk: webAsks(s), sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
+      return { localOnly: s.localOnly === true, mode: s.mode, web: webPlace(s), webAsk: webAsks(s), cloudAsk: cloudAsks(s), sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
     };
     // Another sign-in under this session's profile name: stop, never go on as a different account showing the old one (Codex).
     {
@@ -22872,6 +23144,22 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         say(`${webAskSaid(s)}${kept ? " · kept for you, every session" : " · this session only: it could not be saved"}`);
         continue;
       }
+      // Whether starting cloud jobs is asked (FOL-382; owner, 26 Nov 2026): unasked by default, "ask" asks once per call.
+      const ca = /^cloud(?:\s+(ask|bypass))?$/i.exec(rest);
+      if (ca) {
+        const how = ca[1]?.toLowerCase();
+        if (!how) {
+          say(`${cloudAsks(s) ? "cloud jobs are asked about before they start" : "cloud jobs start without a question"} — /permissions cloud ask · bypass (a job's changes are asked before they go into the folder either way)`);
+          continue;
+        }
+        // This session holds the word even when it cannot be kept on disk (Codex).
+        s.cloudAsk = how === "ask";
+        // Asking first means asking from now on: an "always" given earlier this session no longer covers it (Codex).
+        if (how === "ask") s.localAllow?.kinds?.delete("cloud");
+        const kept = writeCodePrefs({ ...readCodePrefs(), cloudAsk: how === "ask" });
+        say(`${how === "ask" ? "cloud jobs are asked about before they start: one question for each call" : "cloud jobs start without a question (what is sent is still shown, and a job's changes are asked before they go into the folder)"}${kept ? " · kept for you, every session" : " · this session only: it could not be saved"}`);
+        continue;
+      }
       if (rest === "bypass") {
         s.bypass = true;
         s.strict = false;
@@ -22890,9 +23178,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         continue;
       }
       if (s.bypass === true) console.log(`  ${c.red("!")} ${c.white("bypass: nothing is asked this session, outside the sandbox too")} ${c.dim("— /permissions relaxed turns it off")}`);
+      console.log(cloudAsks(s) ? `  ${c.dim("·")} ${c.white("cloud jobs are asked about before they start")} ${c.dim("— /permissions cloud bypass starts them unasked")}` : `  ${c.green("✓")} ${c.white("cloud jobs start without a question")} ${c.dim("— a job's changes are still asked before they go into the folder; /permissions cloud ask asks first")}`);
       if (s.strict !== true) console.log(`  ${c.green("✓")} ${c.white(`commands that only look: ${READ_ONLY_SAID}`)} ${c.dim("— plain forms, inside this folder; /permissions strict asks for these too")}`);
       const rows = [];
-      for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "sending this folder to cloud jobs" : k === "cloud-changes" ? "putting a cloud job's changes into this folder" : String(k));
+      for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "starting cloud jobs" : k === "cloud-changes" ? "putting a cloud job's changes into this folder" : String(k));
       for (const cmd of s.localAllow?.commands ?? []) rows.push(`the command  ${clipLine(plainText(String(cmd)))}`);
       for (const tool of s.localAllow?.mcp?.values() ?? []) rows.push(`the MCP tool  ${plainText(String(tool))}`);
       if (s.uploadAgreed?.get(dir)) rows.push("sending this folder's files to the cloud (the ones you were shown)");
