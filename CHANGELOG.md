@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.4.0] — 2026-11-26
+
+- feat(code): the transcript tells apart what the person sent (❯/┃), koder's answer (◆) and the coding (│ gutter); scripts' output unchanged; whitespace-only edits shown (FOL-356) ([dea47e3](https://github.com/foldrun-io/foldrun-cli/commit/dea47e3))
+
+### deps
+
+- @foldrun/core 29.6.0 ([e8702a9](https://github.com/foldrun-io/foldrun-cli/commit/e8702a9))
+
 ## [33.3.1] — 2026-11-26
 
 ### deps
