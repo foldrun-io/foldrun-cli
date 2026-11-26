@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.7.1] — 2026-11-26
+
+- fix(code): a server started outside the sandbox says it lasts the turn, and a later turn is told why its job is gone (FOL-331) ([faccb25](https://github.com/foldrun-io/foldrun-cli/commit/faccb25))
+
 ## [33.7.0] — 2026-11-26
 
 ### New in the public API
