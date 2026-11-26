@@ -2855,7 +2855,7 @@ test("/update restart starts foldrun again on the same folder, place and convers
       t.send("\r");
     };
     await typeThenEnter("/update restart");
-    at = await t.until(/⏭ \/update restart · queued for after this turn/, at);
+    at = await t.until(/⏭ \/update restart · runs after this turn/, at);
     await typeThenEnter("/update restart");
     at = await t.until(/foldrun starts again after this turn already/, at);
     at = await t.until(/answer 1/, at, 30_000);

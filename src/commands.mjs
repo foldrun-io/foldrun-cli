@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, shapeOutput as browseOutput } from "./browser.mjs";
 import { CLOUD_WEB_DEFINITION, cloudBrowse, cloudBrowseBlock, cloudBrowseBody } from "./browse-cloud.mjs";
-import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu } from "./code-session.mjs";
+import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu, commandDuringTurn, COMMAND_LINE } from "./code-session.mjs";
 import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
@@ -9825,6 +9825,22 @@ function editParts(/** @type {string} */ name, /** @type {any} */ input, /** @ty
  * @param {AbortSignal | undefined} signal
  * @returns {Promise<string | null>}
  */
+/**
+ * An answer typed to the agent's question: never a /command (FOL-380, Codex) — one is not run here either, and is
+ * asked again; `\/` in front answers with a line that starts with /. null when the keyboard closed.
+ * @param {(text: string) => Promise<string | null | undefined>} prompt
+ * @param {string} label
+ */
+async function typedAnswer(prompt, label) {
+  for (;;) {
+    const typed = await prompt(label);
+    if (typed === null || typed === undefined) return null;
+    const t = typed.trim();
+    if (!COMMAND_LINE.test(t)) return t.startsWith("\\/") ? t.slice(1) : t;
+    console.log(`    ${c.dim("a /command is not an answer, and it is not run here — type it once the turn is over; \\/ in front answers with a line that starts with /")}`);
+  }
+}
+
 async function askAtTerminal(q, prompt, signal) {
   console.log(`  ${c.cyan("?")} ${c.bold(q.who ? `${plainText(q.who)} asks you:` : "the agent asks you:")}`);
   const width = Math.max(20, (process.stdout.columns || 80) - 6);
@@ -9847,12 +9863,10 @@ async function askAtTerminal(q, prompt, signal) {
     const v = await pickOne({ signal, title: "your answer", choices: [...q.options.map((o, i) => ({ v: String(i), name: o, note: "" })), { v: OWN, name: "type my own answer…", note: "" }] });
     if (v === OWN) {
       // A closed keyboard (or the question taken back) is no answer at all, not an empty one (Codex).
-      const typed = await prompt(`    ${c.grey("your answer:")} `);
-      answer = typed === null || typed === undefined ? null : typed.trim();
+      answer = await typedAnswer(prompt, `    ${c.grey("your answer:")} `);
     } else if (v !== null) answer = /** @type {string} */ (q.options[Number(v)]);
   } else {
-    const typed = await prompt(`    ${c.grey("your answer (Enter for none):")} `);
-    answer = typed === null || typed === undefined ? null : typed.trim();
+    answer = await typedAnswer(prompt, `    ${c.grey("your answer (Enter for none):")} `);
   }
   if (answer) console.log(`    ${c.dim(`answered: ${clipCells(plainText(answer.replace(/\s+/g, " ")), width - 10)}`)}`);
   return answer;
@@ -16448,6 +16462,14 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
       // /update now|restart with Enter during any turn, here or in the cloud: queued for after it, never words for the agent (FOL-261).
       else if ((k === "\r" || k === "\n") && queue && alone && isRestartLine(text)) {
         if (queue.add(text.trim().replace(/\s+/g, " ").toLowerCase())) text = "";
+      } else if ((k === "\r" || k === "\n") && alone && commandLine(text)) {
+        // A /command with Enter is never words for the agent (FOL-380): it runs beside the turn, or is held for
+        // after it — commandDuringTurn decides which. With no session to run it (none set), it is held. The
+        // queue's own commands act here and now, in the order typed with what is queued (Codex).
+        const t = text.trim();
+        if (queue && QUEUE_LINE.test(t)) queue.add(t) && (text = "");
+        else if (turnCommand?.(t) === "beside") text = "";
+        else if (queue?.add(t)) text = "";
       } else if ((k === "\r" || k === "\n") && onSend && alone && text.trim()) {
         const t = text.trim();
         text = "";
@@ -16504,6 +16526,23 @@ const isRestartLine = (/** @type {string} */ t) => /^\/update\s+(now|restart)\s*
 /** How many messages wait for the turn to end: the working line says so. */
 let queuedNow = 0;
 
+/** The queue's own commands, which act at once during a turn: /queue, /queue clear, /queue rm <n> — in any case,
+ *  as the dispatcher reads a command's name (Codex). */
+const QUEUE_LINE = /^\/queue(?:\s+(clear|rm\s+(\d+)))?\s*$/i;
+
+/** A line the prompt never keeps in its history: `/setup mcp add` is where a token gets pasted by mistake. */
+const MCP_ADD_LINE = /(?:^|\s)\/(?:setup\s+)?mcp\s+add\b/i;
+
+/** Whether what is typed is a /command, as the prompt's dispatcher reads one (FOL-380). */
+const commandLine = (/** @type {string} */ t) => commandDuringTurn(t, () => true) !== null;
+
+/**
+ * The open session's way to take a /command typed with Enter while a turn runs (FOL-380): runs it now when it
+ * is safe beside the turn and answers "beside", or answers "after" and the keys queue it. Null with no session.
+ * @type {((line: string) => "beside" | "after") | null}
+ */
+let turnCommand = null;
+
 /**
  * The session's queue of messages for after the turn, as the keys use it.
  * The same on this computer and in the cloud.
@@ -16513,7 +16552,7 @@ function queueOf(/** @type {any} */ s) {
   return {
     add(/** @type {string} */ t) {
       // The queue's own commands act now: queued behind what they are meant to cancel, they would be too late (Codex).
-      const own = /^\/queue(?:\s+(clear|rm\s+(\d+)))?\s*$/.exec(t);
+      const own = QUEUE_LINE.exec(t.trim().toLowerCase());
       if (own) {
         if (own[1] === "clear") console.log(`  ${c.grey("⏮")} ${c.dim(`dropped ${list.splice(0).length} queued`)}`);
         else if (own[2]) {
@@ -16539,7 +16578,8 @@ function queueOf(/** @type {any} */ s) {
       }
       list.push(t);
       queuedNow = list.length;
-      console.log(`  ${c.cyan("⏭")} ${c.grey(clipLine(t))} ${c.dim(`· queued for after this turn (${list.length}) — Tab on an empty line takes it back`)}`);
+      // A /command held for the end of the turn is said as one (FOL-380): it runs, it is not sent.
+      console.log(`  ${c.cyan("⏭")} ${c.grey(clipLine(t))} ${c.dim(`· ${commandLine(t) ? "runs after this turn" : "queued for after this turn"} (${list.length}) — Tab on an empty line takes it back`)}`);
       return true;
     },
     back() {
@@ -21377,7 +21417,11 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   }
   // What the first turn on this computer looks up once, read while the first message is typed (owner, 26 Nov 2026).
   warmCodeSession(s);
+  /** The /commands run beside a turn (FOL-380), in order: what comes next waits for them. */
+  /** @type {Promise<void>} */
+  let besideRuns = Promise.resolve();
   for (;;) {
+    await besideRuns;
     /** @type {string | null} */
     let fromQueue = null;
     if (Array.isArray(s.queue) && s.queue.length) {
@@ -21390,8 +21434,21 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         // waited is on the line again, to send, change or drop.
         const kept = s.queue.splice(0);
         queuedNow = 0;
-        s.typeAhead = [s.typeAhead, ...kept].filter(Boolean).join(" ");
-        console.log(`  ${c.amber("!")} ${c.grey(`the turn did not finish${s.mode === "cloud" ? " (or its patch was not put in the folder)" : ""}, so ${kept.length === 1 ? "the queued message was" : `the ${kept.length} queued messages were`} not sent — ${kept.length === 1 ? "it is" : "they are"} on your line`)}`);
+        // A held /command is never joined into words, where Enter would send it to the agent (FOL-380, Codex): alone
+        // it goes back on the line as it was; beside anything else, to ↑ (the prompt's history), each on its own.
+        // A draft that is a command takes no words after it either: "/goal" and a queued "clear" are not /goal clear (Codex).
+        const draftCmd = Boolean(s.typeAhead) && commandLine(s.typeAhead);
+        const cmds = draftCmd ? kept : kept.filter(commandLine);
+        const alone = cmds.length === 1 && kept.length === 1 && !s.typeAhead;
+        const words = alone ? kept : draftCmd ? [] : kept.filter((x) => !commandLine(x));
+        s.typeAhead = [s.typeAhead, ...words].filter(Boolean).join(" ");
+        if (words.length) console.log(`  ${c.amber("!")} ${c.grey(`the turn did not finish${s.mode === "cloud" ? " (or its patch was not put in the folder)" : ""}, so ${words.length === 1 ? `the queued ${alone ? "command was not run" : "message was not sent"}` : `the ${words.length} queued messages were not sent`} — ${words.length === 1 ? "it is" : "they are"} on your line`)}`);
+        if (!alone && cmds.length) {
+          // Never a line the prompt keeps out of its history (a pasted token in /setup mcp add, Codex).
+          const keep = cmds.filter((x) => !MCP_ADD_LINE.test(x));
+          prompt.history = [...[...keep].reverse(), ...prompt.history.filter((h) => !keep.includes(h))].slice(0, 500);
+          console.log(`  ${c.amber("!")} ${c.grey(`the turn did not finish, so ${cmds.length === 1 ? "this was" : `these ${cmds.length} were`} not run${keep.length ? ` — on an empty line ↑ (or Ctrl-R) brings ${keep.length === 1 ? "it" : "them"} back` : ""}: ${cmds.map((x) => (MCP_ADD_LINE.test(x) ? "/setup mcp add …" : clipLine(plainText(x)))).join(" · ")}`)}`);
+        }
       }
     }
     // Between turns (FOL-261): the daily look for a newer foldrun, and once a session, a version ready for /update restart.
@@ -21434,7 +21491,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     }
     // `/setup mcp add` is where a token gets pasted by mistake: refused there, and never kept (Codex).
     // Anywhere in the line: a stopped turn puts what was queued back joined into one (Codex).
-    const keepLine = !forMessages && !/(?:^|\s)\/(?:setup\s+)?mcp\s+add\b/i.test(line);
+    const keepLine = !forMessages && !MCP_ADD_LINE.test(line);
     if (keepLine) appendHistory(historyFile, line);
     if (keepLine) prompt.history = [line.replace(/\s*\n\s*/g, " "), ...prompt.history.filter((h) => h !== line)].slice(0, 500);
     if (line.startsWith("!")) {
@@ -21480,15 +21537,24 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         return 1;
       }
     }
+    /**
+     * A /command, run (FOL-380: one dispatcher for the prompt and for a command typed during a turn). Its body
+     * keeps the loop's indentation: a `continue` in it ends the command (the do … while (false) below), a number
+     * returned ends the session with it. `beside`: typed while a turn runs and run beside it (commandDuringTurn
+     * chose it) — no list is opened, the keyboard is the turn's.
+     * @returns {Promise<number | undefined>}
+     */
+    const runCommand = async (/** @type {string} */ line, beside = false) => {
+    do {
     // "/name rest": the name as typed, and what follows it.
-    const slash = /^(\/[\w:?-]*)(?:\s+([\s\S]*))?$/.exec(line);
+    const slash = COMMAND_LINE.exec(line);
     let name = slash ? /** @type {string} */ (slash[1]).toLowerCase() : "";
     let rest = slash ? (slash[2] ?? "").trim() : "";
     // Typed alone, a command with choices opens them as /model does (FOL-259); the choice is the line it stands for.
     // Both ends a terminal: a list drawn into a redirected output would wait for a key nobody can see the question for (Codex).
     // A list a choice of a list opens in turn: /setup's MCP servers (FOL-263).
     const listOf = (/** @type {string} */ n, /** @type {string} */ r) => (!r ? n : n === "/setup" && r.toLowerCase() === "mcp" ? "/setup mcp" : "");
-    if (slash && listOf(name, rest) && codeInteractive && process.stdin.isTTY && process.stdout.isTTY && typeof process.stdin.setRawMode === "function") {
+    if (slash && !beside && listOf(name, rest) && codeInteractive && process.stdin.isTTY && process.stdout.isTTY && typeof process.stdin.setRawMode === "function") {
       let dropped = false;
       let key = listOf(name, rest);
       // Three hops at most: /help's list, the list of the command picked there, and one a choice of that opens (FOL-263).
@@ -22799,8 +22865,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     }
     if (slash) {
       // The folder's own command, then its skill of that name.
-      const cmd = own.commands.find((x) => `/${x.name}` === name);
-      const skill = cmd ? null : own.skills.find((x) => `/${x.name}` === name);
+      // Never beside a turn: one would start a turn of its own (a name made a command while it waited, Codex).
+      const cmd = beside ? undefined : own.commands.find((x) => `/${x.name}` === name);
+      const skill = cmd || beside ? null : own.skills.find((x) => `/${x.name}` === name);
       const file = cmd ?? skill;
       if (file) {
         const read = readBody(dir, file.file);
@@ -22831,6 +22898,32 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       }
       const near = slashMatches(name, prompt.slash).slice(0, 3).map((x) => x.name);
       console.log(`  ${c.dim(`${plainText(name)} is not a command — ${near.length ? `did you mean ${near.join(", ")}? ` : ""}/help lists them (to send a message that starts with /, write \\/ first)`)}\n`);
+      continue;
+    }
+    } while (false);
+    return undefined;
+    };
+    // A /command typed with Enter while a turn runs (FOL-380): run now beside it, or held in the queue for after.
+    turnCommand = (t) => {
+      const how = commandDuringTurn(t, (n) => prompt.slash.some((x) => x.name === n)) === "beside" ? "beside" : "after";
+      if (how === "beside") {
+        console.log(`  ${c.violet("›")} ${c.grey(clipLine(t))} ${c.dim("· runs now, beside the turn")}`);
+        // One at a time, in the order typed; the next prompt waits for them (the loop's top).
+        besideRuns = besideRuns.then(() => {
+          // Another sign-in under this profile meanwhile: nothing runs as the other account (Codex); the loop's
+          // own check ends the session once the turn is over.
+          if (accountChanged(/** @type {any} */ (s).account)) {
+            console.log(`  ${c.red("✗")} ${c.dim(`${plainText(t)} was not run — this profile is signed in as another account now`)}\n`);
+            return undefined;
+          }
+          return runCommand(t, true);
+        }).then(() => undefined, (err) => console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`));
+      }
+      return how;
+    };
+    if (COMMAND_LINE.test(line)) {
+      const code = await runCommand(line);
+      if (code !== undefined) return code;
       continue;
     }
     // \/etc/hosts … : a message that starts with a slash.
