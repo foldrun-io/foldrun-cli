@@ -4236,6 +4236,9 @@ test("the local agent browses on this computer with the cloud's web tool, asked 
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/sessions/code-w267/messages`]: () => ({ messages: [] }),
+    // The agent's file grants the web (FOL-383: browse only for an agent that has it).
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\ntools: [web]\n---\nYou code.\n" } : { content: "" }),
+    "GET /v1/account/agents-md": () => ({ content: "" }),
     "GET /v1/me": () => ({ account: "acme" }),
     "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "POST /v1/keys": (b) => {
@@ -4299,7 +4302,7 @@ test("the agent's web.browse block holds on this computer as in the cloud: its d
     [`GET ${WS}/sessions/code-wb267/messages`]: () => ({ messages: [] }),
     [`GET ${WS}/source`]: (_b, q) =>
       q.get("path") === "agents/coder/agent.md"
-        ? { content: "---\nname: coder\nweb:\n  browse:\n    device: iPhone 15\n    deny: [eval]\n    headless: false\n---\nYou code.\n", sha256: "x" }
+        ? { content: "---\nname: coder\ntools: [web]\nweb:\n  browse:\n    device: iPhone 15\n    deny: [eval]\n    headless: false\n---\nYou code.\n", sha256: "x" }
         : q.get("path") === "AGENTS.md" ? { content: "---\nweb:\n  browse:\n    locale: fr-FR\n---\n", sha256: "y" } : { files: [] },
     "GET /v1/account/agents-md": () => ({ content: "", sha256: null, exists: false }),
     "GET /v1/me": () => ({ account: "acme" }),
@@ -5316,7 +5319,7 @@ test("the web in the cloud by default (FOL-383, FOL-267): the web tool browses t
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/sessions/code-b267/messages`]: () => ({ messages: [] }),
-    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\nweb:\n  browse:\n    allowed_domains: [\"*.shop.example\"]\n---\nYou code.\n" } : { content: "" }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\ntools: [web]\nweb:\n  browse:\n    allowed_domains: [\"*.shop.example\"]\n---\nYou code.\n" } : { content: "" }),
     "GET /v1/account/agents-md": () => ({ content: "" }),
     "GET /v1/me": () => ({ account: "acme" }),
     "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
@@ -5460,6 +5463,51 @@ test("/where web here (FOL-383): search and fetch run from this computer under t
     await t.until(/Asked first\./, at, 30_000);
     t.send("/permissions web bypass\r");
     await t.until(/web calls run without asking/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("no web for an agent its file does not grant it (FOL-383): no browse tool, no search or fetch, in the cloud or here", async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-n383/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\n---\nYou code.\n" } : { content: "" }),
+    "GET /v1/account/agents-md": () => ({ content: "" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return sse([{ type: "text", text: `Answer ${asked.length}.` }]);
+    },
+  }, { headers: { "foldrun-server-tools": "web_search_20250305,web_fetch_20250910" } });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-n383", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("hello\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Answer 1\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at, 30_000);
+    t.send("/where web here\r");
+    at = await t.until(/The web on this computer/, at);
+    t.send("again\r");
+    await t.until(/Answer 2\./, at, 30_000);
+    for (const req of asked) {
+      const names = (req.tools ?? []).map((x: any) => x.name);
+      for (const n of ["web", "web_search", "web_fetch"]) assert.ok(!names.includes(n), `${n} not offered without tools: [web]`);
+    }
     t.send("/quit\r");
     await t.done;
   } finally {

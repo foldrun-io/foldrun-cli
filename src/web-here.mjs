@@ -63,14 +63,26 @@ export const FETCH_HERE_DEFINITION = {
 export function privateAddress(/** @type {string} */ ip) {
   const v = net.isIP(ip);
   if (v === 4) {
-    const [a, b] = ip.split(".").map(Number);
+    const [a, b, c] = ip.split(".").map(Number);
+    // 0/8, 10/8, 127/8, 224/3 and up, 100.64/10, 169.254/16, 172.16/12, 192.168/16, 192.0.0/24, 192.0.2/24,
+    // 198.18/15, 198.51.100/24, 203.0.113/24 — each at its own length, so public neighbours pass (Codex).
     return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19));
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+      (a === 198 && (b === 18 || b === 19)) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113);
   }
   if (v === 6) {
     const x = ip.toLowerCase();
     const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(x);
     if (mapped) return privateAddress(/** @type {string} */ (mapped[1]));
+    // The same, as URL writes it: ::ffff:7f00:1 is 127.0.0.1 (Codex).
+    const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(x);
+    if (hex) {
+      const hi = parseInt(/** @type {string} */ (hex[1]), 16);
+      const lo = parseInt(/** @type {string} */ (hex[2]), 16);
+      return privateAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+    // IPv4-compatible (::a.b.c.d / ::7f00:1) and the old site-local range.
+    if (/^::[0-9a-f.:]+$/.test(x) || /^fe[c-f]/.test(x)) return true;
     return x === "::" || x === "::1" || /^f[cd]/.test(x) || /^fe[89ab]/.test(x) || /^ff/.test(x) || /^64:ff9b:/.test(x) || /^2002:/.test(x);
   }
   return true;
@@ -122,7 +134,12 @@ export async function requestHere(url, o = {}) {
         const loc = r.headers.location;
         if (r.statusCode && r.statusCode >= 300 && r.statusCode < 400 && loc) {
           r.resume();
-          return resolve({ redirect: new URL(loc, u).toString(), status: r.statusCode });
+          // A Location that does not parse is the page's error, never a crash of koder (Codex).
+          try {
+            return resolve({ redirect: new URL(loc, u).toString(), status: r.statusCode });
+          } catch {
+            return reject(new Error(`a redirect to an address that does not read: ${String(loc).slice(0, 200)}`));
+          }
         }
         /** @type {Buffer[]} */
         const parts = [];
