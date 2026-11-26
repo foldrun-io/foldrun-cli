@@ -1539,8 +1539,9 @@ On a cluster, a browsing step's browser is chosen in this order
 | anything else | the account's browser pods, below |
 
 Locally — the CLI, a compose install — Chromium launches inside the step,
-and always did. A `foldrun code` session on your computer browses in a visible
-Google Chrome window instead, with the same tool and arguments
+and always did. A `foldrun code` session on your computer browses in a cloud browser by
+default, or with `/where web here` in a visible Google Chrome window, with the
+same tool and arguments
 ([browser](browser#in-foldrun-code-on-this-computer) has what holds where). Otherwise, on a cluster, it runs in **the account's own browser pods**:
 Playwright servers on the runner image (Playwright pinned to an exact
 version, 1.63.0, in `run-container.ts` — the numbered snapshot needs 1.59

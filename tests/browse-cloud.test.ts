@@ -1,4 +1,4 @@
-// /where browser cloud (FOL-267): the web tool's browse through the gateway's POST /v1/foldrun/browse.
+// The web in the cloud (FOL-383 default, FOL-267): the web tool's browse through the gateway's POST /v1/foldrun/browse.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

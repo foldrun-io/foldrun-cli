@@ -15,7 +15,7 @@ import { configDir } from "./credentials.mjs";
 /** The commands, in the groups /help shows (FOL-263; owner, 24 Nov 2026: "i think we need to orgnize them"). */
 export const CODE_GROUPS = [
   { group: "Where & how", commands: [
-    ["/where [local|local+cloud|cloud|send <task>|browser here|cloud]", "where this session works (and browser here|cloud: where the agent browses the web): this computer only (the agent sends nothing to the cloud), this computer with agents in the cloud, or the cloud (on a copy; you apply what comes back) — send <task> sends one task to the cloud and you stay where you are"],
+    ["/where [local|local+cloud|cloud|send <task>|web here|cloud]", "where this session works (and web here|cloud: where the agent's web search, fetch and browse run — the cloud by default): this computer only (the agent sends nothing to the cloud), this computer with agents in the cloud, or the cloud (on a copy; you apply what comes back) — send <task> sends one task to the cloud and you stay where you are"],
     ["/model [<model>|effort <level>|thinking on|off]", "the model and how it thinks: Default, Max, Fast or any model behind foldrun's proxy (/model deepseek/deepseek-chat sets it straight away); effort: how hard it thinks — low, medium, high, xhigh, max, or default (the model's own), the effort: line of the agent's file, here and in the cloud; thinking on|off: a summary of its thinking above each reply, dimmed (off by default, remembered for you on this computer; /export --thinking writes it too)"],
   ] },
   { group: "Give it a job", commands: [
@@ -25,7 +25,7 @@ export const CODE_GROUPS = [
     ["/init", "have the agent write (or bring up to date) this folder's AGENTS.md: what it is, how to build, test and run it"],
   ] },
   { group: "What it can use", commands: [
-    ["/permissions [strict|relaxed|sandbox …|resources …|rm <n>|reset]", "what the agent may do without asking (and resources: the CPU and memory this computer allows foldrun): strict asks for every command, relaxed lets the ones that only look run; sandbox [on|off|allow <site>|deny <site>]: the walls its commands run in on this computer; the rules kept for this folder (rm <n>; reset asks everything again)"],
+    ["/permissions [strict|relaxed|web ask|bypass|sandbox …|resources …|rm <n>|reset]", "what the agent may do without asking (web ask|bypass: whether its search, fetch and cloud browse are asked first — not by default) (and resources: the CPU and memory this computer allows foldrun): strict asks for every command, relaxed lets the ones that only look run; sandbox [on|off|allow <site>|deny <site>]: the walls its commands run in on this computer; the rules kept for this folder (rm <n>; reset asks everything again)"],
     ["/setup [instructions|skills|agents|mcp …|dirs [path]|check]", "what the agent reads and reaches here — instructions: the files it reads (AGENTS.md, CLAUDE.md); skills: the ones this folder holds (/<skill> [what to do] uses one); agents: the sub-agents it can hand a job to, and your project's agents a cloud job can run as; mcp [on|off|tools|add|rm …]: MCP servers, each started only with your yes, every tool call asked; dirs [path]: another folder it may read without asking; check: what a session needs (node, git, the folder, your sign-in, the project and its agent)"],
   ] },
   { group: "Changes", commands: [
@@ -89,7 +89,7 @@ export const COMMAND_LINE = /^(\/[\w:?-]*)(?:\s+([\s\S]*))?$/;
  * - "beside": it runs now, beside the turn. Only what reads and shows (/help, /status, /sessions but send, /queue,
  *   /todos and /goal alone), or a setting of your own screen (/status
  *   line|tips|jobs). Nothing here asks a question, opens a list, changes what the running turn reads (the
- *   approval for a web call reads /where browser: it waits), or runs git over the folder — a blocked event loop
+ *   approval for a web call reads /where web: it waits), or runs git over the folder — a blocked event loop
  *   starves the sandbox's proxy, so /diff, /where and /status context wait (Codex).
  * - "after": held in the session's queue and run as typed once the turn has finished, like a queued message
  *   (Tab on an empty line takes it back, /queue rm|clear drops it; a turn that stops or fails puts it on the line).
@@ -232,12 +232,12 @@ export function commandMenu(name, st) {
       const tick = `/where ${WHERE_WORD[now]}`;
       return {
         title: "Where should this session work?",
-        subtitle: "/where local · local+cloud · cloud · send <task> · browser here|cloud types it straight away",
+        subtitle: "/where local · local+cloud · cloud · send <task> · web here|cloud types it straight away",
         choices: [
           ...whereChoices(st.repo !== false).map((x) => ({ v: `/where ${WHERE_WORD[x.v]}`, name: x.name, note: x.note })),
-          st.browser === "cloud"
-            ? { v: "/where browser here", name: "Browser on this computer", note: "web browse in your Chrome window (now: in the cloud)" }
-            : { v: "/where browser cloud", name: "Browser in the cloud", note: "web browse in a fresh cloud browser per call, paid per call" },
+          st.web === "here"
+            ? { v: "/where web cloud", name: "The web in the cloud", note: "search and fetch on foldrun's servers, browse in a fresh cloud browser (the default)" }
+            : { v: "/where web here", name: "The web on this computer", note: "search and fetch from your connection, browse in your Chrome window (now: in the cloud)" },
           { v: "/where send ", name: "Send one task to the cloud…", note: st.repo !== false ? "it runs on a copy there; you stay where you are" : "needs git — offered when you pick it", ask: "the task" },
         ],
         tick,
@@ -247,7 +247,7 @@ export function commandMenu(name, st) {
     case "/permissions":
       return {
         title: "What the agent may do without asking",
-        subtitle: "/permissions strict · relaxed · bypass · sandbox on|off · resources · rm <n> · reset types it straight away",
+        subtitle: "/permissions strict · relaxed · bypass · web ask|bypass · sandbox on|off · resources · rm <n> · reset types it straight away",
         choices: [
           { v: "/permissions ", name: "Show them", note: "what is allowed ahead, and the rules kept for this folder" },
           { v: "/permissions relaxed", name: "Relaxed", note: "commands that only look are not asked" },
@@ -263,6 +263,10 @@ export function commandMenu(name, st) {
           { v: "/permissions resources", name: "CPU and memory", note: "what this computer allows foldrun, and what is in force" },
           { v: "/permissions sandbox allow ", name: "Allow a site…", note: "for this session", ask: "the site (example.com)" },
           { v: "/permissions sandbox deny ", name: "Take a site away…", note: "for this session", ask: "the site" },
+          // Web calls (FOL-383; owner, 26 Nov 2026): unasked by default, asked on request.
+          st.webAsk === true
+            ? { v: "/permissions web bypass", name: "Web calls without asking", note: "search, fetch and cloud browse run unasked (the default)" }
+            : { v: "/permissions web ask", name: "Ask before web calls", note: st.web === "here" ? "each search, fetch and browse is asked first" : "a cloud browse is asked first; search and fetch in the cloud cannot be (/where web here)" },
         ],
         tick: st.bypass === true ? "/permissions bypass" : st.strict === true ? "/permissions strict" : "/permissions relaxed",
         start: "/permissions ",
@@ -1437,7 +1441,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, resources?: string, files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
@@ -1457,7 +1461,7 @@ function filesPref(v) {
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
@@ -1467,7 +1471,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;
