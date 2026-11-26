@@ -19148,7 +19148,7 @@ async function codeLocalTurn(s, text) {
         if (child) console.log(`    ${c.grey(`the sub-agent ${plainText(child)} asks:`)}`);
         if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
         if (outsideLive && !outside) console.log(`    ${c.amber("a server started outside the sandbox is running — it can run what changes here as you, so this is asked")}`);
-        if (outside && input.run_in_background === true) console.log(`    ${c.amber("left running as you — while it runs, the agent's commands and file changes in this folder are asked too, since the server may run them outside the sandbox")}`);
+        if (outside && input.run_in_background === true) console.log(`    ${c.amber("runs as you until this turn ends, not after — while it runs, the agent's commands and file changes in this folder are asked too, since the server may run them outside the sandbox")}`);
         const width = Math.max(20, (process.stdout.columns || 80) - 10);
         if (name === MCP_START) {
           // A sub-agent's own MCP server (FOL-253): the yes is to this server for this sub-agent, as it is now.
@@ -19551,7 +19551,7 @@ async function codeLocalTurn(s, text) {
     delete own.ENV;
     const engine = await import("@foldrun/core/engine-loop");
     // Jobs started outside the sandbox (FOL-296: a dev server the agent then opens in the browser): their own
-    // list, ids o1, o2…, so Bash's job calls — unasked inside the walls — never reach one. They end with the turn.
+    // list, ids o1, o2…, so Bash's job calls — unasked inside the walls — never reach one. They end with the turn: the engine loop's clean-up ends every group a turn started (FOL-331), so what the person is told says so.
     const outsideJobs = new Map();
     // Bash's own background jobs, kept here so the working line can show them (FOL-343); an older core keeps its own.
     const sandboxJobs = new Map();
@@ -19566,6 +19566,8 @@ async function codeLocalTurn(s, text) {
       if (input?.job === undefined && input?.run_in_background !== true) {
         return runOutside(String(input?.command ?? ""), { dir: s.dir, env: own, signal: ctx.signal, timeout: input?.timeout });
       }
+      // A job of an earlier turn ended with it (the loop's clean-up ends every group a turn started): said so, not as a step's loss (FOL-331).
+      if (input?.job !== undefined && !outsideJobs.has(String(input.job))) return { text: `no background job ${String(input.job)} — a job started outside the sandbox ends with the turn that started it${outsideJobs.size ? ` (there are: ${[...outsideJobs.keys()].join(", ")})` : ""}; start it again in this turn if it is still needed`, isError: true };
       const Bash = /** @type {any} */ (engine).ENGINE_TOOLS?.Bash;
       if (!Bash) return { text: "a command left running outside the sandbox needs a newer foldrun — `foldrun update`", isError: true };
       if (input.run_in_background === true && !String(input.reason ?? "").trim()) return { text: "bash_outside needs reason: why it cannot run inside the sandbox", isError: true };
