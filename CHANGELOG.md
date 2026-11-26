@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.7.2] — 2026-11-26
+
+- fix(code): /where web says why search and fetch were not offered; a failed gateway ask is made again at the next message (FOL-332) ([feb918d](https://github.com/foldrun-io/foldrun-cli/commit/feb918d))
+
 ## [33.7.1] — 2026-11-26
 
 - fix(code): a server started outside the sandbox says it lasts the turn, and a later turn is told why its job is gone (FOL-331) ([faccb25](https://github.com/foldrun-io/foldrun-cli/commit/faccb25))
