@@ -1785,6 +1785,103 @@ test("--local, cloud_jobs with /permissions cloud ask: starting is asked (no sen
   }
 });
 
+test("--local, cloud_jobs in a folder of repositories (FOL-351): no path is refused with their names, .. is refused, path: repo-b sends repo-b alone and its patch goes into repo-b, f takes it file by file there, /undo takes it back there", { skip: hasPty ? false : "needs python3's pty", timeout: 90_000 }, async () => {
+  // The session's folder is no repository; it holds two.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-code-repos-"));
+  for (const [name, file] of [["repo-a", "only-a.txt"], ["repo-b", "a.txt"]] as const) {
+    const d = path.join(root, name);
+    fs.mkdirSync(d);
+    const git = (...a: string[]) => execFileSync("git", ["-C", d, "-c", "user.email=t@t", "-c", "user.name=t", ...a]);
+    git("init", "-q");
+    fs.writeFileSync(path.join(d, file), "a\n");
+    git("add", "-A");
+    git("commit", "-qm", "base");
+  }
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  // Two files, so the per-file view is offered: paths relative to repo-b, as the platform makes them from its copy.
+  const TWO = PATCH + "diff --git a/two.txt b/two.txt\nnew file mode 100644\nindex 0000000..f719efd\n--- /dev/null\n+++ b/two.txt\n@@ -0,0 +1 @@\n+two\n";
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "c1", name: "cloud_jobs", input: { tasks: ["add b"] } }]),
+    () => sse([{ type: "tool_use", id: "c2", name: "cloud_jobs", input: { tasks: ["add b"], path: "../x" } }]),
+    () => sse([{ type: "tool_use", id: "c3", name: "cloud_jobs", input: { tasks: ["add b to a.txt"], path: "repo-b" } }]),
+    () => sse([{ type: "tool_use", id: "c4", name: "cloud_jobs", input: { wait: true } }]),
+    () => sse([{ type: "text", text: "The cloud agent added b in repo-b." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: "---\nname: coder\n---\nYou code.\n", sha256: "x" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/keys": () => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: 100, walletUsd: 20 }),
+    [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false }),
+    [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN, snapshot: ID }),
+    [`GET ${WS}/runs/${RUN}`]: () => ({
+      id: RUN, flow: "adhoc:coder", status: "completed", snapshot: { id: ID },
+      steps: [{ agent: "coder", group: 1, status: "completed", attempts: 1, costUsd: 0.07, result: "Added b." }],
+    }),
+    // The patch as the platform makes it: paths relative to the repository it was sent.
+    [`GET ${WS}/runs/${RUN}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "changed", modified: ["a.txt"], added: ["two.txt"] }), "application/json") : raw(TWO, "text/x-diff")),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return turns[asked.length - 1]!();
+    },
+  });
+  try {
+    const t = onTerminal(["code", root, "--local", "--engine", "foldrun", "--to", "desk", "--url", s.url, "--token", "k"], home);
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send("use the cloud on repo-b\r");
+      at = await t.until(/make it\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/send it\? \[y\]es/, at);
+      t.send("d\r"); // every path that goes: repo-b's, and nothing of repo-a
+      at = await t.until(/send it\? \[y\]es/, at);
+      const shown = t.out();
+      assert.match(shown, /1 cloud job: sends a copy of the repository repo-b in this folder to desk/);
+      assert.match(shown, /repository repo-b in this folder\)/, "the upload preview says what goes");
+      assert.match(shown, /a\.txt/);
+      assert.doesNotMatch(shown, /only-a\.txt/, "nothing of repo-a goes");
+      t.send("y\r");
+      at = await t.until(/sent the repository repo-b to desk[\s\S]*cloud job #1 · run-sess-1/, at);
+      at = await t.until(/✓ cloud job #1 · completed[\s\S]*changes, into the repository repo-b in this folder \(paths below are in it\):[\s\S]*a\.txt\s+\|\s+1 \+[\s\S]*allow\?/, at);
+      assert.equal(fs.readFileSync(path.join(root, "repo-b", "a.txt"), "utf8"), "a\n", "nothing applied before the yes");
+      t.send("f\r"); // file by file, read from repo-b
+      at = await t.until(/1\/2 a\.txt\s+\|\s+1 \+[^\n]*take it\?/, at);
+      t.send("y\r");
+      at = await t.until(/2\/2 two\.txt[^\n]*take it\?/, at);
+      t.send("n\r");
+      at = await t.until(/apply these 1 of 2 files\? \[y\/N\]/, at);
+      t.send("y\r");
+      at = await t.until(/The cloud agent added b in repo-b\.[\s\S]*✓ done/, at);
+      at = await t.until(/\w ❯ /, at);
+      assert.equal(fs.readFileSync(path.join(root, "repo-b", "a.txt"), "utf8"), "a\nb\n", "applied inside repo-b");
+      assert.equal(fs.existsSync(path.join(root, "a.txt")), false, "never at the folder's top");
+      assert.equal(fs.existsSync(path.join(root, "repo-b", "two.txt")), false, "the file said no to stays out");
+      // /undo takes it back in repo-b.
+      at = await alone(t, "/undo", at);
+      at = await t.until(/take back the last change/, at);
+      t.send("y\r");
+      at = await t.until(/taken back/, at);
+      assert.equal(fs.readFileSync(path.join(root, "repo-b", "a.txt"), "utf8"), "a\n");
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      assert.equal(await t.done, 0);
+    } finally {
+      t.child.kill();
+    }
+    const said = (k: number) => JSON.stringify(asked[k].messages.at(-1));
+    assert.match(said(1), /is not a git repository, but it holds 2: \\"repo-a\\", \\"repo-b\\"\. Call cloud_jobs again with path/);
+    assert.match(said(2), /climbs out with/);
+    assert.match(said(3), /Started 1 cloud job on a copy of this folder[\s\S]*#1 run run-sess-1/);
+    assert.match(said(4), /partly put into the folder \(1 of 2 files\)[\s\S]*It changed repo-b\/a\.txt, repo-b\/two\.txt\.[\s\S]*repo-b\/a\.txt[\s\S]*repo-b\/two\.txt/);
+    assert.equal(s.seen.filter((x: any) => x.url === `${WS}/snapshots`).length, 1, "one snapshot, for the call with path");
+    assert.equal(s.seen.filter((x: any) => x.method === "POST" && x.url === `${WS}/agents/coder/run`).length, 1);
+  } finally {
+    s.close();
+  }
+});
+
 // The CLI runs the published @foldrun/core: this turns on by itself once
 // the CLI's range reaches the core release that has endOf (FOL-211).
 const coreEndsHonestly = typeof ((await import("@foldrun/core/engine-loop")) as Record<string, unknown>).endOf === "function";
