@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.6.0] — 2026-11-26
+
+- feat(code): cloud jobs take many tasks on both paths, start at once and return as each finishes; the platform's room is the limit (FOL-382) ([ad0a8c7](https://github.com/foldrun-io/foldrun-cli/commit/ad0a8c7))
+
 ## [33.5.0] — 2026-11-26
 
 - perf(code): FOL-383 — the local web module and the frontmatter reader load only when the agent has web (FOL-265 ceilings) ([303e51d](https://github.com/foldrun-io/foldrun-cli/commit/303e51d))
