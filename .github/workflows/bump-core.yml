@@ -106,7 +106,12 @@ jobs:
             ' "$V")"
             [ "$cmp" != "not-newer" ] || { echo "main already asks for ^$V or later — nothing to do"; exit 0; }
             MAJOR="$([ "$cmp" = "major" ] && echo true || echo false)"
-            npm install "@foldrun/core@^$V" --save --ignore-scripts
+            # Exactly $V, never a range (26 Nov 2026): with a range, every
+            # installed CLI resolved a core the minute it was listed on npm,
+            # and npm serves the file a few minutes after the listing — so a
+            # fresh `npm i -g foldrun` failed with a 404 after each core
+            # release. Pinned, a CLI takes a new core only in its own release.
+            npm install "@foldrun/core@$V" --save --save-exact --ignore-scripts
             # From the file itself: core's exports map has no ./package.json.
             got="$(node -p "require('./node_modules/@foldrun/core/package.json').version")"
             [ "$got" = "$V" ] || { echo "resolved @foldrun/core $got, not $V"; exit 1; }
@@ -114,13 +119,13 @@ jobs:
             npm test
             git add package.json package-lock.json
             if [ "$MAJOR" = "true" ]; then
-              git commit -q -m "deps!: @foldrun/core ^$V" -m "BREAKING CHANGE: the CLI now runs on @foldrun/core $V, a new major."
+              git commit -q -m "deps!: @foldrun/core $V" -m "BREAKING CHANGE: the CLI now runs on @foldrun/core $V, a new major."
             else
-              git commit -q -m "deps: @foldrun/core ^$V"
+              git commit -q -m "deps: @foldrun/core $V"
             fi
             # No laptop hooks here: the checks are the lines above.
             if git -c core.hooksPath=/dev/null push origin HEAD:main; then
-              echo "pushed deps: @foldrun/core ^$V (try $try)"; exit 0
+              echo "pushed deps: @foldrun/core $V (try $try)"; exit 0
             fi
             echo "main moved while this tested — starting over from it"
           done

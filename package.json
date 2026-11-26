@@ -12,7 +12,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@foldrun/core": "^29.2.2",
+    "@foldrun/core": "29.4.0",
     "gray-matter": "^4.0.3"
   },
   "files": [
