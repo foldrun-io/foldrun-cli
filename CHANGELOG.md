@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.1.1] — 2026-11-26
+
+### docs
+
+- sync from foldrun-docs (FOL-397's /permissions page) — dev's gate failed on the stale copy ([96f96e8](https://github.com/foldrun-io/foldrun-cli/commit/96f96e8))
+
 ## [34.1.0] — 2026-11-26
 
 - feat(code): cloud_jobs path — a job on one repository inside a folder of repositories; identity re-checked before pack, apply and /undo (FOL-351) ([9f2a96e](https://github.com/foldrun-io/foldrun-cli/commit/9f2a96e))
