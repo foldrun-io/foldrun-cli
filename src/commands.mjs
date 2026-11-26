@@ -10065,17 +10065,27 @@ async function localBrowseDefaults(s) {
 }
 
 /**
- * What this computer allows foldrun to use (FOL-240): FOLDRUN_CODE_RESOURCES, else the answer kept for this computer,
- * else — at a terminal, once per computer — one question; a script with neither runs as before, with no limit.
- * null on a core without the module. Throws on a FOLDRUN_CODE_RESOURCES it cannot read.
- * @param {boolean} asking
+ * What this computer allows foldrun to use (FOL-240): --resources / --no-resources (this session only), else
+ * FOLDRUN_CODE_RESOURCES, else the answer kept for this computer, else — at a terminal, once per computer — one
+ * question; a script with none of them runs as before, with no limit. null on a core without the module. Throws on a
+ * flag or FOLDRUN_CODE_RESOURCES it cannot read (FOL-330: a flag that did nothing said nothing).
+ * @param {boolean} asking @param {Record<string, any>} flags
  */
-async function computerBudget(asking) {
+async function computerBudget(asking, flags = {}) {
   // Named at run time: a core from before FOL-240 has no such module, and the session then runs as before.
   const spec = "@foldrun/core/local-resources";
   const R = /** @type {any} */ (await import(spec).catch(() => null));
   if (!R?.detectComputer) return null;
   const computer = R.detectComputer();
+  const said = flags.resources;
+  const none = flags["no-resources"] === true;
+  if (none && said !== undefined) throw new Error("--resources and --no-resources together — one or the other");
+  if (none || said !== undefined) {
+    if (typeof said !== "string" && !none) throw new Error("--resources needs a value: cpu=2,memory=4Gi, balanced or off");
+    const got = R.parseBudget(none ? "off" : said, computer);
+    if ("problem" in got) throw new Error(`--resources: ${got.problem}`);
+    return { R, computer, budget: got.budget, source: none ? "--no-resources" : "--resources" };
+  }
   const env = process.env.FOLDRUN_CODE_RESOURCES;
   if (typeof env === "string" && env.trim()) {
     const got = R.parseBudget(env, computer);
@@ -20911,7 +20921,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
   }
   if (asking && flags.local !== true && !onlyHere && flags.cloud !== true && !(flags.continue === true && chosen?.mode)) console.log(`  ${c.dim("works")}  ${mode === "cloud" ? c.cyan("in the cloud") : localOnly ? c.green("on this computer only") : c.green("on this computer, agents in the cloud")}\n`);
   // CPU and memory on this computer (FOL-240): what it allows foldrun, asked once per computer at a terminal.
-  const resources = mode === "local" ? await computerBudget(asking) : null;
+  const resources = mode === "local" ? await computerBudget(asking, flags) : null;
   const engine = "foldrun";
   const guess = (() => {
     try {
@@ -21481,7 +21491,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     // Work here draws on this computer's budget (FOL-240), however the session came to work here — a start, /where,
     // /resume, a one-off turn: taken up, and recorded, before the turn (Codex).
     if (where === "local") {
-      if (!(/** @type {any} */ (s).resources)) /** @type {any} */ (s).resources = await computerBudget(Boolean(process.stdin.isTTY && process.stdout.isTTY) && typeof flags.task !== "string");
+      if (!(/** @type {any} */ (s).resources)) /** @type {any} */ (s).resources = await computerBudget(Boolean(process.stdin.isTTY && process.stdout.isTTY) && typeof flags.task !== "string", flags);
       if (!(/** @type {any} */ (s).releaseHold)) holdNow();
       if (!(await resourceGate())) return;
     }
@@ -22985,7 +22995,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       // as a start here would refuse it (Codex, FOL-240).
       if (moving && to === "local" && !s.resources) {
         try {
-          s.resources = await computerBudget(Boolean(process.stdin.isTTY && process.stdout.isTTY));
+          s.resources = await computerBudget(Boolean(process.stdin.isTTY && process.stdout.isTTY), flags);
         } catch (err) {
           if (jobsBefore) s.localOnly = true;
           else delete s.localOnly;
@@ -23058,9 +23068,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         continue;
       }
       if (m[3]?.toLowerCase() === "save") {
-        // The environment decides while it is set: a kept answer would not apply, so none is written (Codex).
-        if (r.source === "FOLDRUN_CODE_RESOURCES") {
-          say("not kept — FOLDRUN_CODE_RESOURCES sets this computer's budget for this session; unset it to keep one");
+        // The environment or a flag decides while it is set: a kept answer would not apply, so none is written (Codex).
+        if (r.source === "FOLDRUN_CODE_RESOURCES" || r.source.startsWith("--")) {
+          say(`not kept — ${r.source} sets this computer's budget for this session; ${r.source.startsWith("--") ? "start without it" : "unset it"} to keep one`);
           continue;
         }
         const c0 = /** @type {any} */ (s).resCeiling ?? {};
