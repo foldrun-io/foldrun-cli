@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.3.1] — 2026-11-26
+
+### deps
+
+- @foldrun/core 29.5.1 ([fbdae37](https://github.com/foldrun-io/foldrun-cli/commit/fbdae37))
+
 ## [33.3.0] — 2026-11-26
 
 - feat(code): the running-turn screen drawn in place, roomier, setup reads in parallel (FOL-342); background jobs under the working line, /status jobs on|off (FOL-343) ([e714991](https://github.com/foldrun-io/foldrun-cli/commit/e714991))
