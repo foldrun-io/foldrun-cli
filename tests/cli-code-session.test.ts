@@ -3103,7 +3103,7 @@ test("no git needed on this computer (FOL-274): a folder without git starts, the
     at = await t.until(/1\. This computer only\s+the agent sends nothing to th[^\n]*✔[\s\S]*3\. The cloud\s+needs git[\s\S]*Esc to cancel/, at);
     await new Promise((r) => setTimeout(r, 100));
     t.send("\r");
-    at = await t.until(/This computer only; browser on this computer — \/where local · local\+cloud · cloud · send <task> · browser here\|cloud/, at);
+    at = await t.until(/This computer only; the web on this computer — \/where local · local\+cloud · cloud · send <task> · web here\|cloud/, at);
     t.send("/quit\r");
     assert.equal(await t.done, 0);
   } finally {
@@ -3787,7 +3787,7 @@ test("three ways to work (FOL-258, FOL-263): /where local takes the agent's clou
     at = await t.until(/\w ❯ /, at);
     // /where alone: the three ways, where it works now ticked; Enter on it says so and changes nothing.
     at = await alone(t, "/where", at);
-    at = await t.until(/This computer only; browser on this computer — \/where local · local\+cloud · cloud · send <task> · browser here\|cloud/, at);
+    at = await t.until(/This computer only; the web on this computer — \/where local · local\+cloud · cloud · send <task> · web here\|cloud/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("/where local+cloud\r");
     at = await t.until(/✓ This computer, agents in the cloud from here on/, at);
@@ -4258,6 +4258,9 @@ test("the local agent browses on this computer with the cloud's web tool, asked 
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-w267", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "140" });
   try {
     let at = await t.until(/\w ❯ /);
+    // The web is in the cloud by default (FOL-383): this test browses on this computer.
+    t.send("/where web here\r");
+    at = await t.until(/The web on this computer/, at);
     t.send("read example.com\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
@@ -4320,6 +4323,9 @@ test("the agent's web.browse block holds on this computer as in the cloud: its d
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-wb267", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "140" });
   try {
     let at = await t.until(/\w ❯ /);
+    // The web is in the cloud by default (FOL-383): this test browses on this computer.
+    t.send("/where web here\r");
+    at = await t.until(/The web on this computer/, at);
     t.send("browse\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
@@ -5297,7 +5303,7 @@ test("a cloud agent's question answered elsewhere (FOL-298): the one on the scre
   }
 });
 
-test("/where browser cloud (FOL-267): the web tool browses through the gateway's door with the session's key; the agent's locks go with it", async () => {
+test("the web in the cloud by default (FOL-383, FOL-267): the web tool browses through the gateway's door with the session's key, unasked; the agent's locks go with it", async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -5330,18 +5336,13 @@ test("/where browser cloud (FOL-267): the web tool browses through the gateway's
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-b267", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
     let at = await t.until(/\w ❯ /);
-    t.send("/where browser cloud\r");
-    at = await t.until(/Browser in the cloud/, at);
+    // No /where: the web is in the cloud unless the person says here.
     t.send("read the shop\r");
     at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("y\r");
-    // The web tool is asked before it runs, as every tool that is not read-only.
-    for (let i = 0; i < 3; i++) {
-      at = await t.until(/\[y\]es|Read the page\./, at, 30_000);
-      if (/Read the page\.$/.test(t.out().slice(0, at))) break;
-      t.send("y\r");
-    }
-    await t.until(/Read the page\./, 0, 30_000);
+    // A cloud browse is not asked by default (owner, 26 Nov 2026: /permissions web ask turns asking on).
+    await t.until(/Read the page\./, at, 30_000);
+    assert.doesNotMatch(t.out().slice(at), /\[y\]es/, "nothing asked before the cloud browse");
     const door = (s as any).seen.find((x: any) => x.url === "/v1/foldrun/browse");
     assert.equal(door.headers["x-api-key"], "fr_gw_test", "the session's own key");
     assert.ok(door.headers["idempotency-key"], "an Idempotency-Key");
@@ -5401,6 +5402,64 @@ test("search and fetch on foldrun's servers in a local turn (FOL-304): offered o
     assert.deepEqual(types(1), ["web_search_20250305:web_search"]);
     t.send("/where local\r");
     at = await t.until(/This computer only/, 0, 15_000);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("/where web here (FOL-383): search and fetch run from this computer under the same names, unasked; no server tools go to the gateway; /permissions web ask asks", async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "f1", name: "web_fetch", input: { url: "http://127.0.0.1:9/secret" } }]),
+    () => sse([{ type: "text", text: "Fetched." }]),
+    () => sse([{ type: "tool_use", id: "f2", name: "web_fetch", input: { url: "http://127.0.0.1:9/again" } }]),
+    () => sse([{ type: "text", text: "Asked first." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-w383/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\ntools: [web]\n---\nYou code.\n" } : { content: "" }),
+    "GET /v1/account/agents-md": () => ({ content: "" }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  }, { headers: { "foldrun-server-tools": "web_search_20250305,web_fetch_20250910,foldrun_web_browse_20251125" } });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-w383", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/where web here\r");
+    at = await t.until(/The web on this computer/, at);
+    t.send("fetch it\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Fetched\./, at, 30_000);
+    const names = (n: number) => (asked[n].tools ?? []).map((x: any) => (x.type ? `${x.type}:${x.name}` : x.name));
+    assert.ok(names(0).includes("web_search") && names(0).includes("web_fetch"), "search and fetch offered as this computer's own tools");
+    assert.ok(!names(0).some((x: string) => /^web_(search|fetch)_\d{8}:/.test(x)), "no server tools sent to the gateway");
+    // This computer's own services are never fetched for a page: the answer says it was refused.
+    assert.match(JSON.stringify(asked[1].messages.at(-1)), /on this computer or its local network/);
+    at = await t.until(/\w ❯ /, at, 30_000);
+    t.send("/permissions web ask\r");
+    at = await t.until(/web calls are asked first/, at);
+    t.send("fetch again\r");
+    at = await t.until(/\[y\]es/, at, 30_000);
+    t.send("n\r");
+    await t.until(/Asked first\./, at, 30_000);
+    t.send("/permissions web bypass\r");
+    await t.until(/web calls run without asking/, at);
     t.send("/quit\r");
     await t.done;
   } finally {

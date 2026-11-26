@@ -1,4 +1,4 @@
-// The web tool's browse, run in a cloud browser (FOL-267): `/where browser cloud` in foldrun code. One page per
+// The web tool's browse, run in a cloud browser (FOL-267): the default web place in foldrun code (`/where web cloud`, FOL-383). One page per
 // call through the gateway's POST /v1/foldrun/browse (FOL-313) — the same door every app uses, with the session's
 // own key, priced per call. Never retried by itself: a call whose outcome is unknown may have run (and cost).
 
@@ -49,7 +49,7 @@ export function cloudBrowseBlock(read) {
       if (!l) return { problem: "this agent's web.browse allowed_domains is not a list of sites" };
       // The door holds a site with its sub-domains: a lock to one host alone would be widened, so it is refused (Codex).
       const exact = l.find((d) => !d.startsWith("*."));
-      if (exact) return { problem: `this agent's web.browse allowed_domains names ${exact} alone, and the cloud browse door would also let its sub-domains through — write *.${exact} if they may be reached, or browse on this computer (/where browser here)` };
+      if (exact) return { problem: `this agent's web.browse allowed_domains names ${exact} alone, and the cloud browse door would also let its sub-domains through — write *.${exact} if they may be reached, or browse on this computer (/where web here)` };
       allowed = l;
     } else if (k === "deny") {
       // Actions it may not take (core WEB_BROWSE_ACTIONS): a step of one of them is refused before the call (Codex).

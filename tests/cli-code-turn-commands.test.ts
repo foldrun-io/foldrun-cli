@@ -87,7 +87,7 @@ test("commandDuringTurn: the one list of what runs beside a turn and what waits 
   const { commandDuringTurn } = await import("../src/code-session.mjs");
   const known = (n: string) => ["/status", "/help", "/sessions", "/queue", "/todos", "/goal", "/where", "/model", "/compact", "/undo", "/quit", "/deploy-notes"].includes(n);
   for (const l of ["/status", "/status cost", "/help", "/sessions", "/sessions send-later", "/queue clear", "/todos", "/goal", "/status line off", "/nosuch", "/STATUS"]) assert.equal(commandDuringTurn(l, known), "beside", l);
-  for (const l of ["/model", "/model max", "/model effort high", "/compact", "/undo", "/quit", "/todos add x", "/goal ship it", "/status context", "/sessions send code-x hi", "/where", "/where browser cloud", "/where cloud", "/where local+cloud", "/where send fix it", "/deploy-notes"]) assert.equal(commandDuringTurn(l, known), "after", l);
+  for (const l of ["/model", "/model max", "/model effort high", "/compact", "/undo", "/quit", "/todos add x", "/goal ship it", "/status context", "/sessions send code-x hi", "/where", "/where web cloud", "/where cloud", "/where local+cloud", "/where send fix it", "/deploy-notes"]) assert.equal(commandDuringTurn(l, known), "after", l);
   // Messages, as at the prompt: a path, an escaped slash, words.
   for (const l of ["/Users/x/a.ts fix this", "\\/status", "fix /status", ""]) assert.equal(commandDuringTurn(l, known), null, l);
 });

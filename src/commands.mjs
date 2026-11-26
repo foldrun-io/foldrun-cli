@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, shapeOutput as browseOutput } from "./browser.mjs";
 import { CLOUD_WEB_DEFINITION, cloudBrowse, cloudBrowseBlock, cloudBrowseBody } from "./browse-cloud.mjs";
+import { SEARCH_HERE, FETCH_HERE, SEARCH_HERE_DEFINITION, FETCH_HERE_DEFINITION, searchHere, fetchHere } from "./web-here.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu, commandDuringTurn, COMMAND_LINE } from "./code-session.mjs";
 import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
@@ -10140,13 +10141,47 @@ async function resourcesReport(s) {
 }
 
 /**
+ * Where the agent's web runs on this computer's turns (FOL-383): "cloud" — search and fetch on foldrun's servers,
+ * browse in a cloud browser — unless the person chose /where web here, or keeps the whole session here (/where local).
+ * @param {any} s @returns {"cloud" | "here"}
+ */
+function webPlace(s) {
+  return s.web === "here" || s.localOnly === true ? "here" : "cloud";
+}
+
+/**
+ * Which web actions the session's agent may use, as its file grants them (tools: [web], web.actions), or null when
+ * it has no web. A provider or settings chosen for an action (exclude_engines, a vendor) is not something the
+ * door takes: that action is not offered rather than run without them (Codex).
+ * @param {any} s @returns {Promise<((action: string) => boolean) | null>}
+ */
+async function webGrant(s) {
+  let agent;
+  let project;
+  try {
+    agent = await projectFront(s, `agents/${s.agent}/agent.md`);
+    project = { ...(await accountFront(s, [])), ...(await projectFront(s, "AGENTS.md")) };
+  } catch {
+    return null;
+  }
+  const tools = Array.isArray(agent?.tools) ? agent.tools.map(String) : [];
+  if (!tools.includes("web")) return null;
+  const P = /** @type {any} */ (await import("@foldrun/core/providers"));
+  const web = P.webConfig(agent, project);
+  // A web block that does not read is no grant (Codex).
+  if (Array.isArray(web.problems) && web.problems.length) return null;
+  const actions = web.actions;
+  return (/** @type {string} */ a) => (!Array.isArray(actions) || actions.includes(a)) && (web.raw?.[a] === undefined || web.raw?.[a] === null);
+}
+
+/**
  * The server tools a local turn offers (FOL-304): web search and fetch, run by the gateway itself — never on a
  * session that keeps everything here, never before the gateway said it runs them (an older one could pass them to
  * the model's provider), and only what the agent's web grant and web.actions allow. [] when not.
  * @param {any} s @returns {Promise<{ type: string, name: string }[]>}
  */
 async function localServerTools(s, gateway = /** @type {{ url: string, key: string } | null} */ (null)) {
-  if (s.localOnly === true) return [];
+  if (webPlace(s) !== "cloud") return [];
   // What one gateway said holds for that gateway alone: a sign-in that moved the session to another asks again (Codex).
   if (gateway && s.gatewayRunsFor !== gateway.url) {
     delete s.gatewayRuns;
@@ -10171,24 +10206,8 @@ async function localServerTools(s, gateway = /** @type {{ url: string, key: stri
     }
   }
   if (!Array.isArray(s.gatewayRuns)) return [];
-  let agent;
-  let project;
-  try {
-    agent = await projectFront(s, `agents/${s.agent}/agent.md`);
-    project = { ...(await accountFront(s, [])), ...(await projectFront(s, "AGENTS.md")) };
-  } catch {
-    return [];
-  }
-  const tools = Array.isArray(agent?.tools) ? agent.tools.map(String) : [];
-  if (!tools.includes("web")) return [];
-  const P = /** @type {any} */ (await import("@foldrun/core/providers"));
-  const web = P.webConfig(agent, project);
-  // A web block that does not read is no grant (Codex).
-  if (Array.isArray(web.problems) && web.problems.length) return [];
-  const actions = web.actions;
-  // A provider or settings chosen for an action (exclude_engines, a vendor) is not something this door takes: that
-  // action is not offered here rather than run without them (Codex).
-  const may = (/** @type {string} */ a) => (!Array.isArray(actions) || actions.includes(a)) && (web.raw?.[a] === undefined || web.raw?.[a] === null);
+  const may = await webGrant(s);
+  if (!may) return [];
   /** @type {{ type: string, name: string }[]} */
   const out = [];
   const search = s.gatewayRuns.find((/** @type {string} */ t) => /^web_search_\d{8}$/.test(t));
@@ -18983,6 +19002,10 @@ async function codeLocalTurn(s, text) {
           if (!cancel.asked && !turnOver) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
         }
       }
+      // The web (FOL-383): search and fetch only read, and a cloud browser holds nothing of the person's, so they run
+      // unasked by default (owner, 26 Nov 2026); /permissions web ask asks for each. A browse on this computer acts as
+      // the person, in their Chrome with its sign-ins: asked as before. A plan-only turn sends nothing anywhere.
+      if (!s.planOnly && (name === SEARCH_HERE || name === FETCH_HERE || (name === WEB_TOOL && webPlace(s) === "cloud")) && readCodePrefs().webAsk !== true) return { behavior: /** @type {const} */ ("allow"), updatedInput: input };
       // A sub-agent that only reads, on this computer, reads what the agent
       // itself may read unasked; a call that does not read as one is
       // answered by the tool (its own message), not asked about.
@@ -19203,7 +19226,7 @@ async function codeLocalTurn(s, text) {
           // A browse runs as you, in foldrun's Chrome profile, outside the sandbox: say so, and show every step
           // in full, so nothing it would type or submit is hidden past the edge (FOL-267, Codex).
           // Where it runs, said as it is: a cloud browser gets everything it would type (Codex).
-          console.log(`      ${c.white(s.browser === "cloud" && s.localOnly !== true
+          console.log(`      ${c.white(webPlace(s) === "cloud"
             ? "in a browser in foldrun's cloud — the page, and everything below it would type, go there; paid per call"
             : "in the Chrome window on this computer, as you — outside the sandbox, with that profile's sign-ins")}`);
           const lines = JSON.stringify(input, null, 1).split("\n").map((l) => plainText(l));
@@ -20006,8 +20029,10 @@ async function codeLocalTurn(s, text) {
     // sees — offered when this computer's browser is set up (`foldrun browser setup`).
     const webHere = localBrowserReady({ remoteUrl, galleryCacheDir, credentialsDir }, s.flags);
     const webDef = "error" in webHere ? null : localWebDefinition(webHere.browse, (await core()).readFrontmatter);
-    // /where browser cloud (FOL-267): the web tool browses in a cloud browser instead, through the gateway's door.
-    const webCloud = s.browser === "cloud" && s.localOnly !== true;
+    // The web in the cloud (FOL-383, the default; FOL-267): the web tool browses in a cloud browser instead, through the gateway's door.
+    const webCloud = webPlace(s) === "cloud";
+    // Search and fetch on this computer (FOL-383, /where web here): the same names and shapes as in the cloud.
+    const webMay = webCloud ? null : await webGrant(s);
     // Search and fetch on foldrun's servers (FOL-304): only where the gateway said it runs them, and the agent may.
     const serverTools = await localServerTools(s, { url: engineKey.gatewayUrl, key: engineKey.key });
     const q = engine.foldrunQuery({
@@ -20037,6 +20062,8 @@ async function codeLocalTurn(s, text) {
                 const job = cloudJobWithoutFolder(input);
                 return "problem" in job ? Promise.resolve({ text: job.problem, isError: true }) : agentCall(job, ctx.signal);
               } }]),
+              ...(webMay?.("search") ? [{ name: SEARCH_HERE, description: SEARCH_HERE_DEFINITION.description, input_schema: SEARCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => searchHere(input, { signal: ctx.signal }) }] : []),
+              ...(webMay?.("fetch") ? [{ name: FETCH_HERE, description: FETCH_HERE_DEFINITION.description, input_schema: FETCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => fetchHere(input, { signal: ctx.signal, userAgent: USER_AGENT }) }] : []),
               ...(webCloud
                 ? [{
                     name: "web", description: CLOUD_WEB_DEFINITION.description, input_schema: CLOUD_WEB_DEFINITION.input_schema, readOnly: false,
@@ -21525,7 +21552,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const rows = m ? (await m.look().catch(() => ({ rows: [] }))).rows : [];
         return { mcp: rows.map((/** @type {any} */ r) => ({ name: String(r.name), state: String(r.state), source: String(r.source ?? "") })) };
       }
-      return { localOnly: s.localOnly === true, mode: s.mode, browser: s.browser === "cloud" ? "cloud" : "here", sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
+      return { localOnly: s.localOnly === true, mode: s.mode, web: webPlace(s), webAsk: readCodePrefs().webAsk === true, sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
     };
     // Another sign-in under this session's profile name: stop, never go on as a different account showing the old one (Codex).
     {
@@ -22567,32 +22594,33 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       const ways = whereChoices(inGitRepo(dir));
       const nowWay = s.mode === "cloud" ? "cloud" : s.localOnly === true ? "local-only" : "local";
       if (!rest) {
-        say(`${ways.find((x) => x.v === nowWay)?.name ?? nowWay}; browser ${s.browser === "cloud" ? "in the cloud" : "on this computer"} — /where local · local+cloud · cloud · send <task> · browser here|cloud`);
+        say(`${ways.find((x) => x.v === nowWay)?.name ?? nowWay}; the web ${webPlace(s) === "cloud" ? "in the cloud" : "on this computer"} — /where local · local+cloud · cloud · send <task> · web here|cloud`);
         continue;
       }
-      // Where the agent's web browse runs on this computer's turns (FOL-267): this computer's Chrome, or a cloud browser.
-      const bw = /^browser(?:\s+(here|cloud))?$/i.exec(rest);
+      // Where the agent's web runs on this computer's turns (FOL-383; browse since FOL-267): in the cloud — search and
+      // fetch on foldrun's servers, browse in a cloud browser — by default, or here: this computer's connection and Chrome.
+      const bw = /^web(?:\s+(here|cloud))?$/i.exec(rest);
       if (bw) {
         const to = bw[1]?.toLowerCase();
         if (!to) {
-          say(`browser ${s.browser === "cloud" ? "in the cloud" : "on this computer"} — /where browser here · cloud`);
+          say(`the web ${webPlace(s) === "cloud" ? "in the cloud" : "on this computer"} — /where web here · cloud`);
           continue;
         }
         if (to === "cloud" && s.localOnly === true) {
           say("staying on this computer — this session keeps everything here (/where local); /where local+cloud first");
           continue;
         }
-        if (to === "cloud") s.browser = "cloud";
-        else delete s.browser;
+        if (to === "here") s.web = "here";
+        else delete s.web;
         console.log(`  ${c.green("✓")} ${to === "cloud"
-          ? `${c.white("Browser in the cloud")} ${c.dim("for this session — each web call is a fresh browser in foldrun's cloud, paid per call; nothing is kept between calls")}`
-          : `${c.white("Browser on this computer")} ${c.dim("for this session — the Chrome window set up with foldrun browser setup")}`}\n`);
+          ? `${c.white("The web in the cloud")} ${c.dim("for this session — search and fetch on foldrun's servers, each browse a fresh cloud browser; nothing is kept between calls")}`
+          : `${c.white("The web on this computer")} ${c.dim("for this session — search and fetch from this computer's connection, browse in the Chrome window set up with foldrun browser setup")}`}\n`);
         continue;
       }
       // Exactly the three ways, or send with its task: words after a way are never dropped (Codex).
       const w = /^(?:(local\+cloud|local|cloud)|(send)\s+([\s\S]+))$/i.exec(rest);
       if (!w) {
-        say("/where local · local+cloud · cloud · send <task> · browser here|cloud");
+        say("/where local · local+cloud · cloud · send <task> · web here|cloud");
         continue;
       }
       const word = /** @type {string} */ (w[1] ?? w[2]).toLowerCase();
@@ -22623,8 +22651,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       if (to === "local") {
         if (want === "local-only") {
           s.localOnly = true;
-          // Everything here: a cloud browser too is given up (FOL-267).
-          delete s.browser;
+          // Everything here: the web too (webPlace), whatever /where web said.
         }
         else delete s.localOnly;
       }
@@ -22768,6 +22795,18 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
           continue;
         }
         say(gone ? `removed: ${gone.kind === "prefix" ? "commands that start with" : "the command"}  ${clipLine(plainText(gone.text))} — it is asked again` : left ? `/permissions rm <1–${left}> — /permissions lists them` : "this folder has no kept rules");
+        continue;
+      }
+      // Web calls (FOL-383): unasked by default; "ask" asks before each search, fetch and cloud browse. Kept for you.
+      const wa = /^web(?:\s+(ask|bypass))?$/i.exec(rest);
+      if (wa) {
+        const how = wa[1]?.toLowerCase();
+        if (!how) {
+          say(`web calls ${readCodePrefs().webAsk === true ? "are asked first" : "run without asking"} — /permissions web ask · bypass`);
+          continue;
+        }
+        const kept = writeCodePrefs({ ...readCodePrefs(), webAsk: how === "ask" });
+        say(`${how === "ask" ? "web calls are asked first — each search, fetch and cloud browse" : "web calls run without asking — search, fetch and cloud browse"}${kept ? " (kept for you, every session)" : " (for now — could not be saved)"}; a browse on this computer is always asked`);
         continue;
       }
       if (rest === "bypass") {
