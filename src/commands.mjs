@@ -14781,15 +14781,17 @@ function uploadPreview(p, dest, agreed) {
  * goes. No one to ask (not a terminal), or --yes: the preview is printed
  * and it goes, as a script that ran `foldrun code` asked for.
  * @param {any} s
- * @param {{ packed: any, paths: string[], left: string[], unscanned: string[], untracked: string[] }} p
+ * @param {{ packed: any, paths: string[], left: string[], unscanned: string[], untracked: string[], dir?: string }} p `dir`: a repository inside the folder that goes instead of it (FOL-351)
  * @param {string} dest
  * @param {(question: string) => Promise<string | null>} ask
  * @param {() => boolean} [cancelled] the turn was stopped meanwhile
  */
 async function agreeToUpload(s, p, dest, ask, cancelled = () => false) {
   s.uploadAgreed ??= new Map();
+  // A repository inside the folder (cloud_jobs' path, FOL-351): its paths are its own, agreed to apart from the folder's.
+  const key = typeof p.dir === "string" ? p.dir : s.dir;
   /** @type {{ paths: Set<string>, unscanned: Set<string>, untracked: Set<string> } | null} */
-  const agreed = s.uploadAgreed.get(s.dir) ?? null;
+  const agreed = s.uploadAgreed.get(key) ?? null;
   const { lines, fresh, shown } = uploadPreview(p, dest, agreed);
   if (agreed && !fresh.length) return true;
   for (const l of lines) console.log(l);
@@ -14810,7 +14812,7 @@ async function agreeToUpload(s, p, dest, ask, cancelled = () => false) {
       continue;
     }
     if (a !== "y" && a !== "yes") return false;
-    s.uploadAgreed.set(s.dir, { paths: new Set([...(agreed?.paths ?? []), ...p.paths]), unscanned: new Set([...(agreed?.unscanned ?? []), ...p.unscanned]), untracked: new Set([...(agreed?.untracked ?? []), ...p.untracked]) });
+    s.uploadAgreed.set(key, { paths: new Set([...(agreed?.paths ?? []), ...p.paths]), unscanned: new Set([...(agreed?.unscanned ?? []), ...p.unscanned]), untracked: new Set([...(agreed?.untracked ?? []), ...p.untracked]) });
     return true;
   }
 }
@@ -14941,6 +14943,111 @@ function gitPlace(/** @type {string} */ dir) {
   const pre = spawnSync("git", ["-C", dir, "rev-parse", "--show-prefix"], { encoding: "utf8" });
   if (top.status !== 0 || pre.status !== 0) return null;
   return { root: top.stdout.replace(/\r?\n$/, ""), prefix: pre.stdout.replace(/\r?\n$/, "").replace(/\/$/, "") };
+}
+
+/** The folders right below `dir` that are git repositories (a `.git` in them), by name, sorted; links are not followed. */
+function reposRightBelow(/** @type {string} */ dir) {
+  /** @type {fs.Dirent[]} */
+  let list = [];
+  try {
+    list = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  // A .git that is a link is not followed (Codex: it could tell whether a place outside exists); a folder or a
+  // gitfile (a submodule, a linked worktree) counts only when git itself says the child is a repository's top.
+  return list
+    .filter((e) => {
+      if (!e.isDirectory()) return false;
+      const child = path.join(dir, e.name);
+      let st;
+      try {
+        st = fs.lstatSync(path.join(child, ".git"));
+      } catch {
+        return false;
+      }
+      if (st.isSymbolicLink()) return false;
+      const place = gitPlace(child);
+      try {
+        return !!place && fs.realpathSync(place.root) === fs.realpathSync(child);
+      } catch {
+        return false;
+      }
+    })
+    .map((e) => e.name)
+    .sort();
+}
+
+/**
+ * The repository a folder cloud job gets a copy of (FOL-351). No `rel`: the
+ * session's folder, as before — but a folder that is in no repository and
+ * holds repositories right below it is refused with their names, so the
+ * agent can name one. `rel`: a folder inside the session's folder, relative
+ * to it, that is a repository's top or inside one (then its top is taken);
+ * one that climbs out (`..`, an absolute path, a link that leads out), is in
+ * no repository, or whose repository is not inside the folder is refused.
+ * `dir` is where the job's copy comes from and its patch goes; `rel` is that
+ * place relative to the session's folder ("" for the folder itself).
+ * @param {string} folder the session's folder
+ * @param {string | undefined} rel
+ * @returns {{ dir: string, rel: string, id?: string } | { problem: string }}
+ */
+export function cloudJobRepo(folder, rel) {
+  if (rel === undefined) {
+    if (gitPlace(folder)) return { dir: folder, rel: "" };
+    const repos = reposRightBelow(folder);
+    // None below: packFolder says the folder is in no repository, as before.
+    if (!repos.length) return { dir: folder, rel: "" };
+    const shown = repos.slice(0, 10).map((r) => JSON.stringify(plainText(r))).join(", ");
+    return { problem: `${plainText(folder)} is not a git repository, but it holds ${repos.length === 1 ? "one" : repos.length}: ${shown}${repos.length > 10 ? ` and ${repos.length - 10} more` : ""}. Call cloud_jobs again with path: the one the work is in (e.g. path: ${JSON.stringify(plainText(repos[0]))}) — each job gets a copy of that repository, and its changes come back into it.` };
+  }
+  const said = JSON.stringify(plainText(rel));
+  if (path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel) || rel.startsWith("\\")) return { problem: `path ${said} is absolute: path is a folder inside this one, relative to it (e.g. "repo-b")` };
+  if (rel.split(/[\\/]/).includes("..")) return { problem: `path ${said} climbs out with "..": path is a folder inside this one, relative to it (e.g. "repo-b")` };
+  let root;
+  try {
+    root = fs.realpathSync(folder);
+  } catch {
+    return { problem: `${plainText(folder)} cannot be read` };
+  }
+  const within = (/** @type {string} */ p) => p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+  let real;
+  try {
+    real = fs.realpathSync(path.resolve(root, rel));
+  } catch {
+    return { problem: `path ${said}: there is no such folder in ${plainText(folder)}` };
+  }
+  // A link on the way that leads out of the folder: what it points at is not the person's folder.
+  if (!within(real)) return { problem: `path ${said} leads out of ${plainText(folder)} (through a link) — only a repository inside the folder is sent` };
+  if (!fs.statSync(real).isDirectory()) return { problem: `path ${said} is a file, not a folder: name the repository's folder` };
+  const place = gitPlace(real);
+  if (!place) return { problem: `path ${said} is not a git repository (nor inside one) — a job gets what git would commit, so name a repository's folder, or \`git init\` it first` };
+  let top;
+  try {
+    top = fs.realpathSync(place.root);
+  } catch {
+    return { problem: `path ${said}: git names its repository at ${plainText(place.root)}, which cannot be read` };
+  }
+  if (!within(top)) return { problem: `path ${said} is in the git repository at ${plainText(top)}, which is not inside ${plainText(folder)} — this folder is itself in a repository: leave path out` };
+  const st = fs.statSync(top);
+  return { dir: top, rel: path.relative(root, top).split(path.sep).join("/"), id: `${st.dev}:${st.ino}` };
+}
+
+/**
+ * Is a repository checked by cloudJobRepo still the one it was (Codex, FOL-351)? Its real path unchanged (no
+ * link put on the way since) and the same folder on disk. Asked again before a copy is packed, before a patch
+ * is written and before /undo: a repository swapped meanwhile is refused, never followed.
+ * @param {string} dir the real path cloudJobRepo gave @param {string | undefined} id its dev:ino
+ */
+export function sameCloudRepo(dir, id) {
+  if (!id) return true;
+  try {
+    if (fs.realpathSync(dir) !== dir) return false;
+    const st = fs.statSync(dir);
+    return st.isDirectory() && `${st.dev}:${st.ino}` === id;
+  } catch {
+    return false;
+  }
 }
 
 /** The files a patch names, as git reads it and as the folder names them; none when git cannot read it. @returns {string[]} */
@@ -18274,7 +18381,7 @@ export function cloudJobsTool(cloud, asks = false) {
     description: [
       "Start work on the foldrun platform as cloud jobs, each in its own cloud sandbox, side by side. The call answers at once with each job's run id; you go on working, and each job's result comes to you as it finishes (between your tool calls), or when you call cloud_jobs with wait: true. Before you end your reply, call it with wait: true to collect what is still running.",
       `Several jobs: put them all in one call, one task each (up to ${CLOUD_JOBS_CEILING} a call; another call starts more). The platform runs as many as the account's compute has room for and lines up the rest — it does not refuse them. When the person asks for work in parallel, for many agents, or to see how the cloud acts under load, split the work into independent, self-contained tasks and start them together in one call; do not run them one by one.`,
-      "With the folder (folder: true, the default): each job gets a copy of this folder as it is now (what git would commit; ignored files never go, and a folder holding a secret is refused). For long or heavy work that can be done on its own: a refactor across many files, a dependency upgrade, running and fixing a slow test suite, two approaches side by side. Each job's report and the files it changed come back; its changes are put into the folder only if the person says yes — read changed files again before you edit them.",
+      "With the folder (folder: true, the default): each job gets a copy of this folder as it is now (what git would commit; ignored files never go, and a folder holding a secret is refused). For long or heavy work that can be done on its own: a refactor across many files, a dependency upgrade, running and fixing a slow test suite, two approaches side by side. Each job's report and the files it changed come back; its changes are put into the folder only if the person says yes — read changed files again before you edit them. When this folder is not itself a git repository but holds some (e.g. repo-a/ and repo-b/), pass path: the repository the work is in, relative to this folder — each job gets a copy of that repository alone, and its changes come back into it.",
       cloud
         ? `Without the folder (folder: false): each task runs as one of the project ${cloud.project}'s agents (agent: ${cloud.agents.join(", ")}; default ${cloud.own}), with that agent's own tools — the web, the MCP servers and APIs its definition names. Nothing of this folder is sent, only the tasks; only their answers come back.`
         : "Without the folder (folder: false) is not available: the project has no agents yet.",
@@ -18285,6 +18392,7 @@ export function cloudJobsTool(cloud, asks = false) {
       properties: {
         tasks: { type: "array", minItems: 1, maxItems: CLOUD_JOBS_CEILING, items: { type: "string", description: "One complete, self-contained instruction" } },
         folder: { type: "boolean", description: "true (default): each job works on a copy of this folder and its changes come back as a patch. false: each task runs as a project agent, no folder sent." },
+        path: { type: "string", description: "For folder: true — a git repository inside this folder, relative to it (e.g. \"repo-b\"; a folder inside a repository means that repository). Each job gets a copy of that repository instead of the whole folder, and its changes come back into it. Needed when this folder is not a git repository but holds several; never .., an absolute path, or a link out of the folder." },
         ...(cloud ? { agent: { type: "string", enum: cloud.agents, description: `For folder: false — which agent of the project runs every task of the call. Default: ${cloud.own}.` } } : {}),
         description: { type: "string", description: "The jobs in three to six words, shown to the person." },
         wait: { type: "boolean", description: "true, alone: wait for the jobs already started in this turn and get the results not yet given to you. It answers when one or more have finished, or after a few minutes with what is still running." },
@@ -18544,7 +18652,7 @@ const RUN_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
  * cloud_jobs calls, watched while the turn goes on, their results handed to
  * the agent as each finishes. Every run is off the job rows once it is done
  * or stopped (FOL-343), and stopped when the turn is (Ctrl-C, a failure).
- * @typedef {{ n: number, id: string, task: string, folder: boolean, agent: string, done: boolean, settled: boolean, counted: boolean, run: any, finished: Promise<void> }} CloudJob
+ * @typedef {{ n: number, id: string, task: string, folder: boolean, agent: string, dir?: string, at?: string, repoId?: string, done: boolean, settled: boolean, counted: boolean, run: any, finished: Promise<void> }} CloudJob
  * @typedef {{ jobs: CloudJob[], results: import("./code-cloud-jobs.mjs").CloudResult[], closed?: boolean, next: number, nudged: boolean, wake: Set<() => void>, stopped: Set<string>, unsure: boolean, unsureSaid: boolean }} CloudPool
  * @returns {CloudPool}
  */
@@ -18650,9 +18758,9 @@ async function cloudRoom(/** @type {any} */ s) {
  * for a job with the folder, after its patch was asked about and applied or
  * kept. `signal` is the turn's own: it stops them all.
  * @param {any} s
- * @param {{ folder: boolean, tasks: string[], agent: string | null, description: string }} job
+ * @param {{ folder: boolean, tasks: string[], agent: string | null, description: string, path?: string }} job
  * @param {AbortSignal} signal
- * @param {{ pool: CloudPool, asked: boolean, at: { turn: number, tid: unknown, context: unknown }, say: (print: () => void) => void, approveApply: (n: number, lines: string[], patch: Buffer | string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
+ * @param {{ pool: CloudPool, asked: boolean, at: { turn: number, tid: unknown, context: unknown }, say: (print: () => void) => void, approveApply: (n: number, lines: string[], patch: Buffer | string, dir: string, at: string) => Promise<boolean | { patch: Buffer, taken: string[], refused: string[] }>, changed: (files: string[]) => void, approveUpload: (pack: any, dest: string) => Promise<boolean> }} h
  * @returns {Promise<{ text: string, isError?: boolean }>}
  */
 async function startCloudJobs(s, job, signal, h) {
@@ -18663,6 +18771,9 @@ async function startCloudJobs(s, job, signal, h) {
   // Counted against the turn that started them, however late a record comes (Codex).
   void h.at.turn;
   if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
+  // Where a folder job's copy comes from and its patch goes (FOL-351): the folder, or the repository path names in it.
+  const where = job.folder ? cloudJobRepo(dir, job.path) : { dir, rel: "" };
+  if ("problem" in where) return { text: `No cloud job was started: ${where.problem}`, isError: true };
   /** @type {string | undefined} */
   let snapshot;
   try {
@@ -18684,17 +18795,20 @@ async function startCloudJobs(s, job, signal, h) {
         if (!names.includes(agent)) return { text: `The project ${ws} has no agent ${agent}, so no cloud job was started (one started without asking makes nothing there). Tell the person: /permissions cloud ask lets the next call offer to add it, or \`foldrun agent new\` adds one.`, isError: true };
       }
       if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
-      const pack = await packFolder(dir);
+      const moved = { text: `No cloud job was started: the repository ${plainText("rel" in where ? where.rel : "")} changed on disk while it was being sent (moved, or replaced by a link). Nothing was sent; call again if it is the one you mean.`, isError: true };
+      if ("id" in where && where.id && !sameCloudRepo(where.dir, where.id)) return moved;
+      const pack = await packFolder(where.dir);
+      if ("id" in where && where.id && !sameCloudRepo(where.dir, where.id)) return moved;
       if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
       // Asked before anything leaves (FOL-212), with the bytes that go — once a session for the same files.
-      if (!(await h.approveUpload(pack, `${ws} on ${url.replace(/^https?:\/\//, "")}`))) {
+      if (!(await h.approveUpload(where.rel ? { ...pack, dir: where.dir } : pack, `${ws} on ${url.replace(/^https?:\/\//, "")}${where.rel ? ` (the repository ${plainText(where.rel)} in this folder)` : ""}`))) {
         if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
         return { text: "The person said no to sending the folder: nothing was sent and nothing was started. Do not try another way to send it; do the work here, or say what you wanted to send and why.", isError: true };
       }
       if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
       const snap = await pushPacked(url, flags, ws, pack.packed, signal);
       snapshot = String(snap.snapshotId);
-      h.say(() => console.log(`  ${c.cyan("↑")} ${c.grey(`sent the folder to ${plainText(ws)} · ${pack.packed.files} file${pack.packed.files === 1 ? "" : "s"} · ${formatBytes(pack.packed.bytes)}`)}`));
+      h.say(() => console.log(`  ${c.cyan("↑")} ${c.grey(`sent ${where.rel ? `the repository ${plainText(where.rel)}` : "the folder"} to ${plainText(ws)} · ${pack.packed.files} file${pack.packed.files === 1 ? "" : "s"} · ${formatBytes(pack.packed.bytes)}`)}`));
     }
   } catch (err) {
     if (signal.aborted) return { text: "Stopped by the person. Nothing was started.", isError: true };
@@ -18727,7 +18841,7 @@ async function startCloudJobs(s, job, signal, h) {
           return;
         }
         /** @type {CloudJob} */
-        const j = { n, id, task, folder: job.folder, agent, done: false, settled: false, counted: false, run: null, finished: Promise.resolve() };
+        const j = { n, id, task, folder: job.folder, agent, ...(where.rel ? { dir: where.dir, at: where.rel } : {}), ...("id" in where && where.id ? { dir: where.dir, repoId: where.id } : {}), done: false, settled: false, counted: false, run: null, finished: Promise.resolve() };
         pool.jobs.push(j);
         started.push({ n, id, task });
         liveCloudRuns.set(id, { label: `cloud job #${n}${job.folder ? "" : ` (${agent})`}: ${task}`, startedAt: Date.now() });
@@ -18847,7 +18961,11 @@ async function watchCloudJob(s, r, signal, h) {
  * @param {any} s @param {CloudJob} r @param {AbortSignal} signal @param {Parameters<typeof startCloudJobs>[3]} h
  */
 async function cloudJobChanges(s, r, signal, h) {
-  const { url, flags, ws, dir } = s;
+  const { url, flags, ws } = s;
+  // A job on a repository inside the folder (FOL-351): its patch reads from that repository's top and goes there;
+  // the files it names are said from the folder, so the agent and the person read them where they are.
+  const dir = r.dir ?? s.dir;
+  const fromFolder = (/** @type {string} */ f) => (r.at ? `${r.at}/${f}` : f);
   /** @type {any} */
   let p;
   try {
@@ -18857,10 +18975,10 @@ async function cloudJobChanges(s, r, signal, h) {
   }
   if (p.status === "unchanged") return { outcome: "no files changed", changes: "It changed no files." };
   if (p.status !== "changed") return { outcome: "no changes came back", changes: `No changes came back: ${plainText(String(p.reason ?? p.status))}.` };
-  const files = [...(p.meta?.modified ?? []), ...(p.meta?.added ?? []), ...(p.meta?.deleted ?? [])].map((f) => plainText(typeof f === "string" ? f : String(f?.path ?? ""))).filter(Boolean);
+  const files = [...(p.meta?.modified ?? []), ...(p.meta?.added ?? []), ...(p.meta?.deleted ?? [])].map((f) => plainText(typeof f === "string" ? f : String(f?.path ?? ""))).filter(Boolean).map(fromFolder);
   const named = files.length ? files.slice(0, 30).map(oneLine).join(", ") + (files.length > 30 ? ` and ${files.length - 30} more` : "") : "some files";
   const preview = patchPreview(dir, p.patch);
-  const yes = "stat" in preview && !signal.aborted && (await h.approveApply(r.n, preview.stat, p.patch));
+  const yes = "stat" in preview && !signal.aborted && (await h.approveApply(r.n, preview.stat, p.patch, dir, r.at ?? ""));
   if ("error" in preview) return { outcome: "its patch does not apply — kept in a file", changes: `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; another job's patch or another change may touch the same lines): ${preview.error}. The patch is kept at ${keepPatch(p.patch, r.id)} — read it and make the changes yourself if they are still wanted.` };
   if (signal.aborted) return { outcome: "not put in: the turn was stopped", changes: `It changed ${named}. Not put into the folder: the person stopped the turn. The patch is kept at ${keepPatch(p.patch, r.id)}.` };
   if (!yes) return { outcome: "not put in: the person said no", changes: `It changed ${named}. Not put into the folder: the person said no. The patch is kept at ${keepPatch(p.patch, r.id)}.` };
@@ -18870,11 +18988,15 @@ async function cloudJobChanges(s, r, signal, h) {
     // The whole patch is kept before git writes: a full disk then stops the apply, never follows it.
     const wholeAt = picked ? keepPatch(p.patch, r.id) : "";
     // The turn's stop reaches the last check before git writes (Codex).
+    // The repository it goes into is still the one checked at the start (Codex): else nothing is written.
+    if (r.dir && !sameCloudRepo(r.dir, r.repoId)) return { outcome: "not put in: the repository changed", changes: `It changed ${named}. Not put in: the repository ${plainText(r.at ?? "")} was moved or replaced on disk since the job started. The patch is kept at ${keepPatch(p.patch, r.id)}.` };
     const applied = await applyPatch(dir, picked ? picked.patch : p.patch, { ...flags, yes: true }, r.id, { get asked() { return signal.aborted; }, onAsk: new Set() });
     if (!applied) return { outcome: "not put in: the turn was stopped", changes: `It changed ${named}. Not put into the folder: the person stopped the turn.` };
-    (s.applied ??= []).push({ patch: picked ? picked.patch : String(p.patch), runId: r.id });
-    h.changed((picked ? picked.taken : files).map(oneLine));
-    return picked ? { outcome: `partly put into the folder (${picked.taken.length} of ${picked.taken.length + picked.refused.length} files)`, changes: `It changed ${named}. ${partNote(picked.taken.map(oneLine), picked.refused.map(oneLine))} Read the files that went in again before you edit them. The whole patch is kept at ${wholeAt}.` } : { outcome: "put into the folder", changes: `It changed ${named}. Put into the folder — read these files again before you edit them.` };
+    // Where it went, so /undo takes it back there.
+    // The bytes as they came, not decoded (Codex: a non-UTF-8 patch must reverse too); the repository's identity for /undo.
+    (s.applied ??= []).push({ patch: picked ? picked.patch : p.patch, runId: r.id, ...(r.dir ? { dir: r.dir, repoId: r.repoId } : {}) });
+    h.changed((picked ? picked.taken.map(fromFolder) : files).map(oneLine));
+    return picked ? { outcome: `partly put into the folder (${picked.taken.length} of ${picked.taken.length + picked.refused.length} files)`, changes: `It changed ${named}. ${partNote(picked.taken.map(fromFolder).map(oneLine), picked.refused.map(fromFolder).map(oneLine))} Read the files that went in again before you edit them. The whole patch is kept at ${wholeAt}.` } : { outcome: "put into the folder", changes: `It changed ${named}. Put into the folder — read these files again before you edit them.` };
   } catch (err) {
     return { outcome: "its patch did not apply", changes: `It changed ${named}, but its patch does not apply to the folder as it is now (it was made on the copy sent at the start; another job's patch or another change may touch the same lines). ${plainText(explain(err))}` };
   }
@@ -19215,7 +19337,7 @@ async function codeLocalTurn(s, text) {
       const list = cloudTasks(input).tasks ?? [];
       const folderGoes = /** @type {any} */ (input).folder !== false;
       const who = folderGoes ? String(s.agent) : String(/** @type {any} */ (input).agent ?? turnCloud?.own ?? "");
-      console.log(`      ${c.grey(cloudAskLine({ n: list.length, folder: folderGoes, ws: plainText(s.ws), host: plainText(s.url.replace(/^https?:\/\//, "")), agent: plainText(who), estimate: cloudEstimate(Array.isArray(s.cloudJobCosts) ? s.cloudJobCosts : [], list.length) }))}`);
+      console.log(`      ${c.grey(cloudAskLine({ n: list.length, folder: folderGoes, ws: plainText(s.ws), host: plainText(s.url.replace(/^https?:\/\//, "")), agent: plainText(who), estimate: cloudEstimate(Array.isArray(s.cloudJobCosts) ? s.cloudJobCosts : [], list.length), ...(folderGoes && typeof input.path === "string" ? (() => { const r = cloudJobRepo(s.dir, input.path.trim()); return "rel" in r ? (r.rel ? { repo: plainText(r.rel) } : {}) : { repo: plainText(input.path.trim()) }; })() : {}) }))}`);
       // What leaves this computer is shown whole when nothing else goes with it (Codex, FOL-258); a folder job's task, its start.
       // Counted as the rows it takes on this screen, wrapped as it is printed below (Codex).
       // Cut by the cells a character takes (a wide one two), so what is counted is what is printed.
@@ -19418,7 +19540,7 @@ async function codeLocalTurn(s, text) {
           if (shown) return shown;
           console.log(`      ${c.dim("asked because /permissions cloud ask is on — /permissions cloud bypass starts them without a question")}`);
         } else if (isApply) {
-          console.log(`      ${c.white(typeof input.who === "string" ? `sub-agent ${plainText(input.who)}'s changes (made in its own sandbox), into this folder:` : `cloud job #${Number(input.n) || "?"}'s changes, into this folder:`)}`);
+          console.log(`      ${c.white(typeof input.who === "string" ? `sub-agent ${plainText(input.who)}'s changes (made in its own sandbox), into this folder:` : `cloud job #${Number(input.n) || "?"}'s changes, into ${typeof input.dir === "string" ? `the repository ${plainText(String(input.at ?? input.dir))} in this folder (paths below are in it)` : "this folder"}:`)}`);
           const stat = /** @type {string[]} */ (Array.isArray(input.lines) ? input.lines : []);
           for (const l of stat.slice(0, 40)) console.log(`    ${l}`);
           if (stat.length > 40) console.log(`      ${c.grey(`… ${stat.length - 40} more lines — d shows the whole diff`)}`);
@@ -19584,7 +19706,7 @@ async function codeLocalTurn(s, text) {
             }
             // f: a cloud agent's patch taken file by file; the files taken become the patch that is applied.
             if (isApply && (answer === "f" || answer === "files") && !cancel.asked && !signal?.aborted) {
-              const picked = await choosePatchFiles(s.dir, /** @type {any} */ (input).patchBytes ?? String(input.patch ?? ""), (q) => cancellablePrompt(q, cancel), "      ");
+              const picked = await choosePatchFiles(typeof input.dir === "string" ? input.dir : s.dir, /** @type {any} */ (input).patchBytes ?? String(input.patch ?? ""), (q) => cancellablePrompt(q, cancel), "      ");
               if (cancel.asked || signal?.aborted) break;
               if ("none" in picked) {
                 console.log(`      ${c.dim(`${picked.none} — the whole patch is asked about again`)}`);
@@ -19682,6 +19804,9 @@ async function codeLocalTurn(s, text) {
         // Read as the tool reads it: a call it would refuse is refused before any question (FOL-382).
         const job = cloudJobsInput(input, turnCloud);
         if ("problem" in job) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: job.problem });
+        // A path that leads out of the folder or to no repository (FOL-351): refused before any question.
+        const repo = "folder" in job && job.folder ? cloudJobRepo(s.dir, job.path) : null;
+        if (repo && "problem" in repo) return Promise.resolve({ behavior: /** @type {const} */ ("deny"), message: repo.problem });
         // Collecting the jobs already started starts nothing and sends nothing: never asked.
         if ("wait" in job) return Promise.resolve({ behavior: /** @type {const} */ ("allow"), updatedInput: input });
       }
@@ -19761,9 +19886,10 @@ async function codeLocalTurn(s, text) {
         asked: Boolean(asked),
         at: cloudAt,
         say: said,
-        approveApply: (n, lines, patch) => {
+        approveApply: (n, lines, patch, where, at) => {
           // The patch's own bytes go with it: taken file by file, it is cut and joined as bytes.
-          const next = gate.then(() => decide("cloud_apply", { n, lines, patch: String(patch), patchBytes: patch }, signal));
+          // Its place: the repository it reads from when it is not the folder (FOL-351).
+          const next = gate.then(() => decide("cloud_apply", { n, lines, patch: String(patch), patchBytes: patch, ...(at ? { dir: where, at } : {}) }, signal));
           gate = next.then(() => undefined, () => undefined);
           return next.then((d) => {
             if (d.behavior !== "allow") return false;
@@ -20391,7 +20517,10 @@ async function codeLocalTurn(s, text) {
                 const job = cloudJobsInput(input, turnCloud);
                 if ("problem" in job) return Promise.resolve({ text: job.problem, isError: true });
                 // The folder goes by git (a copy out, the changes back): none here, and the job is refused with how to go on (FOL-274).
-                if (!("wait" in job) && job.folder && !inGitRepo(s.dir)) return Promise.resolve({ text: "This folder has no git, which an agent in the cloud needs to take a copy of it and bring the changes back. Send the jobs without the folder (folder: false), or tell the person: /where cloud offers to set git up.", isError: true });
+                // FOL-351: a repository inside it, named by path, goes instead; without path, the ones right below are named.
+                const repo = !("wait" in job) && job.folder ? cloudJobRepo(s.dir, job.path) : null;
+                if (repo && "problem" in repo) return Promise.resolve({ text: repo.problem, isError: true });
+                if (!("wait" in job) && job.folder && job.path === undefined && !inGitRepo(s.dir)) return Promise.resolve({ text: "This folder has no git, which an agent in the cloud needs to take a copy of it and bring the changes back. Send the jobs without the folder (folder: false), or tell the person: /where cloud offers to set git up.", isError: true });
                 // Both ways, and a wait, go through one door (FOL-382): it answers once the jobs have started.
                 return cloudCall(input, ctx.signal);
               } }]),
@@ -24072,9 +24201,20 @@ async function undoLastPatch(s) {
     console.log(`  ${c.dim("nothing applied in this session to undo")}\n`);
     return;
   }
-  const top = spawnSync("git", ["-C", s.dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  const pre = spawnSync("git", ["-C", s.dir, "rev-parse", "--show-prefix"], { encoding: "utf8" });
+  // Taken back where it went: a cloud job's repository inside the folder (FOL-351), else the folder.
+  const where = typeof last.dir === "string" ? last.dir : s.dir;
+  // Not taken back anywhere else (Codex): a repository moved or replaced since, or git unable to name its top, stops it.
+  if (typeof last.dir === "string" && !sameCloudRepo(last.dir, last.repoId)) {
+    console.log(`  ${c.red("✗")} the repository that change went into (${plainText(last.dir)}) was moved or replaced since — not taken back. ${c.dim(`the patch is at ${keepPatch(last.patch, last.runId)}`)}\n`);
+    return;
+  }
+  const top = spawnSync("git", ["-C", where, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  const pre = spawnSync("git", ["-C", where, "rev-parse", "--show-prefix"], { encoding: "utf8" });
   const root = String(top.stdout).replace(/\r?\n$/, "");
+  if (top.status !== 0 || pre.status !== 0 || top.error || pre.error || !root || !path.isAbsolute(root)) {
+    console.log(`  ${c.red("✗")} git cannot say where ${plainText(where)} is a repository now, so the change is not taken back. ${c.dim(`the patch is at ${keepPatch(last.patch, last.runId)}`)}\n`);
+    return;
+  }
   const prefix = String(pre.stdout).replace(/\r?\n$/, "").replace(/\/$/, "");
   const git = (...more) => spawnSync("git", ["-C", root, "apply", "-R", ...(prefix ? [`--directory=${prefix}`] : []), ...more], { input: last.patch, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   const check = git("--check");
@@ -24085,6 +24225,11 @@ async function undoLastPatch(s) {
   for (const l of String(git("--stat").stdout).trimEnd().split("\n")) if (l.trim()) console.log(`  ${l.trim()}`);
   if (!/^y(es)?$/i.test((await promptVisible(`  take back the last change you applied? [y/N] `)).trim())) {
     console.log(`  ${c.dim("left as it is")}\n`);
+    return;
+  }
+  // Asked again after the question (Codex): the repository may have been swapped while the person read it.
+  if (typeof last.dir === "string" && !sameCloudRepo(last.dir, last.repoId)) {
+    console.log(`  ${c.red("✗")} the repository was moved or replaced while you were asked — not taken back.\n`);
     return;
   }
   const done = git();

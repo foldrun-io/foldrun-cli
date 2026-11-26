@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   CLOUD_JOBS_CEILING, cloudTasks, cloudJobsInput, cloudRoomText, cloudEstimate, cloudAskLine, cloudStartedText, cloudNewsBlock, cloudNewsText, cloudStillRunningText,
 } from "../src/code-cloud-jobs.mjs";
@@ -71,6 +72,7 @@ test("the batch question: how many, where, and the credits as a guess from this 
     "3 cloud jobs, side by side in desk on api.foldrun.dev as its agent researcher, with that agent's own tools — only the text below is sent, no file of this folder — E",
   );
   assert.match(cloudAskLine({ n: 1, folder: true, ws: "desk", host: "h", agent: "coder", estimate: "E" }), /^1 cloud job: sends a copy of this folder to desk on h and runs coder there — E$/);
+  assert.match(cloudAskLine({ n: 2, folder: true, ws: "desk", host: "h", agent: "coder", estimate: "E", repo: "repo-b" }), /^2 cloud jobs, side by side: sends a copy of the repository repo-b in this folder to desk on h/, "FOL-351: the repository path names");
 });
 
 test("cloudStartedText: the run ids at once, what was not started and why, and how the results come", () => {
@@ -122,4 +124,109 @@ test("the choice to be asked first is kept with the person's code prefs, and not
     if (was === undefined) delete process.env.FOLDRUN_HOME;
     else process.env.FOLDRUN_HOME = was;
   }
+});
+
+// FOL-351: a session folder that is not a repository but holds several — cloud_jobs' path names the one a job gets.
+function repos(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-repos-"));
+  for (const name of ["repo-a", "repo-b"]) {
+    const d = path.join(root, name);
+    fs.mkdirSync(path.join(d, "src"), { recursive: true });
+    fs.writeFileSync(path.join(d, `${name}.txt`), `${name}\n`);
+    fs.writeFileSync(path.join(d, "src", "x.txt"), "x\n");
+    execFileSync("git", ["-C", d, "init", "-q"]);
+  }
+  fs.mkdirSync(path.join(root, "plain"));
+  return root;
+}
+
+test("cloudJobsInput: path is read with a folder job, and refused with folder: false or when it is not a name", () => {
+  assert.deepEqual(cloudJobsInput({ tasks: ["a"], path: " repo-b " }, cloud), { folder: true, tasks: ["a"], agent: null, description: "", path: "repo-b" });
+  assert.match((cloudJobsInput({ folder: false, tasks: ["a"], path: "repo-b" }, cloud) as any).problem, /path goes with folder: true/);
+  assert.match((cloudJobsInput({ tasks: ["a"], path: "" }, cloud) as any).problem, /relative to it/);
+  assert.match((cloudJobsInput({ tasks: ["a"], path: 3 }, cloud) as any).problem, /relative to it/);
+  assert.match((cloudJobsInput({ tasks: ["a"], path: "repo\u0007" }, cloud) as any).problem, /control character/);
+});
+
+test("cloudJobRepo: path names a repository inside the folder; .., an absolute path, a link out and a folder that is no repository are refused", async () => {
+  const { cloudJobRepo } = await import("../src/commands.mjs");
+  const root = repos();
+  const real = fs.realpathSync(root);
+  const at = (r: any) => ("problem" in r ? r : { dir: r.dir, rel: r.rel });
+  assert.deepEqual(at(cloudJobRepo(root, "repo-b")), { dir: path.join(real, "repo-b"), rel: "repo-b" });
+  assert.deepEqual(at(cloudJobRepo(root, "repo-b/src")), { dir: path.join(real, "repo-b"), rel: "repo-b" }, "inside a repository: its top");
+  assert.deepEqual(at(cloudJobRepo(root, "./repo-a/")), { dir: path.join(real, "repo-a"), rel: "repo-a" });
+  assert.match((cloudJobRepo(root, "../x") as any).problem, /climbs out with "\.\."/);
+  assert.match((cloudJobRepo(root, "repo-b/../../x") as any).problem, /climbs out/);
+  assert.match((cloudJobRepo(root, path.join(real, "repo-b")) as any).problem, /is absolute/);
+  assert.match((cloudJobRepo(root, "/etc") as any).problem, /is absolute/);
+  // A link inside the folder that points at a repository outside it.
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-"));
+  execFileSync("git", ["-C", outside, "init", "-q"]);
+  fs.symlinkSync(outside, path.join(root, "link-out"));
+  assert.match((cloudJobRepo(root, "link-out") as any).problem, /leads out of .* \(through a link\)/);
+  // A link that stays inside is the repository it points at.
+  fs.symlinkSync(path.join(root, "repo-a"), path.join(root, "link-in"));
+  assert.deepEqual(at(cloudJobRepo(root, "link-in")), { dir: path.join(real, "repo-a"), rel: "repo-a" });
+  assert.match((cloudJobRepo(root, "plain") as any).problem, /is not a git repository/);
+  assert.match((cloudJobRepo(root, "nope") as any).problem, /no such folder/);
+  assert.match((cloudJobRepo(root, "repo-a/repo-a.txt") as any).problem, /is a file/);
+  // This folder itself in a repository: a path whose repository is above it is refused.
+  assert.match((cloudJobRepo(path.join(root, "repo-b", "src"), ".") as any).problem, /not inside .* leave path out/);
+});
+
+test("sameCloudRepo: a repository moved, or replaced by a link to one outside, after it was checked is not the same (Codex, FOL-351)", async () => {
+  const { cloudJobRepo, sameCloudRepo } = await import("../src/commands.mjs");
+  const root = repos();
+  const got = cloudJobRepo(root, "repo-b") as any;
+  assert.ok(got.id && sameCloudRepo(got.dir, got.id), "unchanged: the same");
+  // Swapped for a link to a repository outside, at the same name.
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-"));
+  execFileSync("git", ["-C", outside, "init", "-q"]);
+  fs.renameSync(got.dir, `${got.dir}-moved`);
+  fs.symlinkSync(outside, got.dir);
+  assert.equal(sameCloudRepo(got.dir, got.id), false, "a link in its place is refused");
+  fs.unlinkSync(got.dir);
+  // Another folder at the same path (deleted and made again): not the same.
+  fs.mkdirSync(got.dir);
+  execFileSync("git", ["-C", got.dir, "init", "-q"]);
+  assert.equal(sameCloudRepo(got.dir, got.id), false, "a new folder at the same path is refused");
+  fs.rmSync(got.dir, { recursive: true });
+  assert.equal(sameCloudRepo(got.dir, got.id), false, "gone: refused");
+});
+
+test("the folder's repositories are listed without following a .git link, and a .git file that is no repository is not listed (Codex, FOL-351)", async () => {
+  const { cloudJobRepo } = await import("../src/commands.mjs");
+  const root = repos();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-outside-"));
+  execFileSync("git", ["-C", outside, "init", "-q"]);
+  fs.mkdirSync(path.join(root, "linked"));
+  fs.symlinkSync(path.join(outside, ".git"), path.join(root, "linked", ".git"));
+  fs.mkdirSync(path.join(root, "fake"));
+  fs.writeFileSync(path.join(root, "fake", ".git"), "not a gitdir line\n");
+  const said = (cloudJobRepo(root, undefined) as any).problem as string;
+  assert.match(said, /"repo-a", "repo-b"/);
+  assert.doesNotMatch(said, /linked|fake/);
+});
+
+test("cloudJobRepo without path: a folder of repositories is refused with their names and how to pass path; a repository goes as before", async () => {
+  const { cloudJobRepo } = await import("../src/commands.mjs");
+  const root = repos();
+  const no = (cloudJobRepo(root, undefined) as any).problem as string;
+  assert.match(no, /is not a git repository, but it holds 2: "repo-a", "repo-b"\. Call cloud_jobs again with path: .*e\.g\. path: "repo-a"/);
+  assert.doesNotMatch(no, /plain/, "a folder that is no repository is not named");
+  for (let i = 0; i < 12; i++) execFileSync("git", ["init", "-q", path.join(root, `r${String(i).padStart(2, "0")}`)]);
+  assert.match((cloudJobRepo(root, undefined) as any).problem, /holds 14: "r00", [^\n]*"r09" and 4 more/);
+  assert.deepEqual(cloudJobRepo(path.join(root, "repo-a"), undefined), { dir: path.join(root, "repo-a"), rel: "" });
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-empty-"));
+  assert.deepEqual(cloudJobRepo(empty, undefined), { dir: empty, rel: "" }, "no repository below: the snapshot's own refusal, as before");
+});
+
+test("the tool the model is offered names path for a folder of repositories", async () => {
+  const { cloudJobsTool } = await import("../src/commands.mjs");
+  const tool = cloudJobsTool(null);
+  const props = (tool.schema as any).properties;
+  assert.equal(props.path.type, "string");
+  assert.match(props.path.description, /git repository inside this folder, relative to it[\s\S]*never \.\., an absolute path, or a link out/);
+  assert.match(tool.description, /not itself a git repository but holds some[\s\S]*pass path/);
 });

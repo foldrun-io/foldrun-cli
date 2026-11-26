@@ -35,7 +35,7 @@ export function cloudTasks(/** @type {unknown} */ input) {
  * one of the project's agents without it), or a wait for the ones running.
  * @param {unknown} input
  * @param {{ agents: string[], own: string } | null} cloud the project's agents, for a job without the folder
- * @returns {{ problem: string } | { wait: true } | { folder: boolean, tasks: string[], agent: string | null, description: string }}
+ * @returns {{ problem: string } | { wait: true } | { folder: boolean, tasks: string[], agent: string | null, description: string, path?: string }}
  */
 export function cloudJobsInput(input, cloud) {
   const i = /** @type {any} */ (input && typeof input === "object" ? input : {});
@@ -45,10 +45,17 @@ export function cloudJobsInput(input, cloud) {
     return { wait: true };
   }
   if (i.folder !== undefined && typeof i.folder !== "boolean") return { problem: "folder must be true or false (true: a copy of the folder goes; false: only the task)" };
+  // FOL-351: a repository inside the folder, by its path relative to the folder. Where it leads is checked
+  // against the disk where the job starts (cloudJobRepo); here only its shape.
+  if (i.path !== undefined) {
+    if (i.folder === false) return { problem: "path goes with folder: true — it names the repository inside this folder whose copy a job gets" };
+    if (typeof i.path !== "string" || !i.path.trim()) return { problem: "path is a folder inside this one, relative to it, e.g. \"repo-b\"" };
+    if (/[\x00-\x1f\x7f-\x9f]/.test(i.path)) return { problem: "path holds a control character" };
+  }
   const t = cloudTasks(i);
   if (!t.tasks) return { problem: t.error ?? "no tasks" };
   const description = String(i.description ?? "").replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-  if (i.folder !== false) return { folder: true, tasks: t.tasks, agent: null, description };
+  if (i.folder !== false) return { folder: true, tasks: t.tasks, agent: null, description, ...(i.path !== undefined ? { path: String(i.path).trim() } : {}) };
   if (!cloud) return { problem: "folder: false runs the job as one of the project's agents, and the project has none yet" };
   // Shown whole before it leaves, so plain text only (Codex, FOL-258).
   if (t.tasks.some((x) => /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(x))) return { problem: "each task is plain text only (one holds a control character)" };
@@ -99,12 +106,12 @@ export function cloudEstimate(costs, n) {
 
 /**
  * The question's head line: how many jobs, where, what goes, what it costs.
- * @param {{ n: number, folder: boolean, ws: string, host: string, agent: string, estimate: string }} o
+ * @param {{ n: number, folder: boolean, ws: string, host: string, agent: string, estimate: string, repo?: string }} o `repo`: cloud_jobs' path, the repository inside the folder that goes instead of it (FOL-351)
  */
 export function cloudAskLine(o) {
   const many = o.n === 1 ? "1 cloud job" : `${o.n} cloud jobs, side by side`;
   return o.folder
-    ? `${many}: sends a copy of this folder to ${o.ws} on ${o.host} and runs ${o.agent} there — ${o.estimate}`
+    ? `${many}: sends a copy of ${o.repo ? `the repository ${o.repo} in this folder` : "this folder"} to ${o.ws} on ${o.host} and runs ${o.agent} there — ${o.estimate}`
     : `${many} in ${o.ws} on ${o.host} as its agent ${o.agent}, with that agent's own tools — only the text below is sent, no file of this folder — ${o.estimate}`;
 }
 
