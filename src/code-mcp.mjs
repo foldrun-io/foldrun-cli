@@ -457,6 +457,9 @@ export function forgetServersNamed(/** @type {string} */ name, /** @type {string
 export function mcpManager(o) {
   /** @type {Map<string, { hash: string, conn: any, tools: any[], said: string, cut: string[] }>} */
   const live = new Map();
+  /** Hashes said yes to by /permissions bypass, for this session only (FOL-411): never written to disk. */
+  /** @type {Set<string>} */
+  const forSession = new Set();
   /** Turned off for this session by the person. */
   const off = new Set();
   /** @type {Map<string, string>} name → why the last start failed (for that fingerprint) */
@@ -482,7 +485,7 @@ export function mcpManager(o) {
         continue;
       }
       if (running && running.hash !== r.hash) await stop(s.name);
-      const ok = approved[r.hash];
+      const ok = approved[r.hash] ?? (forSession.has(r.hash) ? {} : undefined);
       // The yes was taken back (in another terminal, say): it does not go on running here.
       if (!ok && live.has(s.name)) await stop(s.name);
       const now = live.get(s.name);
@@ -530,7 +533,7 @@ export function mcpManager(o) {
     if (!entry) return "it is no longer named in the file";
     const resolved = resolvedNow(entry);
     if ("problem" in resolved) return resolved.problem;
-    if (!readApprovals()[resolved.hash]) return `it changed since you were shown it — /setup mcp on ${name} shows it as it is now`;
+    if (!readApprovals()[resolved.hash] && !forSession.has(resolved.hash)) return `it changed since you were shown it — /setup mcp on ${name} shows it as it is now`;
     const row = { name, resolved };
     const key = `${row.name}\n${row.resolved.hash}`;
     failed.delete(key);
@@ -587,6 +590,12 @@ export function mcpManager(o) {
       off.delete(row.name);
       return start(row.name, signal);
     },
+    /** Started on /permissions bypass's yes (FOL-411): for this session only, nothing written — later sessions ask as before. */
+    async approveForSession(/** @type {any} */ row, /** @type {AbortSignal} */ signal) {
+      forSession.add(row.resolved.hash);
+      off.delete(row.name);
+      return start(row.name, signal);
+    },
     async turnOff(/** @type {string} */ name) {
       off.add(name);
       await stop(name);
@@ -620,7 +629,7 @@ export function mcpManager(o) {
       const out = [];
       for (const l of live.values()) {
         // Without its yes — taken back since — nothing of it is offered, even before it is stopped.
-        if (!approved[l.hash]) continue;
+        if (!approved[l.hash] && !forSession.has(l.hash)) continue;
         const never = new Set(approved[l.hash]?.never ?? []);
         for (const t of l.tools) if (!never.has(t.short)) out.push(t);
       }
