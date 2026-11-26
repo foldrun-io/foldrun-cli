@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [33.7.3] — 2026-11-26
+
+### deps
+
+- @foldrun/core 29.7.0 ([3972431](https://github.com/foldrun-io/foldrun-cli/commit/3972431))
+
 ## [33.7.2] — 2026-11-26
 
 - fix(code): /where web says why search and fetch were not offered; a failed gateway ask is made again at the next message (FOL-332) ([feb918d](https://github.com/foldrun-io/foldrun-cli/commit/feb918d))
