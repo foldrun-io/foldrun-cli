@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.0.0] — 2026-11-26
+
+### Breaking changes
+
+- /permissions bypass no longer ends with the session; it (ca559f2)
+
+- feat(code): /permissions remembers the last choice for the next session (FOL-397) ([ca559f2](https://github.com/foldrun-io/foldrun-cli/commit/ca559f2))
+
 ## [33.7.3] — 2026-11-26
 
 ### deps
