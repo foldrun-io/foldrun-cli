@@ -26,7 +26,7 @@ import { listConversation, listedConversations, searchWords, searchConversations
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
 import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, cellsOf, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT, attributionNote, KODER_TRAILER } from "./code-session.mjs";
-import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
+import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, cloudPlaceNote, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
 import { koderLine } from "./koder-path.mjs";
 import { routeFor, groupOf, noteWorked, switchAfterStall, roadFailure, hostOf, approved as frontApproved, originOf as originOfUrl } from "./routes.mjs";
 import { checkClaudeRoute, writeOwnership, noticeWords, takeLock as takeClaudeLock, claudeSettingsFile as claudeSettingsPath, STATUS_LINE_COMMAND, REFRESH_SECONDS } from "./claude-route.mjs";
@@ -15053,7 +15053,7 @@ const SECRET_NAME = /(^|\/)(\.env(\.[^/]*)?|[^/]*\.(pem|key|p12|pfx|jks|keystore
  * @param {string} dest
  * @param {{ paths: Set<string>, unscanned: Set<string>, untracked: Set<string> } | null} agreed what a yes this session covers
  */
-function uploadPreview(p, dest, agreed) {
+function uploadPreview(p, dest, agreed, listedOnly = false) {
   // A path as it is, with anything a terminal would hide or change written
   // as an escape: two names never print the same (Codex).
   // Every control, format, private-use or unassigned code point, line and
@@ -15080,7 +15080,7 @@ function uploadPreview(p, dest, agreed) {
   const lines = [];
   lines.push(`  ${c.cyan("↑")} ${c.bold(`sends a copy of this folder to ${oneLine(dest)}`)}`);
   lines.push(`    ${c.grey(`${p.packed.files} file${p.packed.files === 1 ? "" : "s"} · ${formatBytes(p.packed.bytes)} (${formatBytes(p.packed.archive.length)} packed) · the files git tracks or would add, as they are on disk now`)}`);
-  lines.push(`    ${c.grey(agreed ? "new since your last yes:" : "files:")} ${c.white(listed(fresh))}`);
+  lines.push(`    ${c.grey(agreed ? (listedOnly ? "new since they were last listed:" : "new since your last yes:") : "files:")} ${c.white(listed(fresh))}`);
   const untracked = p.untracked.filter((x) => fresh.includes(x));
   if (untracked.length) lines.push(`    ${c.amber("!")} ${c.grey("not in git yet (sent: .gitignore does not leave them out):")} ${listed(untracked)}`);
   const named = fresh.filter((x) => SECRET_NAME.test(x) && !unscanned.has(x));
@@ -15110,9 +15110,19 @@ async function agreeToUpload(s, p, dest, ask, cancelled = () => false) {
   const key = typeof p.dir === "string" ? p.dir : s.dir;
   /** @type {{ paths: Set<string>, unscanned: Set<string>, untracked: Set<string> } | null} */
   const agreed = s.uploadAgreed.get(key) ?? null;
-  const { lines, fresh, shown } = uploadPreview(p, dest, agreed);
-  if (agreed && !fresh.length) return true;
+  // Under /permissions bypass no yes is kept (below), so the whole list was printed again before every turn
+  // (owner, 28 Nov 2026: "why i keep seeing this"). What bypass has LISTED is remembered apart from what was
+  // agreed to: while bypass stays on, only paths not yet listed are shown; with bypass off it counts for nothing.
+  const bypassing = s?.bypass === true && !s?.headless && !!process.stdin.isTTY && !!process.stdout.isTTY && s.flags?.yes !== true;
+  s.uploadListed ??= new Map();
+  const listedBefore = bypassing ? (s.uploadListed.get(key) ?? null) : null;
+  /** @type {(k: "paths" | "unscanned" | "untracked") => Set<string>} */
+  const both = (k) => new Set([...(agreed?.[k] ?? []), ...(listedBefore?.[k] ?? [])]);
+  const known = agreed || listedBefore ? { paths: both("paths"), unscanned: both("unscanned"), untracked: both("untracked") } : null;
+  const { lines, fresh, shown } = uploadPreview(p, dest, bypassing ? known : agreed, bypassing && !!listedBefore);
+  if (bypassing ? known && !fresh.length : agreed && !fresh.length) return true;
   for (const l of lines) console.log(l);
+  if (bypassing) s.uploadListed.set(key, { paths: new Set([...(listedBefore?.paths ?? []), ...p.paths]), unscanned: new Set([...(listedBefore?.unscanned ?? []), ...p.unscanned]), untracked: new Set([...(listedBefore?.untracked ?? []), ...p.untracked]) });
   // --yes: sent without asking, as it applies without asking. No terminal:
   // nobody to ask — a script gave this turn with --task; the preview is in
   // its output and the patch it gets back is still only applied with --yes.
@@ -16047,7 +16057,11 @@ async function codeTurn(s, task, include = []) {
     // The folder's instruction files and skills, named from what was just
     // packed and agreed to — never from another listing (Codex).
     if (agreed && s.cloudBriefDue) {
-      const brief = cloudBrief(dir, new Set(pack.paths));
+      // Where the copy came from, so a full path can be given and another folder on this computer is not
+      // looked for in the copy; said here, since the path leaves with the message (owner, 28 Nov 2026).
+      const place = cloudPlaceNote(dir);
+      console.log(`  ${c.cyan("↑")} ${c.grey(`tells the agent where this folder is on this computer: ${plainText(path.resolve(dir))}`)}`);
+      const brief = [place, cloudBrief(dir, new Set(pack.paths))].filter(Boolean).join("\n\n");
       if (brief) task = `${brief}\n\n${task}`;
     }
     if (!agreed) {

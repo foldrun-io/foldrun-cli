@@ -1888,6 +1888,15 @@ test("/permissions bypass asks no question (FOL-411): a cloud turn's files go an
     assert.equal(fs.readFileSync(path.join(d, "a.txt"), "utf8"), "a\nb\n", "applied without a question");
     assert.doesNotMatch(t.out(), /send it\? \[y\]es|apply it to/, "neither question was asked");
     at = await t.until(/\w ❯ /, at);
+    // The next turn under bypass: the same files are not listed again (owner, 28 Nov 2026).
+    const listings = () => (t.out().match(/sends a copy of this folder/g) ?? []).length;
+    assert.equal(listings(), 1);
+    t.send("and again\r");
+    at = await t.until(/sent the folder/, at);
+    at = await t.until(/\w ❯ /, at, 30_000);
+    assert.equal(listings(), 1, "listed once while bypass stays on");
+    assert.equal((t.out().match(/send it\? yes — \/permissions bypass asks nothing/g) ?? []).length, 1);
+    assert.equal((t.out().match(/tells the agent where this folder is on this computer/g) ?? []).length, 1, "the place is told once a session");
     t.send("/permissions relaxed\r");
     at = await t.until(/bypass off/, at);
     at = await t.until(/\w ❯ /, at);
