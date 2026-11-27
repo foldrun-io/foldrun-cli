@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.1] — 2026-11-27
+
+### deps
+
+- @foldrun/core 32.1.0 ([6a9a227](https://github.com/foldrun-io/foldrun-cli/commit/6a9a227))
+
 ## [36.1.0] — 2026-11-27
 
 - feat(browser): name the driver in the window's badge (FOL-451) ([ecdf2a9](https://github.com/foldrun-io/foldrun-cli/commit/ecdf2a9))
