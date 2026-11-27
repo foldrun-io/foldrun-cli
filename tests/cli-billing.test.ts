@@ -257,3 +257,35 @@ test("a wallet-only account (FOL-385): billing and billing plans say it pays as 
   assert.equal(off.code, 0, off.out);
   assert.match(off.out, /pay as you go off \(its limit, \$50\.00 a month, kept\) — nothing new runs until you turn it on/);
 });
+
+test("plan renewal (FOL-452): billing plans says who pays it, the grace is said, and the card backup is a wallet setting", async () => {
+  const sub = { kind: "active", source: "subscription", plan: "pro" };
+  const live = { plan: "pro", status: "active", renew: true, periodEnd: "2026-12-20T00:00:00Z", periodStart: "2026-11-20T00:00:00Z", priceUsd: 25 };
+  const base = { prices: { starter: 10, pro: 25, max: 120 }, available: { starter: true, pro: true, max: true }, balanceUsd: 5, allowance: { windows: [] }, extraUsage: { on: false, capUsd: null } };
+  const renewal = (over: object) => ({ plan: "pro", priceUsd: 25, at: live.periodEnd, walletCovers: false, cardBackup: true, state: null, graceUntil: null, attempts: 0, ...over });
+  let view: object = { ...base, plan: live, entitlement: sub, renewal: renewal({}) };
+  const s = await serve({
+    "GET /v1/billing/coding-plan": () => view,
+    "GET /v1/billing/wallet": () => ({ enabled: true, summary: { balanceUsd: 5 }, cardSaved: true, autoTopUp: null, renewFromCard: true }),
+    "PUT /v1/billing/wallet": () => ({ ok: true }),
+    "DELETE /v1/billing/coding-plan": () => ({ plan: null }),
+  });
+  const card = await at(s.url, "billing", "plans");
+  assert.match(card.out, /renewal\s+\$25\.00: your wallet holds \$5\.00, your saved card pays the rest/);
+  view = { ...base, plan: live, entitlement: sub, renewal: renewal({ cardBackup: false }) };
+  assert.match((await at(s.url, "billing", "plans")).out, /no card pays the rest — `foldrun billing top-up <usd>` before then/);
+  view = { ...base, plan: { ...live, status: "ended", renew: false }, entitlement: { kind: "none" }, renewal: renewal({ state: "failed", graceUntil: "2026-12-23T00:00:00Z" }) };
+  assert.match((await at(s.url, "billing", "plans")).out, /your Pro plan could not renew: your wallet is short of \$25\.00\. Top up by 2026-12-23 00:00 UTC/);
+  const stop = await at(s.url, "billing", "plan", "cancel", "--yes");
+  assert.equal(stop.code, 0, stop.out);
+  assert.match(stop.out, /Pro will not renew — it ends within the hour/);
+  assert.ok(s.seen.some((x) => x.method === "DELETE"), "the renewal is stopped in the grace");
+  const w = await at(s.url, "billing", "wallet");
+  assert.match(w.out, /renewals\s+the saved card pays what the wallet lacks/);
+  const off = await at(s.url, "billing", "wallet", "set", "renew-from-card", "off");
+  const put = s.seen.find((x) => x.method === "PUT");
+  s.close();
+  assert.equal(off.code, 0, off.out);
+  assert.deepEqual(JSON.parse(put!.body), { renewFromCard: false });
+  assert.match(off.out, /plan renewals from the wallet only/);
+});

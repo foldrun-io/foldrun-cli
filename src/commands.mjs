@@ -26796,11 +26796,13 @@ async function billingVerbCmd(positional, flags) {
       if (s.daysLeft != null) console.log(`  ${s.daysLeft < 7 ? c.amber("!") : c.dim("·")} ${c.dim(`about ${Math.round(s.daysLeft)} days left at this burn${s.emptyOn ? ` — empty on ${s.emptyOn.slice(0, 10)}` : ""}${s.suggestedTopUpUsd ? `; ${usd(s.suggestedTopUpUsd)} covers about a month` : ""}`)}`);
       const a = w.autoTopUp;
       console.log(`  auto top-up  ${a?.enabled ? `${usd(a.amountUsd)} when the balance falls below ${usd(a.thresholdUsd)}` : c.dim(`off${a ? ` (${usd(a.amountUsd)} below ${usd(a.thresholdUsd)} kept)` : ""}`)}${w.cardSaved ? "" : c.dim(" · no card saved")}`);
+      // FOL-452: a renewal the wallet cannot cover takes the rest from the card.
+      if (typeof w.renewFromCard === "boolean") console.log(`  renewals     ${w.renewFromCard ? `the saved card pays what the wallet lacks${w.cardSaved ? "" : c.dim(" (no card saved)")}` : c.dim("from the wallet only — a short wallet pauses the plan")}`);
       if (w.email) console.log(`  receipts     ${w.email}`);
       // foldrun.ir (3 Nov 2026): paying with an Iranian card, in Toman.
       if (w.tomanTopUp?.url) console.log(`  in Toman     ${w.tomanTopUp.url}`);
       if (w.dunning && w.dunning.state && w.dunning.state !== "ok") console.log(`  ${c.red("✗")} plan invoice unpaid — ${w.dunning.state}`);
-      console.log(`\n  ${c.dim("foldrun billing wallet set auto-top-up --threshold 10 --amount 50 · set auto-top-up off")}\n`);
+      console.log(`\n  ${c.dim("foldrun billing wallet set auto-top-up --threshold 10 --amount 50 · set auto-top-up off · set renew-from-card on|off")}\n`);
       return 0;
     }
     // `wallet clear email`: no receipt or warning address (the page's
@@ -26811,11 +26813,16 @@ async function billingVerbCmd(positional, flags) {
       console.log(`\n  ${c.green("✓")} no receipt email — the low-balance warning has nowhere to go until one is set\n`);
       return 0;
     }
-    if (sub !== "set" || !["auto-top-up", "email"].includes(rest[0])) {
-      throw new Error("`foldrun billing wallet set auto-top-up --threshold <usd> --amount <usd>` (or `off`), or `wallet set email <address>` (`wallet clear email` for none)");
+    if (sub !== "set" || !["auto-top-up", "email", "renew-from-card"].includes(rest[0])) {
+      throw new Error("`foldrun billing wallet set auto-top-up --threshold <usd> --amount <usd>` (or `off`), `wallet set renew-from-card on|off`, or `wallet set email <address>` (`wallet clear email` for none)");
     }
     let body;
-    if (rest[0] === "email") {
+    if (rest[0] === "renew-from-card") {
+      // FOL-452: a plan renewal the wallet cannot cover is paid from the
+      // saved card for what is missing; off, a short wallet pauses the plan.
+      if (rest[1] !== "on" && rest[1] !== "off") throw new Error("`foldrun billing wallet set renew-from-card on|off` — whether the saved card pays what the wallet lacks at a plan renewal");
+      body = { renewFromCard: rest[1] === "on" };
+    } else if (rest[0] === "email") {
       if (!rest[1]) throw new Error("`foldrun billing wallet set email <address>` — where receipts and low-balance warnings go");
       body = { email: rest[1] };
     } else if (rest[1] === "off") {
@@ -26832,7 +26839,11 @@ async function billingVerbCmd(positional, flags) {
       body = { autoTopUp: { enabled: true, thresholdUsd: threshold, amountUsd: amount } };
     }
     await ownerOnly(() => remoteCall(url, flags, "/v1/billing/wallet", { method: "PUT", body: JSON.stringify(body) }), "changing the wallet");
-    const said = body.email
+    const said = typeof body.renewFromCard === "boolean"
+      ? body.renewFromCard
+        ? "plan renewals: the saved card pays what the wallet lacks"
+        : "plan renewals from the wallet only — a short wallet pauses the plan until you top up"
+      : body.email
       ? `receipts go to ${body.email}`
       : body.autoTopUp?.enabled
         ? `auto top-up on: ${usd(body.autoTopUp.amountUsd)} whenever the balance falls below ${usd(body.autoTopUp.thresholdUsd)}`
@@ -28620,6 +28631,12 @@ async function billingPlansCmd(verb, arg, flags) {
     if (mine) {
       const next = mine.nextPlan && mine.nextPlan !== mine.plan ? `, then ${name(mine.nextPlan)}` : "";
       console.log(`\n  ${mine.renew ? `renews ${String(mine.periodEnd).slice(0, 10)}${next}` : c.amber(`ends ${String(mine.periodEnd).slice(0, 10)} — \`foldrun billing plan resume\` keeps it`)}`);
+      // Who pays the renewal (FOL-452): the wallet, the saved card for what
+      // it lacks, or nobody yet.
+      const r = sub.renewal;
+      if (mine.renew && r) {
+        console.log(`  ${pad("renewal", 14)} ${r.walletCovers ? `${usd(r.priceUsd)} from your wallet` : r.cardBackup ? `${usd(r.priceUsd)}: your wallet holds ${usd(sub.balanceUsd)}, your saved card pays the rest` : c.amber(`${usd(r.priceUsd)}, but your wallet holds ${usd(sub.balanceUsd)} and no card pays the rest — \`foldrun billing top-up <usd>\` before then`)}`);
+      }
       for (const w of sub.allowance?.windows ?? []) {
         console.log(`  ${pad(w.name === "month" ? "this month" : "this week", 14)} ${w.usedPct == null ? c.dim("counted, no limit") : `${w.usedPct}% used`} ${c.dim(`· resets ${String(w.resetsAt).slice(0, 16).replace("T", " ")} UTC`)}`);
       }
@@ -28644,6 +28661,12 @@ async function billingPlansCmd(verb, arg, flags) {
     } else {
       console.log(`\n  ${c.amber("no active subscription")} ${c.dim("— new work needs one, or a top-up to pay as you go where this platform offers it (`foldrun billing top-up <usd>`)")}`);
     }
+    // Past the period's end and not renewed yet (FOL-452): no plan for now.
+    const g = sub.renewal;
+    if (!mine && g?.graceUntil) {
+      const until = String(g.graceUntil).slice(0, 16).replace("T", " ");
+      console.log(`\n  ${g.state === "pending" ? c.amber(`your ${name(g.plan)} plan is renewing — the payment from your card is on its way`) : g.state === "failed" ? c.amber(`your ${name(g.plan)} plan could not renew: your wallet is short of ${usd(g.priceUsd)}. Top up by ${until} UTC (\`foldrun billing top-up <usd>\`) and it renews within the hour; after that it ends`) : c.dim(`your ${name(g.plan)} plan is due to renew and will within the hour`)}`);
+    }
     console.log(`\n  ${c.dim("foldrun billing plan starter|pro|max · plan cancel · plan resume · extra-usage on|off [--limit <usd>] · top-up <usd>")}\n`);
     return 0;
   }
@@ -28663,6 +28686,18 @@ async function billingPlansCmd(verb, arg, flags) {
           }
           const r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/subscribe", { method: "DELETE" }), "cancelling the plan");
           console.log(`\n  ${c.green("✓")} the platform plan stops ${r.endsAt ? `on ${String(r.endsAt).slice(0, 10)}` : "at the end of this cycle"}\n`);
+          return 0;
+        }
+        // Past its end and waiting to renew (FOL-452): stopping the renewal
+        // ends it, and the card is not tried again.
+        const g = sub.renewal;
+        if (g?.graceUntil) {
+          if (!(await confirmed(flags, "billing plan cancel", `Stop renewing ${name(g.plan)}? It is paused now, so it ends instead of renewing and your card is not tried again. [y/N] `))) {
+            console.log(`\n  ${c.dim("nothing changed")}\n`);
+            return 0;
+          }
+          await billingOnly(() => remoteCall(url, flags, "/v1/billing/coding-plan", { method: "DELETE" }), "cancelling the subscription");
+          console.log(`\n  ${c.green("✓")} ${name(g.plan)} will not renew — it ends within the hour\n`);
           return 0;
         }
         throw new Error("this account has no subscription to cancel");
