@@ -775,7 +775,7 @@ async function platformLibrary(flags) {
   }
   const names = async (kind) => {
     const res = await fetch(new URL(`/v1/library/${kind}`, url), {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${token}`, "user-agent": USER_AGENT },
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`/v1/library/${kind} → HTTP ${res.status}`);
@@ -807,7 +807,7 @@ async function platformBrowsers(url) {
   if (!platformBrowsersCache.has(url)) {
     platformBrowsersCache.set(url, (async () => {
       try {
-        const res = await fetch(new URL("/v1/version", url), { signal: AbortSignal.timeout(8_000) });
+        const res = await fetch(new URL("/v1/version", url), { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(8_000) });
         if (!res.ok) return none;
         const bv = /** @type {any} */ (await res.json())?.browser_versions;
         const pick = (v) => (typeof v === "string" && /^\d+(\.\d+)+$/.test(v) ? v : null);
@@ -6607,7 +6607,7 @@ export async function gatewayStatusLine(env = process.env, flags = {}, now = Dat
   } catch { /* none yet */ }
   let line;
   try {
-    const res = await fetch(`${base}/v1/usage?format=line`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(3000) });
+    const res = await fetch(`${base}/v1/usage?format=line`, { headers: { authorization: `Bearer ${key}`, "user-agent": USER_AGENT }, signal: AbortSignal.timeout(3000) });
     const text = await res.text();
     // The gateway's own line; anything else (a proxy's page, Anthropic's own
     // API) is not shown as if it were.
@@ -6679,7 +6679,7 @@ async function talkCmd(flags) {
     // Claude Code kills a skill's command at 2 minutes and drops the prompt:
     // the whole of `talk` stays inside 110 s, recording included.
     const wait = Math.max(10_000, TALK_DEADLINE_MS - (Date.now() - started));
-    res = await fetch(`${base}/v1/foldrun/transcribe?lang=${lang}`, { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "audio/wav" }, body: wav, signal: AbortSignal.timeout(wait) });
+    res = await fetch(`${base}/v1/foldrun/transcribe?lang=${lang}`, { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "audio/wav", "user-agent": USER_AGENT }, body: wav, signal: AbortSignal.timeout(wait) });
   } catch (err) {
     throw new Error(`the gateway at ${base} did not answer (${err.name === "TimeoutError" ? "no transcript in time — try a shorter recording" : err.message})`);
   }
