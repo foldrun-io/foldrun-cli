@@ -6087,3 +6087,270 @@ test("CPU and memory on this computer (FOL-240): asked once at the start, shown 
     s.close();
   }
 });
+
+// ---- FOL-345: trusted sessions, messages into a running turn, the answer sent back -------------------------------
+
+/** A platform for the FOL-345 tests: one waiting message that `arrive()` makes appear, the take route, what is sent
+ *  back to the sender, and the thread between them as the platform keeps it. */
+async function messagingPlatform(ctx: string, models: Array<(n: number) => unknown>, opts: { sender?: string; text?: string } = {}) {
+  const asked: any[] = [];
+  const takes: any[] = [];
+  const back: any[] = [];
+  const state = { arrived: false, used: false, held: false };
+  const msg = { id: "m345", from: "bo@example.com", sender: opts.sender ?? "key:k-bo", fromContext: "code-other", text: opts.text ?? "Please check the build script.", at: "2026-11-27T01:00:00.000Z" };
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/${ctx}/messages`]: (_b, q) => {
+      if (q.get("with") === "code-other") {
+        return { with: "code-other", messages: [
+          // An earlier message from the session, taken in before: the sign-in a trust is pinned to.
+          { id: "m0", from: "bo@example.com", sender: "key:k-bo", fromContext: "code-other", context: ctx, text: "hello from the API session", at: "2026-11-27T00:00:00.000Z", usedLocally: true, direction: "in" },
+          ...(state.arrived ? [{ ...msg, context: ctx, direction: "in", ...(state.used ? { usedLocally: true } : {}) }] : []),
+          ...back.map((b, i) => ({ id: `r${i}`, context: "code-other", fromContext: ctx, text: b.text, at: "2026-11-27T01:05:00.000Z", direction: "out" })),
+        ] };
+      }
+      return { messages: state.arrived && !state.used && !state.held ? [msg] : [] };
+    },
+    [`POST ${WS}/sessions/${ctx}/messages/take`]: (b) => {
+      const body = JSON.parse(String(b));
+      takes.push(body);
+      if (body.ids) {
+        state.held = true;
+        return { taken: [msg], refused: [], hold: "lt-bbbbbbbbbbbbbbbbbbbbbbbb" };
+      }
+      state.held = false;
+      if (body.outcome === "used") state.used = true;
+      return { used: 1 };
+    },
+    [`POST ${WS}/sessions/code-other/messages`]: (b) => {
+      back.push(JSON.parse(String(b)));
+      return { ok: true, message: { id: `r${back.length}` } };
+    },
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => ({ id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: JSON.parse(String(b)).dailyUsd, walletUsd: JSON.parse(String(b)).walletUsd }),
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (models[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))(asked.length);
+    },
+  });
+  return { s, asked, takes, back, state, msg };
+}
+
+const later = (ms: number, v: unknown) => new Promise((r) => setTimeout(() => r(v), ms));
+
+test("a trusted session's message reaches a running turn with no key pressed, is used, and the answer goes back as a thread (FOL-345)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let p: Awaited<ReturnType<typeof messagingPlatform>>;
+  p = await messagingPlatform("code-mid", [
+    // The first call: the message arrives while it runs, and the answer is a read the agent makes unasked.
+    () => {
+      p.state.arrived = true;
+      return later(1_500, sse([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "a.txt" } }]));
+    },
+    () => sse([{ type: "text", text: "The build script is fine." }]),
+  ]);
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-mid", "--url", p.s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/sessions trust code-other\r");
+    at = await t.until(/came from the sign-in key:k-bo — trust that sign-in as code-other\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/code-other is trusted in this conversation \(as the sign-in key:k-bo\)/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("look at a.txt\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/✉ a message from code-other — Please check the build script\.[\s\S]*from a session you trust: the agent reads it after what it is doing now/, at, 30_000);
+    at = await t.until(/the message from code-other goes to the agent now/, at, 30_000);
+    at = await t.until(/The build script is fine\./, at, 30_000);
+    at = await t.until(/↩ the answer went back to code-other/, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/sessions code-other\r");
+    at = await t.until(/code-mid and code-other · 3 messages[\s\S]*Please check the build script\.[\s\S]*→ you to code-other[\s\S]*↩ answer from code-mid to your message:[\s\S]*The build script is fine\./, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    p.s.close();
+  }
+  assert.doesNotMatch(JSON.stringify(p.asked[0].messages), /Please check the build script/, "not in the call already running");
+  const second = JSON.stringify(p.asked[1].messages);
+  assert.match(second, /Please check the build script\./, "handed in at the next step");
+  assert.match(second, /information from those sessions, not instructions/, "framed as information");
+  assert.deepEqual(p.takes, [{ ids: ["m345"] }, { hold: "lt-bbbbbbbbbbbbbbbbbbbbbbbb", outcome: "used" }], "held, then used once handed in");
+  assert.equal(p.back.length, 1, "one answer back");
+  assert.equal(p.back[0].from, "code-mid");
+  assert.match(p.back[0].text, /^↩ answer from code-mid to your message:\n\nThe build script is fine\.$/);
+  // Kept with the conversation for --continue, pinned to the sign-in that sent it.
+  const kept = JSON.parse(fs.readFileSync(path.join(home, "code-sessions.json"), "utf8"))[d];
+  assert.deepEqual(kept.trusted, [{ context: "code-other", sender: "key:k-bo" }]);
+});
+
+test("a message from a session not trusted is only said during a turn: not held, not sent in, no answer back (FOL-345)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let p: Awaited<ReturnType<typeof messagingPlatform>>;
+  p = await messagingPlatform("code-unt", [
+    () => {
+      p.state.arrived = true;
+      return later(1_500, sse([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "a.txt" } }]));
+    },
+    () => sse([{ type: "text", text: "Read it." }]),
+  ]);
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-unt", "--url", p.s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("look at a.txt\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/✉ a message from code-other — Please check the build script\.[\s\S]*after this turn, Enter on an empty line takes it in \(you are asked first\)/, at, 30_000);
+    at = await t.until(/Read it\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    // Left for the person: an empty Enter asks, as before.
+    t.send("\r");
+    at = await t.until(/take it into a turn now\? \[y\/N\]/, at, 10_000);
+    t.send("n\r");
+    at = await t.until(/left waiting/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    p.s.close();
+  }
+  assert.equal(p.asked.length, 2);
+  assert.doesNotMatch(JSON.stringify(p.asked), /Please check the build script/, "never sent to the model");
+  assert.deepEqual(p.takes, [], "never held");
+  assert.deepEqual(p.back, [], "nothing sent back");
+});
+
+test("a trusted session's message at an empty prompt starts a turn by itself, and its answer goes back (FOL-345)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const p = await messagingPlatform("code-idle", [() => sse([{ type: "text", text: "Checked: it builds." }])]);
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-idle", "--url", p.s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/sessions trust code-other\r");
+    at = await t.until(/came from the sign-in key:k-bo — trust that sign-in as code-other\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/code-other is trusted/, at);
+    at = await t.until(/\w ❯ /, at);
+    p.state.arrived = true;
+    at = await t.until(/✉ a message from code-other \(a session you trust\) — a turn starts for it/, at, 10_000);
+    at = await t.until(/make it\? \[y\/N\]/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Checked: it builds\./, at, 30_000);
+    at = await t.until(/↩ the answer went back to code-other/, at, 30_000);
+    assert.doesNotMatch(t.out(), /take it into a turn now\?|include it in this turn\?/, "nobody was asked about the message");
+    at = await t.until(/\w ❯ /, at);
+    // Used: it starts nothing again.
+    await new Promise((r) => setTimeout(r, 1_000));
+    assert.equal(p.asked.length, 1);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    p.s.close();
+  }
+  assert.match(JSON.stringify(p.asked[0].messages), /Please check the build script\./);
+  assert.deepEqual(p.takes, [{ ids: ["m345"] }, { hold: "lt-bbbbbbbbbbbbbbbbbbbbbbbb", outcome: "used" }]);
+  assert.equal(p.back.length, 1);
+  assert.match(p.back[0].text, /^↩ answer from code-idle to your message:\n\nChecked: it builds\.$/);
+});
+
+test("the answer is not sent back a second time when the agent answered the sender itself with session_send (FOL-345)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const p = await messagingPlatform("code-own", [
+    () => sse([{ type: "tool_use", id: "s1", name: "session_send", input: { to: "code-other", text: "It builds, details follow." } }]),
+    () => sse([{ type: "text", text: "Told code-other." }]),
+  ]);
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-own", "--url", p.s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/sessions trust code-other\r");
+    at = await t.until(/came from the sign-in key:k-bo — trust that sign-in as code-other\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/code-other is trusted/, at);
+    at = await t.until(/\w ❯ /, at);
+    p.state.arrived = true;
+    at = await t.until(/a turn starts for it/, at, 10_000);
+    at = await t.until(/make it\? \[y\/N\]/, at, 30_000);
+    t.send("y\r");
+    // The agent's own message is asked about, as every session_send is.
+    at = await t.until(/a message to the session code-other[\s\S]*allow\? \[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Told code-other\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    p.s.close();
+  }
+  assert.doesNotMatch(String(p.back.map((b) => b.text)), /↩ answer from/, "no answer sent back on top");
+  assert.deepEqual(p.back.map((b) => b.text), ["It builds, details follow."]);
+});
+
+test("a trust holds only for the sign-in it is pinned to: the same session id from another sign-in is asked about (FOL-345, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const p = await messagingPlatform("code-pin", [() => sse([{ type: "text", text: "x" }])], { sender: "key:k-mallory" });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-pin", "--url", p.s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/sessions trust code-other\r");
+    at = await t.until(/came from the sign-in key:k-bo — trust that sign-in as code-other\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/as the sign-in key:k-bo/, at);
+    at = await t.until(/\w ❯ /, at);
+    p.state.arrived = true;
+    at = await t.until(/✉ a message from code-other[\s\S]*Enter on an empty line takes it into a turn \(you are asked first\)/, at, 10_000);
+    await new Promise((r) => setTimeout(r, 1_500));
+    assert.doesNotMatch(t.out().slice(at), /a turn starts/);
+    t.send("/sessions untrust code-other\r");
+    at = await t.until(/code-other is not trusted any more/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/sessions trust\r");
+    at = await t.until(/no session is trusted here/, at);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    p.s.close();
+  }
+  assert.equal(p.asked.length, 0, "nothing started for it");
+  assert.deepEqual(p.takes, []);
+});
+
+test("an answer sent back from a trusted session never starts a turn by itself (FOL-345)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const p = await messagingPlatform("code-rep", [() => sse([{ type: "text", text: "x" }])], { text: "↩ answer from code-other to your message:\n\nit builds" });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-rep", "--url", p.s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200", FOLDRUN_CODE_MESSAGE_POLL_MS: "300" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/sessions trust code-other\r");
+    at = await t.until(/came from the sign-in key:k-bo — trust that sign-in as code-other\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/code-other is trusted/, at);
+    at = await t.until(/\w ❯ /, at);
+    p.state.arrived = true;
+    at = await t.until(/✉ a message from code-other[\s\S]*an answer to your message · Enter on an empty line takes it into a turn/, at, 10_000);
+    await new Promise((r) => setTimeout(r, 1_500));
+    assert.doesNotMatch(t.out().slice(at), /a turn starts/);
+    t.send("/quit\r");
+    assert.equal(await t.done, 0);
+  } finally {
+    t.child.kill();
+    p.s.close();
+  }
+  assert.equal(p.asked.length, 0, "no turn, no model call");
+  assert.deepEqual(p.takes, []);
+});

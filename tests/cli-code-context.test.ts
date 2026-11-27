@@ -137,6 +137,7 @@ test("the messages block names session_send only where the agent has it (FOL-309
   const { messagesBlockText } = await import("../src/commands.mjs");
   const m = [{ from: "ana", fromContext: "code-1", text: "hi" }];
   assert.match(messagesBlockText(m), /use session_send with the id/);
+  assert.match(messagesBlockText(m), /final answer of this turn goes back to each session that sent one/);
   const only = messagesBlockText(m, false);
   assert.doesNotMatch(only, /session_send/);
   assert.match(only, /\/sessions send <session id> <text>/);
@@ -861,4 +862,32 @@ test("a turn that did not finish always says why (FOL-426): the engine's own err
   assert.match(turnEndReason({ subtype: "error_max_turns", errors: [""] }, 120), /120 model steps/);
   assert.match(turnEndReason({ subtype: "error_something_new" }), /error_something_new/);
   assert.match(turnEndReason(undefined), /no result/);
+});
+
+test("a trust names a conversation and holds only for the sign-in it is pinned to; never in a script's turn (FOL-345)", async () => {
+  const { trustedOf, pinTrust, isReplyMessage, replyText, REPLY_LEAD } = await import("../src/commands.mjs");
+  const s: any = { context: "code-me", trusted: [{ context: "code-a" }] };
+  const m = (sender: string, fromContext = "code-a") => ({ id: "x", fromContext, sender, text: "hi" });
+  assert.equal(trustedOf(s, m("key:1")), false, "not in force before a sign-in is pinned: whoever says first is not trusted (Codex)");
+  pinTrust(s, [m("key:1")]);
+  assert.equal(s.trusted[0].sender, "key:1", "the person's yes to one of its messages pins its sign-in");
+  pinTrust(s, [m("key:2")]);
+  assert.equal(s.trusted[0].sender, "key:1", "pinned once");
+  const two: any = { context: "code-me", trusted: [{ context: "code-a" }] };
+  pinTrust(two, [m("key:1"), m("key:2")]);
+  assert.equal(two.trusted[0].sender, undefined, "two sign-ins sending as one session pin neither (Codex)");
+  assert.equal(trustedOf(s, m("key:1")), true);
+  assert.equal(trustedOf(s, m("key:2")), false, "the same conversation id from another sign-in is not trusted");
+  assert.equal(trustedOf(s, m("key:1", "code-b")), false, "another conversation is not trusted");
+  assert.equal(trustedOf(s, { id: "y", fromContext: "code-a", text: "no sender" }), false);
+  assert.equal(trustedOf({ ...s, headless: true }, m("key:1")), false, "a script's turn is as it was");
+  assert.equal(trustedOf({ context: "code-me" }, m("key:1")), false);
+  // An answer sent back is marked, never a turn's start; it fits one message.
+  const r = replyText("code-me", "done");
+  assert.equal(r, `${REPLY_LEAD}code-me to your message:\n\ndone`);
+  assert.equal(isReplyMessage({ text: r }), true);
+  assert.equal(isReplyMessage({ text: "done" }), false);
+  const long = replyText("code-me", "y".repeat(10_000));
+  assert.ok(long.length <= 4_000);
+  assert.match(long, /\[cut: the answer was longer\]$/);
 });

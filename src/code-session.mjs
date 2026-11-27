@@ -42,7 +42,7 @@ export const CODE_GROUPS = [
   ] },
   { group: "Status", commands: [
     ["/status [cost|explain|usage|context|tips on|off|line on|off|jobs on|off]", "this session: turns, model, where it works, the account — cost: what it spent; explain: where it went, row by row; usage: your foldrun plan and the credit left; context: what fills the agent's context; tips on|off: a line before a turn that re-reads the whole conversation; line on|off: the status line under the prompt; jobs on|off: a row with a spinner for each background job (here, outside the sandbox, cloud) under the working line, on by default"],
-    ["/sessions [send <id> <text>|read]", "this session's id and the other sessions of this project on this computer — send messages one (the agent can too, when you ask it); read shows what they sent this one"],
+    ["/sessions [send <id> <text>|read|trust <id>|untrust <id>]", "this session's id and the other sessions of this project on this computer — send messages one (the agent can too, when you ask it); read shows what they sent this one; trust lets one's messages in without asking (into a running turn, or a turn of their own), its answer sent back"],
   ] },
   { group: "App", commands: [
     ["/help", "these commands"],
@@ -110,7 +110,8 @@ export function commandDuringTurn(line, known) {
   if (!known(name)) return "beside";
   if (name === "/status") return /^context\b/i.test(rest) ? "after" : "beside";
   // /sessions send writes to another session: it waits, as a message would (Codex).
-  if (name === "/sessions") return /^send(?:\s|$)/i.test(rest) ? "after" : "beside";
+  // /sessions trust <id> asks the person to confirm a sign-in: never beside a turn's own questions (FOL-345, Codex).
+  if (name === "/sessions") return /^(?:send(?:\s|$)|trust\s+\S)/i.test(rest) ? "after" : "beside";
   if (["/help", "/queue"].includes(name)) return "beside";
   if ((name === "/todos" || name === "/goal") && !rest) return "beside";
   return "after";
@@ -303,6 +304,8 @@ export function commandMenu(name, st) {
           { v: "/sessions list", name: "List them", note: "this session's id and the others on this computer" },
           { v: "/sessions send ", name: "Send a message…", note: "it waits until that session's person sends their next message", ask: "<id> <text>" },
           { v: "/sessions read", name: "Read what they sent", note: "messages other sessions sent this one" },
+          { v: "/sessions trust ", name: "Trust a session…", note: "its messages come in without asking, and get the answer back", ask: "<id>" },
+          { v: "/sessions trust", name: "Trusted sessions", note: "the ones trusted in this conversation (/sessions untrust <id> ends one)" },
         ],
         tick: null,
         start: "/sessions list",
