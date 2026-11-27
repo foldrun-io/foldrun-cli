@@ -621,15 +621,40 @@ includes it in a turn.
   only on your yes, every time; one too long to read (over 4,000
   characters) is not sent. It does not wait for an answer: a reply arrives
   like any other message, before a later turn.
+- **Trusted sessions:** `/sessions trust <id>` in `foldrun code` lets one
+  session's messages in without the y/N, for this conversation (and its
+  `--continue`; `/resume new` starts with none). The trust is pinned to the
+  sign-in that sends from that conversation — the `from` a sender gives is
+  only its word, so the same id from another sign-in is asked about as
+  before. While a turn runs, a message is said at once in one line
+  ("✉ a message from …"); a trusted one is held for the turn and handed to
+  the agent at its next step, between tool calls, the way a message you send
+  with Enter is — used once handed in, freed to wait again if the turn ended
+  first. At an empty prompt a trusted message starts a turn of its own
+  (shown as from that session; each tool call is asked as usual, the same
+  spend checks), at most 10 an hour. A message from a session you have not
+  trusted is only said; you decide after the turn, as before. To the agent
+  every message is still information, never an instruction.
+  `/sessions trust` lists them, `/sessions untrust <id>` ends one. A script's
+  turn (`-p`, `--task`) is unchanged.
+- **The answer goes back:** after a turn that carried messages and
+  finished, its final answer is sent back to each session that sent one, as
+  a message from this session that begins `↩ answer from <id>` — unless the
+  agent already answered that session itself with `session_send` in the
+  turn. An answer never starts a turn by itself and gets no answer back, so
+  two sessions never answer each other in a loop. `/sessions <id>` shows the
+  message and its answer together. A session on this computer only sends
+  nothing back.
 - **On this computer:** a turn that runs on your computer has no run for
   the platform to bind messages to, so they stay listed as waiting there;
   the session remembers which ones it has shown you and offers each once
   (`/sessions read` still lists them all). `/sessions` shows the session's own id
   — what another session needs to reach it — and the other sessions of the
   project on this computer.
-- **Not live:** a message is never put into a running step. To say
-  something to a step while it runs, use `foldrun message <run>`
-  (`POST …/runs/<id>/message`).
+- **Not live in a run:** a message is never put into a running step of a
+  run on the platform (a `foldrun code` turn on your computer takes a
+  trusted session's at its next step, above). To say something to a step
+  while it runs, use `foldrun message <run>` (`POST …/runs/<id>/message`).
 
 At most 100 wait for one conversation; they are kept 30 days. Deleting a
 project deletes them; renaming it moves them with it.

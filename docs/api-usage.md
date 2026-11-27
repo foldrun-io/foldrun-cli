@@ -417,11 +417,13 @@ only where that is acceptable.
 
 **What it costs.** The second model's tokens, at that model's own listed
 price, paid the way the rest of the call is (your plan's allowance, then the
-wallet). There is no fee per call. A call that fails costs nothing:
-`unavailable` (no key or no price for that model here, or it did not answer),
-`payment_required`, `too_many_requests`, `input_too_long`,
-`invalid_tool_input`, `max_uses_exceeded`. It always runs on foldrun's API
-key for that provider, never on a Claude subscription login.
+wallet). There is no fee per call. A call refused before the second model
+runs costs nothing: `unavailable` (no key or no price for that model here),
+`model_not_allowed`, `payment_required`, `too_many_requests`,
+`input_too_long`, `invalid_tool_input`, `max_uses_exceeded`. Tokens the
+second model did use are charged as any model call is, even when its answer
+turns out empty (`unavailable` then). It always runs on foldrun's API key for
+that provider, never on a Claude subscription login.
 
 The result block is `foldrun_debate_tool_result`, with content `{type:
 "foldrun_debate_result", model, text, usage: {input_tokens, output_tokens}}`
@@ -431,6 +433,64 @@ adds `foldrun_debate_requests`. The request's top-level `usage` counts the
 first model's tokens only; the second model's are in its result block and on
 your usage page under its own model. Not offered to a run's own model calls
 yet (an agent's step): from an app, a script or the API.
+
+### Server tool: a code review from another provider's model
+
+`foldrun_review_20261127` (`foldrun_review`) works like `foldrun_debate`, for
+a code change: the model you call sends a unified diff (as `git diff` prints
+it), and a model from a **different provider** reviews it and answers with
+findings. The options are the same (`model`, `max_tokens`, `max_uses`, default
+3 a turn), and so are the rules on what is sent and what it costs.
+
+The input is `diff` (required), `files` (`[{path, content}]`, whole files the
+reviewer needs beside the diff, at most 50) and `instructions` (what to look
+at), 200,000 characters together. The result block is
+`foldrun_review_tool_result`, with content:
+
+```json
+{"type": "foldrun_review_result", "model": "deepseek/deepseek-chat",
+ "summary": "One real bug.",
+ "findings": [{"severity": "high", "file": "src/pay.ts", "line": 11,
+               "title": "charged twice", "body": "…"}],
+ "dropped": 0, "usage": {"input_tokens": 512, "output_tokens": 96}}
+```
+
+Each finding is checked against what was sent. One that names a file the
+diff and `files` did not hold is left out and counted in `dropped`. A `line`
+outside what the reviewer was shown of that file comes back as `null`.
+`severity` is `high`, `medium` or `low`. A reviewer that does not answer in
+this shape still gets its words through: `summary` holds them,
+`findings` is empty and `unstructured` is `true`. `usage.server_tool_use`
+adds `foldrun_review_requests`. Check a finding in the code before acting on
+it; the reviewer can be wrong.
+
+The same review without a model of your own:
+
+```sh
+curl "$GATEWAY/v1/foldrun/review" -H "x-api-key: $KEY" \
+  -H "content-type: application/json" -H "Idempotency-Key: review-42" \
+  -d "$(jq -n --arg diff "$(git diff)" '{diff: $diff, against: "anthropic"}')"
+```
+
+`POST $GATEWAY/v1/foldrun/review` takes the same `diff`, `files`,
+`instructions` and `max_tokens`, and the reviewer as `model`
+(`provider/model`) or as `against`: the provider of the model that wrote the
+change, for the platform's own choice of another provider's model. It
+answers the result above without its `type`. This is what `foldrun code`
+uses, so your coding model never has to write the diff out as tokens.
+
+- **`Idempotency-Key`**: the same key again answers the first review, free
+  (`idempotent-replayed: true`); the same key for a different review is `409
+  idempotency_conflict`; while the first is still running, `409 in_progress`
+  with `retry-after`. A review refused before anything was sent (`400`,
+  `402`, `429`, a model with no price here) leaves the key free, so a retry
+  runs it. One that failed after it reached the provider, or never finished,
+  may have been charged, so it is never run twice under the same key: it
+  answers `409 in_progress`, after ten minutes `409 idempotency_lost`, and a
+  new key runs it again. Kept a day.
+- **Errors**: `400` (`invalid_tool_input`, `model_not_allowed`), `402
+  payment_required`, `413 input_too_long` (a request is at most 1 MB), `429`
+  (30 reviews a minute per key), `503 unavailable`.
 
 ## Pagination
 
