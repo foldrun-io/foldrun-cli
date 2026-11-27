@@ -12,6 +12,15 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.9.0] — 2026-11-27
+
+- feat(code): trusted sessions — messages into a running turn, the answer sent back (FOL-345) ([66ec8e1](https://github.com/foldrun-io/foldrun-cli/commit/66ec8e1))
+- fix(usage): rates says tokens come from the wallet, plan credits first, when the account's terms say so (FOL-384) ([bf77b79](https://github.com/foldrun-io/foldrun-cli/commit/bf77b79))
+
+### docs
+
+- sync budgets-and-billing and cli from foldrun-docs (FOL-384) ([29eab7d](https://github.com/foldrun-io/foldrun-cli/commit/29eab7d))
+
 ## [34.8.0] — 2026-11-27
 
 - fix(code): turnSteps in the CodePrefs type (the release's typecheck failed on 883c1cc) ([79c04dc](https://github.com/foldrun-io/foldrun-cli/commit/79c04dc))
