@@ -12,6 +12,17 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.13.0] — 2026-11-27
+
+- test(billing): the pay-as-you-go refusal's new words (FOL-385, e808b66) — main was red on the old ones ([e988074](https://github.com/foldrun-io/foldrun-cli/commit/e988074))
+- feat(billing): a wallet-only account in billing, billing plans and pay-as-you-go — no plan, the wallet pays as it goes, its limit a month (FOL-385) ([e808b66](https://github.com/foldrun-io/foldrun-cli/commit/e808b66))
+- test(code): cli-code-session.test.ts in three files — it ran 5.5 min after FOL-434 and CI cuts a file at 3 min ([a8c3b9f](https://github.com/foldrun-io/foldrun-cli/commit/a8c3b9f))
+- feat(code): one keyboard reader; / and @ lists during a turn; questions wait for a typing pause (FOL-434) ([5f43c3e](https://github.com/foldrun-io/foldrun-cli/commit/5f43c3e))
+
+### docs
+
+- sync bundled docs — pay as you go with no plan (FOL-385) ([0bb7df2](https://github.com/foldrun-io/foldrun-cli/commit/0bb7df2))
+
 ## [34.12.0] — 2026-11-27
 
 - test(code): the coder upgrade against the templates releases wrote, and only over the file it read (FOL-415, Codex) ([6a95e9e](https://github.com/foldrun-io/foldrun-cli/commit/6a95e9e))
