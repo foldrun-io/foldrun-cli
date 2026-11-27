@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.7.0] — 2026-11-27
+
+- feat(billing): `billing` and `billing plans` show the storage the plan includes (FOL-386) ([053dc7c](https://github.com/foldrun-io/foldrun-cli/commit/053dc7c))
+- fix(code): line editing during a turn is grapheme-safe — widths, cuts and the cursor by grapheme (emoji, flags, vowel signs), a paste is text not keys, Esc then Enter sends, repaint after a reflow (FOL-348, Codex rounds 1–8) ([a3eac8d](https://github.com/foldrun-io/foldrun-cli/commit/a3eac8d))
+- feat(code): the cursor shows in the input line while a turn runs, and ←/→/Home/End edit the typed line (FOL-348) ([a7b57c3](https://github.com/foldrun-io/foldrun-cli/commit/a7b57c3))
+
 ## [34.6.0] — 2026-11-27
 
 - feat(routes): production's Iran front approved for api.foldrun.io (FOL-402) ([87dccb2](https://github.com/foldrun-io/foldrun-cli/commit/87dccb2))
