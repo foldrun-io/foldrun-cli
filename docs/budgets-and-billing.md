@@ -560,7 +560,12 @@ expired or was still being written` means nothing in the prompt moved —
 the gap was longer than the cache lives, or two copies raced.
 
 The cache keeps a prefix for an hour on a Claude subscription and five
-minutes on an API key. A low rate usually means one of:
+minutes on an API key. A step on the platform's own model credential keeps
+five minutes too, with one exception: an agent that has sub-agents of their
+own sandbox (`subagents:` naming an agent with `sandbox: own`) keeps an
+hour where that credential is a Claude login, because it sits waiting while
+a sub-agent works, and after five minutes it would pay to write its whole
+conversation again. It is charged the same price for the write either way. A low rate usually means one of:
 
 - the agent's prose changes from run to run — keep per-item data in the
   step's instruction, not in `agent.md` or `AGENTS.md`;
