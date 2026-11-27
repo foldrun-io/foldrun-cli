@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { serve, cli } from "./fake-platform.ts";
-import { findChrome, playwrightVersion, callEnv, humanise, shapeOutput, TOOLS, browserPaths, windowOpen, callTool, MAX_SHOT_BYTES } from "../src/browser.mjs";
+import { findChrome, playwrightVersion, callEnv, koderBadge, clientBadge, humanise, shapeOutput, TOOLS, browserPaths, windowOpen, callTool, MAX_SHOT_BYTES } from "../src/browser.mjs";
 
 test("Chrome is found where each system installs it, and nowhere else", () => {
   const only = (want: string) => (p: string) => p === want;
@@ -73,7 +73,7 @@ function home() {
   return dir;
 }
 const fakeBrowse = `// install hint: npm i -g playwright@1.63.0
-console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: Object.keys(process.env).filter((k) => /FOLDRUN|TOKEN|KEY/.test(k)).sort() }));
+console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: Object.keys(process.env).filter((k) => /FOLDRUN|TOKEN|KEY/.test(k)).sort(), label: process.env.FOLDRUN_BROWSER_LABEL ?? null }));
 `;
 const gallery = { tools: [{ name: "web", kind: "tools", title: "Web", description: "", files: [{ kind: "tools", file: "web/browse.mjs", content: fakeBrowse }], installed: null }] };
 
@@ -81,7 +81,7 @@ test("browser mcp: initialize, list, and each tool call is one browse.mjs call w
   const dir = home();
   const s = await serve({ "/v1/library/gallery": () => gallery });
   const msgs = [
-    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } },
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code\u001b[2J\nx", version: "1" } } },
     { jsonrpc: "2.0", method: "notifications/initialized" },
     { jsonrpc: "2.0", id: 2, method: "tools/list" },
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_open", arguments: { url: "https://example.com" } } },
@@ -106,7 +106,9 @@ test("browser mcp: initialize, list, and each tool call is one browse.mjs call w
   const open = said(3);
   assert.deepEqual(open.argv.slice(0, 7), ["--browser", "chrome", "--live", "true", "--url", "https://example.com", "--mode"]);
   assert.equal(fs.realpathSync(open.cwd), fs.realpathSync(path.join(dir, "browser", "work")), "calls run in the browser's own folder");
-  assert.deepEqual(open.env, ["FOLDRUN_BROWSER_DESKTOP", "FOLDRUN_BROWSER_HEADLESS", "FOLDRUN_BROWSER_LIVE_IDLE_MS", "FOLDRUN_BROWSER_LIVE_ROOT", "FOLDRUN_BROWSER_MODULES"], "no token, no key reaches a call");
+  assert.deepEqual(open.env, ["FOLDRUN_BROWSER_DESKTOP", "FOLDRUN_BROWSER_HEADLESS", "FOLDRUN_BROWSER_LABEL", "FOLDRUN_BROWSER_LIVE_IDLE_MS", "FOLDRUN_BROWSER_LIVE_ROOT", "FOLDRUN_BROWSER_MODULES"], "no token, no key reaches a call");
+  // FOL-451: the window's badge names the app driving it, one plain line.
+  assert.equal(open.label, "an AI app · foldrun browser", "a name that is not a plain program name is not shown");
   assert.ok(fs.existsSync(path.join(dir, "browser", "work", "AGENTS.md")), "uploads are confined to work/, whatever the folders above hold");
 
   const act = said(4);
@@ -241,7 +243,7 @@ function webGallery() {
     "",
   ].join("\n"));
   fs.writeFileSync(path.join(dir, "run.mjs"), `const ARGS = { "fetch": [ "url" ], "browse": [ "url", "mode", "actions", "proxy", "captcha_solver", "identity", "browser", "live" ] };
-console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: Object.keys(process.env).filter((k) => k.startsWith("FOLDRUN") || /KEY|TOKEN/.test(k)).sort() }));
+console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: Object.keys(process.env).filter((k) => k.startsWith("FOLDRUN") || /KEY|TOKEN/.test(k)).sort(), label: process.env.FOLDRUN_BROWSER_LABEL ?? null }));
 console.error("browser: live session live");
 console.error("wrote outputs/page.png");
 `);
@@ -340,6 +342,26 @@ test("FOL-267: browser mcp also serves the cloud's full web tool, refused option
   assert.match(answers.get(5).result.content[0].text, /proxy uses a secret from foldrun's vault/);
   assert.equal(answers.has(6), false, "a cancelled call is not run or answered");
   assert.doesNotMatch(r.out, /cancelled --browser/);
+});
+
+test("FOL-451: a call names who drives the window, the caller says it and an agent's block cannot", async () => {
+  const dir = webGallery();
+  const paths = browserPaths(() => fs.mkdtempSync(path.join(os.tmpdir(), "local-web-home-")));
+  fs.mkdirSync(paths.work, { recursive: true });
+  const ctx = { browse: path.join(dir, "browse.mjs"), paths, label: "koder · code-1a2b3c4d5e6f7a8b" };
+  const r: any = await runLocalWeb(ctx, ["--action", "browse"], { env: { FOLDRUN_BROWSER_LABEL: "bank.example · trusted", FOLDRUN_BROWSER_DENY: "eval" } });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).label, "koder · code-1a2b3c4d5e6f7a8b");
+  const bare: any = await runLocalWeb({ browse: ctx.browse, paths }, ["--action", "browse"], { env: { FOLDRUN_BROWSER_LABEL: "spoofed" } });
+  assert.equal(JSON.parse(bare.stdout).label, null, "no caller label: none at all, never the block's");
+  assert.equal(callEnv(paths, {}, "a\u0000b\n\tc").FOLDRUN_BROWSER_LABEL, "a b c");
+  assert.equal(callEnv(paths, {}, "x".repeat(200)).FOLDRUN_BROWSER_LABEL.length, 80);
+  assert.equal("FOLDRUN_BROWSER_LABEL" in callEnv(paths, {}), false);
+  // The page can read the badge: koder shows only an id foldrun made, an app only a plain program name.
+  assert.equal(koderBadge("code-1a2b3c4d5e6f7a8b"), "koder · code-1a2b3c4d5e6f7a8b");
+  for (const c of ["my-bank-taxes", "code-XYZ", undefined, "code-1a2b3c4d5e6f7a8b "]) assert.equal(koderBadge(c), "koder", String(c));
+  assert.equal(clientBadge("claude-code"), "claude-code · foldrun browser");
+  for (const n of ["Claude\u202eedoc", "x".repeat(41), "<b>hi</b>", "", null]) assert.equal(clientBadge(n), "an AI app · foldrun browser", String(n));
 });
 
 test("FOL-267: the agent's web.browse block on this computer — kept, refused by name, or noted, never dropped", () => {
