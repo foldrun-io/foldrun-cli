@@ -23,10 +23,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 /** The built-in list: an API's own origin → the fronts approved for it.
- *  A new front is a CLI release (the prod front is not built yet). */
+ *  A new front is a CLI release. Production's front: prod/terraform/iran-front.tf (27 Nov 2026). */
 export const FRONTS = Object.freeze({
   "https://api.foldrun.dev": Object.freeze(["https://dmdw0aty3jgf6.cloudfront.net"]),
-  "https://api.foldrun.io": Object.freeze([]),
+  "https://api.foldrun.io": Object.freeze(["https://d3c69doqudkyqv.cloudfront.net"]),
 });
 
 /** How long an API's naming of a front holds without being asked again. */

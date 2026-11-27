@@ -26,9 +26,10 @@ test("only a front in the CLI's own list, for that API, is approved; the environ
   assert.ok(!routes.approved(MAIN, "https://evil.cloudfront.net"));
   assert.ok(!routes.approved("https://api.foldrun.io", FRONT), "the dev front is not prod's");
   assert.ok(!routes.approved(MAIN, `${FRONT}:8443`));
-  assert.equal(routes.groupOf("https://api.foldrun.io"), null, "no front built for prod yet: nothing changes there");
+  assert.ok(routes.approved("https://api.foldrun.io", "https://d3c69doqudkyqv.cloudfront.net"), "prod's own front (prod/terraform/iran-front.tf)");
+  assert.ok(!routes.approved(MAIN, "https://d3c69doqudkyqv.cloudfront.net"), "prod's front is not dev's");
   const list = routes.frontList({ FOLDRUN_TEST_FRONTS: JSON.stringify({ "https://api.foldrun.io": ["https://evil.example"], "http://127.0.0.1:1": ["http://127.0.0.1:2"] }) });
-  assert.deepEqual(list["https://api.foldrun.io"], [], "no environment approves a real address");
+  assert.deepEqual(list["https://api.foldrun.io"], ["https://d3c69doqudkyqv.cloudfront.net"], "no environment approves a real address");
   assert.deepEqual(list["http://127.0.0.1:1"], ["http://127.0.0.1:2"]);
 });
 
