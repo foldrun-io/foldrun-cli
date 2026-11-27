@@ -617,8 +617,7 @@ export function cutRows(line, room) {
   const rows = [];
   let cur = "";
   let used = 0;
-  for (const ch of text) {
-    const w = cells(ch);
+  for (const [ch, w] of cellsOf(text)) {
     if (used + w > max && cur) {
       rows.push(cur);
       cur = "";
@@ -827,8 +826,26 @@ function cells(/** @type {string} */ ch) {
   return 1;
 }
 
-/** How many cells a text takes on screen. */
-export const displayWidth = (/** @type {string} */ t) => [...t].reduce((n, ch) => n + cells(ch), 0);
+const clusters = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** How many cells a text takes on screen: each grapheme as wide as its widest character, so 👍🏽 or 👩‍💻 is two, not four (FOL-348, Codex). */
+const graphemeCells = (/** @type {string} */ g) => {
+  let w = 0;
+  for (const ch of g) w = Math.max(w, cells(ch));
+  // A flag (two regional indicators) and an emoji asked for as one (VS16) are drawn two wide (Codex).
+  return w < 2 && (/\p{Regional_Indicator}{2}/u.test(g) || (g.includes("\ufe0f") && w > 0)) ? 2 : w;
+};
+/** Anything but printable ASCII may join the character before it (a ZWJ, a skin tone, a vowel sign, a combining
+ *  mark): such text is cut by grapheme. Printable ASCII is counted by character, as fast as before (Codex). */
+const JOINS = /[^\x20-\x7e]/;
+/** The text's graphemes, each with its cells. */
+/** @type {(t: string) => Array<[string, number]>} */
+export const cellsOf = (t) => (JOINS.test(t) ? [...clusters.segment(t)].map(({ segment }) => [segment, graphemeCells(segment)]) : [...t].map((ch) => [ch, cells(ch)]));
+export const displayWidth = (/** @type {string} */ t) => {
+  if (!JOINS.test(t)) return [...t].reduce((n, ch) => n + cells(ch), 0);
+  let n = 0;
+  for (const { segment } of clusters.segment(t)) n += graphemeCells(segment);
+  return n;
+};
 
 /** At most n cells of a text, its start kept, … where cut. */
 export function clipCells(/** @type {string} */ t, /** @type {number} */ n) {
@@ -836,10 +853,11 @@ export function clipCells(/** @type {string} */ t, /** @type {number} */ n) {
   if (displayWidth(t) <= n) return t;
   let out = "";
   let used = 0;
-  for (const ch of t) {
-    if (used + cells(ch) > n - 1) break;
-    out += ch;
-    used += cells(ch);
+  // By grapheme, never inside one: 👍🏽 is kept or cut whole (Codex).
+  for (const [g, w] of cellsOf(t)) {
+    if (used + /** @type {number} */ (w) > n - 1) break;
+    out += g;
+    used += /** @type {number} */ (w);
   }
   return `${out}…`;
 }
@@ -848,14 +866,14 @@ export function clipCells(/** @type {string} */ t, /** @type {number} */ n) {
 export function clipCellsEnd(/** @type {string} */ t, /** @type {number} */ n) {
   if (n <= 0) return "";
   if (displayWidth(t) <= n) return t;
-  const chars = [...t];
+  const gs = cellsOf(t);
   let out = "";
   let used = 0;
-  for (let i = chars.length - 1; i >= 0; i--) {
-    const ch = /** @type {string} */ (chars[i]);
-    if (used + cells(ch) > n - 1) break;
-    out = ch + out;
-    used += cells(ch);
+  for (let i = gs.length - 1; i >= 0; i--) {
+    const [g, w] = /** @type {[string, number]} */ (gs[i]);
+    if (used + w > n - 1) break;
+    out = g + out;
+    used += w;
   }
   return `…${out}`;
 }
@@ -1012,7 +1030,9 @@ function wrapWords(words, room) {
       }
       lines.push([head]);
       w = rest;
-      len = displayWidth(w.map((x) => x.t).join(""));
+      // What is left, by what was taken, while it clearly needs more rows; measured exactly once it may fit, so a
+      // grapheme cut across styles (👍**🏽**) never makes a row too wide. Linear, not once per row (Codex).
+      len = !w.length ? 0 : len - n > room + 2 ? len - n : displayWidth(w.map((x) => x.t).join(""));
     }
     if (!w.length) continue;
     if (line.length && used + 1 + len > room) {
@@ -1030,9 +1050,13 @@ function wrapWords(words, room) {
 /** The longest start of `t` that fits in `n` cells. */
 function clipTo(/** @type {string} */ t, /** @type {number} */ n) {
   let out = "";
-  for (const ch of t) {
-    if (displayWidth(out + ch) > n) break;
-    out += ch;
+  let used = 0;
+  // Graphemes read lazily, only as far as fits (Codex).
+  for (const { segment } of clusters.segment(t)) {
+    const w = graphemeCells(segment);
+    if (used + w > n) break;
+    out += segment;
+    used += w;
   }
   return out;
 }
@@ -1531,6 +1555,10 @@ export function marginLines(text, width = Infinity) {
     // Widths counted once and carried (Codex): a long unbroken word is never re-measured per row.
     for (let word of body.split(/ +/).filter(Boolean)) {
       let wordW = displayWidth(word);
+      // Its graphemes measured once, and cut from in order, however many rows it takes (Codex).
+      /** @type {Array<[string, number]> | null} */
+      let units = null;
+      let u = 0;
       for (;;) {
         const sepW = fresh ? 0 : 1;
         if (curW + sepW + wordW <= room) {
@@ -1549,8 +1577,9 @@ export function marginLines(text, width = Infinity) {
         // Alone and still too wide: cut it where the row ends.
         let head = "";
         let headW = 0;
-        for (const ch of word) {
-          const w = displayWidth(ch);
+        units ??= cellsOf(word);
+        for (; u < units.length; u++) {
+          const [ch, w] = /** @type {[string, number]} */ (units[u]);
           if (curW + headW + w > room && head) break;
           head += ch;
           headW += w;
