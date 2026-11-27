@@ -1270,7 +1270,8 @@ test("typing during a turn: ←/→, Home/End, Ctrl-A/Ctrl-E, Backspace and Dele
     const id = (s: string) => s;
     const t0 = Date.now();
     drawTable([`| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`, `| ${head.map(() => "x".repeat(20000) + "é").join(" | ")} |`], 120, { bold: id, dim: id, cyan: id });
-    assert.ok(Date.now() - t0 < 1000, `table took ${Date.now() - t0} ms`);
+    // 123 ms on a laptop, 1262 ms on a CI runner; measured again each row it is minutes (~3,300 rows × 20,000 × 20 cells).
+    assert.ok(Date.now() - t0 < 5000, `table took ${Date.now() - t0} ms`);
     for (const r of cutRows("👍🏽".repeat(9), 6)) assert.ok(displayWidth(r) <= 6 && !/^\u{1f3fd}/u.test(r), `cut whole: ${r}`);
   } finally {
     t.child.kill();
