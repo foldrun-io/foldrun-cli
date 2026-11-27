@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.15.0] — 2026-11-27
+
+### FOL-418
+
+- foldrun check says the second-opinion warnings (#352) ([0abeb89](https://github.com/foldrun-io/foldrun-cli/commit/0abeb89))
+
 ## [34.14.0] — 2026-11-27
 
 ### docs
