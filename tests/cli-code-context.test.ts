@@ -219,6 +219,9 @@ test("one session, two places: each side is told once what the other did; the ne
   assert.match(cut, /The person: new/);
   assert.doesNotMatch(cut, /The person: old/);
   assert.match(exportTranscript(t, { ws: "desk", context: "code-1", dir: "~/x" }), /## 2\. You \(in the cloud\)\n\nadd docstrings\n\n### foldrun code\n\nadded two docstrings/);
+  // koder's mark at the end (FOL-415), gone when the person turned it off.
+  assert.match(exportTranscript(t, { ws: "desk", context: "code-1", dir: "~/x" }), /---\n\nExported from ◆ \[koder\]\(https:\/\/foldrun\.io\) from foldrun\.io\n$/);
+  assert.doesNotMatch(exportTranscript(t, { ws: "desk", context: "code-1", dir: "~/x", attribution: false }), /koder/);
 });
 
 test("suggestions: what starts with the typed part first, then what holds it; nothing once the line is more than the command", () => {

@@ -25,7 +25,7 @@ import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
-import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, cellsOf, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
+import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, cellsOf, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT, attributionNote, KODER_TRAILER } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
 import { koderLine } from "./koder-path.mjs";
 import { routeFor, groupOf, noteWorked, switchAfterStall, roadFailure, hostOf, approved as frontApproved, originOf as originOfUrl } from "./routes.mjs";
@@ -2815,7 +2815,15 @@ const CLI_VERSION = (() => {
     return "0";
   }
 })();
-const USER_AGENT = `foldrun-cli/${CLI_VERSION}`;
+// koder's name and home on every request it makes, after the CLI's own (FOL-415): what servers already match stays first.
+const USER_AGENT = `foldrun-cli/${CLI_VERSION} (koder from foldrun.io; +https://foldrun.io)`;
+/** A task sent to a cloud agent, with koder's mark note after it unless the person turned it off (FOL-415). */
+function withMark(/** @type {string} */ task) {
+  const note = attributionNote(readCodePrefs().attribution !== false);
+  return note ? `${task}\n\n${note}` : task;
+}
+/** The name koder gives itself to MCP servers (clientInfo, FOL-415). */
+const KODER_MCP_CLIENT = { name: "koder", version: CLI_VERSION, title: "koder from foldrun.io" };
 
 /**
  * The HTTP API version this CLI was written against, sent as
@@ -8016,7 +8024,7 @@ async function signInWorks(p, seconds = 6) {
     // Resolved as remoteFetch resolves every call (against the origin), so
     // the check asks the endpoint real commands use (Codex review).
     const res = await fetch(new URL("/v1/me", p.url), {
-      headers: { authorization: `Bearer ${p.token}`, "user-agent": `foldrun-cli/${CLI_VERSION}` },
+      headers: { authorization: `Bearer ${p.token}`, "user-agent": USER_AGENT },
       signal: AbortSignal.timeout(seconds * 1000),
     });
     await res.body?.cancel().catch(() => {});
@@ -15884,7 +15892,8 @@ async function codeTurn(s, task, include = []) {
     // The folder's instruction files and skills, named from what was just
     // packed and agreed to — never from another listing (Codex).
     if (agreed && s.cloudBriefDue) {
-      const brief = cloudBrief(dir, new Set(pack.paths));
+      // koder's mark (FOL-415) goes with the brief, once per cloud conversation, not on every turn.
+      const brief = [cloudBrief(dir, new Set(pack.paths)), attributionNote(readCodePrefs().attribution !== false)].filter(Boolean).join("\n\n");
       if (brief) task = `${brief}\n\n${task}`;
     }
     if (!agreed) {
@@ -16460,7 +16469,7 @@ async function mcpEngine() {
 async function mcpConnect(/** @type {Record<string, any>} */ servers, /** @type {Record<string, any>} */ ctx) {
   const engine = await mcpEngine();
   if (!engine) throw new Error("this foldrun's engine cannot connect MCP servers — update foldrun (npm i -g foldrun@latest)");
-  return engine.connectMcp(servers, ctx);
+  return engine.connectMcp(servers, { client: KODER_MCP_CLIENT, ...ctx });
 }
 
 async function mcpOf(/** @type {any} */ s) {
@@ -16531,7 +16540,7 @@ async function runCloudSub(s, job, signal, h) {
     try {
       started = await remoteCall(url, flags, `${base}/agents/${enc(job.agent)}/run`, /** @type {RequestInit} */ ({
         method: "POST",
-        body: JSON.stringify({ task: job.prompt, ...(flags.test === true ? { test: true } : {}) }),
+        body: JSON.stringify({ task: withMark(job.prompt), ...(flags.test === true ? { test: true } : {}) }),
         stopBefore: signal,
       }));
     } catch (err) {
@@ -19401,7 +19410,7 @@ async function startCloudJobs(s, job, signal, h) {
       try {
         const got = await remoteCall(url, flags, `${base}/agents/${enc(agent)}/run`, /** @type {RequestInit} */ ({
           method: "POST",
-          body: JSON.stringify({ task, ...(snapshot ? { snapshot } : {}), ...(flags.test === true ? { test: true } : {}) }),
+          body: JSON.stringify({ task: withMark(task), ...(snapshot ? { snapshot } : {}), ...(flags.test === true ? { test: true } : {}) }),
           // Not sent after a stop; once sent, its answer is read, so the run it started is known and can be stopped (Codex).
           stopBefore: signal,
         }));
@@ -20784,9 +20793,10 @@ async function codeLocalTurn(s, text) {
               env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
               shellEnv: shellOwn,
               userAgent: USER_AGENT,
+              mcpClient: KODER_MCP_CLIENT,
               model: localModelOf(model),
               ...(effort && /** @type {any} */ (engine).ENGINE_FEATURES?.effort === true ? { effort } : {}),
-              systemPrompt: [def.prompt, "You work on a private copy of the person's folder, in a sandbox of your own: what you change there comes back as one patch the person is asked about, and nothing else you do reaches their computer. Your commands are not asked. Sites off the sandbox's list are refused (there is no one to ask).", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
+              systemPrompt: [def.prompt, "You work on a private copy of the person's folder, in a sandbox of your own: what you change there comes back as one patch the person is asked about, and nothing else you do reaches their computer. Your commands are not asked. Sites off the sandbox's list are refused (there is no one to ask).", attributionNote(readCodePrefs().attribution !== false), folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
               tools: def.tools,
               maxTurns: Math.min(AGENT_TURNS_EACH, left),
               sites: Array.isArray(s.sandboxSites) ? s.sandboxSites : [],
@@ -21037,11 +21047,12 @@ async function codeLocalTurn(s, text) {
             env: { ...own, ANTHROPIC_BASE_URL: engineAt.base, ANTHROPIC_AUTH_TOKEN: engineAt.token, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
             shellEnv: shellOwn,
             userAgent: USER_AGENT,
+            mcpClient: KODER_MCP_CLIENT,
             model: localModelOf(model),
             // The session's effort: a sub-agent thinks as hard as the agent that hands it the job.
             ...(effort && /** @type {any} */ (engine).ENGINE_FEATURES?.effort === true ? { effort } : {}),
             // The definition's prose is the person's or the project's own text; the folder's instructions go with it as they do for the session's agent.
-            systemPrompt: [def.prompt, `You work in the person's folder: ${s.dir}`, Array.isArray(s.extraDirs) && s.extraDirs.length ? `They also added these folders, for reading: ${s.extraDirs.join(", ")}` : "", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
+            systemPrompt: [def.prompt, `You work in the person's folder: ${s.dir}`, attributionNote(readCodePrefs().attribution !== false), Array.isArray(s.extraDirs) && s.extraDirs.length ? `They also added these folders, for reading: ${s.extraDirs.join(", ")}` : "", folderInstructions(s.dir).text].filter(Boolean).join("\n\n"),
             tools: def.tools,
             // Its own MCP servers' tools, in its conversation only. What one answers may hold anything: marked,
             // so the person is asked before the agent's later words about it go to the cloud.
@@ -21135,8 +21146,9 @@ async function codeLocalTurn(s, text) {
             env: { ...own, ANTHROPIC_BASE_URL: engineAt.base, ANTHROPIC_AUTH_TOKEN: engineAt.token, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
             shellEnv: shellOwn,
             userAgent: USER_AGENT,
+            mcpClient: KODER_MCP_CLIENT,
             model: localModelOf(model),
-            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local", canSend: s.localOnly !== true }), s.localOnly !== true), folderInstructions(s.dir).text, walls ? SANDBOX_NOTE : "", skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
+            systemPrompt: [localPrompt(s.dir, foldrunKnowledge({ ws: s.ws, url: s.url, mode: "local", canSend: s.localOnly !== true }), s.localOnly !== true), attributionNote(readCodePrefs().attribution !== false), folderInstructions(s.dir).text, walls ? SANDBOX_NOTE : "", skillsNote(folderSkills(s.dir, { relativeTo: s.dir })), s.strict === true ? "" : LOOKS_NOTE, Array.isArray(s.extraDirs) && s.extraDirs.length ? `The person also added these folders for you to read (reading there is not asked; a change there is asked every time): ${s.extraDirs.join(", ")}` : ""].filter(Boolean).join("\n\n"),
             // Symbols (FOL-297): a language server is a program, so only inside the walls, and only from a core that has it.
             tools: [...ENGINE_TOOLS_LOCAL, ...(walls && /** @type {any} */ (engine).ENGINE_TOOLS?.Symbols ? ["Symbols"] : [])],
             extraTools: [
@@ -22799,7 +22811,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const last = s.applied?.at(-1);
         return { turns: rewindTurns(rewindOf(s)), patch: last ? `${last.files?.length ?? "its"} file${last.files?.length === 1 ? "" : "s"}${last.runId ? ` · run ${String(last.runId)}` : ""}` : undefined };
       }
-      if (cmd === "/status") return { tips: readCodePrefs().tips !== false, line: readCodePrefs().statusLine !== false, jobs: readCodePrefs().jobs !== false };
+      if (cmd === "/status") return { tips: readCodePrefs().tips !== false, line: readCodePrefs().statusLine !== false, jobs: readCodePrefs().jobs !== false, attribution: readCodePrefs().attribution !== false };
       if (cmd === "/todos") return { todos: Array.isArray(s.todos) ? s.todos : [] };
       if (cmd === "/setup mcp") {
         const m = await mcpOf(s).catch(() => null);
@@ -22917,8 +22929,8 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       else if (name === "/setup" && w0 === "check" && !after) [name, rest] = ["#doctor", ""];
     }
     // Words a command does not take are said back, never dropped (Codex).
-    if (name === "/status" && rest && !/^(?:line|jobs)(?:\s+(?:on|off))?$/i.test(rest)) {
-      say(`/status has no ${plainText(rest)} — /status cost · explain · usage · context · tips on|off · line on|off · jobs on|off`);
+    if (name === "/status" && rest && !/^(?:line|jobs|attribution)(?:\s+(?:on|off))?$/i.test(rest)) {
+      say(`/status has no ${plainText(rest)} — /status cost · explain · usage · context · tips on|off · line on|off · jobs on|off · attribution on|off`);
       continue;
     }
     if (name === "/sessions" && rest) {
@@ -23167,6 +23179,15 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(explain(err))}\n`);
       }
+      continue;
+    }
+    if (name === "/status" && /^attribution(\s|$)/i.test(rest)) {
+      // koder's mark on commits, pull requests, issues and exports (FOL-415): a choice of /status, as jobs and line are.
+      const want = /^attribution\s+(on|off)$/i.exec(rest)?.[1]?.toLowerCase();
+      const prefs = readCodePrefs();
+      if (!want) say(`koder's mark is ${prefs.attribution === false ? "off" : "on"} · /status attribution ${prefs.attribution === false ? "on" : "off"}`);
+      else if (!writeCodePrefs({ ...prefs, attribution: want === "on" })) say(`that could not be saved — ${homeTilde(configDir())} is not writable`);
+      else say(want === "on" ? `koder's mark on — commits end with ${KODER_TRAILER}, pull requests and issues with a "Generated with koder from foldrun.io" line, from the next turn` : "koder's mark off — for you, in every folder, from the next turn");
       continue;
     }
     if (name === "/status" && /^jobs(\s|$)/i.test(rest)) {
@@ -24256,7 +24277,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       const to = path.resolve(dir, named || path.join(os.tmpdir(), `foldrun-${s.context}.md`));
       try {
         // Never over a file that is there: a name is given, not a target to replace.
-        fs.writeFileSync(to, exportTranscript(s.transcript, { ws, context: s.context, dir: homeTilde(dir), thinking: withThinking }), { mode: 0o600, flag: "wx" });
+        fs.writeFileSync(to, exportTranscript(s.transcript, { ws, context: s.context, dir: homeTilde(dir), thinking: withThinking, attribution: readCodePrefs().attribution !== false }), { mode: 0o600, flag: "wx" });
         console.log(`  ${c.green("✓")} ${c.white(plainText(homeTilde(to)))} ${c.dim(`— ${s.transcript.length} turn${s.transcript.length === 1 ? "" : "s"}`)}\n`);
       } catch (err) {
         console.log(`  ${c.red("✗")} ${plainText(/** @type {NodeJS.ErrnoException} */ (err).code === "EEXIST" ? `${homeTilde(to)} is already there — name another file` : explain(err))}\n`);

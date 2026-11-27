@@ -220,6 +220,35 @@ test("/status jobs off hides the background jobs' rows under the working line, f
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).jobs, undefined, "on again: nothing kept");
 });
 
+test("/status attribution off|on (FOL-415): koder's mark on commits, pull requests, issues and exports; kept for the person, on by default", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-at", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1", NO_COLOR: "1", COLUMNS: "200" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/status attribution\r");
+    at = await t.until(/koder's mark is on · \/status attribution off/, at);
+    t.send("/status attribution off\r");
+    at = await t.until(/koder's mark off/, at);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).attribution, false, "kept for the person");
+    t.send("/status attribution on\r");
+    at = await t.until(/koder's mark on — commits end with Co-Authored-By: koder <noreply@foldrun\.io>/, at);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).attribution, undefined, "on again: nothing kept");
+  const { attributionNote, KODER_TRAILER, KODER_SIGNATURE } = await import("../src/code-session.mjs");
+  assert.equal(KODER_TRAILER, "Co-Authored-By: koder <noreply@foldrun.io>");
+  assert.match(attributionNote(), /end it with a blank line and this trailer: Co-Authored-By: koder <noreply@foldrun\.io>/);
+  assert.ok(attributionNote().includes(KODER_SIGNATURE));
+  assert.equal(attributionNote(false), "");
+  for (const mark of [attributionNote(), KODER_SIGNATURE]) assert.doesNotMatch(mark, /claude|anthropic/i, "never another product's name in koder's marks");
+});
+
 test("/permissions cloud ask|bypass (FOL-382): starting cloud jobs is unasked until the person asks to be asked; kept for the person, a job's changes always asked", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

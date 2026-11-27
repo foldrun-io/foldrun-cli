@@ -41,7 +41,7 @@ export const CODE_GROUPS = [
     ["/queue [rm <n>|clear]", "messages waiting for the turn to end — while a turn runs, type one and press Tab; they are sent in order, each after the turn before it finished"],
   ] },
   { group: "Status", commands: [
-    ["/status [cost|explain|usage|context|tips on|off|line on|off|jobs on|off]", "this session: turns, model, where it works, the account — cost: what it spent; explain: where it went, row by row; usage: your foldrun plan and the credit left; context: what fills the agent's context; tips on|off: a line before a turn that re-reads the whole conversation; line on|off: the status line under the prompt; jobs on|off: a row with a spinner for each background job (here, outside the sandbox, cloud) under the working line, on by default"],
+    ["/status [cost|explain|usage|context|tips on|off|line on|off|jobs on|off|attribution on|off]", "this session: turns, model, where it works, the account — cost: what it spent; explain: where it went, row by row; usage: your foldrun plan and the credit left; context: what fills the agent's context; tips on|off: a line before a turn that re-reads the whole conversation; line on|off: the status line under the prompt; jobs on|off: a row with a spinner for each background job (here, outside the sandbox, cloud) under the working line, on by default; attribution on|off: koder's mark on what it writes — the trailer Co-Authored-By: koder <noreply@foldrun.io> on commits, a line Generated with koder from foldrun.io on pull requests and issues, a line on an exported conversation; on by default"],
     ["/sessions [send <id> <text>|read|trust <id>|untrust <id>]", "this session's id and the other sessions of this project on this computer — send messages one (the agent can too, when you ask it); read shows what they sent this one; trust lets one's messages in without asking (into a running turn, or a turn of their own), its answer sent back"],
   ] },
   { group: "App", commands: [
@@ -282,7 +282,7 @@ export function commandMenu(name, st) {
       // One command for what the session is, has spent and holds (FOL-263: /cost, /usage, /context went in).
       return {
         title: "This session",
-        subtitle: "/status cost · explain · usage · context · tips on|off · line on|off · jobs on|off types it straight away",
+        subtitle: "/status cost · explain · usage · context · tips on|off · line on|off · jobs on|off · attribution on|off types it straight away",
         choices: [
           { v: "/status", name: "The session", note: "turns, model, where it works, the account" },
           { v: "/status cost", name: "What it spent", note: "turns here and in the cloud" },
@@ -292,6 +292,7 @@ export function commandMenu(name, st) {
           { v: st.tips === false ? "/status tips on" : "/status tips off", name: st.tips === false ? "Token hints on" : "Token hints off", note: "a line before a turn that re-reads the conversation" },
           { v: st.line === false ? "/status line on" : "/status line off", name: st.line === false ? "Status line on" : "Status line off", note: "the line under the prompt" },
           { v: st.jobs === false ? "/status jobs on" : "/status jobs off", name: st.jobs === false ? "Background jobs on" : "Background jobs off", note: "a row each, with a spinner, under the working line" },
+          { v: st.attribution === false ? "/status attribution on" : "/status attribution off", name: st.attribution === false ? "koder's mark on" : "koder's mark off", note: "Co-Authored-By: koder on commits, a koder line on pull requests and issues" },
         ],
         tick: null,
         start: "/status",
@@ -1367,6 +1368,19 @@ export function localModelOf(/** @type {string | null} */ v) {
 }
 
 /** What the agent is told when it works in the person's own folder. */
+/** koder's own mark (FOL-415, owner 27 Nov 2026: "everywhere claude sends its name we need to send our name with logo"). */
+export const KODER_TRAILER = "Co-Authored-By: koder <noreply@foldrun.io>";
+export const KODER_SIGNATURE = "◆ Generated with [koder](https://foldrun.io) from foldrun.io";
+/** What the agent is told about its mark on what it writes for git and GitHub; "" when the person turned it off (/status attribution off). */
+export function attributionNote(/** @type {boolean} */ on = true) {
+  if (!on) return "";
+  return [
+    `When you write a git commit message, end it with a blank line and this trailer: ${KODER_TRAILER}`,
+    `When you write the body of a pull request or an issue, end it with this line: ${KODER_SIGNATURE}`,
+    "Never name another product, model or company as the author in these marks.",
+  ].join("\n");
+}
+
 export function localPrompt(/** @type {string} */ dir, /** @type {string} */ about = "", /** @type {boolean} */ cloudAgents = true) {
   return [
     "You are foldrun code, a coding agent working directly in the person's own folder on their computer:",
@@ -1476,7 +1490,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, cloudAsk?: boolean, turnSteps?: number | null, resources?: string, permissions?: "bypass" | "strict", files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, attribution?: boolean, webAsk?: boolean, cloudAsk?: boolean, turnSteps?: number | null, resources?: string, permissions?: "bypass" | "strict", files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
@@ -1497,7 +1511,7 @@ function filesPref(v) {
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(doc.cloudAsk === true ? { cloudAsk: true } : {}), ...(Number.isInteger(doc.turnSteps) && doc.turnSteps >= 5 && doc.turnSteps <= 99999 ? { turnSteps: doc.turnSteps } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...(doc.permissions === "bypass" || doc.permissions === "strict" ? { permissions: doc.permissions } : {}), ...filesPref(doc.files) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.attribution === false ? { attribution: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(doc.cloudAsk === true ? { cloudAsk: true } : {}), ...(Number.isInteger(doc.turnSteps) && doc.turnSteps >= 5 && doc.turnSteps <= 99999 ? { turnSteps: doc.turnSteps } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...(doc.permissions === "bypass" || doc.permissions === "strict" ? { permissions: doc.permissions } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
@@ -1507,7 +1521,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof prefs.turnSteps === "number" && Number.isInteger(prefs.turnSteps) && prefs.turnSteps >= 5 && prefs.turnSteps <= 99999 ? { turnSteps: prefs.turnSteps } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...(prefs.permissions === "bypass" || prefs.permissions === "strict" ? { permissions: prefs.permissions } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.attribution === false ? { attribution: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof prefs.turnSteps === "number" && Number.isInteger(prefs.turnSteps) && prefs.turnSteps >= 5 && prefs.turnSteps <= 99999 ? { turnSteps: prefs.turnSteps } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...(prefs.permissions === "bypass" || prefs.permissions === "strict" ? { permissions: prefs.permissions } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;

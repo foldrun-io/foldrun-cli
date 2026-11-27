@@ -384,13 +384,15 @@ export function carryNote(transcript, to, from = 0, maxChars = 8_000) {
 }
 
 /** The session as a markdown file a person can keep. */
-export function exportTranscript(/** @type {Exchange[]} */ transcript, /** @type {{ ws: string, context: string, dir: string, thinking?: boolean }} */ s) {
+export function exportTranscript(/** @type {Exchange[]} */ transcript, /** @type {{ ws: string, context: string, dir: string, thinking?: boolean, attribution?: boolean }} */ s) {
   return [
     `# foldrun code — ${s.ws}`,
     "",
     `Session ${s.context} · ${s.dir}`,
     "",
     ...transcript.flatMap((e, i) => [`## ${i + 1}. You (${e.where === "local" ? "on this computer" : "in the cloud"})`, "", e.you.trim(), "", ...(s.thinking === true && e.thinking ? ["### Thinking (the model's summary)", "", ...e.thinking.trim().split("\n").map((l) => `> ${l}`), ""] : []), "### foldrun code", "", e.agent.trim() || "(no reply)", ""]),
+    // koder's mark (FOL-415), unless the person turned it off (/status attribution off).
+    ...(s.attribution === false ? [] : ["---", "", "Exported from ◆ [koder](https://foldrun.io) from foldrun.io", ""]),
   ].join("\n");
 }
 
