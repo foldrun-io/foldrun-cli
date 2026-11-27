@@ -12,6 +12,13 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.8.0] — 2026-11-27
+
+- fix(code): turnSteps in the CodePrefs type (the release's typecheck failed on 883c1cc) ([79c04dc](https://github.com/foldrun-io/foldrun-cli/commit/79c04dc))
+- feat(code): no step limit per turn by default; /permissions steps <n>|off sets one, kept for the person (owner, 27 Nov 2026) ([883c1cc](https://github.com/foldrun-io/foldrun-cli/commit/883c1cc))
+- fix(code): a turn that did not finish always says why and how to go on — the step limit, a cut-off reply, no result (FOL-426) ([cd07e9f](https://github.com/foldrun-io/foldrun-cli/commit/cd07e9f))
+- fix(code): a paste never sends — it waits on the line and Enter sends it, with or without the terminal's paste marks (FOL-423) ([d960935](https://github.com/foldrun-io/foldrun-cli/commit/d960935))
+
 ## [34.7.1] — 2026-11-27
 
 ### docs
