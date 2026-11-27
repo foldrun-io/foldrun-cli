@@ -12,6 +12,20 @@ edited by a person.
 
 <!-- releases -->
 
+## [35.0.0] — 2026-11-27
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 31.0.0, a new major. (021dc93)
+
+### deps
+
+- @foldrun/core 31.0.0 ([021dc93](https://github.com/foldrun-io/foldrun-cli/commit/021dc93))
+
+### docs
+
+- sync flows.md (a check that ends the run, FOL-450) ([d22bfe6](https://github.com/foldrun-io/foldrun-cli/commit/d22bfe6))
+
 ## [34.15.1] — 2026-11-27
 
 ### docs
