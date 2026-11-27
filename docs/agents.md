@@ -72,6 +72,7 @@ refused. See [The four jobs](four-jobs).
 | `model` | `fast` \| `default` \| `max`, an alias (`opus`), or a full id | a **tier**, so agents don't rot when models are renamed. Synonyms land on their tier: `small`/`cheap` → fast, `large`/`best` → max |
 | `effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | how long it thinks before answering. Unset leaves the model's own default. In a `foldrun code` session, `/model effort` changes it; the same line runs on this computer and in the cloud |
 | `max_output_tokens` | a whole number, 1 to 1048576 | the longest one model reply may be, in tokens — on every provider, each under its own name. Lower keeps replies short, cheap and quick; higher lets an agent that writes long documents finish one in a reply. A flow or a step may set its own. On [foldrun's models](providers#foldruns-models) the price list's ceiling for the model applies too (the lower wins; above it is a [check warning](checks#config-output-fitted)); unset there is the ceiling, and elsewhere the runtime's default |
+| `second_model` | `provider/model` of another provider than `model:` — `openai/gpt-5.5` | the model that answers the `debate` and `review` tools ([below](#a-second-opinion-debate-and-review)). Only with one of them in `tools:`; on [foldrun's models](providers#foldruns-models) only. In a `foldrun code` session, `/model second` sets it and the tools in one save |
 | `budget` | a number in USD | the most this agent may spend in **one run**, across every step it takes in it. Its step stops mid-turn at what is left; a later step of its own in the same run is refused before it starts. Unset is no limit. Per run only — a cap over a day, week or month belongs in `AGENTS.md` |
 
 The two are orthogonal — the model is which brain, effort is how long it
@@ -118,10 +119,46 @@ only Web takes a provider:
 | **Memory** | `search` | `search_files(query)` over knowledge, memory, state and storage at every scope | — |
 | | `history` | `recall_runs()` and `read_run(id)` — the project's last thirty finished runs | — |
 | | `desks` | `recall_desk_runs()` and `read_desk_run(id)` — the same, across the account's *other* workspaces: ten recent runs each, named per line, up to 100 runs in all. Run records, not files: the way a digest agent reads what every desk concluded this week | — |
+| **Second opinion** | `debate` · `review` | `foldrun_debate(topic, position?, context?)` — another provider's model argues an idea back; `foldrun_review(diff, files?, instructions?)` — it reviews a change and lists what is wrong. Answered by `second_model:` ([below](#a-second-opinion-debate-and-review)) | the model in `second_model:` |
 | **People** | `ask` | `ask_person(question, options?)` — asks the person running the desk mid-step and waits for the answer ([below](#asking-a-person-mid-step)) | — |
 | | `peers` | `peers_list()` and `peers_message(to, text)` — the other steps running beside it in its parallel group, and a message to one of them (or all), which reaches that agent after its next tool call ([below](#asking-a-colleague-beside-you)) | — |
 | **Installing** | `install` — every agent has it | `install(manager, packages)` — installs a missing program or library mid-step: Debian packages (`apt`), Python (`pip`), Node (`npm`) ([below](#installing-what-a-step-needs)) | `disallowedTools: [install]` removes it |
 | **Colleagues** | `agents:` · `subagents:` | not in `tools:` — their own fields: consult a colleague for an answer, or delegate a job to one that works with its own tools ([consult](#consulting-colleagues), [delegate](#delegating-to-a-sub-agent)) | — |
+
+### A second opinion: `debate` and `review`
+
+`tools: [debate]`, `tools: [review]` or both give the agent a second
+opinion from a model of **another provider** than its own — Claude's work
+argued over or reviewed by GPT, and the other way round. `second_model:`
+names that model, written `provider/model`:
+
+```markdown
+---
+name: coder
+model: anthropic/claude-opus-5-5
+tools: [read, write, code, review]
+second_model: openai/gpt-5.5
+---
+```
+
+- **What leaves.** Only what the agent puts in the call: the topic and position, or the
+  diff and the files it names. Never the conversation, its instructions or
+  the agent's files. It goes to the provider in `second_model:`.
+- **What it costs.** That model's tokens, at its listed price, on the same
+  meter as every model call: your plan's allowance, then the wallet. No
+  separate charge.
+- **Where it works.** On [foldrun's models](providers#foldruns-models), in
+  the cloud and in `foldrun code` on your computer alike. On your own model
+  key there is no second opinion and `foldrun check` says so.
+- **What is checked.** The step may ask only for the tools its file grants,
+  answered only by that model: a call naming another model is refused before
+  anything is sent. `second_model:` of the same provider as `model:`, or one
+  with neither tool, is a [check warning](checks).
+- `[[review]]` is still your own tool named `review`, if you have one; the
+  bare word is the built-in. `disallowedTools: [review]` takes it away.
+
+The same tools are on `/v1/messages` for your own app
+([API usage](api-usage#server-tool-a-second-opinion-from-another-providers-model)).
 
 ### Asking a person mid-step
 

@@ -583,6 +583,50 @@ test("the start box and /status name the same session, and /status says where it
   }
 });
 
+test("/model second (FOL-418): another provider's model for tools: [debate, review], written as second_model: and the tools in one save; none takes all three away", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  let file = "---\nname: coder\nmodel: anthropic/claude-x\ntools: [read, write]\n---\n\nYou code.\n";
+  const puts: Array<{ content: string; ifMatch: unknown; message: string }> = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: file, sha256: `sha-${puts.length}` }),
+    [`PUT ${WS}/source`]: (b) => {
+      const body = JSON.parse(String(b));
+      puts.push(body);
+      file = body.content;
+      return { ok: true };
+    },
+    [`GET ${WS}/sessions/code-sm/messages`]: () => ({ messages: [] }),
+  });
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-sm", "--url", s.url, "--token", "k"], home);
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/model second anthropic/claude-y\r");
+    at = await t.until(/same provider as this agent's model/, at);
+    assert.equal(puts.length, 0);
+    t.send("/model second gpt-x\r");
+    at = await t.until(/not a model written provider\/model/, at);
+    t.send("/model second openai/gpt-x\r");
+    at = await t.until(/second opinion: openai\/gpt-x — debate and review/, at);
+    assert.equal(puts.length, 1);
+    assert.equal(puts[0]!.ifMatch, "sha-0", "written over exactly what was read");
+    assert.match(puts[0]!.content, /^second_model: openai\/gpt-x$/m);
+    assert.match(puts[0]!.content, /^tools: \[read, write, debate, review\]$/m);
+    assert.match(puts[0]!.content, /^model: anthropic\/claude-x$/m, "the rest of the file as it was");
+    t.send("/model second none\r");
+    at = await t.until(/no second opinion: debate and review are taken away/, at);
+    assert.doesNotMatch(puts[1]!.content, /second_model/);
+    assert.match(puts[1]!.content, /^tools: \[read, write\]$/m);
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("/model effort (FOL-256, FOL-263): the effort: line of the agent's file — a picker, from /model's list too, a level straight away, default takes the line out; /status names it", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

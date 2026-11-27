@@ -128,7 +128,7 @@ async function session(agentMd: string, models: (n: number) => unknown, files: {
     t.send("/quit\r");
     await t.done;
   };
-  return { t, types, send, close, stop: () => { t.child.kill(); s.close(); } };
+  return { t, types, asked0: () => asked[0].tools ?? [], send, close, stop: () => { t.child.kill(); s.close(); } };
 }
 const announces = () => raw("{}", "application/json", { "foldrun-server-tools": ANNOUNCED });
 
@@ -198,4 +198,26 @@ test("a gateway ask that failed is made again at the next message, and /where we
   } finally {
     x.stop();
   }
+});
+
+// tools: [debate, review] (FOL-418): offered only when the agent's file grants them with a second model.
+const announcesSecond = () => raw("{}", "application/json", { "foldrun-server-tools": `${ANNOUNCED},foldrun_debate_20261127,foldrun_review_20261127` });
+
+test("debate and review: announced by the gateway but not offered until the agent's file grants them with second_model:, then sent with that model", { skip, timeout: 180_000 }, async () => {
+  const offered = async (agentMd: string) => {
+    const x = await session(agentMd, announcesSecond);
+    try {
+      let at = await x.t.until(/\w ❯ /);
+      at = await x.send("hello", 1, at);
+      const tools = (x.asked0() as { type?: string; name: string; model?: string }[]).filter((t) => t.type);
+      await x.close();
+      return tools.filter((t) => t.name === "foldrun_debate" || t.name === "foldrun_review").map((t) => `${t.name}:${t.model ?? "-"}`);
+    } finally {
+      x.stop();
+    }
+  };
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code]\n---\nYou code.\n"), [], "no grant, nothing offered");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, review]\n---\nYou code.\n"), [], "a grant with no second model, nothing offered");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, review]\nsecond_model: openai/gpt-x\n---\nYou code.\n"), ["foldrun_review:openai/gpt-x"]);
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, debate, review]\nsecond_model: openai/gpt-x\ndisallowedTools: [debate]\n---\nYou code.\n"), ["foldrun_review:openai/gpt-x"], "disallowedTools takes one away");
 });

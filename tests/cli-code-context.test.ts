@@ -261,13 +261,13 @@ test("a command typed alone opens one list (FOL-259): every choice is a line the
       assert.ok(names.has(x.v.split(" ")[0]!), `${cmd}: ${x.v} is a command line`);
       // A choice that asks ends in …; so does one that opens a list of its own (/model's Model…, the owner's words).
       if (x.ask) assert.ok(x.name.endsWith("…"), `${cmd}: ${x.name} — a choice that asks ends in …`);
-      else if (x.name.endsWith("…")) assert.ok(["/model", "/model effort"].includes(x.v), `${cmd}: ${x.name} ends in … but neither asks nor opens a list`);
+      else if (x.name.endsWith("…")) assert.ok(["/model", "/model effort", "/model second"].includes(x.v), `${cmd}: ${x.name} ends in … but neither asks nor opens a list`);
       if (x.ask) assert.ok(x.v.endsWith(" "), `${cmd}: ${x.v} is a line still to finish`);
     }
   }
   // /model: the model, how hard it thinks, and its thinking shown or not — the choice is the other one.
-  assert.deepEqual(commandMenu("/model", { thinking: false })!.choices.map((x) => x.v), ["/model", "/model effort", "/model thinking on"]);
-  assert.equal(commandMenu("/model", { thinking: true })!.choices[2]!.v, "/model thinking off");
+  assert.deepEqual(commandMenu("/model", { thinking: false })!.choices.map((x) => x.v), ["/model", "/model effort", "/model second", "/model thinking on"]);
+  assert.equal(commandMenu("/model", { thinking: true })!.choices[3]!.v, "/model thinking off");
   // /setup: what the agent reads and reaches; its MCP servers are a list of their own.
   assert.deepEqual(commandMenu("/setup", {})!.choices.map((x) => x.v), ["/setup instructions", "/setup skills", "/setup agents", "/setup mcp", "/setup dirs", "/setup dirs ", "/setup check"]);
   // A hidden or broken server is listed by /setup mcp, never offered an action; a server is removed from its own file.
