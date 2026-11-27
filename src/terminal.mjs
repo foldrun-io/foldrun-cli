@@ -139,10 +139,11 @@ export function writeExact(chunk, stream = process.stdout) {
  *  go to the line's start, clear the line, bracketed paste on and off. */
 // Carriage return, clear the line, bracketed paste on/off, and — for a
 // picker drawn in place (/model) — cursor up n rows and clear to the end;
-// the cursor hidden and shown again around the working line; erase to the
+// the cursor hidden and shown again around the working line, and put at a
+// column of its input line (FOL-348); erase to the
 // row's end and synchronized output (DEC 2026), so the working rows are
 // drawn over in place, never cleared to a blank frame first.
-const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[K|\u001b\[\?2004[hl]|\u001b\[\?2026[hl]|\u001b\[\?25[hl]|\u001b\[\d{1,2}A|\u001b\[J)+$/;
+const OUR_CONTROLS = /^(?:\r|\u001b\[2K|\u001b\[K|\u001b\[\?2004[hl]|\u001b\[\?2026[hl]|\u001b\[\?25[hl]|\u001b\[\d{1,2}A|\u001b\[\d{1,3}C|\u001b\[J)+$/;
 
 /**
  * One of the CLI's own terminal controls (OUR_CONTROLS), past the guard —

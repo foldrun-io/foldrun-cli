@@ -16832,6 +16832,40 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
   // A draft the keyboard was stopped on (a prompt came): drawn again as it was (FOL-306).
   // Cut by characters, never inside one (Codex).
   let text = [...String(initial)].slice(0, TYPE_AHEAD_MAX).join("");
+  // Where the next key goes: an index into text, always between two graphemes (FOL-348). Anything that
+  // puts a whole new text on the line puts it at the end.
+  let at = text.length;
+  const set = (/** @type {string} */ t) => {
+    text = t;
+    at = t.length;
+  };
+  const insert = (/** @type {string} */ k) => {
+    text = text.slice(0, at) + k + text.slice(at);
+    at += k.length;
+  };
+  /** The grapheme boundary before / after the cursor. */
+  const prevAt = () => {
+    let b = 0;
+    for (const { index } of graphemes.segment(text.slice(0, at))) b = index;
+    return b;
+  };
+  const nextAt = () => {
+    const first = graphemes.segment(text.slice(at))[Symbol.iterator]().next();
+    return first.done ? at : at + first.value.segment.length;
+  };
+  /** The line's editing keys, by their sequence: ←/→ one grapheme, Home/End, Delete at the cursor (FOL-348). */
+  /** @type {Record<string, () => void>} */
+  const moves = {
+    left: () => (at = prevAt()),
+    right: () => (at = nextAt()),
+    home: () => (at = 0),
+    end: () => (at = text.length),
+    del: () => (text = text.slice(0, at) + text.slice(nextAt())),
+  };
+  const moveOf = (/** @type {string} */ seq) =>
+    /^\x1b(?:\[(?:1;\d)?D|OD)$/.test(seq) ? "left" : /^\x1b(?:\[(?:1;\d)?C|OC)$/.test(seq) ? "right" : /^\x1b(?:\[(?:1;\d)?H|OH|\[[17]~)$/.test(seq) ? "home" : /^\x1b(?:\[(?:1;\d)?F|OF|\[[48]~)$/.test(seq) ? "end" : seq === "\x1b[3~" ? "del" : "";
+  const publish = () => (typeAheadCaret = { text, at });
+  publish();
   let carry = "";
   let pasting = false;
   const onData = (/** @type {Buffer} */ d) => {
@@ -16847,45 +16881,61 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     // key and nothing else, outside the terminal's paste marks (Codex).
     const alone = !pasting && /^(\r\n?|\n)$/.test(raw);
     const tabAlone = !pasting && raw === "\t";
-    /** @type {Array<{ k: string, pasted: boolean }>} */
+    /** @type {Array<{ k: string, pasted: boolean, move?: string }>} */
     const keys = [];
     for (const part of raw.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b)/)) {
       if (part === "\x1b[200~") pasting = true;
       else if (part === "\x1b[201~") pasting = false;
-      else if (!part.startsWith("\x1b")) for (const k of part) keys.push({ k, pasted: pasting });
+      // The editing keys move on the line; any other sequence (↑, ↓, F-keys) is still dropped whole.
+      else if (part.startsWith("\x1b")) {
+        const move = moveOf(part);
+        if (move) keys.push({ k: "", pasted: pasting, move });
+      } else for (const k of part) keys.push({ k, pasted: pasting });
     }
-    for (const { k, pasted } of keys) {
-      if (k === "\x03") onInt();
+    for (const { k, pasted, move } of keys) {
+      if (move) moves[move]?.();
+      else if (k === "\x01") moves.home?.();
+      else if (k === "\x05") moves.end?.();
+      else if (k === "\x03") onInt();
       // Tab queues only as a key pressed on its own, like Enter: a tab
       // inside pasted text (a table, code) is never a request (Codex).
       else if (k === "\t" && queue && !pasted && tabAlone) {
         const t = text.trim();
-        if (!t) text = queue.back() ?? "";
-        else if (queue.add(t)) text = "";
-      } else if (k === "\t") text = text && !text.endsWith(" ") ? `${text} ` : text;
-      else if (k === "\x7f" || k === "\b") text = [...text].slice(0, -1).join("");
+        if (!t) set(queue.back() ?? "");
+        else if (queue.add(t)) set("");
+      } else if (k === "\t") {
+        // A space at the cursor, never two in a row (at the end: as before).
+        if (text.slice(0, at) && !text.slice(0, at).endsWith(" ")) insert(" ");
+      } else if (k === "\x7f" || k === "\b") {
+        // The grapheme before the cursor.
+        const b = prevAt();
+        text = text.slice(0, b) + text.slice(at);
+        at = b;
+      }
       // /update now|restart with Enter during any turn, here or in the cloud: queued for after it, never words for the agent (FOL-261).
       else if ((k === "\r" || k === "\n") && queue && alone && isRestartLine(text)) {
-        if (queue.add(text.trim().replace(/\s+/g, " ").toLowerCase())) text = "";
+        if (queue.add(text.trim().replace(/\s+/g, " ").toLowerCase())) set("");
       } else if ((k === "\r" || k === "\n") && alone && commandLine(text)) {
         // A /command with Enter is never words for the agent (FOL-380): it runs beside the turn, or is held for
         // after it — commandDuringTurn decides which. With no session to run it (none set), it is held. The
         // queue's own commands act here and now, in the order typed with what is queued (Codex).
         const t = text.trim();
-        if (queue && QUEUE_LINE.test(t)) queue.add(t) && (text = "");
-        else if (turnCommand?.(t) === "beside") text = "";
-        else if (queue?.add(t)) text = "";
+        if (queue && QUEUE_LINE.test(t)) queue.add(t) && set("");
+        else if (turnCommand?.(t) === "beside") set("");
+        else if (queue?.add(t)) set("");
       } else if ((k === "\r" || k === "\n") && onSend && alone && text.trim()) {
         const t = text.trim();
-        text = "";
+        set("");
         onSend(t);
       } else if ((k === "\r" || k === "\n") && queue && alone && text.trim()) {
         // No way into the running turn (a cloud turn): Enter queues it for
         // after the turn, as Tab does — never a space added (FOL-325).
-        if (queue.add(text.trim())) text = "";
-      } else if (k === "\r" || k === "\n") text = text && !text.endsWith(" ") ? `${text} ` : text;
-      else if (!/[\x00-\x1f\x7f-\x9f]/.test(k) && text.length < TYPE_AHEAD_MAX) text += k;
+        if (queue.add(text.trim())) set("");
+      } else if (k === "\r" || k === "\n") {
+        if (text.slice(0, at) && !text.slice(0, at).endsWith(" ")) insert(" ");
+      } else if (!/[\x00-\x1f\x7f-\x9f]/.test(k) && text.length < TYPE_AHEAD_MAX) insert(k);
     }
+    publish();
   };
   process.stdin.setRawMode(true);
   // Paste marks on, so a paste is told from typing (the prompt turns them
@@ -16914,7 +16964,8 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
         process.stdin.setRawMode(false);
         process.stdin.pause();
         const t = text;
-        text = "";
+        set("");
+        publish();
         return t;
       })();
       const t = await stopping;
@@ -16924,6 +16975,14 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     },
   };
 }
+
+/** Graphemes: ←/→ and Backspace step over a whole character, an emoji with its modifiers included (FOL-348). */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/**
+ * The keyboard's line during a turn and where its cursor is (an index into text): the working rows draw the
+ * cursor there when what they draw is this text, at its end otherwise (FOL-348).
+ */
+let typeAheadCaret = { text: "", at: 0 };
 
 /** A line that starts foldrun again — /update now or /update restart: the name exactly, as the prompt parser reads one (Codex). */
 const isRestartLine = (/** @type {string} */ t) => /^\/update\s+(now|restart)\s*$/i.test(t.trim());
@@ -17044,6 +17103,35 @@ function liveJobs() {
 /** At most this many job rows; the rest are counted on one more. */
 const JOB_ROWS_MAX = 3;
 
+/** Where the cursor is in a typed text: the keyboard's own cursor when the text is the keyboard's, its end otherwise (FOL-348). */
+const caretIn = (/** @type {string} */ t) => (typeAheadCaret.text === t ? Math.min(typeAheadCaret.at, t.length) : t.length);
+
+/**
+ * At most `room` cells of a typed text with the cursor (index `at`) in view, as clipCellsEnd shows it while the
+ * cursor is near the end, … where cut; and the cell in what is shown where the cursor goes (FOL-348).
+ * @param {string} t
+ * @param {number} at
+ * @param {number} room
+ */
+export function inputView(t, at, room) {
+  const gs = [...graphemes.segment(t)].map((g) => ({ g: g.segment, w: displayWidth(g.segment), end: g.index + g.segment.length }));
+  const k = gs.filter((g) => g.end <= at).length;
+  const width = (/** @type {number} */ a, /** @type {number} */ b) => gs.slice(a, b).reduce((n, g) => n + g.w, 0);
+  const text = (/** @type {number} */ a, /** @type {number} */ b) => gs.slice(a, b).map((g) => g.g).join("");
+  if (width(0, gs.length) <= room) return { shown: t, col: width(0, k) };
+  // The end in view, as before, when the cursor is inside it.
+  let s = gs.length;
+  while (s > 0 && width(s - 1, gs.length) <= room - 1) s--;
+  if (k >= s) return { shown: `…${text(s, gs.length)}`, col: 1 + width(s, k) };
+  // Otherwise from a little before the cursor, … at either end cut.
+  s = k;
+  while (s > 0 && width(s - 1, k) <= Math.floor(room / 3)) s--;
+  const lead = s > 0 ? 1 : 0;
+  let e = s;
+  while (e < gs.length && lead + width(s, e + 1) <= room - 1) e++;
+  return { shown: `${lead ? "…" : ""}${text(s, e)}${e < gs.length ? "…" : ""}`, col: lead + width(s, k) };
+}
+
 /**
  * @param {number} since
  * @param {() => string} [typed] what is being typed for the next message
@@ -17079,6 +17167,7 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
   let i = 0;
   /** What is typed, as last drawn: a key shows at once, not on the next frame. */
   let lastTyped = "";
+  let lastAt = 0;
   let lastHint = "";
   /**
    * The rows written over the ones drawn last, in place: each row then the rest of it erased, then whatever
@@ -17087,9 +17176,10 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
    * but colours: the CLI's own controls go past it, the text through it.
    * @param {string[]} rows
    */
-  const paint = (rows) => {
+  const paint = (rows, cursorAt = 0) => {
+    // The cursor hidden while the rows are written, in the same write (FOL-348).
     /** @type {Array<string | { control: string }>} */
-    const parts = [{ control: `\x1b[?2026h${shown ? upToFirst() : "\r"}` }];
+    const parts = [{ control: `\x1b[?2026h\x1b[?25l${shown ? upToFirst() : "\r"}` }];
     rows.forEach((row, k) => {
       // One physical row each, whatever a label holds: a line break in it would add a row never counted (Codex).
       if (row) parts.push(row.replace(/[\r\n\t\v\f]+/g, " "));
@@ -17097,7 +17187,9 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
       // A newline on a terminal goes down a row and back to its start; the guard keeps \n as it is.
       if (k < rows.length - 1) parts.push("\n");
     });
-    parts.push({ control: "\x1b[?2026l" });
+    // Then shown at the typed text's insertion point on the last row, the input line (FOL-348): a column on
+    // that row, so the next frame still goes up from there.
+    parts.push({ control: `${cursorAt > 0 ? `\r${cursorAt > 1 ? `\x1b[${Math.min(cursorAt - 1, 999)}C` : ""}\x1b[?25h` : ""}\x1b[?2026l` });
     writeFrame(parts);
   };
   const draw = (advance = true) => {
@@ -17119,6 +17211,8 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
     const head = `  ${c.sweep(frames[frame % frames.length], HUE.violet, HUE.cyan, (frame % 10) / 5)} ${c.cyan("working")} ${bar ? `${bar} ` : ""}${c.grey(`${secs}${doing}`)}`;
     const t = typed();
     lastTyped = t;
+    const caret = caretIn(t);
+    lastAt = caret;
     const hintText = hintNow();
     lastHint = hintText;
     const waiting = queuedNow ? ` · ${queuedNow} queued` : "";
@@ -17149,10 +17243,15 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
       // terminal tests wait for), so nothing takes a running turn for one.
       const lead = tickerLead && full - displayWidth(`${tickerLead} `) >= 20 ? tickerLead : "";
       const room = full - (lead ? displayWidth(`${lead} `) : 0);
-      const typedText = t ? clipCellsEnd(t, Math.max(1, room)) : c.dim(clipCells(hintText, Math.max(1, room)));
-      const second = `  ${lead ? `${lead}\u00a0` : ""}❯ ${t ? clipCellsEnd(t, Math.max(1, room)) : clipCells(hintText, Math.max(1, room))}${waiting}`;
+      // What is typed, the part around the cursor in view (FOL-348); the cursor's cell in it.
+      const view = inputView(t, caret, Math.max(1, room));
+      const typedText = t ? view.shown : c.dim(clipCells(hintText, Math.max(1, room)));
+      const second = `  ${lead ? `${lead}\u00a0` : ""}❯ ${t ? view.shown : clipCells(hintText, Math.max(1, room))}${waiting}`;
       const inputRow = `  ${lead ? `${c.bold(c.cyan(lead))}\u00a0` : ""}${c.violet("❯")} ${typedText}${waiting ? c.cyan(waiting) : ""}`;
-      paint(roomy ? ["", head, ...jobLines, "", inputRow] : [head, inputRow]);
+      // The cursor where the next key goes: after the chevron while the line is empty, at its column in what
+      // is typed otherwise (1-based). A terminal that cannot move its cursor (TERM=dumb) keeps it hidden.
+      const cursorAt = roomy ? displayWidth(`  ${lead ? `${lead}\u00a0` : ""}❯ `) + (t ? view.col : 0) + 1 : 0;
+      paint(roomy ? ["", head, ...jobLines, "", inputRow] : [head, inputRow], cursorAt);
       drawn = roomy ? [0, displayWidth(plainText(head)), ...jobWidths, 0, displayWidth(second)] : [displayWidth(plainText(head)), displayWidth(second)];
       shown = true;
       return;
@@ -17178,7 +17277,7 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
   };
   const clear = () => {
     // Back to the first row drawn, then everything below it cleared.
-    if (shown) writeControl(`${upToFirst()}\x1b[J`);
+    if (shown) writeControl(`\x1b[?25l${upToFirst()}\x1b[J`);
     shown = false;
   };
   console.log = (...args) => {
@@ -17216,7 +17315,8 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
   const jobsKey = () => (jobsOn ? liveJobs().map((j) => `${j.where}${j.id}`).join(",") : "");
   const keys = setInterval(() => {
     const k = jobsKey();
-    if (typed() !== lastTyped || hintNow() !== lastHint || k !== lastJobs) {
+    const t = typed();
+    if (t !== lastTyped || caretIn(t) !== lastAt || hintNow() !== lastHint || k !== lastJobs) {
       lastJobs = k;
       draw(false);
     }
