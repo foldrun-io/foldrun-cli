@@ -141,11 +141,17 @@ const inDir = (url: string, dir: string, ...args: string[]) => cli([...args, "--
 test("keys create --gateway --claude-code writes the URL and key into a new Claude Code settings file, readable only by you", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-"));
   const s = await serve(gw());
-  const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-home-"));
+  const r = await cli(["keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code", "--url", s.url, "--token", "k"], { env: { CLAUDE_CONFIG_DIR: dir, FOLDRUN_HOME: home } });
   s.close();
   assert.equal(r.code, 0, r.out);
   const file = path.join(dir, "settings.json");
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" }, statusLine: { type: "command", command: "foldrun gateway status-line" } });
+  // FOL-402: what was written is recorded, so a later move of the address knows it is ours — never the key itself.
+  const record = JSON.parse(fs.readFileSync(path.join(home, "claude-code.json"), "utf8"));
+  assert.equal(record.settings, path.resolve(file));
+  assert.equal(record.baseUrl, "https://gateway.example.test");
+  assert.doesNotMatch(JSON.stringify(record), /fr_gw_cc_secret/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" }, statusLine: { type: "command", command: "foldrun gateway status-line", refreshInterval: 60 } });
   assert.match(r.out, /statusLine: foldrun gateway status-line/);
   if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.match(r.out, /Claude Code now runs on it/);
@@ -166,7 +172,7 @@ test("--claude-code keeps every other setting, drops a competing ANTHROPIC_API_K
     model: "opus",
     permissions: { allow: ["Bash(ls)"] },
     env: { FOO: "1", ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" },
-    statusLine: { type: "command", command: "foldrun gateway status-line" },
+    statusLine: { type: "command", command: "foldrun gateway status-line", refreshInterval: 60 },
   });
   assert.equal(fs.readFileSync(`${file}.before-foldrun`, "utf8"), before);
   assert.match(r.out, /removed from that env block: ANTHROPIC_API_KEY/);
@@ -226,7 +232,7 @@ test("--claude-code writes from the file as it is after the key is made, so a ch
   const r = await inDir(s.url, dir, "keys", "create", "laptop", "--gateway", "--cap", "20", "--claude-code");
   s.close();
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { model: "sonnet", theme: "dark", env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" }, statusLine: { type: "command", command: "foldrun gateway status-line" } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { model: "sonnet", theme: "dark", env: { ANTHROPIC_BASE_URL: "https://gateway.example.test", ANTHROPIC_AUTH_TOKEN: "fr_gw_cc_secret" }, statusLine: { type: "command", command: "foldrun gateway status-line", refreshInterval: 60 } });
 });
 
 test("--claude-code: a file broken after the key is made is left alone, and the lines to copy are printed", async () => {

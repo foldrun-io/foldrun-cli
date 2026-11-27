@@ -411,7 +411,7 @@ Signing in
   foldrun team invites revoke <id>   take an invite back: its link stops working at once (an admin's; a key may)
   foldrun onboarding        the account's getting-started steps, done or not, the next one first; --to <workspace> adds that project's checklist (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
-  foldrun doctor            check the path to the platform: node, CLI, where its files are kept, model credential, account, DNS, a timed /v1/healthz
+  foldrun doctor            check the path to the platform: node, CLI, where its files are kept, model credential, account, DNS, a timed /v1/healthz, and the road test (small and 64 KiB calls at every address the API names)
   foldrun home              where foldrun keeps its files on this computer: ~/.foldrun, or the XDG config, state and cache folders when those are set and there is no ~/.foldrun (--json)
   foldrun home migrate      move an existing ~/.foldrun into the XDG folders — asks first (--yes), overwrites nothing, loosens no mode
   foldrun accounts          every account signed in on this machine, and which one is active

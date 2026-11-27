@@ -86,3 +86,75 @@ test("doctor: not signed in and no platform named is said in the account line, a
   assert.match(r.out, /✗ healthz\s+no platform/);
   assert.match((await run(["--help"])).out, /foldrun doctor/, "and it is in --help");
 });
+
+// FOL-402: the road test — a small and a big download and a big upload of
+// /v1/network/bytes on the profile's address and on each front its
+// /v1/version names; "consistent with Iran's filter" only when the small one
+// passes and a big one stalls on one address while another completes.
+function bytesServer(opts: { freezeBig?: boolean; fronts?: string[]; notice?: unknown }) {
+  return serve(async (req, res) => {
+    const u = new URL(req.url ?? "/", "http://x");
+    if (u.pathname === "/v1/healthz") return void res.end(JSON.stringify({ ok: true }));
+    if (u.pathname === "/v1/version") {
+      res.setHeader("content-type", "application/json");
+      return void res.end(JSON.stringify({ urls: { api: null, ...(opts.fronts ? { fronts: opts.fronts } : {}) }, ...(opts.notice ? { notice: opts.notice } : {}) }));
+    }
+    if (u.pathname === "/v1/network/bytes" && req.method === "GET") {
+      const size = Number(u.searchParams.get("size") ?? 65536);
+      res.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(size) });
+      if (opts.freezeBig && size > 20000) return void res.write(Buffer.alloc(16384)); // then nothing: frozen
+      return void res.end(Buffer.alloc(size, 7));
+    }
+    if (u.pathname === "/v1/network/bytes" && req.method === "POST") {
+      let n = 0;
+      for await (const c of req) {
+        n += (c as Buffer).length;
+        if (opts.freezeBig && n > 20000) return; // swallowed: frozen
+      }
+      res.setHeader("content-type", "application/json");
+      return void res.end(JSON.stringify({ received: n }));
+    }
+    res.writeHead(404);
+    res.end("{}");
+  });
+}
+
+test("doctor: the road test passes on a whole road, and a platform without the route is said, not failed", async () => {
+  const p = await bytesServer({ notice: { id: "abc", message: "Iran's filter blocked our old address", action: "run_doctor", command: "foldrun doctor" } });
+  try {
+    const r = await run(["doctor", "--url", p.url, "--token", "k"], { FOLDRUN_TIMEOUT: "5" });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /✓ road\s+127\.0\.0\.1:\d+ · 1 KiB down \d+ ms · 64 KiB down \d+ ms · 64 KiB up \d+ ms/);
+    assert.match(r.out, /! notice\s+Iran's filter blocked our old address — run `foldrun doctor`/);
+    assert.doesNotMatch(r.out, /Iran's filter:/);
+  } finally {
+    p.close();
+  }
+  const old = await serve((req, res) => {
+    if (req.url === "/v1/healthz") return void res.end("{}");
+    res.writeHead(404);
+    res.end("{}");
+  });
+  try {
+    const r = await run(["doctor", "--url", old.url, "--token", "k"], { FOLDRUN_TIMEOUT: "5" });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /· road\s+.* has no road test/);
+  } finally {
+    old.close();
+  }
+});
+
+test("doctor: big calls freezing on the main address while the named front completes reads as Iran's filter", async () => {
+  const front = await bytesServer({});
+  const main = await bytesServer({ freezeBig: true, fronts: [front.url] });
+  try {
+    const r = await run(["doctor", "--url", main.url, "--token", "k"], { FOLDRUN_TIMEOUT: "5", FOLDRUN_PROBE_IDLE_SECONDS: "1" });
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /✗ road\s+127\.0\.0\.1:\d+ · 1 KiB down \d+ ms · 64 KiB down stalled at body, 16384 bytes/);
+    assert.match(r.out, /✓ road\s+127\.0\.0\.1:\d+ · 1 KiB down/);
+    assert.match(r.out, /consistent with Iran's filter: small calls pass but big ones stall at 127\.0\.0\.1:\d+, while 127\.0\.0\.1:\d+ completes/);
+  } finally {
+    main.close();
+    front.close();
+  }
+});

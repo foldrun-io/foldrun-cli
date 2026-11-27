@@ -28,6 +28,8 @@ import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, 
 import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
 import { koderLine } from "./koder-path.mjs";
+import { routeFor, groupOf, noteWorked, switchAfterStall, roadFailure, hostOf, approved as frontApproved, originOf as originOfUrl } from "./routes.mjs";
+import { checkClaudeRoute, writeOwnership, noticeWords, takeLock as takeClaudeLock, claudeSettingsFile as claudeSettingsPath, STATUS_LINE_COMMAND, REFRESH_SECONDS } from "./claude-route.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
@@ -1772,7 +1774,8 @@ async function useAccountDoor(flags = {}) {
     );
   }
   if (!me.actor?.modelAccess) return null; // a sign-in that opens the platform alone
-  const modelsUrl = typeof me.modelsUrl === "string" ? me.modelsUrl.replace(/\/+$/, "") : "";
+  // A front only when the CLI's own list approves it for this API (FOL-402).
+  const modelsUrl = typeof me.modelsUrl === "string" && me.modelsUrl ? modelOrigin(url, me.modelsUrl.replace(/\/+$/, "")) : "";
   if (!modelsUrl) throw new Error(`${url} says this sign-in may call foldrun's models but names no models address — \`--own-key\` runs on this shell's key instead`);
   let origin;
   try {
@@ -2719,7 +2722,7 @@ async function platformUrls(url) {
   try {
     // Answered by `url` itself: a redirect is no answer from it, so it can
     // never vouch for an address it was not asked at (Codex review).
-    const res = await remoteFetch(url, "/v1/version", { redirect: "manual" }, { seconds: 15 });
+    const res = await remoteFetch(url, "/v1/version", { redirect: "manual" }, { seconds: 15, route: false });
     if (res.status !== 200) return null;
     const body = /** @type {any} */ (await res.json().catch(() => null));
     const u = body?.urls;
@@ -2756,7 +2759,7 @@ async function signedInAddresses(url, token, account) {
   const urls = await urlsAt(url);
   const same = async (at) => {
     try {
-      const res = await remoteFetch(at, "/v1/me", { redirect: "manual" }, { token, seconds: 15 });
+      const res = await remoteFetch(at, "/v1/me", { redirect: "manual" }, { token, seconds: 15, route: false });
       return res.status === 200 && /** @type {any} */ (await res.json().catch(() => null))?.account === account;
     } catch {
       return false;
@@ -2773,8 +2776,14 @@ async function signedInAddresses(url, token, account) {
     const theirs = await urlsAt(other);
     return !!theirs && `${theirs.api} ${theirs.app}` === pair;
   };
-  const checked = async (other) => (await bound(other)) && (await same(other));
-  const api = urls?.api && urls.api !== url && (await checked(urls.api)) ? urls.api : url;
+  // A front (FOL-402) is never kept as the profile's address, and no key goes
+  // to one the CLI's own list does not approve: the profile keeps the API's
+  // main name, and routes.mjs uses the front while the API names it.
+  const front = (/** @type {string} */ other) => isFrontHost(other) || (!!groupOf(other) && groupOf(other)?.main !== originOfUrl(other));
+  const checked = async (other) => !front(other) && (await bound(other)) && (await same(other));
+  // Signed in at a front itself: kept at the API's main name when the key answers there.
+  const atFront = groupOf(url) && groupOf(url)?.main !== originOfUrl(url) ? /** @type {string} */ (groupOf(url)?.main) : null;
+  const api = atFront && (await same(atFront)) ? atFront : urls?.api && urls.api !== url && (await checked(urls.api)) ? urls.api : url;
   // The dashboard is the one the platform names, once checked; where the
   // sign-in started only when it is that one, or when none is named and
   // the key moved off it (Codex review).
@@ -2895,11 +2904,19 @@ function retryAfterMs(res, seconds) {
  * 429/502/503/504 is asked once more, after Retry-After when the server
  * names one — a rolling deploy or a rate limit deserves the nudge. Nothing
  * else is retried: a second POST could be a second run.
+ *
+ * Which address it goes to (FOL-402): an API with fronts this CLI approves
+ * (routes.mjs) is called at the last address that worked; a connection that
+ * stalls or is cut there switches the NEXT request to the next approved
+ * address the API named — this one is never sent again, and the error says
+ * whether it might have been done. `route: false` asks exactly `url` (a
+ * check of what that address itself says).
  * @param {string} url @param {string} apiPath @param {RequestInit} [init]
- * @param {{ token?: string, seconds?: number }} [opts]
+ * @param {{ token?: string, seconds?: number, route?: boolean }} [opts]
  */
-async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = {}) {
-  const target = new URL(apiPath, url);
+async function remoteFetch(url, apiPath, init = {}, { token, seconds: given, route = true } = {}) {
+  const routes = route && groupOf(url) ? credentialsDir() : null;
+  const target = new URL(apiPath, routes ? routeFor(routes, url) : url);
   const method = (init.method ?? "GET").toUpperCase();
   const headers = {
     "user-agent": USER_AGENT,
@@ -2915,6 +2932,15 @@ async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = 
   // sent reads its answer, as a paid start must so its run can be stopped.
   const { stopBefore, ...rest } = /** @type {RequestInit & { stopBefore?: AbortSignal }} */ (init);
   const stop = /** @type {AbortSignal | undefined} */ (rest.signal ?? undefined);
+  /** A stall or a cut on an API with other addresses: the next request goes
+   *  elsewhere, and the sentence says so — and, for a write, that it may
+   *  have been done (it is not sent again). */
+  const rerouted = async (/** @type {unknown} */ err) => {
+    if (!routes || !roadFailure(err)) return "";
+    const next = await switchAfterStall(routes, url, target.origin).catch(() => null);
+    const unknown = WRITE_METHODS.has(method) ? " — whether it was done is unknown; it was not sent again" : "";
+    return `${unknown}${next ? `${unknown ? "; " : " — "}the next request goes through ${hostOf(next)}` : ""}`;
+  };
   const attempt = async () => {
     if (stop?.aborted || stopBefore?.aborted) throw new Error(`stopped before ${method} ${target.pathname} was sent`);
     try {
@@ -2923,9 +2949,9 @@ async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = 
       const name = /** @type {any} */ (err)?.name;
       if (stop?.aborted) throw new Error(`stopped during ${method} ${target.pathname}`);
       if (name === "TimeoutError" || name === "AbortError") {
-        throw new Error(`${target.host} did not answer ${method} ${target.pathname} within ${seconds}s — FOLDRUN_TIMEOUT=<seconds> allows longer`);
+        throw new Error(`${target.host} did not answer ${method} ${target.pathname} within ${seconds}s — FOLDRUN_TIMEOUT=<seconds> allows longer${await rerouted(Object.assign(new Error("stalled"), { name: "TimeoutError" }))}`);
       }
-      throw new Error(`could not reach ${target.origin}`, { cause: err });
+      throw new Error(`could not reach ${target.origin}${await rerouted(err)}`, { cause: err });
     }
   };
   let res = await attempt();
@@ -2937,6 +2963,7 @@ async function remoteFetch(url, apiPath, init = {}, { token, seconds: given } = 
     await sleep(retryAfterMs(res, seconds));
     res = await attempt();
   }
+  if (routes) noteWorked(routes, url, target.origin);
   updateNotice(res);
   const refused = await versionRefusal(res, target);
   if (refused) throw new Error(refused);
@@ -5619,6 +5646,7 @@ async function whoami(flags) {
   const profile = flags.token || env("FOLDRUN_TOKEN") ? null : chosenProfile(flags);
   const source = flags.token ? "--token" : env("FOLDRUN_TOKEN") ? "FOLDRUN_TOKEN" : `${credentialsShown()} as "${profile?.name ?? "?"}"`;
   console.log(`  ${c.dim(`credential from ${source}`)}`);
+  if (me.notice && typeof me.notice.message === "string") console.log(`  ${c.yellow("notice")}      ${noticeLine(me.notice)}`);
   const others = listProfiles().filter((p) => p.name !== profile?.name);
   console.log(others.length ? `  ${c.dim(`also signed in as: ${others.map((p) => p.name).join(", ")} — \`foldrun accounts\``)}\n` : "\n");
   return 0;
@@ -5984,10 +6012,60 @@ async function doctor(flags) {
     } catch (err) {
       line(false, "healthz", `${explain(err)} ${c.dim(`(${took()})`)}`);
     }
+    await doctorRoad(url, line);
   }
 
   console.log();
   return results.every(Boolean) ? 0 : 1;
+}
+
+/**
+ * `foldrun doctor`'s road test (FOL-402): no credential. The addresses are
+ * the profile's own and the fronts its /v1/version names (it names them to
+ * a caller in Iran); each gets a small and a big download and a big upload
+ * (road-probe.mjs), and the line says how far each got. Also the notice the
+ * platform's operator set for this caller, if any.
+ */
+async function doctorRoad(/** @type {string} */ url, /** @type {(ok: boolean, label: string, detail: string) => void} */ line) {
+  const { probeRoute, probeText, verdict } = await import("./road-probe.mjs");
+  const { askVersion, originOf, noteNamed, groupOf: group } = await import("./routes.mjs");
+  const main = originOf(url) ?? url;
+  const v = /** @type {any} */ (await askVersion(fetch, main, 10));
+  const named = [v?.urls?.api, ...(Array.isArray(v?.urls?.fronts) ? v.urls.fronts : [])].map(originOf).filter((o) => o && o !== main).slice(0, 4);
+  if (group(main) && v) noteNamed(credentialsDir(), main, v);
+  const routes = [main, ...new Set(named)];
+  const results = [];
+  for (const r of routes) {
+    const idle = Number(env("FOLDRUN_PROBE_IDLE_SECONDS"));
+    const got = await probeRoute(fetch, /** @type {string} */ (r), Number.isFinite(idle) && idle >= 1 && idle <= 60 ? { idleSeconds: idle } : {});
+    // A platform from before the road test (no route): said, not failed.
+    if (got.small.status === 404) {
+      console.log(`  ${c.dim("·")} ${"road".padEnd(9)} ${c.dim(`${new URL(/** @type {string} */ (r)).host} has no road test (GET /v1/network/bytes) — an older platform`)}`);
+      continue;
+    }
+    results.push(got);
+    line(got.ok, "road", `${new URL(/** @type {string} */ (r)).host} · ${[probeText("1 KiB down", got.small), probeText("64 KiB down", got.down), probeText("64 KiB up", got.up)].join(" · ")}`);
+  }
+  if (!results.length) return void shownNotice(v);
+  const said = verdict(results);
+  if (said.kind === "filter") {
+    console.log(`  ${c.yellow("!")} ${"road".padEnd(9)} consistent with Iran's filter: small calls pass but big ones stall at ${(said.frozen ?? []).map((o) => new URL(o).host).join(", ")}, while ${(said.whole ?? []).map((o) => new URL(o).host).join(", ")} completes${group(main) ? " — koder and the CLI move to it by themselves" : ""}`);
+  } else if (results.length > 1 && said.kind === "whole") {
+    console.log(`  ${c.dim("·")} ${"road".padEnd(9)} ${c.dim(`every address completed: ${routes.map((o) => new URL(/** @type {string} */ (o)).host).join(", ")}`)}`);
+  }
+  shownNotice(v);
+}
+
+/** The operator's notice from a /v1/version answer, on doctor's own line. */
+function shownNotice(/** @type {any} */ v) {
+  const n = v?.notice;
+  if (n && typeof n.message === "string") console.log(`  ${c.yellow("!")} ${"notice".padEnd(9)} ${noticeLine(n)}`);
+}
+
+/** The operator's notice, as one line of plain text with the fixed command. */
+function noticeLine(/** @type {any} */ n) {
+  const cmd = typeof n?.command === "string" && /^foldrun( [a-z][a-z-]*){1,3}$/.test(n.command) ? ` — run \`${n.command}\`` : n?.action === "restart_claude_code" ? " — restart Claude Code" : "";
+  return `${plainText(String(n?.message ?? "")).slice(0, 400)}${cmd}`;
 }
 
 /**
@@ -6355,6 +6433,8 @@ async function keysCreateGateway(url, label, flags) {
   console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential, plan: made.plan, walletUsd: made.walletUsd, walletSpentUsd: 0 }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
   if (made.key == null) return lostSecret(made.id);
   console.log(`  ${made.key}\n`);
+  // A front the CLI's own list does not approve is never written beside the key (FOL-402).
+  if (made.gatewayUrl) made.gatewayUrl = modelOrigin(url, made.gatewayUrl);
   const base = made.gatewayUrl ?? "<the gateway URL — not set on this platform yet>";
   // Written from the file as it is NOW, not as it was before the request,
   // so a change made meanwhile is kept. A write that fails after the key
@@ -6395,8 +6475,7 @@ async function keysCreateGateway(url, label, flags) {
  *  ~/.claude/settings.json (%USERPROFILE%\.claude on Windows). Its env block
  *  reaches the CLI, the IDE extensions' sessions and background agents. */
 function claudeSettingsFile() {
-  const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  return path.join(dir, "settings.json");
+  return claudeSettingsPath(process.env);
 }
 
 /** Read Claude Code's settings for `keys create --gateway --claude-code`,
@@ -6439,7 +6518,24 @@ function preflightClaudeSettings() {
  *  login with no prompt; an ANTHROPIC_API_KEY in the same block would compete
  *  with it, so it goes. The old file is kept beside it, the new one is
  *  written whole (a temp file, then a rename) and readable only by you. */
-function writeClaudeSettings({ file, text, settings }, baseUrl, key) {
+function writeClaudeSettings(found, baseUrl, key) {
+  // The same lock the status line's address move takes (FOL-402): one foldrun writer at a time.
+  fs.mkdirSync(path.dirname(found.file), { recursive: true, mode: 0o700 });
+  let release = takeClaudeLock(found.file);
+  for (let i = 0; !release && i < 20; i++) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    release = takeClaudeLock(found.file);
+  }
+  if (!release) throw new Error(`${found.file} is being written by another foldrun (${found.file}.foldrun-lock) — try again`);
+  try {
+    // Read fresh under the lock: what was read before the key was made may be old.
+    return writeClaudeSettingsLocked(readClaudeSettings(), baseUrl, key);
+  } finally {
+    release();
+  }
+}
+
+function writeClaudeSettingsLocked({ file, text, settings }, baseUrl, key) {
   const env = { ...(settings.env ?? {}) };
   const dropped = ["ANTHROPIC_API_KEY"].filter((k) => k in env);
   for (const k of dropped) delete env[k];
@@ -6450,7 +6546,9 @@ function writeClaudeSettings({ file, text, settings }, baseUrl, key) {
   // the person's own is set, which is theirs and stays.
   /** @type {"added" | "kept" | "theirs"} */
   const statusLine = settings.statusLine === undefined ? "added" : settings.statusLine?.command === STATUS_LINE_COMMAND ? "kept" : "theirs";
-  if (statusLine === "added") next.statusLine = { type: "command", command: STATUS_LINE_COMMAND };
+  // refreshInterval (FOL-402): Claude Code runs it every minute even while idle, so a notice and a move reach it.
+  if (statusLine === "added") next.statusLine = { type: "command", command: STATUS_LINE_COMMAND, refreshInterval: REFRESH_SECONDS };
+  else if (statusLine === "kept" && settings.statusLine.refreshInterval === undefined) next.statusLine = { ...settings.statusLine, refreshInterval: REFRESH_SECONDS };
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   /** @type {string | null} */
   let backup = null;
@@ -6463,12 +6561,11 @@ function writeClaudeSettings({ file, text, settings }, baseUrl, key) {
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   fs.renameSync(tmp, file);
   try { fs.chmodSync(file, 0o600); } catch { /* Windows: no modes */ }
+  // What we wrote, so a later move of the address knows it is ours (FOL-402).
+  try { writeOwnership(credentialsDir(), { file, baseUrl, key }); } catch { /* no record: a move is then only made on clear evidence */ }
   return { file, dropped, backup, statusLine };
 }
 
-/** Claude Code's status line, as `keys create --gateway --claude-code`
- *  writes it: the key's spend, read from the gateway itself. */
-const STATUS_LINE_COMMAND = "foldrun gateway status-line";
 
 /**
  * `foldrun gateway status-line` — one line for Claude Code's status line:
@@ -6503,7 +6600,7 @@ export async function gatewayStatusLine(env = process.env, flags = {}, now = Dat
   const ttl = typeof flags.cache === "string" && /^\d+$/.test(flags.cache) ? Number(flags.cache) * 1000 : 10_000;
   try {
     const st = fs.statSync(cacheFile);
-    if (now - st.mtimeMs < ttl) return fs.readFileSync(cacheFile, "utf8");
+    if (now - st.mtimeMs < ttl) return fs.readFileSync(cacheFile, "utf8") + (await statusLineRoute(env, now));
   } catch { /* none yet */ }
   let line;
   try {
@@ -6522,7 +6619,19 @@ export async function gatewayStatusLine(env = process.env, flags = {}, now = Dat
     fs.writeFileSync(`${cacheFile}.${process.pid}`, line, { mode: 0o600 });
     fs.renameSync(`${cacheFile}.${process.pid}`, cacheFile);
   } catch { /* the next draw asks again */ }
-  return line;
+  return line + (await statusLineRoute(env, now));
+}
+
+/** FOL-402: the notice for this caller, and a move of Claude Code's address
+ *  to the one the API names (claude-route.mjs) — checked every 10 minutes. */
+async function statusLineRoute(/** @type {Record<string, string | undefined>} */ env, /** @type {number} */ now) {
+  try {
+    const r = await checkClaudeRoute({ dir: credentialsDir(), file: claudeSettingsPath(env), env, now });
+    const words = noticeWords(r.notice);
+    return [r.said, words].filter(Boolean).map((x) => ` · ${x}`).join("");
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -18011,7 +18120,65 @@ async function makeLocalKey(s, file) {
  * number (Codex). The kept key is forgotten only when the gateway itself
  * says that key is unknown, revoked or expired. Null for anything else.
  */
+/**
+ * Where a local turn's model calls go (FOL-402): for an API with fronts this
+ * CLI approves (routes.mjs), the address that works now — and, for the calls
+ * the engine makes in this process, through the session's loopback relay,
+ * which sees a stalled call and moves the next one. Anything else: the key's
+ * own address, as before.
+ * @param {any} s @param {{ id: string, key: string, gatewayUrl: string, kind?: string }} engineKey
+ */
+async function engineRoute(s, engineKey) {
+  const safe = modelOrigin(s.url, engineKey.gatewayUrl);
+  const group = groupOf(safe);
+  if (!group) return { key: { ...engineKey, gatewayUrl: safe }, base: safe, token: engineKey.key };
+  const dir = credentialsDir();
+  const at = routeFor(dir, safe);
+  const key = { ...engineKey, gatewayUrl: at };
+  try {
+    s.modelRelay ??= await (await import("./model-relay.mjs")).startRelay({ dir });
+    s.modelRelay.set({ main: group.main, origin: at, key: engineKey.key });
+    return { key, base: s.modelRelay.baseUrl, token: s.modelRelay.secret };
+  } catch {
+    return { key, base: at, token: engineKey.key };
+  }
+}
+
+/** A CloudFront name: what a front looks like, approved or not. */
+function isFrontHost(/** @type {string} */ u) {
+  try {
+    return /\.cloudfront\.net\.?$/i.test(new URL(u).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The model address a key may be used at, from the one the platform named
+ * (FOL-402): a front only when the CLI's own list approves it for the
+ * profile's API; any other front, or one of another API's, is replaced by
+ * the profile's own address. An address that is no front stays the
+ * platform's choice, as before.
+ * @param {string} profileUrl @param {string} named
+ */
+function modelOrigin(profileUrl, named) {
+  const p = originOfUrl(profileUrl) ?? profileUrl;
+  const n = originOfUrl(named);
+  // Not an https (or loopback) origin: a front could hide in it, so the profile's own.
+  if (!n) return isFrontHost(named) ? (groupOf(p)?.main ?? p) : named;
+  if (n === p) return n;
+  const ng = groupOf(n);
+  if (ng || isFrontHost(n)) {
+    if (frontApproved(p, n)) return n;
+    return groupOf(p)?.main ?? p;
+  }
+  return named.replace(/\/+$/, "");
+}
+
 function engineModelError(/** @type {unknown} */ err, s) {
+  // A call the relay gave up on (FOL-402): it may have been done; the next one goes elsewhere.
+  const stalled = s.modelRelay?.takeStall?.();
+  if (stalled) return s.modelRelay.text(stalled);
   const m = /the model endpoint answered (\d{3}): ([\s\S]*)/.exec(String(/** @type {Error} */ (err)?.message ?? ""));
   if (!m) return null;
   const status = Number(m[1]);
@@ -18022,7 +18189,12 @@ function engineModelError(/** @type {unknown} */ err, s) {
     if (typeof body?.error?.message === "string") said = body.error.message;
     code = typeof body?.error?.code === "string" ? body.error.code : typeof body?.code === "string" ? body.code : "";
   } catch {
-    /* the text as it came */
+    // Cut short by the engine (it keeps 500 characters): the code and the
+    // message are still read from what came (FOL-402: the bodies are longer).
+    const c = /"code"\s*:\s*"([a-z_]{1,60})"/.exec(said);
+    if (c) code = c[1];
+    const msg = /"message"\s*:\s*"((?:[^"\\]|\\.){1,400})/.exec(said);
+    if (msg) said = msg[1].replace(/\\(.)/g, "$1");
   }
   said = plainText(said).slice(0, 300);
   // A billing refusal: the wallet and the plan are both read again next
@@ -18046,7 +18218,8 @@ function engineModelError(/** @type {unknown} */ err, s) {
     s.signInRefused = true;
     return `your sign-in cannot call models here (${said}) — the next message uses a key for this computer instead`;
   }
-  if (status === 401 && /^(invalid API key|API key revoked|API key expired)/.test(said) && s.keySlot) {
+  // By its code (FOL-402: the message now leads with what to do), or by the words for a gateway of before.
+  if (status === 401 && (["key_unknown", "key_revoked", "key_expired"].includes(code) || /(^|: )(invalid API key|API key revoked|API key expired)/.test(said)) && s.keySlot) {
     // Forgotten only if the kept key is still the one refused: another
     // session may have swapped it in the meantime (Codex).
     // Under the kept keys' lock; when another session holds it, it is
@@ -19308,6 +19481,10 @@ async function codeLocalTurn(s, text) {
     s.engineKeyInUse = engineKey.key;
     s.engineKeyKind = engineKey.kind;
     s.engineKeyMade = true;
+    // FOL-402: on an API with fronts this CLI approves, the address that works
+    // now, and the relay that sees a stalled call (model-relay.mjs).
+    const engineAt = await engineRoute(s, engineKey);
+    engineKey = engineAt.key;
     await foldrunPlanLabel(s);
     keyboardOn();
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
@@ -20403,7 +20580,7 @@ async function codeLocalTurn(s, text) {
           prompt: job.prompt,
           options: {
             cwd: s.dir,
-            env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
+            env: { ...own, ANTHROPIC_BASE_URL: engineAt.base, ANTHROPIC_AUTH_TOKEN: engineAt.token, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
             shellEnv: shellOwn,
             userAgent: USER_AGENT,
             model: localModelOf(model),
@@ -20501,7 +20678,7 @@ async function codeLocalTurn(s, text) {
             cwd: s.dir,
             // The model's key stays with the loop; the commands the agent
             // runs get the person's own environment without it.
-            env: { ...own, ANTHROPIC_BASE_URL: engineKey.gatewayUrl, ANTHROPIC_AUTH_TOKEN: engineKey.key, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
+            env: { ...own, ANTHROPIC_BASE_URL: engineAt.base, ANTHROPIC_AUTH_TOKEN: engineAt.token, ...(s.onPlan && isTierWord(model) ? PLAN_TIERS : {}) },
             shellEnv: shellOwn,
             userAgent: USER_AGENT,
             model: localModelOf(model),
