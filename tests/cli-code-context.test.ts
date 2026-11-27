@@ -266,8 +266,8 @@ test("a command typed alone opens one list (FOL-259): every choice is a line the
     }
   }
   // /model: the model, how hard it thinks, and its thinking shown or not — the choice is the other one.
-  assert.deepEqual(commandMenu("/model", { thinking: false })!.choices.map((x) => x.v), ["/model", "/model effort", "/model second", "/model thinking on"]);
-  assert.equal(commandMenu("/model", { thinking: true })!.choices[3]!.v, "/model thinking off");
+  assert.deepEqual(commandMenu("/model", { thinking: false })!.choices.map((x) => x.v), ["/model", "/model effort", "/model thinking on", "/model second"]);
+  assert.equal(commandMenu("/model", { thinking: true })!.choices[2]!.v, "/model thinking off");
   // /setup: what the agent reads and reaches; its MCP servers are a list of their own.
   assert.deepEqual(commandMenu("/setup", {})!.choices.map((x) => x.v), ["/setup instructions", "/setup skills", "/setup agents", "/setup mcp", "/setup dirs", "/setup dirs ", "/setup check"]);
   // A hidden or broken server is listed by /setup mcp, never offered an action; a server is removed from its own file.

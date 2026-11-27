@@ -10527,6 +10527,9 @@ async function secondToolsFor(s, gateway, why) {
       const read = await readSourceAt(s, file);
       return read.content !== null ? await frontOfText(read.content) : {};
     };
+    // Most agents name neither: no YAML reader or tool reader is loaded for them (a turn stays light, FOL-265).
+    const raw = await readSourceAt(s, `agents/${s.agent}/agent.md`);
+    if (!/\b(debate|review)\b/.test(raw.content ?? "")) return [];
     front = await fresh(`agents/${s.agent}/agent.md`);
     const tools = await bareTools(front.tools, { grant: true });
     want = /** @type {("debate" | "review")[]} */ (["debate", "review"].filter((t) => tools.includes(t)));
