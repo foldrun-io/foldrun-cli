@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
-import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, shapeOutput as browseOutput } from "./browser.mjs";
+import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, koderBadge, shapeOutput as browseOutput } from "./browser.mjs";
 import { CLOUD_WEB_DEFINITION, cloudBrowse, cloudBrowseBlock, cloudBrowseBody } from "./browse-cloud.mjs";
 import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu, commandDuringTurn, COMMAND_LINE } from "./code-session.mjs";
 import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
@@ -21962,7 +21962,9 @@ async function codeLocalTurn(s, text) {
                       // The agent's web.browse block holds here as in the cloud, or the call says why not.
                       const block = await localBrowseDefaults(s);
                       if ("problem" in block) return { text: block.problem, isError: true };
-                      const r = await runLocalWeb(webHere, call.argv, { signal: ctx.signal, env: block.env });
+                      // The window's badge names this session by the id foldrun made for it, as /sessions shows (FOL-451):
+                      // the page can read the badge, so never a name or a --context a person wrote.
+                      const r = await runLocalWeb({ ...webHere, label: koderBadge(s.context) }, call.argv, { signal: ctx.signal, env: block.env });
                       const files = /outputs\//.test(r.stdout + r.stderr) ? `\n(files named outputs/… are in ${path.join(webHere.paths.work, "outputs")})` : "";
                       const notes = block.notes.length ? `not kept on this computer — ${block.notes.join("; ")}\n` : "";
                       return { text: `${notes}${browseOutput(r)}${files}`, isError: r.code !== 0 };

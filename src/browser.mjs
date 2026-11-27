@@ -78,8 +78,25 @@ function installedPlaywright(paths) {
   try { return JSON.parse(fs.readFileSync(path.join(paths.modules, "playwright", "package.json"), "utf8")).version ?? null; } catch { return null; }
 }
 
-/** The environment one call runs with. */
-export function callEnv(paths, from = process.env) {
+/** Who drives the window, as its badge says (FOL-451): the page can read it, so an id or a program's name, never
+ *  what a person wrote (a session's name is often its first message). One line, at most 80 characters. */
+export function badgeLabel(/** @type {unknown} */ label) {
+  return String(label ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+/** koder's badge: the session's id when foldrun made it (`code-` and 16 hex), else just "koder" (FOL-451). */
+export function koderBadge(/** @type {unknown} */ context) {
+  return typeof context === "string" && /^code-[0-9a-f]{16}$/.test(context) ? `koder · ${context}` : "koder";
+}
+
+/** An MCP client's badge: the name it gives, when that is a plain program name; else "an AI app" (FOL-451). */
+export function clientBadge(/** @type {unknown} */ name) {
+  const n = typeof name === "string" ? name.trim() : "";
+  return `${/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(n) ? n : "an AI app"} · foldrun browser`;
+}
+
+/** The environment one call runs with; `label` names who drives it (FOL-451). */
+export function callEnv(paths, from = process.env, label = "") {
   /** @type {Record<string, string>} */
   const out = {};
   for (const k of ENV_KEEP) if (from[k] !== undefined) out[k] = String(from[k]);
@@ -88,6 +105,8 @@ export function callEnv(paths, from = process.env) {
   out.FOLDRUN_BROWSER_LIVE_ROOT = paths.chrome; // one profile that outlives sessions and reboots
   out.FOLDRUN_BROWSER_LIVE_IDLE_MS = "0";       // never closed for idleness: the person may be away
   out.FOLDRUN_BROWSER_MODULES = paths.home;     // the Playwright setup installed, ahead of any global one
+  const who = badgeLabel(label);
+  if (who) out.FOLDRUN_BROWSER_LABEL = who;     // the window's badge: who drives it, and the step it is on
   return out;
 }
 
@@ -178,13 +197,13 @@ async function stopLive(paths, ctx) {
 
 /**
  * One call of browse.mjs. Never throws: the answer says what happened.
- * @param {{ browse: string, paths: ReturnType<typeof browserPaths> }} ctx
+ * @param {{ browse: string, paths: ReturnType<typeof browserPaths>, label?: string }} ctx
  * @param {string[]} args
  */
 export function runBrowse(ctx, args, { timeoutMs = 120_000 } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [ctx.browse, "--browser", "chrome", ...args], {
-      cwd: ctx.paths.work, env: callEnv(ctx.paths), stdio: ["ignore", "pipe", "pipe"],
+      cwd: ctx.paths.work, env: callEnv(ctx.paths, process.env, ctx.label), stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
@@ -574,7 +593,7 @@ export function localWebArgv(input, def) {
 
 /**
  * One local `web` call: run.mjs beside browse.mjs, in this window's profile. Never throws.
- * @param {{ browse: string, paths: ReturnType<typeof browserPaths> }} ctx @param {string[]} argv
+ * @param {{ browse: string, paths: ReturnType<typeof browserPaths>, label?: string }} ctx @param {string[]} argv
  * @param {{ signal?: AbortSignal, timeoutMs?: number, env?: Record<string, string> }} [o]
  */
 export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000, env = {} } = {}) {
@@ -585,8 +604,9 @@ export function runLocalWeb(ctx, argv, { signal, timeoutMs = 180_000, env = {} }
   if (link) return Promise.resolve({ code: 1, stdout: "", stderr: `not run: ${link === LINK_SCAN_FULL ? `${ctx.paths.work} holds too many files to check for links — clear its outputs/` : `${link} is a link`} — the browser's folder holds only real files\n`, timedOut: false });
   return new Promise((resolve) => {
     // The agent's block's defaults: only FOLDRUN_BROWSER_* settings, never the window's own (where it runs, its profile).
-    const own = callEnv(ctx.paths);
-    const block = Object.fromEntries(Object.entries(env).filter(([k]) => /^FOLDRUN_BROWSER_[A-Z_]+$/.test(k) && !(k in own)));
+    const own = callEnv(ctx.paths, process.env, ctx.label);
+    // Who drives the window is the caller's to say, never an agent file's (FOL-451).
+    const block = Object.fromEntries(Object.entries(env).filter(([k]) => /^FOLDRUN_BROWSER_[A-Z_]+$/.test(k) && k !== "FOLDRUN_BROWSER_LABEL" && !(k in own)));
     const child = spawn(process.execPath, [path.join(path.dirname(ctx.browse), "run.mjs"), ...argv], {
       cwd: ctx.paths.work, env: { ...block, ...own }, stdio: ["ignore", "pipe", "pipe"],
     });
@@ -660,6 +680,8 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
   /** A call the client cancelled (notifications/cancelled): skipped if queued, stopped if running. */
   const cancels = new Map();
   const cancelled = new Set();
+  /** The app driving the window, by the name it gave at initialize (FOL-451): the badge on the page says it. */
+  let client = "";
   const handle = async (line) => {
     let msg;
     try { msg = JSON.parse(line); } catch { return send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "not JSON — one JSON-RPC message per line" } }); }
@@ -670,6 +692,7 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
     switch (method) {
       case "initialize": {
         const asked = params?.protocolVersion;
+        client = clientBadge(params?.clientInfo?.name);
         return answer({
           protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
           capabilities: { tools: {} },
@@ -690,8 +713,9 @@ export function serveMcp(context, { version, work = browserPaths(() => path.join
         return answer({ tools: web ? [...TOOLS, { name: "web", description: web.description, inputSchema: web.input_schema }] : TOOLS });
       }
       case "tools/call": {
-        const ctx = await context();
-        if ("error" in ctx) return answer(textResult(ctx.error, true));
+        const got = await context();
+        if ("error" in got) return answer(textResult(got.error, true));
+        const ctx = { ...got, label: client || clientBadge("") };
         try {
           if (params?.name === "web") {
             const web = webTool ? await webTool().catch(() => null) : null;

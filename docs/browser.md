@@ -19,6 +19,33 @@ window. You see every page it opens, and you can step in. It is offered once
 `foldrun browser setup` has run; each call is asked like any other tool.
 A session in the cloud browses in the cloud, as any step does.
 
+### Who is driving the window
+
+The window carries a small badge in its bottom-right corner that says who
+drives it and what it is doing: `koder · code-1a2b3c4d5e6f7a8b — step 2 of 3:
+click @e13` while a call runs, then `done — waiting for the next step` (or
+`stopped at step 2 — waiting`). A `foldrun code` session names itself by
+its id, the one `/sessions` shows; an AI app over `foldrun browser mcp` by
+the program name it gives (`claude-code · foldrun browser`), else as `an AI
+app`.
+
+The badge is drawn inside the page, so the site can read it, hide it or
+imitate it: it is a convenience, not a security indicator. So it says nothing
+private. A step shows its verb, an `@e13` reference or a key's name (`press
+Enter`), never the text it types, a selector, a site's address or a URL:
+`fill @e4` or just `fill`, never the password. A session is shown by its id,
+never its name or a `--context` you chose, which can say what you are
+working on. An agent's `web.browse` block cannot change it.
+
+It is for you, not for the agent. It shows only while a step that acts
+(click, fill, press, go to …) runs, and comes off before a step that reads
+the page (`get`, `extract`, `if`, `expect`, `eval`, a screenshot, a pdf) and
+before the result is read, so nothing a call returns holds it. Clicks pass
+through it. It is never drawn while the window is recorded (`trace`,
+`video`), and a browser in the cloud has no window, and so no badge. A call
+first takes off what the last call left; if a tab will not let it, the call
+stops with nothing recorded or read, and says which tab to close.
+
 What a call cannot do on this computer is refused by name, never dropped:
 
 | On this computer | In the cloud |
