@@ -245,6 +245,27 @@ the plan period (`--limit <usd>`; `--no-limit` removes it). Extra usage is off
 by default. Calls and runs check what is spent and held against the limit
 together, so work started at once cannot pass it between them.
 
+### Renewal
+
+A plan renews from the wallet at the end of each thirty days. When the wallet
+cannot cover the price, **your saved card pays what is missing** (an
+automatic top-up of exactly the shortfall, at least $0.50), and the plan
+renews. Turn this off under Billing → Payment, "Pay plan renewals from this
+card", or `foldrun billing wallet set renew-from-card off`; then a short
+wallet waits for you.
+
+- **Before:** three days ahead, an account whose wallet cannot cover the
+  renewal gets an email saying what will happen (card or top-up).
+- **When it cannot renew:** the plan pauses — no allowance, though a
+  wallet-only account's pay as you go still applies — for **three days**.
+  The saved card is tried once a day in them (three tries at most), and any
+  top-up renews it within the hour. A card charge already on its way is never followed by another for the same renewal, and the plan waits for its answer. A plan that renews late starts its thirty
+  days then, so the paused days are not paid for. After three days it ends,
+  and you are told; nothing is owed.
+- Billing → Plans and `foldrun billing plans` show who pays the next renewal
+  (the wallet, the card for the rest, or nobody yet) and, while paused, how
+  long is left. A cancelled plan simply ends at its period's end.
+
 ### Pay as you go with no plan
 
 Where the operator offers it, a plan is not required: an account that has
