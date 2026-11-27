@@ -219,14 +219,17 @@ test("code: the coder carries koder's mark; one still as foldrun code made it be
   const mark = CODER_AGENT.slice(CODER_AGENT.indexOf("- A commit message you write"), CODER_AGENT.indexOf("- End with a short summary"));
   assert.ok(mark.length > 100);
   assert.doesNotMatch(mark, /claude|anthropic/i, "never another product in koder's mark (CLAUDE.md elsewhere is a file to read)");
-  for (const [stored, wants] of [[CODER_AGENTS_BEFORE.at(-1), true], [`${CODER_AGENTS_BEFORE.at(-1)}\n- My own rule.\n`, false]] as const) {
+  // What released foldrun code wrote, copied from git history (Codex): not derived from the list under test.
+  const written = (day: string) => fs.readFileSync(new URL(`./fixtures/coder-agent-${day}.md`, import.meta.url), "utf8");
+  assert.equal(CODER_AGENTS_BEFORE.length, 2);
+  for (const [stored, wants] of [[written("2026-11-24"), true], [written("2026-11-27"), true], [`${written("2026-11-27")}\n- My own rule.\n`, false]] as const) {
     const d = repo(BASE);
     const puts: string[] = [];
     const s = await serve({
       [`GET ${WS}`]: () => ({ name: "desk" }),
       [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
       [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: stored, sha256: "s".repeat(64) }),
-      [`PUT ${WS}/source`]: (b) => { puts.push(JSON.parse(String(b)).content); return { ok: true }; },
+      [`PUT ${WS}/source`]: (b) => { const put = JSON.parse(String(b)); assert.equal(put.ifMatch, "s".repeat(64), "only over the file it read: an edit meanwhile is not overwritten"); puts.push(put.content); return { ok: true }; },
       [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "x", reused: false }),
       [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN_ID }),
       [`GET ${WS}/runs/${RUN_ID}`]: () => record("completed"),
