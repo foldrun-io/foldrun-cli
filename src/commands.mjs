@@ -25411,7 +25411,8 @@ async function usageRatesCmd(flags) {
     for (const [name, rate, per] of [["vCPU", r.vcpuUsdPerHour, "vCPU-hour"], ["RAM", r.ramUsdPerGibHour, "GiB-hour"], ["step disk", r.diskUsdPerGibMonth, "GiB-month"], ["storage over the plan", r.storageUsdPerGbMonth, "GB-month"], ["network", r.networkUsdPerGb, "GB, in and out"]]) {
       console.log(`  ${pad(name, 22)} $${rate} per ${pad(per, 16)} ${c.dim(`${credits(rate)} credits`)}`);
     }
-    console.log(`  ${c.dim(`tokens on foldrun's models: the provider's price × ${r.margin}, from bought credits only`)}`);
+    // One wallet (FOL-384): the account's terms say whether plan credit pays tokens too.
+    console.log(`  ${c.dim(`tokens on foldrun's models: the provider's price × ${r.margin}, ${d.plan?.paysForTokens ? "from the wallet, plan credits first" : "from bought credits only"}`)}`);
   }
   if (d.plan) console.log(`\n  ${c.bold("your plan")}  ${d.plan.name}${d.plan.status ? c.dim(` (${d.plan.status})`) : ""} · ${creditsText(d.plan.creditsPerMonth)} credits a month · ${d.plan.storageGb} GB stored · ${d.plan.computeAtOnce.vcpu} vCPU · ${d.plan.computeAtOnce.memGiB} GiB at once${d.plan.rollover ? ` · unused credits roll over up to ${creditsText(d.plan.rolloverCapCredits)}` : " · unused credits are lost at month end"}`);
   if (cat) {
