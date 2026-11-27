@@ -320,6 +320,27 @@ passing as equal to a missing file):
 
 A run's record shows each step's last one as `attemptId`.
 
+**A check that ends the run.** A failed `verify:` fails the step, and then
+`retry:` and `on-fail:` have their turn. When the check finds something no
+further attempt can mend (the proof is another attempt's, the inputs are
+wrong), a shell check says so: it writes one line, the reason, to the file
+named in `$FOLDRUN_FAIL_RUN_FILE` and exits non-zero.
+
+```markdown
+   verify: test "$(cat workspace/storage/draft/published.attempt)" = "$FOLDRUN_STEP_ATTEMPT_ID" || { echo "the proof is not this attempt's" > "$FOLDRUN_FAIL_RUN_FILE"; exit 1; }
+```
+
+The run then ends as failed: the step's remaining retries are not used, its
+`on-fail:` agent is not called, a `?` on the step does not let the run go on,
+and no later step starts. Steps already running beside it finish the
+attempt they are on; nothing new starts for them either (no retry, no
+rescue, no step still waiting for its turn). The reason
+is on the step's record as `failRun`. The file is made for each check, so
+nothing the step wrote can be in it; a check that exits 0 ends nothing,
+whatever it wrote. An exit code is not used for this on purpose: codes
+already mean things to shells and tools. A rescuer owes the same check, and
+its word counts the same.
+
 `judge:` is a toolless fast-tier grading call; the other four cost
 nothing.
 
