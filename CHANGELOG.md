@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.14.0] — 2026-11-27
+
+### docs
+
+- sync bundled docs (FOL-418's agents.md and cli.md), unblocks the dev gate ([7057756](https://github.com/foldrun-io/foldrun-cli/commit/7057756))
+
+### FOL-418
+
+- /model second — a second opinion from another provider's model (#349) ([55f7fe2](https://github.com/foldrun-io/foldrun-cli/commit/55f7fe2))
+
 ## [34.13.1] — 2026-11-27
 
 ### deps
