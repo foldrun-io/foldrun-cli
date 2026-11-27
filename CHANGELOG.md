@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.7.1] — 2026-11-27
+
+### docs
+
+- sync api-usage, cli and runs from foldrun-docs (FOL-386 left them stale; dev's gate failed on it) ([c3d9749](https://github.com/foldrun-io/foldrun-cli/commit/c3d9749))
+
 ## [34.7.0] — 2026-11-27
 
 - feat(billing): `billing` and `billing plans` show the storage the plan includes (FOL-386) ([053dc7c](https://github.com/foldrun-io/foldrun-cli/commit/053dc7c))
