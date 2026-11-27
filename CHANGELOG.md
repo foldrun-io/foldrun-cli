@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.13.1] — 2026-11-27
+
+### deps
+
+- @foldrun/core 30.1.0 ([bc6b226](https://github.com/foldrun-io/foldrun-cli/commit/bc6b226))
+
 ## [34.13.0] — 2026-11-27
 
 - test(billing): the pay-as-you-go refusal's new words (FOL-385, e808b66) — main was red on the old ones ([e988074](https://github.com/foldrun-io/foldrun-cli/commit/e988074))
