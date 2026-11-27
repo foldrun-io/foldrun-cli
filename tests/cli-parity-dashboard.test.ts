@@ -522,7 +522,7 @@ test("billing plans / plan / cancel / resume / pay-as-you-go / top-up / card —
   ]);
 });
 
-test("billing plan on a legacy platform plan: shown as honoured, cancelled where it was bought; pay as you go needs a subscription", async () => {
+test("billing plan on a legacy platform plan: shown as honoured, cancelled where it was bought; pay as you go needs a plan or a wallet payment (FOL-385)", async () => {
   const s = await serve({
     "GET /v1/billing/coding-plan": () => ({ prices: { pro: 20, max: 100 }, available: { pro: true, max: true }, plan: null, balanceUsd: 5, allowance: null, entitlement: { kind: "active", plan: "scale", source: "legacy", paidThrough: "2026-12-01T00:00:00Z", renews: true }, extraUsage: null }),
     "DELETE /v1/billing/subscribe": () => ({ ok: true, endsAt: "2026-12-01T00:00:00Z" }),
@@ -541,7 +541,7 @@ test("billing plan on a legacy platform plan: shown as honoured, cancelled where
   assert.equal(cancel.code, 0, cancel.out);
   assert.match(cancel.out, /the platform plan stops on 2026-12-01/);
   assert.equal(payg.code, 1);
-  assert.match(payg.out, /pay as you go needs a subscription — `foldrun billing plan pro` starts one/);
+  assert.match(payg.out, /pay as you go needs a plan, or a payment in your wallet .*`foldrun billing plan pro` starts a plan, `foldrun billing top-up <usd>`/);
   assert.deepEqual(writes(s).map((w) => [w.method, w.url, w.body]), [["DELETE", "/v1/billing/subscribe", null], ["PATCH", "/v1/billing/coding-plan", { extraUsage: true }], ["POST", "/v1/billing/coding-plan", { plan: "pro", maxUsd: 20 }]]);
 });
 
