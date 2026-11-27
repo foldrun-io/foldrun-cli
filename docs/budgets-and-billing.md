@@ -216,7 +216,15 @@ Every hosted account works under one subscription in three sizes, **Starter**,
 from it (Billing → Plans, `foldrun billing plan starter|pro|max`). Prices are
 set by the operator and shown on Billing → Plans, `foldrun billing plans` and
 foldrun.io/pricing; a size with no price is not on sale. Starter's allowance
-is 0.4 of Pro's, Max's five times Pro's. A move up starts at once, for the
+is 0.4 of Pro's, Max's five times Pro's. The operator sets the figures:
+`/v1/pricing` lists the dollar shares and storage in force, and Billing →
+Plans and `foldrun billing plans` show how much of each is used and the
+storage your plan includes. The planned figures (27 Nov 2026) are model usage of $40 a week and
+$170 a period on Starter, $100 and $425 on Pro, $500 and $2,125 on Max,
+weighed at list price (a weight, nothing is charged for it), and stored files
+of 2 GB on Starter, 5 GB on Pro and 25 GB on Max; beyond what a plan includes,
+storage is charged by the GB-month. There is no separate cap on what the
+models cost foldrun: the allowance is the limit. A move up starts at once, for the
 difference over the days left; a move down starts at the renewal. Without a
 subscription, new work is refused before anything is held or charged; the
 balance, the billing pages, buying a plan and the history keep working. The
@@ -234,6 +242,24 @@ is paid from the balance at the listed price, up to an optional **limit** for
 the plan period (`--limit <usd>`; `--no-limit` removes it). Extra usage is off
 by default. Calls and runs check what is spent and held against the limit
 together, so work started at once cannot pass it between them.
+
+### Platform tools
+
+foldrun's own tools are priced per use, set by the operator and listed at
+`/v1/pricing` (`tools`). The prices below are charged per call on the API's
+server tools (`web_search`, `web_fetch`, `web_browse` on `/v1/messages`) and
+the cloud browser for a laptop (`/v1/foldrun/browse`); a step's own web tool
+in a run is paid as the run's compute instead. Each call is paid from the
+plan's allowance first; past it, from the balance only with extra usage on,
+else it is refused like any other work. A call that fails costs nothing.
+
+| Tool | Price |
+|---|---|
+| web search | $0.01 a search |
+| web fetch | free (the page's tokens are what it costs) |
+| web browse | $0.002 a browser-minute, one minute at least |
+| extract | $0.001 a page, $0.003 a scanned page, $0.006 a minute of audio or video — listed, not charged yet |
+| docs | $0.002 a look-up — listed, not charged yet |
 
 When work is refused, the answer carries a code:
 
@@ -379,7 +405,7 @@ provider's own invoice.
 | **vCPU** | per second, the cores a step reserves while it runs |
 | **RAM** | per second, the GiB a step reserves while it runs |
 | **step disk** | per second, the GiB of disk the step may write; deleted when the step ends |
-| **storage** | per GB-month, the files you keep between runs **over your plan's allowance**, accrued daily. Only the GB above what your plan includes are charged (Free 2 GB, Starter 10, Pro 100, Scale 1 TB). It counts your projects' files and your run history, as they are now; a GB is 2^30 bytes |
+| **storage** | per GB-month, the files you keep between runs **over your plan's allowance**, accrued daily. Only the GB above what your plan includes are charged (the subscription: what `/v1/pricing` lists for your size — planned Starter 2 GB, Pro 5, Max 25; the old platform plans: Free 2 GB, Starter 10, Pro 100, Scale 1 TB). It counts your projects' files and your run history, as they are now; a GB is 2^30 bytes |
 | **network** | per GB the sandbox moves, both directions |
 | **search and browser pods** | an account's search engine and its browser run as pods of their own. Each is charged like a step: the vCPU and GiB it holds, for the seconds it lives (idle time included, until it is let go), at the same vCPU and RAM rates, plus the GB it moves at the network rate. A search pod holds 0.25 vCPU and 0.75 GiB and a browser pod 1 vCPU, 3 GiB and 4 GiB of disk by default; the platform's operator sets these sizes, so the size shown is the one in force. Each pod's requests equal its limits, so you are charged for exactly what is reserved for it, at the size the pod was made with. A pod session is not a run, so no minimum run charge applies |
 | **warm builds** | when you deploy, your project's environments (the packages an agent declares) are built ahead of its first step, in a short pod. **You pay for it**, because it is the work the first step would otherwise have done in its own sandbox: a small sandbox's vCPU and RAM, with the disk of the largest agent that uses the environment (a `size: heavy` agent's build gets a heavy sandbox's disk, so it fits), for the seconds it ran from when it was placed on a machine, and the GB it downloaded. Waiting for room is not charged. It is bounded (one build at a time, ten minutes at most) and shown as its own line, so it is never hidden in another |

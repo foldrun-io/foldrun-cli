@@ -9070,6 +9070,8 @@ async function billingCmd(flags) {
       for (const w of (sub.allowance?.windows ?? []).filter((/** @type {any} */ w) => w.usedPct != null)) {
         console.log(`    ${w.name === "month" ? "this month" : "this week"} ${w.usedPct}% of the allowance used ${c.dim(`· resets ${String(w.resetsAt).slice(0, 10)}`)}`);
       }
+      // The storage the plan includes (27 Nov 2026); an older platform does not say.
+      if (typeof sub.allowance?.storageGb === "number") console.log(`    storage ${sub.allowance.storageGb} GB included ${c.dim("· beyond it, by the GB-month")}`);
       const x = sub.extraUsage;
       const spent = x && typeof x.spentUsd === "number" ? ` · ${usd(x.spentUsd)} spent` : "";
       console.log(`    extra usage ${x?.on ? `on${x.capUsd != null ? ` · cap ${usd(x.capUsd)} a period` : " · no cap beyond the balance"}${spent}` : c.dim("off — past the allowance new work waits for the reset")}`);
@@ -27299,6 +27301,7 @@ async function billingPlansCmd(verb, arg, flags) {
       for (const w of sub.allowance?.windows ?? []) {
         console.log(`  ${pad(w.name === "month" ? "this month" : "this week", 14)} ${w.usedPct == null ? c.dim("counted, no limit") : `${w.usedPct}% used`} ${c.dim(`· resets ${String(w.resetsAt).slice(0, 16).replace("T", " ")} UTC`)}`);
       }
+      if (typeof sub.allowance?.storageGb === "number") console.log(`  ${pad("storage", 14)} ${sub.allowance.storageGb} GB included ${c.dim("· beyond it, by the GB-month")}`);
       const x = sub.extraUsage;
       const sums = x && typeof x.spentUsd === "number" ? ` ${c.dim(`· ${usd(x.spentUsd)} spent, ${usd(x.heldUsd ?? 0)} held`)}` : "";
       const limit = x?.capUsd != null ? ` · up to ${usd(x.capUsd)} a period` : " · no limit beyond the balance";

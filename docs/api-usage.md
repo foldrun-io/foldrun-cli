@@ -298,6 +298,10 @@ and the reply comes back in Anthropic's shape: `server_tool_use` and
 `web_search_tool_result` / `web_fetch_tool_result` blocks, `pause_turn` for a
 long turn (send the conversation back to go on), `usage.server_tool_use` for
 the counts. Streaming works too, with the text arriving as it is written.
+Each search or fetch that worked is charged at the price in
+[the platform tools' prices](budgets-and-billing#platform-tools), from your
+plan's allowance first, then the balance when extra usage is on; one that
+fails costs nothing.
 
 ```sh
 curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" \
@@ -363,8 +367,9 @@ may already have acted (a step ran, then something failed or was cut off):
 the call is never repeated for you, and should not be repeated without
 looking at the page first. A resent request runs the model again, so its
 browses are new calls. One browse runs at a time per key and two per
-account (`too_many_requests` past that). It is charged per call, and only
-when the page came back.
+account (`too_many_requests` past that). It is charged by the browser-minute,
+one minute at least (a call is cut off at 45 seconds, so each is one minute),
+and only when the page came back.
 
 The same browser call without a model: `POST $GATEWAY/v1/foldrun/browse` with
 `{url, steps?, mode?, allowed_domains?, blocked_domains?}` answers `{url,

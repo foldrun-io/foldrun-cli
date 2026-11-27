@@ -213,3 +213,26 @@ test("Starter is the third size (27 Nov 2026): listed with its price, bought, an
   old.close();
   assert.doesNotMatch(o.out, /Starter/);
 });
+
+test("the storage a plan includes is a line in `billing` and `billing plans` (27 Nov 2026); an older platform that does not say prints none", async () => {
+  const live = { plan: "starter", status: "active", renew: true, periodEnd: "2026-12-20T00:00:00Z" };
+  const body = (allowance: object) => ({ prices: { starter: 10, pro: 25, max: 120 }, available: { starter: true, pro: true, max: true }, balanceUsd: 5, plan: live, allowance, extraUsage: { on: false, capUsd: null }, entitlement: { kind: "active", source: "subscription", plan: "starter" } });
+  const s = await serve({
+    "/v1/billing": () => ({ enabled: true, balanceUsd: 5, entries: [] }),
+    "/v1/billing/coding-plan": () => body({ windows: [{ name: "week", usedPct: 5, resetsAt: "2026-12-01T00:00:00Z" }], storageGb: 2 }),
+  });
+  const a = await at(s.url, "billing");
+  const p = await at(s.url, "billing", "plans");
+  s.close();
+  assert.equal(a.code, 0, a.out);
+  assert.match(a.out, /foldrun Starter/);
+  assert.match(a.out, /storage 2 GB included/);
+  assert.match(p.out, /storage\s+2 GB included/);
+  const old = await serve({
+    "/v1/billing": () => ({ enabled: true, balanceUsd: 5, entries: [] }),
+    "/v1/billing/coding-plan": () => body({ windows: [] }),
+  });
+  const o = await at(old.url, "billing", "plans");
+  old.close();
+  assert.doesNotMatch(o.out, /GB included/);
+});
