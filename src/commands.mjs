@@ -3326,6 +3326,7 @@ export function billingRefusalHint(body) {
     allowance_used: "wait for the reset (`foldrun billing plans` shows when), or `foldrun billing extra-usage on --limit <usd>` to carry on from your balance",
     extra_usage_cap: "raise it with `foldrun billing extra-usage on --limit <usd>` (or `--no-limit`), or wait for the period to renew",
     extra_usage_unfunded: "add credit with `foldrun billing top-up <usd>`; extra usage is paid from your balance",
+    pay_as_you_go_off: "turn it on with `foldrun billing pay-as-you-go on` (`--limit <usd>` caps a month), or choose a plan: `foldrun billing plans`",
     model_not_in_plan: "choose a model the plan covers, or `foldrun billing extra-usage on --limit <usd>` to pay for this one from your balance",
     billing_unreadable: "billing could not be read just now and nothing was charged — try again in a moment",
   };
@@ -9097,6 +9098,12 @@ async function billingCmd(flags) {
       console.log(`    extra usage ${x?.on ? `on${x.capUsd != null ? ` · cap ${usd(x.capUsd)} a period` : " · no cap beyond the balance"}${spent}` : c.dim("off — past the allowance new work waits for the reset")}`);
     } else if (e?.kind === "active" && e.source === "legacy") {
       console.log(`  ${c.dim("●")} ${e.plan} platform plan ${c.dim(`— honoured to ${String(e.paidThrough ?? "").slice(0, 10) || "its paid-through date"}, no longer sold`)}`);
+    } else if (e?.kind === "active" && e.source === "wallet") {
+      // No plan, a wallet it paid into (FOL-385): pay as you go for everything.
+      const x = sub.extraUsage;
+      const spent = x && typeof x.spentUsd === "number" ? ` · ${usd(x.spentUsd)} spent this month` : "";
+      console.log(`  ${c.green("●")} pay as you go ${c.dim("— no plan, your wallet pays for models, compute and tools")}`);
+      console.log(`    ${x?.on ? `on${x.capUsd != null ? ` · cap ${usd(x.capUsd)} a month` : " · no cap beyond the balance"}${spent}` : c.amber("off — nothing new runs until foldrun billing pay-as-you-go on, or a plan")}`);
     } else if (e?.kind === "none") {
       console.log(`  ${c.amber("!")} no active subscription ${c.dim("— new work is refused until one starts: foldrun billing plan pro")}`);
     }
@@ -28364,12 +28371,19 @@ async function billingPlansCmd(verb, arg, flags) {
       console.log(`  ${pad("pay as you go", 14)} ${x?.on ? `on${limit}${sums}` : c.dim(`off — past the allowance new work waits for the reset${x?.capUsd != null ? ` (limit ${usd(x.capUsd)} kept)` : ""}`)}`);
     } else if (sub.entitlement?.kind === "active" && sub.entitlement.source === "legacy") {
       console.log(`\n  ${c.dim(`on the ${sub.entitlement.plan} platform plan, honoured to ${String(sub.entitlement.paidThrough ?? "").slice(0, 10) || "its paid-through date"}; it is no longer sold`)}`);
+    } else if (sub.entitlement?.kind === "active" && sub.entitlement.source === "wallet") {
+      // No plan, a wallet it paid into (FOL-385): it pays as it goes.
+      const x = sub.extraUsage;
+      const sums = x && typeof x.spentUsd === "number" ? ` ${c.dim(`· ${usd(x.spentUsd)} spent, ${usd(x.heldUsd ?? 0)} held this month`)}` : "";
+      const limit = x?.capUsd != null ? ` · up to ${usd(x.capUsd)} a month` : " · no limit beyond the balance";
+      console.log(`\n  ${c.dim("no plan — your wallet pays as you go for models, compute and tools")}`);
+      console.log(`  ${pad("pay as you go", 14)} ${x?.on ? `on${limit}${sums}` : c.amber("off — nothing new runs until `foldrun billing pay-as-you-go on`, or a plan")}`);
     } else if (sub.entitlement?.kind === "exempt") {
       console.log(`\n  ${c.dim("this account is not charged (the platform's own, or set by the operator)")}`);
     } else if (sub.entitlement?.kind !== "none") {
       console.log(`\n  ${c.amber("the subscription could not be read just now")} ${c.dim("— try again in a moment")}`);
     } else {
-      console.log(`\n  ${c.amber("no active subscription")} ${c.dim("— new work needs one")}`);
+      console.log(`\n  ${c.amber("no active subscription")} ${c.dim("— new work needs one, or a top-up to pay as you go where this platform offers it (`foldrun billing top-up <usd>`)")}`);
     }
     console.log(`\n  ${c.dim("foldrun billing plan starter|pro|max · plan cancel · plan resume · extra-usage on|off [--limit <usd>] · top-up <usd>")}\n`);
     return 0;
@@ -28445,7 +28459,7 @@ async function billingPlansCmd(verb, arg, flags) {
     return 0;
   }
   if (verb === "pay-as-you-go" || verb === "extra-usage") {
-    const usage = "`foldrun billing extra-usage on|off` (or `pay-as-you-go`) — past the allowance, carry on from your balance; `--limit <usd>` caps a period, `--no-limit` drops the cap";
+    const usage = "`foldrun billing extra-usage on|off` (or `pay-as-you-go`) — past the allowance (or, with no plan, for everything) carry on from your balance; `--limit <usd>` caps a period, `--no-limit` drops the cap";
     // Nothing guessed where money is concerned (Codex, 23 Nov 2026): a word
     // that is not on/off, a bare --limit, or both limit flags is refused
     // before anything is sent.
@@ -28462,14 +28476,19 @@ async function billingPlansCmd(verb, arg, flags) {
       if (!(n >= 0.01 && n <= 100_000)) throw new Error("--limit is dollars a period, from 0.01 to 100000 (`--no-limit` for none)");
       body.extraUsageCapUsd = n;
     }
-    current(await readSub());
+    const before = await readSub();
+    current(before);
+    // No plan, a wallet it paid into (FOL-385): the same switch, for everything.
+    const walletOnly = !(before.plan && before.plan.status === "active") && before.entitlement?.kind === "active" && before.entitlement.source === "wallet";
+    const per = walletOnly ? "a month" : "a period";
+    const past = walletOnly ? "Models, compute and tools are" : "Past the allowance, work is";
     // Turning it on, or lifting or setting its limit, lets the balance be
     // spent: asked first (`--yes`). Only turning it off, alone, is not asked.
     if (!(arg === "off" && body.extraUsageCapUsd === undefined)) {
       const what = body.extraUsage === true
-        ? `Turn on pay as you go${body.extraUsageCapUsd === null ? " with no limit beyond your balance" : typeof body.extraUsageCapUsd === "number" ? `, up to ${usd(body.extraUsageCapUsd)} a period` : ""}? Past the allowance, work is paid from your balance at the listed price. [y/N] `
+        ? `Turn on pay as you go${body.extraUsageCapUsd === null ? " with no limit beyond your balance" : typeof body.extraUsageCapUsd === "number" ? `, up to ${usd(body.extraUsageCapUsd)} ${per}` : ""}? ${past} paid from your balance at the listed price. [y/N] `
         : body.extraUsageCapUsd === null ? `${body.extraUsage === false ? "Turn pay as you go off and remove its limit? Turned on later, it" : "Remove the pay-as-you-go limit? If it is on, it"} may then spend up to your whole balance. [y/N] `
-        : `${body.extraUsage === false ? "Turn pay as you go off and set" : "Set"} its limit to ${usd(Number(body.extraUsageCapUsd))} a period? [y/N] `;
+        : `${body.extraUsage === false ? "Turn pay as you go off and set" : "Set"} its limit to ${usd(Number(body.extraUsageCapUsd))} ${per}? [y/N] `;
       if (!(await confirmed(flags, "billing pay-as-you-go", what))) {
         console.log(`\n  ${c.dim("nothing changed")}\n`);
         return 0;
@@ -28480,12 +28499,14 @@ async function billingPlansCmd(verb, arg, flags) {
     try {
       r = await billingOnly(() => remoteCall(url, flags, "/v1/billing/coding-plan", { method: "PATCH", body: JSON.stringify(body) }), "pay as you go");
     } catch (err) {
-      if (err instanceof HttpError && err.status === 409) throw new Error("pay as you go needs a subscription — `foldrun billing plan pro` starts one");
+      if (err instanceof HttpError && err.status === 409) throw new Error("pay as you go needs a plan, or a payment in your wallet where this platform offers pay as you go alone — `foldrun billing plan pro` starts a plan, `foldrun billing top-up <usd>` adds money");
       if (err instanceof HttpError && (err.status === 404 || err.status === 501)) throw new Error("this platform sells no subscription (no billing here)");
       throw err;
     }
     const x = r.extraUsage ?? { on: r.plan?.extraUsage, capUsd: r.plan?.extraUsageCapUsd };
-    console.log(`\n  ${c.green("✓")} pay as you go ${x.on ? `on${x.capUsd != null ? `, up to ${usd(x.capUsd)} a period` : ", no limit beyond the balance"} ${c.dim("— past the allowance, work carries on from your balance at the listed price")}` : `off${x.capUsd != null ? ` (its limit, ${usd(x.capUsd)} a period, kept)` : ""} ${c.dim("— past the allowance, new work waits for the reset")}`}\n`);
+    console.log(walletOnly
+      ? `\n  ${c.green("✓")} pay as you go ${x.on ? `on${x.capUsd != null ? `, up to ${usd(x.capUsd)} a month` : ", no limit beyond the balance"} ${c.dim("— models, compute and tools are paid from your balance at the listed price")}` : `off${x.capUsd != null ? ` (its limit, ${usd(x.capUsd)} a month, kept)` : ""} ${c.dim("— nothing new runs until you turn it on, or choose a plan")}`}\n`
+      : `\n  ${c.green("✓")} pay as you go ${x.on ? `on${x.capUsd != null ? `, up to ${usd(x.capUsd)} a period` : ", no limit beyond the balance"} ${c.dim("— past the allowance, work carries on from your balance at the listed price")}` : `off${x.capUsd != null ? ` (its limit, ${usd(x.capUsd)} a period, kept)` : ""} ${c.dim("— past the allowance, new work waits for the reset")}`}\n`);
     return 0;
   }
   if (verb === "top-up") {

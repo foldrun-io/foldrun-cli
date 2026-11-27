@@ -167,6 +167,7 @@ test("each billing refusal code says what to do next (FOL-235)", async () => {
     allowance_used: /foldrun billing extra-usage on --limit/,
     extra_usage_cap: /--no-limit/,
     extra_usage_unfunded: /foldrun billing top-up/,
+    pay_as_you_go_off: /foldrun billing pay-as-you-go on/,
     model_not_in_plan: /extra-usage on/,
     billing_unreadable: /nothing was charged/,
   };
@@ -235,4 +236,24 @@ test("the storage a plan includes is a line in `billing` and `billing plans` (27
   const o = await at(old.url, "billing", "plans");
   old.close();
   assert.doesNotMatch(o.out, /GB included/);
+});
+
+test("a wallet-only account (FOL-385): billing and billing plans say it pays as it goes, and pay-as-you-go speaks of a month", async () => {
+  const wallet = { kind: "active", plan: "wallet", source: "wallet", paidThrough: null, renews: false };
+  const base = { prices: { starter: 10, pro: 25, max: 120 }, available: { starter: true, pro: true, max: true }, balanceUsd: 20, plan: null, allowance: null, entitlement: wallet };
+  const s = await serve({
+    "/v1/billing": () => ({ enabled: true, balanceUsd: 20, entries: [] }),
+    "GET /v1/billing/coding-plan": () => ({ ...base, extraUsage: { on: true, capUsd: 50, spentUsd: 3.5, heldUsd: 0, wallet: true } }),
+    "PATCH /v1/billing/coding-plan": () => ({ plan: null, allowance: null, extraUsage: { on: false, capUsd: 50, spentUsd: 3.5, heldUsd: 0, wallet: true } }),
+  });
+  const b = await at(s.url, "billing");
+  assert.equal(b.code, 0, b.out);
+  assert.match(b.out, /pay as you go — no plan, your wallet pays/);
+  assert.match(b.out, /on · cap \$50\.00 a month · \$3\.50 spent this month/);
+  const l = await at(s.url, "billing", "plans");
+  assert.match(l.out, /pay as you go\s+on · up to \$50\.00 a month/);
+  const off = await at(s.url, "billing", "pay-as-you-go", "off");
+  s.close();
+  assert.equal(off.code, 0, off.out);
+  assert.match(off.out, /pay as you go off \(its limit, \$50\.00 a month, kept\) — nothing new runs until you turn it on/);
 });
