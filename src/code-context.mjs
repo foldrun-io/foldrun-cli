@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { insideFolder } from "./code-session.mjs";
+import { insideFolder, KODER_LOGO } from "./code-session.mjs";
 
 /** The instruction files a folder may hold, in the order they are read. */
 export const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md", path.join(".claude", "CLAUDE.md"), "CLAUDE.local.md"];
@@ -392,7 +392,7 @@ export function exportTranscript(/** @type {Exchange[]} */ transcript, /** @type
     "",
     ...transcript.flatMap((e, i) => [`## ${i + 1}. You (${e.where === "local" ? "on this computer" : "in the cloud"})`, "", e.you.trim(), "", ...(s.thinking === true && e.thinking ? ["### Thinking (the model's summary)", "", ...e.thinking.trim().split("\n").map((l) => `> ${l}`), ""] : []), "### foldrun code", "", e.agent.trim() || "(no reply)", ""]),
     // koder's mark (FOL-415), unless the person turned it off (/status attribution off).
-    ...(s.attribution === false ? [] : ["---", "", "Exported from ◆ [koder](https://foldrun.io) from foldrun.io", ""]),
+    ...(s.attribution === false ? [] : ["---", "", `Exported from ${KODER_LOGO} [koder](https://foldrun.io) from foldrun.io`, ""]),
   ].join("\n");
 }
 

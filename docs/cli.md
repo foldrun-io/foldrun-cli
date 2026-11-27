@@ -745,9 +745,11 @@ computer (its turns and sub-agents) carries its name, as other coding agents
 carry theirs; cloud turns and cloud jobs get it from the platform's agent,
 next. A commit message it writes ends
 with the trailer `Co-Authored-By: koder <noreply@foldrun.io>`, and a pull
-request or issue body ends with `◆ Generated with [koder](https://foldrun.io)
-from foldrun.io`. An exported conversation (`/export`) ends with an
-"Exported from koder" line. Requests carry the User-Agent
+request or issue body ends with foldrun's logo and "Generated with
+[koder](https://foldrun.io) from foldrun.io" (the logo is
+`https://foldrun.io/favicon.svg`, as a 16 px picture GitHub draws). An
+exported conversation (`/export`) ends with the logo and an "Exported from
+koder" line. Requests carry the User-Agent
 `foldrun-cli/<version> (koder from foldrun.io; +https://foldrun.io)`, and MCP
 servers see the client `koder` ("koder from foldrun.io"). `/status
 attribution off` turns the commit, pull-request, issue and export marks off

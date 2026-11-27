@@ -104,6 +104,10 @@ test("/status attribution off|on (FOL-415): koder's mark on commits, pull reques
   assert.equal(KODER_TRAILER, "Co-Authored-By: koder <noreply@foldrun.io>");
   assert.match(attributionNote(), /end it with a blank line and this trailer: Co-Authored-By: koder <noreply@foldrun\.io>/);
   assert.ok(attributionNote().includes(KODER_SIGNATURE));
+  // The logo is foldrun's mark from foldrun.io, a picture GitHub draws (FOL-415).
+  assert.match(KODER_SIGNATURE, /^<img src="https:\/\/foldrun\.io\/favicon\.svg" width="16" height="16" alt="koder"> Generated with \[koder\]\(https:\/\/foldrun\.io\) from foldrun\.io$/);
+  const logo = await fetch("https://foldrun.io/favicon.svg").then((r) => r.ok ? r.headers.get("content-type") : null, () => "offline");
+  if (logo !== "offline") assert.match(String(logo), /^image\/svg\+xml/, "the logo's address answers with a picture");
   assert.equal(attributionNote(false), "");
   for (const mark of [attributionNote(), KODER_SIGNATURE]) assert.doesNotMatch(mark, /claude|anthropic/i, "never another product's name in koder's marks");
 });
