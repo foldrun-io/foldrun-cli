@@ -91,6 +91,7 @@ const skip = !coreServerTools ? "needs a core with the engine's serverTools (FOL
 
 /** One session: two messages, with /where web typed after each. `models` answers GET /v1/models, call by call. */
 async function session(agentMd: string, models: (n: number) => unknown, files: { project?: string; account?: string } = {}) {
+  const saved: string[] = [];
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -99,7 +100,12 @@ async function session(agentMd: string, models: (n: number) => unknown, files: {
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/sessions/code-w332/messages`]: () => ({ messages: [] }),
-    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: agentMd } : q.get("path") === "AGENTS.md" ? { content: files.project ?? "" } : { content: "" }),
+    [`PUT ${WS}/source`]: (b) => {
+      agentMd = JSON.parse(String(b)).content;
+      saved.push(agentMd);
+      return { ok: true };
+    },
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: agentMd, sha256: `sha-${saved.length}` } : q.get("path") === "AGENTS.md" ? { content: files.project ?? "" } : { content: "" }),
     "GET /v1/account/agents-md": () => ({ content: files.account ?? "" }),
     "GET /v1/me": () => ({ account: "acme" }),
     "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
@@ -128,7 +134,7 @@ async function session(agentMd: string, models: (n: number) => unknown, files: {
     t.send("/quit\r");
     await t.done;
   };
-  return { t, types, send, close, stop: () => { t.child.kill(); s.close(); } };
+  return { t, types, asked0: () => asked[0].tools ?? [], toolsOf: (n: number) => asked[n].tools ?? [], saved, send, close, stop: () => { t.child.kill(); s.close(); } };
 }
 const announces = () => raw("{}", "application/json", { "foldrun-server-tools": ANNOUNCED });
 
@@ -194,6 +200,62 @@ test("a gateway ask that failed is made again at the next message, and /where we
     assert.deepEqual(x.types(1), ["web_search", "web_fetch"], "asked again, and offered");
     x.t.send("/where web\r");
     await x.t.until(/last turn offered web_search and web_fetch/, at);
+    await x.close();
+  } finally {
+    x.stop();
+  }
+});
+
+// tools: [debate, review] (FOL-418): offered only when the agent's file grants them with a second model.
+const announcesSecond = () => raw("{}", "application/json", { "foldrun-server-tools": `${ANNOUNCED},foldrun_debate_20261127,foldrun_review_20261127` });
+
+test("debate and review: announced by the gateway but not offered until the agent's file grants them with second_model:, then sent with that model", { skip, timeout: 180_000 }, async () => {
+  const offered = async (agentMd: string) => {
+    const x = await session(agentMd, announcesSecond);
+    try {
+      let at = await x.t.until(/\w ❯ /);
+      at = await x.send("hello", 1, at);
+      const tools = (x.asked0() as { type?: string; name: string; model?: string }[]).filter((t) => t.type);
+      await x.close();
+      return tools.filter((t) => t.name === "foldrun_debate" || t.name === "foldrun_review").map((t) => `${t.name}:${t.model ?? "-"}`);
+    } finally {
+      x.stop();
+    }
+  };
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code]\n---\nYou code.\n"), [], "no grant, nothing offered");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, review]\n---\nYou code.\n"), [], "a grant with no second model, nothing offered");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, review]\nsecond_model: openai/gpt-x\n---\nYou code.\n"), ["foldrun_review:openai/gpt-x"]);
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, debate, review]\nsecond_model: openai/gpt-x\ndisallowedTools: [debate]\n---\nYou code.\n"), ["foldrun_review:openai/gpt-x"], "disallowedTools takes one away");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, review]\nsecond_model: openai/gpt-x\ndisallowedTools: review\n---\nYou code.\n"), [], "one name, not a list, takes it away too");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [write, [[review]]]\nsecond_model: openai/gpt-x\n---\nYou code.\n"), [], "[[review]] is the author's own tool, not the built-in");
+  assert.deepEqual(await offered("---\nname: coder\ntools: review\nsecond_model: openai/gpt-x\n---\nYou code.\n"), ["foldrun_review:openai/gpt-x"], "one name, not a list, grants it");
+  assert.deepEqual(await offered("---\nname: coder\ntools: read, review\nsecond_model: openai/gpt-x\ndisallowedTools: Bash, review\n---\nYou code.\n"), [], "Claude Code's comma string, both ways");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [read, review]\nsecond_model: openai/gpt-x\ndisallowedTools: [\"*\"]\n---\nYou code.\n"), [], "* takes everything away");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [read, {review: ask}]\nsecond_model: openai/gpt-x\n---\nYou code.\n"), [], "ask before each use is not a grant: a server tool cannot ask");
+});
+
+test("debate and review: a project's AGENTS.md takes them away; /model second none holds from the very next message", { skip, timeout: 180_000 }, async () => {
+  const names = (tools: { type?: string; name: string }[]) => tools.filter((t) => t.type && /^foldrun_(debate|review)$/.test(t.name)).map((t) => t.name);
+  const p = await session("---\nname: coder\ntools: [write, review]\nsecond_model: openai/gpt-x\n---\nYou code.\n", announcesSecond, { project: "---\ndisallowedTools: [review]\n---\n" });
+  try {
+    let at = await p.t.until(/\w ❯ /);
+    at = await p.send("hello", 1, at);
+    assert.deepEqual(names(p.asked0()), []);
+    await p.close();
+  } finally {
+    p.stop();
+  }
+  const x = await session("---\nname: coder\ntools: [write, review]\nsecond_model: openai/gpt-x\n---\nYou code.\n", announcesSecond);
+  try {
+    let at = await x.t.until(/\w ❯ /);
+    at = await x.send("hello", 1, at);
+    assert.deepEqual(names(x.toolsOf(0)), ["foldrun_review"]);
+    x.t.send("/model second none\r");
+    at = await x.t.until(/no second opinion: debate and review are taken away/, at);
+    assert.doesNotMatch(x.saved[0]!, /second_model|review/);
+    at = await x.t.until(/\w ❯ /, at);
+    at = await x.send("again", 2, at);
+    assert.deepEqual(names(x.toolsOf(1)), [], "taken away from the next message");
     await x.close();
   } finally {
     x.stop();

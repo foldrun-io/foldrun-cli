@@ -88,6 +88,8 @@ export function meter() {
     started: false,
     note,
   };
+  /** Second-model results already counted as their block arrived (FOL-418), by tool_use_id: not counted again with the whole answer. */
+  const seconds = new Set();
   /** A call whose answer has begun and not ended: what its start reported (input and cache), counted if the answer never comes. */
   /** @type {{ model: string, usage: any } | null} */
   let open = null;
@@ -117,6 +119,17 @@ export function meter() {
       m.lastAt = Date.now();
       return;
     }
+    // A second opinion's result arrives whole in one block, already billed: counted now, so a stream cut before the
+    // answer's end still has it (Codex).
+    if (e?.type === "stream_event" && !e.parent_tool_use_id && e.event?.type === "content_block_start") {
+      const b = e.event.content_block;
+      const r = /^foldrun_(debate|review)_tool_result$/.test(String(b?.type)) ? b.content : null;
+      if (r && typeof r.model === "string" && r.usage && typeof r.usage === "object" && !seconds.has(b.tool_use_id)) {
+        seconds.add(b.tool_use_id);
+        add(r.model, r.usage);
+      }
+      return;
+    }
     // What the answer's end reported (its output count, mostly), should the answer itself never arrive whole.
     if (e?.type === "stream_event" && !e.parent_tool_use_id && e.event?.type === "message_delta" && open && e.event.usage && typeof e.event.usage === "object") {
       for (const [k, v] of Object.entries(e.event.usage)) if (typeof v === "number" && Number.isFinite(v) && v > num(open.usage[k])) open.usage[k] = v;
@@ -127,6 +140,15 @@ export function meter() {
     const u = call?.usage;
     if (!u || typeof u !== "object") return;
     add(typeof call.model === "string" ? call.model : "", u);
+    // A second opinion asked in the answer (tools: [debate, review], FOL-418): the second model's tokens are
+    // billed at its own price beside the call's, and counted here the same way, under that model.
+    if (answered) for (const b of Array.isArray(call.content) ? call.content : []) {
+      const r = /^foldrun_(debate|review)_tool_result$/.test(String(b?.type)) ? b.content : null;
+      if (r && typeof r.model === "string" && r.usage && typeof r.usage === "object" && !seconds.has(b.tool_use_id)) {
+        seconds.add(b.tool_use_id);
+        add(r.model, r.usage);
+      }
+    }
     if (answered) {
       // The whole answer came: its own count stands in place of what its start reported.
       open = null;
@@ -346,7 +368,8 @@ export const rowsOf = (/** @type {string} */ key) => (KEY.test(key) ? readLedger
 export function priceOf(/** @type {any} */ rates, /** @type {string | undefined} */ model) {
   const list = rates?.catalogue?.models?.prices;
   if (!Array.isArray(list) || !model) return null;
-  const m = list.find((/** @type {any} */ p) => p && p.model === model && typeof p.inputPerMTok === "number" && typeof p.outputPerMTok === "number");
+  // A second model's result names it `provider/model` (FOL-418); the list keeps the provider beside the model.
+  const m = list.find((/** @type {any} */ p) => p && (p.model === model || (typeof p.provider === "string" && `${p.provider}/${p.model}` === model)) && typeof p.inputPerMTok === "number" && typeof p.outputPerMTok === "number");
   return m ?? null;
 }
 

@@ -172,11 +172,12 @@ export function commandMenu(name, st) {
       // The model, how hard it thinks, and whether its thinking shows: one command (FOL-263, owner).
       return {
         title: "The model",
-        subtitle: "/model <model> · effort <level> · thinking on|off types it straight away",
+        subtitle: "/model <model> · effort <level> · second <provider/model> · thinking on|off types it straight away",
         choices: [
           { v: "/model", name: "Model…", note: "Default, Max, Fast or any model behind foldrun's proxy" },
           { v: "/model effort", name: "How hard it thinks…", note: st.effort ? `now ${st.effort === "default" ? "the model's own" : st.effort}` : "low to max, or the model's own" },
           { v: st.thinking === true ? "/model thinking off" : "/model thinking on", name: st.thinking === true ? "Hide its thinking" : "Show its thinking", note: st.thinking === true ? "replies only" : "a summary, dimmed, above each reply" },
+          { v: "/model second", name: "A second opinion…", note: "another provider's model debates and reviews code when the agent asks" },
         ],
         tick: null,
         start: "/model",
