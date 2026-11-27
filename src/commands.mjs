@@ -25,7 +25,7 @@ import { handedOver, sessionCheck, stagedUpdate, installedBin, actingFor, HANDED
 import { listConversation, listedConversations, searchWords, searchConversations, MAX_WORDS } from "./code-search.mjs";
 import { priceOf, estimateUsd, meteredRows, cloudRow, meter, keepRow, keptRows, keptSessions, findSessions, rowsOf, explainCost, explainLines, costWords } from "./code-cost.mjs";
 import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, rulesAllow } from "./code-rules.mjs";
-import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
+import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, cellsOf, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
 import { koderLine } from "./koder-path.mjs";
 import { routeFor, groupOf, noteWorked, switchAfterStall, roadFailure, hostOf, approved as frontApproved, originOf as originOfUrl } from "./routes.mjs";
@@ -16843,6 +16843,14 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     text = text.slice(0, at) + k + text.slice(at);
     at += k.length;
   };
+  /** What was typed can join the grapheme after it (a ZWJ, a skin tone, half a flag): once a read is in, the
+   *  cursor goes to the end of the grapheme it is inside, never between its parts — once, not per character,
+   *  so a pasted flag does not cross into the next one (Codex). */
+  const snap = () => {
+    if (at <= 0 || at >= text.length) return;
+    const g = graphemes.segment(text).containing(at);
+    if (g && g.index < at) at = g.index + g.segment.length;
+  };
   /** The grapheme boundary before / after the cursor. */
   const prevAt = () => {
     let b = 0;
@@ -16861,6 +16869,7 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     home: () => (at = 0),
     end: () => (at = text.length),
     del: () => (text = text.slice(0, at) + text.slice(nextAt())),
+    snap: () => snap(),
   };
   const moveOf = (/** @type {string} */ seq) =>
     /^\x1b(?:\[(?:1;\d)?D|OD)$/.test(seq) ? "left" : /^\x1b(?:\[(?:1;\d)?C|OC)$/.test(seq) ? "right" : /^\x1b(?:\[(?:1;\d)?H|OH|\[[17]~)$/.test(seq) ? "home" : /^\x1b(?:\[(?:1;\d)?F|OF|\[[48]~)$/.test(seq) ? "end" : seq === "\x1b[3~" ? "del" : "";
@@ -16872,7 +16881,11 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     // Escape sequences (arrows, paste marks) are dropped whole — one cut at
     // the end of a read waits for its rest (Codex); a line break becomes a
     // space, so a paste stays one message.
-    let raw = carry + decoder.write(d);
+    const got = decoder.write(d);
+    // Esc on its own, then Enter: the Esc was no sequence's start, and the Enter is a key on its own (Codex).
+    // Anything else after it is read with it, so a paste mark cut after its Esc is still one mark.
+    if (carry === "\x1b" && /^(\r\n?|\n)$/.test(got)) carry = "";
+    let raw = carry + got;
     const cut = /\x1b(?:\[[0-?]*[ -/]*|O)?$/.exec(raw);
     carry = cut ? cut[0] : "";
     if (cut) raw = raw.slice(0, cut.index);
@@ -16885,7 +16898,11 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     const keys = [];
     for (const part of raw.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1bO.|\x1b)/)) {
       if (part === "\x1b[200~") pasting = true;
-      else if (part === "\x1b[201~") pasting = false;
+      else if (part === "\x1b[201~") {
+        pasting = false;
+        // The paste is whole now: the cursor to a grapheme's end before any key after it in this read (Codex).
+        keys.push({ k: "", pasted: false, move: "snap" });
+      }
       // The editing keys move on the line; any other sequence (↑, ↓, F-keys) is still dropped whole.
       else if (part.startsWith("\x1b")) {
         const move = moveOf(part);
@@ -16893,10 +16910,11 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
       } else for (const k of part) keys.push({ k, pasted: pasting });
     }
     for (const { k, pasted, move } of keys) {
-      if (move) moves[move]?.();
-      else if (k === "\x01") moves.home?.();
-      else if (k === "\x05") moves.end?.();
-      else if (k === "\x03") onInt();
+      // Inside a paste nothing is a key: its sequences and control characters are dropped, never moves (Codex).
+      if (move) pasted || moves[move]?.();
+      else if (k === "\x01") pasted || moves.home?.();
+      else if (k === "\x05") pasted || moves.end?.();
+      else if (k === "\x03") pasted || onInt();
       // Tab queues only as a key pressed on its own, like Enter: a tab
       // inside pasted text (a table, code) is never a request (Codex).
       else if (k === "\t" && queue && !pasted && tabAlone) {
@@ -16906,6 +16924,8 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
       } else if (k === "\t") {
         // A space at the cursor, never two in a row (at the end: as before).
         if (text.slice(0, at) && !text.slice(0, at).endsWith(" ")) insert(" ");
+      } else if ((k === "\x7f" || k === "\b") && pasted) {
+        // A pasted Backspace is no key (Codex).
       } else if (k === "\x7f" || k === "\b") {
         // The grapheme before the cursor.
         const b = prevAt();
@@ -16935,6 +16955,8 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
         if (text.slice(0, at) && !text.slice(0, at).endsWith(" ")) insert(" ");
       } else if (!/[\x00-\x1f\x7f-\x9f]/.test(k) && text.length < TYPE_AHEAD_MAX) insert(k);
     }
+    // Not while a paste is still coming in: its next read may finish the grapheme (Codex).
+    if (!pasting) snap();
     publish();
   };
   process.stdin.setRawMode(true);
@@ -17164,6 +17186,8 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
    *  them, so clear() counts their rows at the width there is now (Codex). */
   /** @type {number[]} */
   let drawn = [];
+  /** The column the last frame left the cursor at on the input line (1-based), 0 when it was not shown there. */
+  let caretCol = 0;
   let i = 0;
   /** What is typed, as last drawn: a key shows at once, not on the next frame. */
   let lastTyped = "";
@@ -17177,9 +17201,11 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
    * @param {string[]} rows
    */
   const paint = (rows, cursorAt = 0) => {
+    const from = shown ? upToFirst() : "\r";
+    caretCol = cursorAt;
     // The cursor hidden while the rows are written, in the same write (FOL-348).
     /** @type {Array<string | { control: string }>} */
-    const parts = [{ control: `\x1b[?2026h\x1b[?25l${shown ? upToFirst() : "\r"}` }];
+    const parts = [{ control: `\x1b[?2026h\x1b[?25l${from}` }];
     rows.forEach((row, k) => {
       // One physical row each, whatever a label holds: a line break in it would add a row never counted (Codex).
       if (row) parts.push(row.replace(/[\r\n\t\v\f]+/g, " "));
@@ -17269,7 +17295,13 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
   /** Back to the first row drawn, counted at the width there is now (a narrower terminal wraps them). */
   const upToFirst = () => {
     const cols = Math.max(1, process.stdout.columns || 80);
-    const up = drawn.reduce((n, w) => n + Math.max(1, Math.ceil(w / cols)), 0) - 1;
+    let up = drawn.reduce((n, w) => n + Math.max(1, Math.ceil(w / cols)), 0) - 1;
+    // The cursor stands on the input line at its column, not at the end: when a narrower terminal wraps that
+    // line, it is on one of its first rows, and the rows below it are not to go up (FOL-348, Codex).
+    if (caretCol > 0 && drawn.length) {
+      const lastRows = Math.max(1, Math.ceil(/** @type {number} */ (drawn[drawn.length - 1]) / cols));
+      up -= lastRows - 1 - Math.min(lastRows - 1, Math.floor((caretCol - 1) / cols));
+    }
     // In steps of at most 99 rows (the controls the guard lets through), however far it reflowed (Codex).
     let moves = "";
     for (let left = up; left > 0; left -= 99) moves += `\x1b[${Math.min(left, 99)}A`;
@@ -19711,8 +19743,7 @@ async function codeLocalTurn(s, text) {
       const wrap = (/** @type {string} */ l) => {
         const out = [""];
         let used = 0;
-        for (const ch of l) {
-          const w = displayWidth(ch);
+        for (const [ch, w] of cellsOf(l)) {
           if (used + w > width - 3) {
             out.push("");
             used = 0;

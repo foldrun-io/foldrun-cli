@@ -1130,13 +1130,27 @@ test("typing during a turn: ←/→, Home/End, Ctrl-A/Ctrl-E, Backspace and Dele
     await pause(200);
     const last = frameWith("Hello world!");
     assert.ok(last.endsWith(`\r\x1b[${columnFor(last, "Hello world!", 1) - 1}C\x1b[?25h\x1b[?2026l`), `the cursor after "H": ${JSON.stringify(last)}`);
+    // A paste is text, never keys: its Delete sequence and Ctrl-A do nothing, and it goes in at the end (Codex).
+    t.send("\x05\x1b[200~ x\x1b[3~\x01\x7f\x03y\x1b[201~");
+    at = await t.until(/❯ Hello world! xy/, at);
+    // A flag pasted before a flag stays two flags: the cursor snaps once the read is in, not per character (Codex).
+    await pause();
+    t.send("\x1b[200~🇳🇿\x1b[201~");
+    await pause();
+    t.send("\x1b[D");
+    await pause();
+    // In two reads, cut between the flag's halves.
+    t.send("\x1b[200~🇦");
+    await pause();
+    t.send("🇺\x1b[201~!");
+    at = await t.until(/❯ Hello world! xy🇦🇺!🇳🇿/, at);
     finish();
     at = await t.until(/apply it to/, at);
     t.send("n\r");
     at = await t.until(/\w ❯ /, at);
     t.send("\r");
     at = await t.until(/apply it to/, at);
-    assert.deepEqual(posts, ["add b", "Hello world!"], "the line as edited is the next message");
+    assert.deepEqual(posts, ["add b", "Hello world! xy🇦🇺!🇳🇿"], "the line as edited is the next message");
     t.send("n\r");
     at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
@@ -1147,6 +1161,26 @@ test("typing during a turn: ←/→, Home/End, Ctrl-A/Ctrl-E, Backspace and Dele
     assert.deepEqual(inputView("日本語ab", 2, 20), { shown: "日本語ab", col: 4 });
     assert.deepEqual(inputView("abcdefghijklmnopqrstuvwxyz", 26, 10), { shown: "…rstuvwxyz", col: 10 });
     assert.deepEqual(inputView("abcdefghijklmnopqrstuvwxyz", 2, 10), { shown: "abcdefghi…", col: 2 });
+    // A grapheme of several characters is as wide as its widest: 👍🏽 and 👩‍💻 are two cells, not four (Codex).
+    assert.deepEqual(inputView("👍🏽x", 4, 20), { shown: "👍🏽x", col: 2 });
+    assert.deepEqual(inputView("👩‍💻ab", "👩‍💻".length, 20), { shown: "👩‍💻ab", col: 2 });
+    const { displayWidth } = await import("../src/code-session.mjs");
+    assert.equal(displayWidth("👍🏽👩‍💻e\u0301日"), 2 + 2 + 1 + 2);
+    assert.equal(displayWidth("🇦🇺❤️"), 4, "a flag and an emoji-presentation heart are two each");
+    const { clipCells, clipCellsEnd } = await import("../src/code-session.mjs");
+    assert.equal(clipCells("👍🏽ab", 3), "👍🏽…");
+    assert.equal(clipCellsEnd("ab👍🏽", 3), "…👍🏽");
+    const { marginLines, cutRows } = await import("../src/code-session.mjs");
+    for (const r of marginLines("👍🏽👍🏽ab" + "c".repeat(14), 10)) assert.ok(displayWidth(r) <= 10, `wrapped by grapheme: ${r}`);
+    assert.deepEqual(cutRows("abकि", 2), ["ab", "कि"], "a vowel sign stays with its letter");
+    // A long table cell with one non-ASCII letter wraps in linear time: the rest is not measured again each row (Codex).
+    const { drawTable } = await import("../src/code-session.mjs");
+    const head = Array.from({ length: 20 }, (_, i) => `h${i}`);
+    const id = (s: string) => s;
+    const t0 = Date.now();
+    drawTable([`| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`, `| ${head.map(() => "x".repeat(20000) + "é").join(" | ")} |`], 120, { bold: id, dim: id, cyan: id });
+    assert.ok(Date.now() - t0 < 1000, `table took ${Date.now() - t0} ms`);
+    for (const r of cutRows("👍🏽".repeat(9), 6)) assert.ok(displayWidth(r) <= 6 && !/^\u{1f3fd}/u.test(r), `cut whole: ${r}`);
   } finally {
     t.child.kill();
     server.closeAllConnections();
