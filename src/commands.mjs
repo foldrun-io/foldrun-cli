@@ -21008,7 +21008,7 @@ async function codeLocalTurn(s, text) {
               if (ok && !bothInside(s.dir, f)) s.privateSeen = true;
               return ok;
             },
-            maxTurns: 80,
+            maxTurns: LOCAL_TURN_STEPS,
             history,
             canUseTool,
             abortController: abort,
@@ -21149,7 +21149,9 @@ async function codeLocalTurn(s, text) {
       const failed = !done && !cancel.asked && !!result && result.subtype !== "success";
       const partial = failed && typeof result.result === "string" ? result.result.trim() : "";
       if (failed && typeof result.result === "string") reply = partial;
-      const reason = failed && Array.isArray(result.errors) && typeof result.errors[0] === "string" ? result.errors[0] : "";
+      const reason = failed ? turnEndReason(result) : "";
+      // Said on screen with the end line, never a bare "not finished" (owner, 27 Nov 2026; FOL-426).
+      s.turnWhy = reason || (!done && !cancel.asked && !result ? "the model's reply ended without a result (the connection may have been cut)" : undefined);
       const ending = `(this turn did not finish${reason ? `: ${reason}` : ""})`;
       const note = cancel.asked ? "(stopped by the person before I finished)" : partial ? `${partial}\n\n${ending}` : ending;
       s.localHistory = trimConversation(nextConversation({ history, turn, compacted, done, note }));
@@ -21271,8 +21273,31 @@ async function codeLocalTurn(s, text) {
   const how = cancel.asked ? c.bold(c.amber("■ stopped")) : ok ? c.bold(c.green("✓ done")) : c.bold(c.red("✗ not finished"));
   const parts = [c.white(formatSecs(secs)), s.model ? c.violet(shortModel(plainText(s.model))) : null, s.planLabel ? c.grey(`on ${s.planLabel}`) : null].filter(Boolean);
   console.log(`\n  ${how} ${c.grey("·")} ${parts.join(` ${c.grey("·")} `)}`);
+  // Why it stopped, and how to go on (FOL-426): a turn that did not finish always says.
+  const why = s.turnWhy;
+  delete s.turnWhy;
+  if (!ok && !cancel.asked && why) console.log(`  ${c.red("why:")} ${plainText(why)} ${c.grey("— type \"go on\" to carry on from here")}`);
   if (changed.size) console.log(`  ${c.grey(`changed ${[...changed].slice(0, 6).map((f) => plainText(f)).join(", ")}${changed.size > 6 ? ` and ${changed.size - 6} more` : ""} — /diff shows it`)}`);
   console.log();
+}
+
+/** The steps one turn on this computer may take before it stops and asks to go on. */
+export const LOCAL_TURN_STEPS = 80;
+
+/**
+ * Why a turn on this computer did not finish, in words (FOL-426): the engine's
+ * own error when it sent one, else what its ending means — never empty.
+ * @param {any} result the engine's result message
+ */
+export function turnEndReason(result) {
+  if (Array.isArray(result?.errors) && typeof result.errors[0] === "string" && result.errors[0].trim()) return result.errors[0];
+  switch (result?.subtype) {
+    case "error_max_turns": return `it used the ${LOCAL_TURN_STEPS} model steps one turn may take`;
+    case "error_max_output": return "the reply was cut off at the output limit";
+    case "error_refusal": return "the model declined to answer";
+    case "error_context_full": return "the conversation filled the model's context window";
+    default: return `the engine ended the turn (${String(result?.subtype ?? "no result")})`;
+  }
 }
 
 /** A file's content as a digest, or null when there is none (for -p's "applied"). Only a regular file is read: a FIFO would block the process (Codex). */
