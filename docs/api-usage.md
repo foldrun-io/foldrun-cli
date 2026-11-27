@@ -380,6 +380,53 @@ Any other server tool (`code_execution`, an MCP toolset, `mcp_servers`, a
 tool added mid-conversation) is refused with a `400`
 (`server_tool_not_offered`): it is never passed on to the provider.
 
+### Server tool: a second opinion from another provider's model
+
+`foldrun_debate_20261127` (`foldrun_debate`) is foldrun's own. The model you
+call can ask a model from a **different provider** to argue against its
+position, inside the same reply: it says what is wrong, missing or risky and
+what it would do instead, and the first model reads that and goes on.
+
+```sh
+curl "$GATEWAY/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model": "claude-sonnet-4-5", "max_tokens": 2000,
+       "tools": [{"type": "foldrun_debate_20261127", "name": "foldrun_debate",
+                  "model": "deepseek/deepseek-chat", "max_uses": 2}],
+       "messages": [{"role": "user", "content": "SQLite or Postgres for 200 writes a second? Debate it with another model first."}]}'
+```
+
+| Option | |
+|---|---|
+| `model` | The second model, written `provider/model`. It must be another provider than the model the request calls; the same one is refused (`model_not_allowed`), and nothing falls back to it. Left out: the platform's own choice for your model's provider, where it has set one (`unavailable` where it has not). |
+| `max_tokens` | The longest answer the second model may give, 1024 to 16000 (default 4096). |
+| `max_uses` | Calls in one turn (default 5). It holds across a turn resumed after `pause_turn`. |
+
+**What the second model sees.** Only what the first model puts in the call:
+`topic`, and optionally `position` and `context`, 60,000 characters together.
+It is not given the conversation, the system prompt, your request's headers
+or any tools. To carry a debate on, the first model calls the tool again
+with the last objection and its reply in `context`. Naming the tool in a
+request is what sends that text to the second model's provider, so name it
+only where that is acceptable.
+
+**What it costs.** The second model's tokens, at that model's own listed
+price, paid the way the rest of the call is (your plan's allowance, then the
+wallet). There is no fee per call. A call that fails costs nothing:
+`unavailable` (no key or no price for that model here, or it did not answer),
+`payment_required`, `too_many_requests`, `input_too_long`,
+`invalid_tool_input`, `max_uses_exceeded`. It always runs on foldrun's API
+key for that provider, never on a Claude subscription login.
+
+The result block is `foldrun_debate_tool_result`, with content `{type:
+"foldrun_debate_result", model, text, usage: {input_tokens, output_tokens}}`
+or `{type: "foldrun_debate_tool_result_error", error_code}`; the stock
+Anthropic SDKs keep it and send it back as it is. `usage.server_tool_use`
+adds `foldrun_debate_requests`. The request's top-level `usage` counts the
+first model's tokens only; the second model's are in its result block and on
+your usage page under its own model. Not offered to a run's own model calls
+yet (an agent's step): from an app, a script or the API.
+
 ## Pagination
 
 There is no cursor yet. The lists that can grow — runs — answer newest first
