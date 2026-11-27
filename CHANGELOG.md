@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.11.0] — 2026-11-27
+
+- feat(code): koder's mark carries foldrun's logo on pull requests, issues and exports (FOL-415) ([0bd5b21](https://github.com/foldrun-io/foldrun-cli/commit/0bd5b21))
+
 ## [34.10.1] — 2026-11-27
 
 ### docs
