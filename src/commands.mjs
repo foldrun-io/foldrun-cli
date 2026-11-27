@@ -2817,11 +2817,6 @@ const CLI_VERSION = (() => {
 })();
 // koder's name and home on every request it makes, after the CLI's own (FOL-415): what servers already match stays first.
 const USER_AGENT = `foldrun-cli/${CLI_VERSION} (koder from foldrun.io; +https://foldrun.io)`;
-/** A task sent to a cloud agent, with koder's mark note after it unless the person turned it off (FOL-415). */
-function withMark(/** @type {string} */ task) {
-  const note = attributionNote(readCodePrefs().attribution !== false);
-  return note ? `${task}\n\n${note}` : task;
-}
 /** The name koder gives itself to MCP servers (clientInfo, FOL-415). */
 const KODER_MCP_CLIENT = { name: "koder", version: CLI_VERSION, title: "koder from foldrun.io" };
 
@@ -15892,8 +15887,7 @@ async function codeTurn(s, task, include = []) {
     // The folder's instruction files and skills, named from what was just
     // packed and agreed to — never from another listing (Codex).
     if (agreed && s.cloudBriefDue) {
-      // koder's mark (FOL-415) goes with the brief, once per cloud conversation, not on every turn.
-      const brief = [cloudBrief(dir, new Set(pack.paths)), attributionNote(readCodePrefs().attribution !== false)].filter(Boolean).join("\n\n");
+      const brief = cloudBrief(dir, new Set(pack.paths));
       if (brief) task = `${brief}\n\n${task}`;
     }
     if (!agreed) {
@@ -16540,7 +16534,7 @@ async function runCloudSub(s, job, signal, h) {
     try {
       started = await remoteCall(url, flags, `${base}/agents/${enc(job.agent)}/run`, /** @type {RequestInit} */ ({
         method: "POST",
-        body: JSON.stringify({ task: withMark(job.prompt), ...(flags.test === true ? { test: true } : {}) }),
+        body: JSON.stringify({ task: job.prompt, ...(flags.test === true ? { test: true } : {}) }),
         stopBefore: signal,
       }));
     } catch (err) {
@@ -19410,7 +19404,7 @@ async function startCloudJobs(s, job, signal, h) {
       try {
         const got = await remoteCall(url, flags, `${base}/agents/${enc(agent)}/run`, /** @type {RequestInit} */ ({
           method: "POST",
-          body: JSON.stringify({ task: withMark(task), ...(snapshot ? { snapshot } : {}), ...(flags.test === true ? { test: true } : {}) }),
+          body: JSON.stringify({ task, ...(snapshot ? { snapshot } : {}), ...(flags.test === true ? { test: true } : {}) }),
           // Not sent after a stop; once sent, its answer is read, so the run it started is known and can be stopped (Codex).
           stopBefore: signal,
         }));
