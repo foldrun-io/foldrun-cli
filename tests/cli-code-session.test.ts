@@ -619,6 +619,16 @@ test("/model second (FOL-418): another provider's model for tools: [debate, revi
     at = await t.until(/no second opinion: debate and review are taken away/, at);
     assert.doesNotMatch(puts[1]!.content, /second_model/);
     assert.match(puts[1]!.content, /^tools: \[read, write\]$/m);
+    // A prose line that starts the same way is not the field.
+    file = `${file}\nsecond_model: an example in the prose\n`;
+    t.send("/model second none\r");
+    at = await t.until(/no second model was set/, at);
+    assert.equal(puts.length, 2);
+    // [[review]] is the author's own tool: left for the person to edit.
+    file = "---\nname: coder\nmodel: anthropic/claude-x\ntools: [read, [[review]]]\n---\n\nYou code.\n";
+    t.send("/model second openai/gpt-x\r");
+    at = await t.until(/lists its own tool \[\[review\]\], not the built-in/, at);
+    assert.equal(puts.length, 2);
     t.send("/quit\r");
     await t.done;
   } finally {

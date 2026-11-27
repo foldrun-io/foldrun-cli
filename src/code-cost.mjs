@@ -127,6 +127,12 @@ export function meter() {
     const u = call?.usage;
     if (!u || typeof u !== "object") return;
     add(typeof call.model === "string" ? call.model : "", u);
+    // A second opinion asked in the answer (tools: [debate, review], FOL-418): the second model's tokens are
+    // billed at its own price beside the call's, and counted here the same way, under that model.
+    if (answered) for (const b of Array.isArray(call.content) ? call.content : []) {
+      const r = /^foldrun_(debate|review)_tool_result$/.test(String(b?.type)) ? b.content : null;
+      if (r && typeof r.model === "string" && r.usage && typeof r.usage === "object") add(r.model, r.usage);
+    }
     if (answered) {
       // The whole answer came: its own count stands in place of what its start reported.
       open = null;

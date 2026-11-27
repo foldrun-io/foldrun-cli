@@ -147,3 +147,14 @@ test("a call's start marks the turn read even when it reports no input count (a 
   assert.equal(m.started, true);
   assert.equal(m.lastInput, 0);
 });
+
+test("a second opinion in an answer (FOL-418): the second model's tokens counted under that model, beside the call's", () => {
+  const m = meter();
+  m.note({ type: "assistant", message: { model: "claude-x", usage: { input_tokens: 100, output_tokens: 10 }, content: [
+    { type: "server_tool_use", id: "s1", name: "foldrun_review", input: { diff: "x" } },
+    { type: "foldrun_review_tool_result", tool_use_id: "s1", content: { type: "foldrun_review_result", model: "openai/gpt-x", text: "ok", usage: { input_tokens: 400, output_tokens: 40 } } },
+    { type: "foldrun_debate_tool_result", tool_use_id: "s2", content: { type: "foldrun_debate_tool_result_error", error_code: "unavailable" } },
+  ] } });
+  const rows = meteredRows(m, { kind: "local", turn: 1, paidBy: "p" });
+  assert.deepEqual(rows.map((r) => [r.model, r.calls, r.read, r.output]), [["claude-x", 1, 100, 10], ["openai/gpt-x", 1, 400, 40]]);
+});

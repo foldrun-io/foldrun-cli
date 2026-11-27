@@ -141,14 +141,19 @@ second_model: openai/gpt-5.5
 ---
 ```
 
-- **What leaves.** Only what the agent puts in the call: the topic and position, or the
-  diff and the files it names. Never the conversation, its instructions or
-  the agent's files. It goes to the provider in `second_model:`.
+- **What leaves.** Only what the agent puts in the call, and all of it:
+  for `debate` the topic, its position and any context it adds; for
+  `review` the diff, the whole contents of each file it attaches, and its
+  instructions. Nothing is attached for it: not the conversation, not the
+  agent's instructions, not the project's files it did not include. It all
+  goes to the provider in `second_model:`.
 - **What it costs.** That model's tokens, at its listed price, on the same
   meter as every model call: your plan's allowance, then the wallet. No
   separate charge.
 - **Where it works.** On [foldrun's models](providers#foldruns-models), in
-  the cloud and in `foldrun code` on your computer alike. On your own model
+  the cloud and in `foldrun code` on your computer alike. In a cloud step
+  the gateway offers the tools from the step's grant, and the step's record
+  shows the call and the answer as text. On your own model
   key there is no second opinion and `foldrun check` says so.
 - **What is checked.** The step may ask only for the tools its file grants,
   answered only by that model: a call naming another model is refused before
