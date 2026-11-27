@@ -12,6 +12,24 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.0.0] — 2026-11-27
+
+### Breaking changes
+
+- the CLI now runs on @foldrun/core 32.0.0, a new major. (f2dea54)
+
+### billing
+
+- renewal in billing plans, renew-from-card, plan cancel in the grace (FOL-452) ([ac6e32e](https://github.com/foldrun-io/foldrun-cli/commit/ac6e32e))
+
+### deps
+
+- @foldrun/core 32.0.0 ([f2dea54](https://github.com/foldrun-io/foldrun-cli/commit/f2dea54))
+
+### docs
+
+- sync from foldrun-docs (FOL-452 plan renewal) ([8086d9d](https://github.com/foldrun-io/foldrun-cli/commit/8086d9d))
+
 ## [35.0.1] — 2026-11-27
 
 ### docs
