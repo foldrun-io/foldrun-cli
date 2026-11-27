@@ -1087,7 +1087,21 @@ back and `/queue rm|clear` drops it. A turn that stops or fails runs none of
 them: a command queued alone is put back on your line, one queued beside
 messages is kept for ↑ on an empty line (or Ctrl-R). A `/command` typed as the answer to the agent's
 question is not taken as the answer either. A path (`/src/a.ts fix this`)
-is a message, and `\/` in front sends a line that starts with `/` as one. What you are typing
+is a message, and `\/` in front sends a line that starts with `/` as one.
+Typing `/` there opens the same command list as the prompt, under the input
+line, narrowed as you type (`/per` shows `/permissions`); `@` and a path
+lists the folder's files. ↑/↓ choose, Tab puts the chosen one on the line
+(while a list is open Tab completes instead of queueing), Enter takes the
+chosen command as above, and Esc closes the list without stopping the turn.
+A paste is text: no list opens on it. One reader takes every key for the
+whole session, so nothing you type is lost between the prompt, a turn and
+a question: keys typed while a turn gets ready show on the input line once
+it is drawn. A question (allow?, the agent's own question, an upload) comes
+up over the input line, one at a time in the order asked, and not while you
+are typing: it waits until a second passes with no key, so a `y` meant for
+your message never answers it. A paste never answers a question (its line
+breaks are spaces; Enter typed after it does), Esc is a no, and Ctrl-C stops
+the turn. What you are typing
 stays on the working line through a permission question and comes back after
 it, and keys typed before a question is shown never answer it. Ctrl-C still stops the
 turn. At the apply prompt `d` shows the whole diff before you answer. A turn you

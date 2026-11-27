@@ -2280,15 +2280,17 @@ function promptHidden(question) {
       stdin.on("end", () => resolve(buf.replace(/\n$/, "")));
       return;
     }
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding("utf8");
+    const keys = keysFor();
+    keys.setRawMode(true);
+    keys.resume();
+    keys.setEncoding("utf8");
     let value = "";
     // A chunk is not one key press: a pasted key arrives whole, Enter
     // included, and treating the chunk as one character never saw the Enter
     // (the prompt waited forever). Walk it a character at a time.
     const onData = (chunk) => {
-      for (const ch of String(chunk)) {
+      // The terminal's paste marks are no part of a pasted token (Codex).
+      for (const ch of String(chunk).replace(/\x1b\[20[01]~/g, "")) {
         if (ch === "\u0003") {
           cleanup();
           reject(new Error("cancelled"));
@@ -2306,34 +2308,26 @@ function promptHidden(question) {
       }
     };
     const cleanup = () => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.off("data", onData);
+      keys.setRawMode(false);
+      keys.pause();
+      keys.off("data", onData);
+      keys.off("end", onEnd);
+      keys.release?.();
     };
-    stdin.on("data", onData);
+    const onEnd = () => {
+      cleanup();
+      reject(new Error("cancelled"));
+    };
+    keys.on("data", onData);
+    keys.once("end", onEnd);
   });
 }
 
-/**
- * Called before a question is put to the person, while a turn's keyboard reader may be running (FOL-306): it
- * hands the terminal back first, so what was typed before the question is kept for the next message and never
- * read as its answer (Codex). Set only while a turn's setup may ask.
- * @type {(() => Promise<void>) | null}
- */
-let keysBeforeAsk = null;
-/** And after it is answered: the keyboard reader again, so nothing typed waits in the terminal for the next question (Codex). @type {(() => void) | null} */
-let keysAfterAsk = null;
-
-/** Read a line with normal echo — for the non-secret halves of a config. */
+/** Read a line with normal echo — for the non-secret halves of a config. A question over the session's input line
+ *  when there is one (FOL-434): what is typed there stays, and comes back after. */
 async function promptVisible(question) {
   holdReadyTicker();
-  if (!keysBeforeAsk) return promptVisibleNow(question);
-  await keysBeforeAsk();
-  try {
-    return await promptVisibleNow(question);
-  } finally {
-    keysAfterAsk?.();
-  }
+  return promptVisibleNow(question);
 }
 
 /**
@@ -2345,13 +2339,21 @@ async function promptVisible(question) {
  * answers, and a paste is taken to its first line end. Every other question keeps the cooked reader, whose
  * confirmations (y/N, Ctrl-U, Ctrl-C) behave as before (Codex). Exported for tests.
  * @param {string} question
- * @param {NodeJS.ReadStream & { setRawMode?: (on: boolean) => unknown, isRaw?: boolean }} stdin
+ * @param {{ on: (ev: string, fn: (...a: any[]) => void) => unknown, off: (ev: string, fn: (...a: any[]) => void) => unknown, once: (ev: string, fn: (...a: any[]) => void) => unknown, resume: () => unknown, pause: () => unknown, setRawMode?: (on: boolean) => unknown, isRaw?: boolean }} stdin
+ *   the terminal, or a view of the session's reader (FOL-434)
  * @param {{ write: (s: string) => unknown }} out
  * @param {(seq: string) => unknown} [control] the CLI's own controls past the stream's guard
- * @returns {Promise<{ text: string, escaped: boolean }>}
+ * @param {{ signal?: AbortSignal, onInt?: () => void }} [opts] signal: the question withdrawn (it ends as Esc);
+ *   onInt: what Ctrl-C does after it ends the question (a turn's stop, as the terminal's own Ctrl-C was)
+ * @returns {Promise<{ text: string, escaped: boolean, why: "enter" | "esc" | "int" | "end" | "abort" }>}
  */
-export function readLineRaw(question, stdin, out, control = (seq) => out.write(seq)) {
+export function readLineRaw(question, stdin, out, control = (seq) => out.write(seq), opts = {}) {
   return new Promise((resolve) => {
+    if (opts.signal?.aborted) {
+      /** @type {any} */ (stdin).release?.();
+      out.write(`${question}\n`);
+      return resolve({ text: "", escaped: true, why: "abort" });
+    }
     out.write(question);
     const wasRaw = Boolean(stdin.isRaw);
     stdin.setRawMode?.(true);
@@ -2360,6 +2362,8 @@ export function readLineRaw(question, stdin, out, control = (seq) => out.write(s
     let buf = "";
     let text = "";
     let over = false;
+    // Inside the terminal's paste marks: text only — a line break there is a space, never the answer (FOL-434).
+    let pasting = false;
     /** @type {NodeJS.Timeout | undefined} */
     let lone;
     // How many rows the question and answer take now, so a redraw clears them all (a wrapped answer too).
@@ -2371,20 +2375,25 @@ export function readLineRaw(question, stdin, out, control = (seq) => out.write(s
       out.write(question + text);
       rows = Math.floor(Math.max(0, shown() - 1) / cols);
     };
-    const finish = (/** @type {boolean} */ escaped) => {
+    const finish = (/** @type {boolean} */ escaped, /** @type {"enter" | "esc" | "int" | "end" | "abort"} */ why = escaped ? "esc" : "enter") => {
       if (over) return;
       over = true;
       clearTimeout(lone);
+      opts.signal?.removeEventListener("abort", withdrawn);
       stdin.off("data", onData);
       stdin.off("end", gone);
       stdin.off("close", gone);
       stdin.off("error", gone);
       stdin.setRawMode?.(wasRaw);
       stdin.pause();
+      /** @type {any} */ (stdin).release?.();
       out.write("\n");
-      resolve({ text: escaped ? "" : text, escaped });
+      resolve({ text: escaped ? "" : text, escaped, why });
+      if (why === "int") opts.onInt?.();
     };
-    const gone = () => finish(true);
+    const gone = () => finish(true, "end");
+    const withdrawn = () => finish(true, "abort");
+    opts.signal?.addEventListener("abort", withdrawn, { once: true });
     const onData = (/** @type {Buffer | string} */ d) => {
       clearTimeout(lone);
       buf += typeof d === "string" ? d : decoder.write(d);
@@ -2402,6 +2411,8 @@ export function readLineRaw(question, stdin, out, control = (seq) => out.write(s
         const seq = ESC_SEQ.exec(buf);
         if (seq) {
           i += seq[0].length; // an arrow, a function key, Alt and a key: not text
+          if (seq[0] === "\u001b[200~") pasting = true;
+          else if (seq[0] === "\u001b[201~") pasting = false;
           continue;
         }
         if (buf[i] === "\u001b") {
@@ -2419,6 +2430,15 @@ export function readLineRaw(question, stdin, out, control = (seq) => out.write(s
         const cp = /** @type {number} */ (buf.codePointAt(i));
         const ch = String.fromCodePoint(cp);
         i += ch.length;
+        // Pasted: its line breaks are spaces and its control keys nothing — a paste never answers (FOL-434).
+        if (pasting && (ch === "\r" || ch === "\n" || ch === "\t")) {
+          if (text && !text.endsWith(" ")) {
+            text += " ";
+            echo += " ";
+          }
+          continue;
+        }
+        if (pasting && ch < " ") continue;
         if (ch === "\r" || ch === "\n") {
           flush();
           buf = "";
@@ -2427,12 +2447,12 @@ export function readLineRaw(question, stdin, out, control = (seq) => out.write(s
         if (ch === "\u0003") {
           flush();
           buf = "";
-          return finish(true);
+          return finish(true, "int");
         }
         if (ch === "\u0004") {
           if (!text && !echo) {
             buf = "";
-            return finish(true);
+            return finish(true, "end");
           }
           continue;
         }
@@ -2462,16 +2482,13 @@ async function promptMenuAnswer(/** @type {string} */ question) {
   const tty = process.stdin.isTTY && typeof process.stdin.setRawMode === "function";
   if (!tty) return { text: await promptVisible(question), escaped: false };
   holdReadyTicker();
-  await keysBeforeAsk?.();
-  try {
-    return await readLineRaw(question, process.stdin, process.stdout, (seq) => writeControl(seq));
-  } finally {
-    keysAfterAsk?.();
-  }
+  return readLineRaw(question, keysFor(), process.stdout, (seq) => writeControl(seq));
 }
 
 /** @param {string} question @returns {Promise<string>} */
 function promptVisibleNow(question) {
+  // Over the session's input line: a question of its own, raw, never the terminal's cooked line (FOL-434).
+  if (keyboard.on) return keyboard.typingPause().then(() => readLineRaw(question, keyboard.view({ label: "question" }), process.stdout, (seq) => writeControl(seq), { onInt: () => keyboard.sigint() })).then((r) => (r.escaped ? "" : r.text));
   return new Promise((resolve) => {
     process.stdout.write(question);
     const { stdin } = process;
@@ -2481,7 +2498,7 @@ function promptVisibleNow(question) {
     stdin.once("end", onEnd);
     stdin.once("data", (line) => {
       stdin.off("end", onEnd);
-      stdin.pause();
+      if (stdin.listenerCount("data") === 0) stdin.pause();
       resolve(String(line).replace(/\r?\n$/, ""));
     });
   });
@@ -9960,6 +9977,9 @@ async function typedAnswer(prompt, label) {
 }
 
 async function askAtTerminal(q, prompt, signal) {
+  // Not while the person is typing on the input line: shown after a pause, its choices included (Codex, FOL-434).
+  await keyboard.typingPause();
+  if (signal?.aborted) return null;
   console.log(`  ${c.cyan("?")} ${c.bold(q.who ? `${plainText(q.who)} asks you:` : "the agent asks you:")}`);
   const width = Math.max(20, (process.stdout.columns || 80) - 6);
   for (const l of plainText(q.question).split("\n")) for (let i = 0; i < Math.max(1, l.length); i += width) console.log(`    ${c.white(l.slice(i, i + width))}`);
@@ -14907,6 +14927,8 @@ async function packFolder(dir) {
 /** Throws away what is waiting in the terminal: keys pressed before a
  *  question must not answer it. */
 async function dropTypedAhead() {
+  // The session's reader gives a question only the keys pressed after it shows (FOL-434).
+  if (keyboard.on) return;
   const { stdin } = process;
   if (!stdin.isTTY || typeof stdin.setRawMode !== "function") return;
   const was = stdin.isRaw;
@@ -15478,24 +15500,37 @@ function numstatPaths(out) {
  *  its next prompt rather than waiting for a line nobody will type (Codex). */
 async function cancellablePrompt(question, cancel) {
   holdReadyTicker();
-  if (!keysBeforeAsk) return cancellablePromptNow(question, cancel);
-  await keysBeforeAsk();
-  try {
-    return await cancellablePromptNow(question, cancel);
-  } finally {
-    keysAfterAsk?.();
-  }
+  return cancellablePromptNow(question, cancel);
 }
 
 /** @param {string} question @param {any} cancel @returns {Promise<string | null>} */
 function cancellablePromptNow(question, cancel) {
+  // Over the session's input line (FOL-434): a view of its own on the one reader — never the terminal's cooked
+  // line, which another reader's hand-back could pause under it. Esc is a no; Ctrl-C stops the turn, as before.
+  if (keyboard.on) {
+    if (cancel?.asked) {
+      process.stdout.write(`${question}\n`);
+      return Promise.resolve(null);
+    }
+    const withdrawn = new AbortController();
+    const onCancel = () => withdrawn.abort();
+    cancel?.onAsk?.add(onCancel);
+    // Esc leaves it unanswered (null), as Ctrl-C and a withdrawn question do: every caller reads that as a no or as
+    // "not answered here", never as an empty answer sent on (Codex).
+    // Withdrawn while it waited for the pause: no view is taken for it (Codex).
+    return keyboard.typingPause().then(() => (withdrawn.signal.aborted ? { text: "", escaped: true, why: "abort" } : readLineRaw(question, keyboard.view({ label: "question" }), process.stdout, (seq) => writeControl(seq), { signal: withdrawn.signal, onInt: () => keyboard.sigint() }))).then((r) => {
+      cancel?.onAsk?.delete(onCancel);
+      return r.why === "enter" ? r.text : null;
+    });
+  }
   return new Promise((resolve) => {
     const { stdin } = process;
     const done = (/** @type {string | null} */ v) => {
       stdin.off("data", onData);
       stdin.off("end", onEnd);
       cancel?.onAsk?.delete(onCancel);
-      stdin.pause();
+      // Paused only when nothing else reads the keyboard: another listener's keys never wait behind it (FOL-434).
+      if (stdin.listenerCount("data") === 0) stdin.pause();
       resolve(v);
     };
     const onData = (/** @type {string} */ line) => done(String(line).replace(/\r?\n$/, ""));
@@ -15869,13 +15904,12 @@ async function codeTurn(s, task, include = []) {
   const readyAgain = () => {
     if (readySince !== null && !readyTicker && !cancel.asked) readyTicker = startTicker(readySince, () => readyInput.typed(), () => readyInput.hint(), { input: Boolean(process.stdin.isTTY) });
   };
-  /** Hands the keyboard back, keys already pressed taken in first. */
+  /** The keyboard at the turn's end: what is typed starts the next message. Questions on the way never stop it:
+   *  each is a view over the input line (FOL-434). */
   const keyboardBack = async () => {
     const t = await typeAhead.stop();
     if (t) s.typeAhead = s.typeAhead ? `${s.typeAhead} ${t}` : t;
   };
-  // applyPatch hands the keyboard over only right before it asks.
-  cancel.beforeAsk = keyboardBack;
   let run;
   let runId;
   let stopTicker = () => {};
@@ -15890,14 +15924,10 @@ async function codeTurn(s, task, include = []) {
     // Asked before anything leaves (FOL-212): what is sent is `packed`, the
     // bytes the preview showed.
     const agreed = await agreeToUpload(s, pack, `${ws} on ${url.replace(/^https?:\/\//, "")}`, async (q) => {
-      await keyboardBack();
       try {
         return await cancellablePrompt(q, cancel);
       } finally {
-        if (!cancel.asked) {
-          typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
-          readyAgain();
-        }
+        if (!cancel.asked) readyAgain();
       }
     }, () => cancel.asked);
     if (cancel.asked) return "cancelled";
@@ -15907,15 +15937,11 @@ async function codeTurn(s, task, include = []) {
     const extra = s.cloudExtra;
     delete s.cloudExtra;
     if (agreed && extra && !(extra.rel && pack.paths.includes(extra.rel))) {
-      await keyboardBack();
       let answer;
       try {
         answer = bypassYes(s, `send the text of ${plainText(extra.file)} too?`) ? "y" : await cancellablePrompt(`    ${plainText(extra.file)} is not part of the folder's upload — send its text (${extra.lines} line${extra.lines === 1 ? "" : "s"}) to the cloud with this message? [y/N] `, cancel);
       } finally {
-        if (!cancel.asked) {
-          typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
-          readyAgain();
-        }
+        if (!cancel.asked) readyAgain();
       }
       if (cancel.asked) return "cancelled";
       if (!/^y(es)?$/i.test(String(answer ?? "").trim())) {
@@ -16001,7 +16027,6 @@ async function codeTurn(s, task, include = []) {
         return;
       }
       stopTicker();
-      await keyboardBack();
       /** @type {string | null} */
       let answer = null;
       // Taken back when it is answered elsewhere, given up on, or the run ends: no stale question is left to eat the
@@ -16015,10 +16040,7 @@ async function codeTurn(s, task, include = []) {
         answer = await askAtTerminal({ question, options, who }, (t) => cancellablePrompt(t, cancel), gone.signal);
       } finally {
         live = null;
-        if (!cancel.asked) {
-          typeAhead = startTypeAhead(onInt, undefined, queueOf(s));
-          stopTicker = startTicker(Date.now(), () => typeAhead.text(), () => (typeAhead.running() ? QUEUE_HINT : ""), { input: Boolean(process.stdin.isTTY) });
-        }
+        if (!cancel.asked) stopTicker = startTicker(Date.now(), () => typeAhead.text(), () => (typeAhead.running() ? QUEUE_HINT : ""), { input: Boolean(process.stdin.isTTY) });
       }
       if (cancel.asked) return;
       if (gone.signal.aborted) {
@@ -16883,6 +16905,336 @@ function turnLine(s, run, cost, stopped) {
  * line prints and put back after. Only on a terminal; a script's output
  * stays line by line. Returns the stop.
  */
+/**
+ * The session's one keyboard reader (FOL-434, owner 27 Nov 2026: "make it smooth for coders"). foldrun code reads
+ * the terminal in ONE place: raw mode and paste marks on from the session's start to its end, never paused, handed
+ * back or started again between the prompt, a turn and a question. Whoever wants keys takes a view: the views are a
+ * stack, and each read goes to the top one — a question or a list over the input line, the input line otherwise
+ * (the idle prompt's readline, or the line under "working" while a turn runs). So a question never reads the
+ * terminal itself, a reader that ends never pauses another's keys, and nothing typed lands on a row nobody reads
+ * (the 27 Nov hang: a question's own `stdin.once("data")` waited on a stream another reader's hand-back paused).
+ * Keys that come while no view is up (a turn getting ready) wait for the next view that takes typing, never a
+ * question; Ctrl-C among them is Ctrl-C at once. Only on a terminal, in an interactive session: everywhere else
+ * each reader reads stdin as before.
+ */
+const keyboard = (() => {
+  let on = false;
+  let suspended = false;
+  /** @type {KeyView[]} */
+  const stack = [];
+  /** @type {Buffer[]} */
+  let held = [];
+  let heldBytes = 0;
+  /** When a key last reached a view that takes typing: a question waits for a pause in it (FOL-434). */
+  let typedAt = 0;
+  /** Inside the terminal's paste marks now, and the view the paste began in: it gets the whole paste, never a
+   *  question that comes up halfway through it (Codex). */
+  let pasting = false;
+  /** @type {KeyView | null} */
+  let pasteOwner = null;
+  /** The terminal's input ended: a view taken after it is told at once. */
+  let inputEnded = false;
+  const sigint = () => {
+    // A person's Ctrl-C, as the terminal would have sent it in cooked mode: to whoever handles it, else foldrun ends.
+    if (process.listenerCount("SIGINT") > 0) process.emit("SIGINT", "SIGINT");
+    else {
+      restore();
+      process.kill(process.pid, "SIGINT");
+    }
+  };
+  /** Where the paste marks in a read leave the paste: still open after it, closed, or as it was. */
+  /** A paste begun while no view read: the next input line that takes the held keys owns it. */
+  const HELD = /** @type {KeyView} */ (/** @type {unknown} */ ({ held: true, released: false }));
+  /** The tail of a read that may be the start of a paste mark: kept for the next read, or let go after 30 ms. */
+  /** @type {Buffer} */
+  let tail = Buffer.alloc(0);
+  /** @type {NodeJS.Timeout | undefined} */
+  let tailTimer;
+  /** @type {NodeJS.Timeout | undefined} */
+  let pasteTimer;
+  const MARK_OPEN = Buffer.from("\x1b[200~");
+  const MARK_CLOSE = Buffer.from("\x1b[201~");
+  /** How long the end of `b` is a proper start of a paste mark. */
+  const markStart = (/** @type {Buffer} */ b) => {
+    for (let n = Math.min(5, b.length); n > 0; n--) {
+      const end = b.subarray(b.length - n);
+      if (MARK_OPEN.subarray(0, n).equals(end) || MARK_CLOSE.subarray(0, n).equals(end)) return n;
+    }
+    return 0;
+  };
+  /** One piece to one reader: the view, or the held keys when none reads (bounded — a paste's marks always kept). */
+  const give = (/** @type {KeyView | null} */ to, /** @type {Buffer} */ piece, /** @type {boolean} */ mark) => {
+    if (!piece.length) return;
+    if (to === HELD || !to) {
+      if (!to && !pasting && !mark && piece.includes(3) && !piece.includes(0x1b)) return sigint();
+      if (mark || heldBytes + piece.length <= 16_000) {
+        held.push(piece);
+        heldBytes += piece.length;
+      }
+      return;
+    }
+    // A paste whose reader is gone is dropped: never handed to whatever is on top now, a question (Codex).
+    if (to.released) return;
+    if (to.typing) typedAt = Date.now();
+    // Keys a view claimed before it was read go first, to it alone (Codex).
+    if (to.replay) to.replay.push(piece);
+    else to.emit("data", piece);
+  };
+  /**
+   * A read, cut at the terminal's paste marks: each mark reaches its reader whole (one cut across two reads is put
+   * together first), a paste goes to the view it began in until it closes — what follows the close in the same
+   * read goes to whoever is on top then — and the rest goes to the top view (Codex, FOL-434).
+   */
+  const feed = (/** @type {Buffer | string} */ raw) => {
+    clearTimeout(tailTimer);
+    // Bytes whatever an earlier cooked prompt set the stream's encoding to (Codex).
+    /** @type {Buffer} */
+    let d = typeof raw === "string" ? Buffer.from(raw, "utf8") : raw;
+    if (tail.length) d = Buffer.concat([tail, d]);
+    tail = Buffer.alloc(0);
+    const keep = markStart(d);
+    if (keep) {
+      tail = d.subarray(d.length - keep);
+      d = d.subarray(0, d.length - keep);
+      // Not a mark after all (a lone Esc, an arrow): let it go in a moment, to the reader it came to — never to a
+      // question that came up meanwhile (Codex). Four bytes or more of a mark are a mark coming: waited for longer.
+      const dest = pasting ? pasteOwner : stack.at(-1) ?? null;
+      if (dest && dest !== HELD && dest.typing) typedAt = Date.now();
+      tailTimer = setTimeout(() => {
+        const t = tail;
+        tail = Buffer.alloc(0);
+        give(dest, t, false);
+      }, keep >= 4 ? 500 : 50);
+      tailTimer.unref?.();
+    }
+    // A paste whose close never came (cut, or its reader gone): over after a second with nothing more, so the
+    // keyboard is never left routing every key to a reader that is not there (Codex).
+    clearTimeout(pasteTimer);
+    let i = 0;
+    while (i < d.length) {
+      const mark = pasting ? MARK_CLOSE : MARK_OPEN;
+      const at = d.indexOf(mark, i);
+      const upto = at < 0 ? d.length : at;
+      give(pasting ? pasteOwner : stack.at(-1) ?? null, d.subarray(i, upto), false);
+      if (at < 0) break;
+      if (!pasting) {
+        pasteOwner = stack.at(-1) ?? HELD;
+        pasting = true;
+        give(pasteOwner, mark, true);
+      } else {
+        give(pasteOwner, mark, true);
+        pasting = false;
+        pasteOwner = null;
+      }
+      i = at + mark.length;
+    }
+    if (pasting) {
+      pasteTimer = setTimeout(() => {
+        pasting = false;
+        pasteOwner = null;
+      }, 1000);
+      pasteTimer.unref?.();
+    }
+  };
+  const ended = () => {
+    inputEnded = true;
+    for (const v of [...stack]) v.emit("end");
+  };
+  const restore = () => {
+    if (!on) return;
+    try {
+      writeControl("\x1b[?2004l");
+      process.stdin.setRawMode(false);
+    } catch {
+      /* the terminal is gone */
+    }
+  };
+  const onExit = () => restore();
+  // Killed: paste mode off first, then the signal does what it would have (Codex).
+  const onTerm = () => {
+    restore();
+    if (process.listenerCount("SIGTERM") === 0) process.kill(process.pid, "SIGTERM");
+  };
+  /**
+   * A reader's own stream: what the code that reads keys was written against (data/end listeners, setRawMode,
+   * resume, pause), so each reader keeps its key handling and only its source changes. pause, resume and
+   * setRawMode do nothing: the terminal is the session's.
+   */
+  class KeyView {
+    /** @param {boolean} typing @param {string} label */
+    constructor(typing, label) {
+      this.typing = typing;
+      this.label = label;
+      /** @type {Map<string, Set<(...a: any[]) => void>>} */
+      this.ls = new Map();
+      /** @type {string | null} */
+      this.enc = null;
+      this.isTTY = true;
+      this.isRaw = true;
+      this.readable = true;
+      this.destroyed = false;
+      this.released = false;
+      /** @type {Buffer[] | null} keys this view claimed, delivered once it is read */
+      this.replay = null;
+    }
+    /** @param {string} ev @param {(...a: any[]) => void} fn */
+    on(ev, fn) {
+      if (!this.ls.has(ev)) this.ls.set(ev, new Set());
+      this.ls.get(ev)?.add(fn);
+      return this;
+    }
+    /** @param {string} ev @param {(...a: any[]) => void} fn */
+    once(ev, fn) {
+      const one = (/** @type {any[]} */ ...a) => {
+        this.off(ev, one);
+        fn(...a);
+      };
+      /** @type {any} */ (one).inner = fn;
+      return this.on(ev, one);
+    }
+    /** @param {string} ev @param {(...a: any[]) => void} fn */
+    off(ev, fn) {
+      const set = this.ls.get(ev);
+      if (set) for (const f of set) if (f === fn || /** @type {any} */ (f).inner === fn) set.delete(f);
+      return this;
+    }
+    /** @param {string} ev @param {(...a: any[]) => void} fn */
+    removeListener(ev, fn) {
+      return this.off(ev, fn);
+    }
+    /** @param {string} ev */
+    listenerCount(ev) {
+      return this.ls.get(ev)?.size ?? 0;
+    }
+    /** @param {string} ev @param {any} [x] */
+    emit(ev, x) {
+      const v = ev === "data" && this.enc && Buffer.isBuffer(x) ? x.toString(/** @type {BufferEncoding} */ (this.enc)) : x;
+      for (const f of [...(this.ls.get(ev) ?? [])]) f(v);
+      return true;
+    }
+    /** @param {string} enc */
+    setEncoding(enc) {
+      this.enc = enc;
+      return this;
+    }
+    setRawMode() {
+      return this;
+    }
+    resume() {
+      return this;
+    }
+    pause() {
+      return this;
+    }
+    /** Off the stack: the keys go to the view under it again. */
+    release() {
+      if (this.released) return;
+      this.released = true;
+      const i = stack.lastIndexOf(this);
+      if (i >= 0) stack.splice(i, 1);
+      this.ls.clear();
+    }
+  }
+  return {
+    /** Whether the session's reader is the terminal's one reader now. */
+    get on() {
+      return on && !suspended;
+    },
+    /** Started once, by the interactive session; ended with it. */
+    start() {
+      if (on || !process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") return;
+      on = true;
+      process.stdin.setRawMode(true);
+      writeControl("\x1b[?2004h");
+      process.stdin.on("data", feed);
+      process.stdin.on("end", ended);
+      process.stdin.resume();
+      process.once("exit", onExit);
+      process.once("SIGTERM", onTerm);
+    },
+    stop() {
+      if (!on) return;
+      restore();
+      process.stdin.off("data", feed);
+      process.stdin.off("end", ended);
+      process.stdin.pause();
+      process.off("exit", onExit);
+      process.off("SIGTERM", onTerm);
+      on = false;
+      stack.length = 0;
+      held = [];
+      heldBytes = 0;
+    },
+    /** The terminal handed to a program of the person's own (`!cmd`) while it runs, then taken back. */
+    async lend(/** @type {() => Promise<any>} */ fn) {
+      if (!on || suspended) return fn();
+      suspended = true;
+      restore();
+      process.stdin.off("data", feed);
+      process.stdin.pause();
+      try {
+        return await fn();
+      } finally {
+        suspended = false;
+        process.stdin.setRawMode(true);
+        writeControl("\x1b[?2004h");
+        process.stdin.on("data", feed);
+        process.stdin.resume();
+      }
+    },
+    /**
+     * A view on top: the keys are its own until release(). `typing` views take the keys that waited while nobody
+     * read (the input line); a question never does — what was typed before it shows is never its answer.
+     * @param {{ typing?: boolean, label?: string }} [o]
+     */
+    view({ typing = false, label = "" } = {}) {
+      const v = new KeyView(typing, label);
+      stack.push(v);
+      if (typing && held.length) {
+        // Claimed now, read once its reader listens: to this view alone, before anything typed after (Codex).
+        v.replay = held;
+        held = [];
+        heldBytes = 0;
+        if (pasteOwner === HELD) pasteOwner = v;
+        setImmediate(() => {
+          const keys = v.replay ?? [];
+          v.replay = null;
+          if (v.released) {
+            held = [...keys, ...held];
+            heldBytes = held.reduce((n, b) => n + b.length, 0);
+          } else for (const k of keys) v.emit("data", k);
+        });
+      }
+      if (inputEnded) setImmediate(() => v.released || v.emit("end"));
+      return v;
+    },
+    /** Ctrl-C from a view that ends on it (a question): the turn's stop, as the terminal's own Ctrl-C was. */
+    sigint,
+    /** Milliseconds since a key last reached the input line. */
+    sinceTyped() {
+      return Date.now() - typedAt;
+    },
+    /** A question waits for a pause in the typing on the input line (at most 10 s of it), so a key meant for the
+     *  message never answers it — every question, the cloud's and a turn's setup's too (Codex, FOL-434). */
+    async typingPause() {
+      for (let waited = 0; waited < 10_000 && on && Date.now() - typedAt < TYPING_IDLE_MS; waited += 100) await new Promise((r) => setTimeout(r, 100));
+    },
+  };
+})();
+
+/** How long the input line must be still before a question is shown over it (FOL-434; Codex's TUI waits 1 s). */
+const TYPING_IDLE_MS = Number(process.env.FOLDRUN_CODE_TYPING_IDLE_MS) || 1000;
+
+/**
+ * The stream a reader reads keys from: its own view of the session's reader when there is one, the terminal
+ * itself otherwise (a script, a command outside `foldrun code`). release() when done.
+ * @param {{ typing?: boolean, label?: string }} [o]
+ * @returns {any}
+ */
+function keysFor(o = {}) {
+  return keyboard.on ? keyboard.view(o) : process.stdin;
+}
+
 /** The longest a message typed during a turn may grow. */
 const TYPE_AHEAD_MAX = 4000;
 
@@ -16953,19 +17305,64 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     snap: () => snap(),
   };
   const moveOf = (/** @type {string} */ seq) =>
-    /^\x1b(?:\[(?:1;\d)?D|OD)$/.test(seq) ? "left" : /^\x1b(?:\[(?:1;\d)?C|OC)$/.test(seq) ? "right" : /^\x1b(?:\[(?:1;\d)?H|OH|\[[17]~)$/.test(seq) ? "home" : /^\x1b(?:\[(?:1;\d)?F|OF|\[[48]~)$/.test(seq) ? "end" : seq === "\x1b[3~" ? "del" : "";
-  const publish = () => (typeAheadCaret = { text, at });
+    /^\x1b(?:\[(?:1;\d)?A|OA)$/.test(seq) ? "up" : /^\x1b(?:\[(?:1;\d)?B|OB)$/.test(seq) ? "down" : /^\x1b(?:\[(?:1;\d)?D|OD)$/.test(seq) ? "left" : /^\x1b(?:\[(?:1;\d)?C|OC)$/.test(seq) ? "right" : /^\x1b(?:\[(?:1;\d)?H|OH|\[[17]~)$/.test(seq) ? "home" : /^\x1b(?:\[(?:1;\d)?F|OF|\[[48]~)$/.test(seq) ? "end" : seq === "\x1b[3~" ? "del" : "";
+  // The list under the line (FOL-434): the session's / commands for a line that is one /word, the folder's files
+  // for an @path at its end — the idle prompt's own lists. ↑/↓ choose, Tab puts the chosen one on the line, Enter
+  // takes it as the command, Esc puts the list away until the line changes. Only while the cursor is at the end.
+  /** @type {Array<{ name: string, hint?: string, desc: string }>} */
+  let hits = [];
+  let listAt = 0;
+  let listTopAt = 0;
+  let fileFrom = -1; // where the @path starts, for an @file list
+  /** @type {string | null} */
+  let closedFor = null; // Esc, or a paste: no list until the line changes
+  // Only where the working rows can draw it (as they draw the input line): keys never act on a list not shown.
+  const listable = process.stdout.isTTY === true && process.env.TERM !== "dumb" && !process.env.FOLDRUN_NO_TICKER;
+  const relist = () => {
+    if (closedFor !== null && closedFor !== text) closedFor = null;
+    const was = hits[listAt]?.name;
+    hits = [];
+    fileFrom = -1;
+    if (listable && closedFor === null && !pasting && at === text.length && text && listFit() >= 2) {
+      hits = slashMatches(text, turnSlash?.() ?? []);
+      // An exact name alone needs no list: Enter runs it.
+      if (hits.length === 1 && hits[0]?.name === text) hits = [];
+      const m = !hits.length && !/^\/\S*$/.test(text) && turnFiles ? /(?:^|\s)@([^\s]*)$/.exec(text) : null;
+      if (m) {
+        const [names] = codeCompleter(/** @type {() => string[]} */ (turnFiles))(text);
+        const token = `@${m[1]}`;
+        hits = names.length === 1 && names[0] === token ? [] : names.slice(0, 200).map((n) => ({ name: n, desc: "" }));
+        fileFrom = text.length - token.length;
+      }
+    }
+    listAt = Math.max(0, hits.findIndex((x) => x.name === was));
+    listTopAt = listTop(listAt, hits.length ? Math.min(listTopAt, listAt) : 0);
+  };
+  const publish = () => {
+    typeAheadCaret = { text, at };
+    typeAheadList = { text, hits, at: listAt, top: listTopAt };
+  };
   publish();
   let carry = "";
   let pasting = false;
+  /** @type {NodeJS.Timeout | undefined} */
+  let escTimer;
   const onData = (/** @type {Buffer} */ d) => {
+    clearTimeout(escTimer);
     // Escape sequences (arrows, paste marks) are dropped whole — one cut at
     // the end of a read waits for its rest (Codex); a line break becomes a
     // space, so a paste stays one message.
     const got = decoder.write(d);
     // Esc on its own, then Enter: the Esc was no sequence's start, and the Enter is a key on its own (Codex).
     // Anything else after it is read with it, so a paste mark cut after its Esc is still one mark.
-    if (carry === "\x1b" && /^(\r\n?|\n)$/.test(got)) carry = "";
+    if (carry === "\x1b" && /^(\r\n?|\n)$/.test(got)) {
+      carry = "";
+      // That Esc put the list away first: the Enter after it never takes the one it closed (Codex).
+      if (hits.length) {
+        closedFor = text;
+        hits = [];
+      }
+    }
     let raw = carry + got;
     const cut = /\x1b(?:\[[0-?]*[ -/]*|O)?$/.exec(raw);
     carry = cut ? cut[0] : "";
@@ -16983,6 +17380,8 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
         pasting = false;
         // The paste is whole now: the cursor to a grapheme's end before any key after it in this read (Codex).
         keys.push({ k: "", pasted: false, move: "snap" });
+        // A paste is text (FOL-423): no list opens on it, so Enter after it never swaps it for a command (FOL-434).
+        keys.push({ k: "", pasted: false, move: "pasted" });
       }
       // The editing keys move on the line; any other sequence (↑, ↓, F-keys) is still dropped whole.
       else if (part.startsWith("\x1b")) {
@@ -16991,11 +17390,31 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
       } else for (const k of part) keys.push({ k, pasted: pasting });
     }
     for (const { k, pasted, move } of keys) {
+      // Enter on its own with a / list open takes the chosen command, as at the prompt; then it is a command line.
+      if ((k === "\r" || k === "\n") && alone && !pasted) {
+        relist();
+        const pick = fileFrom < 0 ? hits[listAt] : undefined;
+        if (pick) set(pick.name);
+        hits = [];
+      }
       // Inside a paste nothing is a key: its sequences and control characters are dropped, never moves (Codex).
-      if (move) pasted || moves[move]?.();
+      if (move === "pasted") closedFor = text;
+      else if ((move === "up" || move === "down") && !pasted) {
+        // ↑/↓ choose in the list; with none open they are dropped, as before.
+        relist();
+        if (hits.length) listAt = (listAt + (move === "up" ? -1 : 1) + hits.length) % hits.length;
+        listTopAt = listTop(listAt, listTopAt);
+      } else if (move) pasted || moves[move]?.();
       else if (k === "\x01") pasted || moves.home?.();
       else if (k === "\x05") pasted || moves.end?.();
       else if (k === "\x03") pasted || onInt();
+      // Tab with a list open puts the chosen one on the line (FOL-434): a command and a space when it takes more,
+      // a file and a space, a folder to go on into. With none open it queues, as before.
+      else if (k === "\t" && !pasted && tabAlone && (relist(), hits.length > 0)) {
+        const pick = /** @type {{ name: string, hint?: string }} */ (hits[listAt]);
+        if (fileFrom >= 0) set(`${text.slice(0, fileFrom)}${pick.name}${pick.name.endsWith("/") ? "" : " "}`);
+        else set(`${pick.name}${pick.hint ? " " : ""}`);
+      }
       // Tab queues only as a key pressed on its own, like Enter: a tab
       // inside pasted text (a table, code) is never a request (Codex).
       else if (k === "\t" && queue && !pasted && tabAlone) {
@@ -17038,14 +17457,32 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
     }
     // Not while a paste is still coming in: its next read may finish the grapheme (Codex).
     if (!pasting) snap();
+    relist();
+    // Esc on its own (nothing after it within 40 ms) puts the list away; it never stops the turn, and with no
+    // list open it does nothing, as before. Its byte stays held for a sequence that may still come.
+    if (carry === "\x1b" && !pasting) {
+      escTimer = setTimeout(() => {
+        // The byte stays held: a paste mark cut after its Esc still arrives whole (Codex).
+        if (carry !== "\x1b" || !hits.length) return;
+        closedFor = text;
+        hits = [];
+        publish();
+      }, 40);
+    }
     publish();
   };
-  process.stdin.setRawMode(true);
-  // Paste marks on, so a paste is told from typing (the prompt turns them
-  // off when it hands the terminal back).
-  if (onSend || queue) writeControl("\x1b[?2004h");
-  process.stdin.on("data", onData);
-  process.stdin.resume();
+  // The session's input line while the turn runs: a view on the one reader (FOL-434), under any question that comes.
+  const keys = keysFor({ typing: true, label: "turn" });
+  const own = keys === process.stdin;
+  const reader = ++readerNow;
+  if (own) {
+    process.stdin.setRawMode(true);
+    // Paste marks on, so a paste is told from typing (the prompt turns them
+    // off when it hands the terminal back).
+    if (onSend || queue) writeControl("\x1b[?2004h");
+  }
+  keys.on("data", onData);
+  keys.resume();
   /** @type {Promise<string> | null} */
   let stopping = null;
   let claimed = false;
@@ -17062,12 +17499,19 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
         // left in it, a "y" and Enter would answer the next prompt.
         await new Promise((r) => setImmediate(r));
         await new Promise((r) => setTimeout(r, 15));
-        process.stdin.off("data", onData);
-        if (onSend || queue) writeControl("\x1b[?2004l");
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
+        clearTimeout(escTimer);
+        keys.off("data", onData);
+        keys.release?.();
+        // The terminal handed back only when no newer reader has it, and paused only when nothing else reads it (a
+        // question listening meanwhile would never get its answer, FOL-434). The session's reader keeps it.
+        if (own && readerNow === reader) {
+          if (onSend || queue) writeControl("\x1b[?2004l");
+          process.stdin.setRawMode(false);
+          if (process.stdin.listenerCount("data") === 0) process.stdin.pause();
+        }
         const t = text;
         set("");
+        hits = [];
         publish();
         return t;
       })();
@@ -17079,6 +17523,9 @@ function startTypeAhead(onInt, onSend, queue, initial = "") {
   };
 }
 
+/** The keyboard reader started last (FOL-434): an older one's stop leaves the terminal to it. */
+let readerNow = 0;
+
 /** Graphemes: ←/→ and Backspace step over a whole character, an emoji with its modifiers included (FOL-348). */
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /**
@@ -17086,6 +17533,20 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
  * cursor there when what they draw is this text, at its end otherwise (FOL-348).
  */
 let typeAheadCaret = { text: "", at: 0 };
+/**
+ * The list under the keyboard's line during a turn (FOL-434), as the keyboard has it: the working rows draw it
+ * under the input line when what they draw is this text.
+ * @type {{ text: string, hits: Array<{ name: string, hint?: string, desc: string }>, at: number, top: number }}
+ */
+let typeAheadList = { text: "", hits: [], at: 0, top: 0 };
+/**
+ * The open session's / commands and folder files, as its prompt offers them: the same lists under the input line
+ * while a turn runs (FOL-434). Null with no session.
+ * @type {(() => Array<{ name: string, hint?: string, desc: string }>) | null}
+ */
+let turnSlash = null;
+/** @type {(() => string[]) | null} */
+let turnFiles = null;
 
 /** A line that starts foldrun again — /update now or /update restart: the name exactly, as the prompt parser reads one (Codex). */
 const isRestartLine = (/** @type {string} */ t) => /^\/update\s+(now|restart)\s*$/i.test(t.trim());
@@ -17274,6 +17735,9 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
   let lastTyped = "";
   let lastAt = 0;
   let lastHint = "";
+  /** The list under the input line as last drawn (FOL-434): a move in it shows at once. */
+  const listKey = () => `${typeAheadList.text}\u0000${typeAheadList.at}\u0000${typeAheadList.top}\u0000${typeAheadList.hits.map((x) => x.name).join(" ")}`;
+  let lastList = "";
   /**
    * The rows written over the ones drawn last, in place: each row then the rest of it erased, then whatever
    * is below cleared — never a cleared, blank frame between two draws (the owner saw it flicker, 26 Nov
@@ -17281,7 +17745,7 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
    * but colours: the CLI's own controls go past it, the text through it.
    * @param {string[]} rows
    */
-  const paint = (rows, cursorAt = 0) => {
+  const paint = (rows, cursorAt = 0, under = 0) => {
     const from = shown ? upToFirst() : "\r";
     caretCol = cursorAt;
     // The cursor hidden while the rows are written, in the same write (FOL-348).
@@ -17296,7 +17760,9 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
     });
     // Then shown at the typed text's insertion point on the last row, the input line (FOL-348): a column on
     // that row, so the next frame still goes up from there.
-    parts.push({ control: `${cursorAt > 0 ? `\r${cursorAt > 1 ? `\x1b[${Math.min(cursorAt - 1, 999)}C` : ""}\x1b[?25h` : ""}\x1b[?2026l` });
+    // Rows drawn under the input line (the / list, FOL-434): back up to the line first, so the next frame and
+    // clear() count from it as they always have.
+    parts.push({ control: `${cursorAt > 0 && under > 0 ? `\x1b[${Math.min(under, 99)}A` : ""}${cursorAt > 0 ? `\r${cursorAt > 1 ? `\x1b[${Math.min(cursorAt - 1, 999)}C` : ""}\x1b[?25h` : ""}\x1b[?2026l` });
     writeFrame(parts);
   };
   const draw = (advance = true) => {
@@ -17353,12 +17819,25 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
       // What is typed, the part around the cursor in view (FOL-348); the cursor's cell in it.
       const view = inputView(t, caret, Math.max(1, room));
       const typedText = t ? view.shown : c.dim(clipCells(hintText, Math.max(1, room)));
-      const second = `  ${lead ? `${lead}\u00a0` : ""}❯ ${t ? view.shown : clipCells(hintText, Math.max(1, room))}${waiting}`;
-      const inputRow = `  ${lead ? `${c.bold(c.cyan(lead))}\u00a0` : ""}${c.violet("❯")} ${typedText}${waiting ? c.cyan(waiting) : ""}`;
+      // No hint: nothing reads the keyboard now (a turn getting ready, a reader handed back). The row is kept, so
+      // the rows do not jump, but no input line and no cursor is drawn on it — a key typed then is never shown as
+      // if it were taken (FOL-434: the owner's `/per` under "working", with no hint, was the terminal's own echo).
+      const reading = Boolean(hintText) || Boolean(t);
+      const second = reading ? `  ${lead ? `${lead}\u00a0` : ""}❯ ${t ? view.shown : clipCells(hintText, Math.max(1, room))}${waiting}` : waiting ? `  ${waiting}` : "";
+      const inputRow = reading ? `  ${lead ? `${c.bold(c.cyan(lead))}\u00a0` : ""}${c.violet("❯")} ${typedText}${waiting ? c.cyan(waiting) : ""}` : waiting ? `  ${c.cyan(waiting)}` : "";
       // The cursor where the next key goes: after the chevron while the line is empty, at its column in what
       // is typed otherwise (1-based). A terminal that cannot move its cursor (TERM=dumb) keeps it hidden.
-      const cursorAt = roomy ? displayWidth(`  ${lead ? `${lead}\u00a0` : ""}❯ `) + (t ? view.col : 0) + 1 : 0;
-      paint(roomy ? ["", head, ...jobLines, "", inputRow] : [head, inputRow], cursorAt);
+      const cursorAt = roomy && reading ? displayWidth(`  ${lead ? `${lead}\u00a0` : ""}❯ `) + (t ? view.col : 0) + 1 : 0;
+      // The / list (or @file list) under the input line, as the prompt draws it (FOL-434): only under the text it
+      // was made for, and only where the cursor can come back up to the line.
+      const list = typeAheadList;
+      // Only as many rows as the screen has under the rows already drawn (one kept for the count): a frame taller
+      // than the screen would scroll its start away on every redraw (Codex).
+      const fit = listFit();
+      const listTopNow = list.at < list.top ? list.at : list.at >= list.top + fit ? list.at - fit + 1 : list.top;
+      const listed = roomy && t && fit >= 2 && list.text === t && list.hits.length ? listRows(list.hits, list.at, listTopNow, cols - 2, fit).map((r) => `  ${r}`) : [];
+      lastList = listKey();
+      paint(roomy ? ["", head, ...jobLines, "", inputRow, ...listed] : [head, inputRow], cursorAt, listed.length);
       drawn = roomy ? [0, displayWidth(plainText(head)), ...jobWidths, 0, displayWidth(second)] : [displayWidth(plainText(head)), displayWidth(second)];
       shown = true;
       return;
@@ -17369,6 +17848,7 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
     const shownText = t && room > 8 ? clipCellsEnd(t, room) : "";
     const row = `${head}${waiting ? c.cyan(waiting) : ""}${shownText ? `${c.dim(" · next: ")}${shownText}` : ""}`;
     const rowWidth = displayWidth(plainText(`${head}${waiting}${shownText ? ` · next: ${shownText}` : ""}`));
+    lastList = listKey();
     paint(roomy ? ["", row, ...jobLines] : [row]);
     drawn = roomy ? [0, rowWidth, ...jobWidths] : [rowWidth];
     shown = true;
@@ -17429,7 +17909,7 @@ function startTicker(since, typed = () => "", hint = /** @type {string | (() => 
   const keys = setInterval(() => {
     const k = jobsKey();
     const t = typed();
-    if (t !== lastTyped || caretIn(t) !== lastAt || hintNow() !== lastHint || k !== lastJobs) {
+    if (t !== lastTyped || caretIn(t) !== lastAt || hintNow() !== lastHint || k !== lastJobs || listKey() !== lastList) {
       lastJobs = k;
       draw(false);
     }
@@ -17896,18 +18376,22 @@ function pickOne({ title, subtitle = "", choices, tick = null, start = undefined
   return new Promise((resolve) => {
     const decoder = new StringDecoder("utf8");
     let buf = "";
+    let pasted = false;
     /** @type {NodeJS.Timeout | undefined} */
     let lone;
     let over = false;
+    // Its keys from the session's reader when there is one (FOL-434).
+    const keys = keysFor({ label: "picker" });
     const done = (/** @type {string | null} */ v) => {
       if (over) return;
       over = true;
       clearTimeout(lone);
       signal?.removeEventListener("abort", gone);
-      process.stdin.off("end", gone);
-      process.stdin.off("data", onData);
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
+      keys.off("end", gone);
+      keys.off("data", onData);
+      keys.setRawMode(false);
+      keys.pause();
+      keys.release?.();
       if (drawn) writeControl(`\x1b[${drawn}A\r\x1b[J`);
       resolve(v);
     };
@@ -17931,7 +18415,12 @@ function pickOne({ title, subtitle = "", choices, tick = null, start = undefined
         const seq = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|O.)/.exec(buf);
         if (seq) {
           buf = buf.slice(seq[0].length);
-          key(seq[0]);
+          // A paste is never a choice: what is inside the marks is no key (Codex, FOL-434).
+          if (seq[0] === "\x1b[200~") pasted = true;
+          else if (seq[0] === "\x1b[201~") pasted = false;
+          else if (!pasted) key(seq[0]);
+        } else if (pasted) {
+          buf = buf.slice(/** @type {string} */ ([...buf][0]).length);
         } else if (buf[0] === "\x1b" && /^\x1b(?:\[[0-?]*[ -/]*|O)?$/.test(buf)) {
           lone = setTimeout(() => !over && (buf = "", key("\x1b")), 40);
           return;
@@ -17944,13 +18433,16 @@ function pickOne({ title, subtitle = "", choices, tick = null, start = undefined
       }
     };
     const gone = () => done(null);
-    if (signal?.aborted) return resolve(null);
+    if (signal?.aborted) {
+      keys.release?.();
+      return resolve(null);
+    }
     signal?.addEventListener("abort", gone, { once: true });
-    process.stdin.once("end", gone);
+    keys.once("end", gone);
     draw();
-    process.stdin.setRawMode(true);
-    process.stdin.on("data", onData);
-    process.stdin.resume();
+    keys.setRawMode(true);
+    keys.on("data", onData);
+    keys.resume();
   });
 }
 
@@ -19702,19 +20194,8 @@ async function codeLocalTurn(s, text) {
   const typedNow = () => typeAhead.text();
   // The getting-ready rows show it too, while the turn's lookups run (owner, 26 Nov 2026).
   readyInput = { typed: typedNow, hint: inputHint };
-  // The unfinished line a prompt interrupted: given back to the keyboard after it, not moved aside (FOL-306, Codex).
-  let draft = "";
-  const keyboardBack = async () => {
-    const t = await typeAhead.stop(true);
-    if (t.trim()) draft = draft ? `${draft}${t}` : t;
-  };
-  /** The keyboard again after a prompt, unless the turn is over (its end has stopped it for good). */
-  const keyboardOn = () => {
-    // Still reading (no question came): one reader, never a second beside it.
-    if (turnOver || typeAhead.running()) return;
-    typeAhead = startTypeAhead(onInt, onSend, queueOf(s), draft);
-    draft = "";
-  };
+  // The input line reads for the whole turn (FOL-434): a question is a view over it, so what is typed stays on it
+  // and is there again once the question is answered — nothing is handed back or started again for one.
   const changed = new Set();
   /** Files a call was let change, held until its result says it did (FOL-294): a refused patch changed nothing. */
   const changedPending = new Map();
@@ -19776,6 +20257,41 @@ async function codeLocalTurn(s, text) {
   let replyEnding = false;
   /** Questions on the screen now: a line printed from the background (a cloud job finishing) waits for them (FOL-382). */
   let questionOpen = 0;
+  /** The questions waiting their turn: one on the screen at a time, whoever asks (FOL-434). */
+  let questionChain = Promise.resolve();
+  let questionsAsked = 0;
+  let questionsWaiting = 0;
+  /**
+   * Put one question to the person (FOL-434): after any question before it (in the order they came, each said as
+   * "question 2 of 3" while more wait), and not while the person is typing on the input line — held until a second
+   * passes without a key, so a "y" meant for the message never answers it (as Codex's TUI does). Counted open from
+   * the moment it is its turn, so a line printed meanwhile (said()) waits and no ticker is drawn under it; the
+   * working rows come back after. The input line is never stopped for it: its text is kept below the question.
+   * @template T @param {() => Promise<T>} ask @returns {Promise<T>}
+   */
+  const withQuestion = (ask) => {
+    questionsWaiting++;
+    const mine = questionChain.then(async () => {
+      questionOpen++;
+      try {
+        // A pause in the typing first (at most 10 s of it, then it is asked anyway).
+        await keyboard.typingPause();
+        stopTicker();
+        questionsAsked++;
+        questionsWaiting--;
+        const more = questionsWaiting;
+        if (more > 0 || questionsAsked > 1) console.log(`    ${c.grey(`question ${questionsAsked} of ${questionsAsked + more}`)}`);
+        return await ask();
+      } finally {
+        questionOpen--;
+        if (!questionOpen && !questionsWaiting) questionsAsked = 0;
+        flushNotices();
+        if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
+      }
+    });
+    questionChain = mine.then(() => undefined, () => undefined);
+    return mine;
+  };
   /** @type {Array<() => void>} */
   const heldNotices = [];
   /** What waited for a question, printed once none is open. */
@@ -19960,16 +20476,9 @@ async function codeLocalTurn(s, text) {
     // `FAST`, `cheap` or `foldrun/fast` is fast (Codex review).
     resolveTierFn ??= (await modelNames()).resolveTier;
     model = tierOf(model) ?? model;
-    // Read on through the plan and key lookups; handed back only if one of them asks something (Codex).
-    keysBeforeAsk = keyboardBack;
-    keysAfterAsk = keyboardOn;
-    try {
-      if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
-      engineKey = await localKeyFor(s, cancel);
-    } finally {
-      keysBeforeAsk = null;
-      keysAfterAsk = null;
-    }
+    // Read on through the plan and key lookups: a question one of them asks is a view over the input line (FOL-434).
+    if (!(await creditsReady(s, tierOf(model))) || cancel.asked) return;
+    engineKey = await localKeyFor(s, cancel);
     if (!engineKey || cancel.asked) return;
     s.engineKeyInUse = engineKey.key;
     s.engineKeyKind = engineKey.kind;
@@ -19979,7 +20488,6 @@ async function codeLocalTurn(s, text) {
     const engineAt = await engineRoute(s, engineKey);
     engineKey = engineAt.key;
     await foldrunPlanLabel(s);
-    keyboardOn();
     /** @type {{ kinds: Set<string>, commands: Set<string>, mcp?: Map<string, string> }} */
     const allow = (s.localAllow ??= { kinds: new Set(), commands: new Set() });
     let gate = Promise.resolve();
@@ -20052,19 +20560,17 @@ async function codeLocalTurn(s, text) {
         if (child) return { behavior: /** @type {const} */ ("deny"), message: "A sub-agent does not ask the person. Finish with what you found and say what needs deciding; the agent that started you will ask." };
         const q = askInput(input);
         if ("problem" in q) return { behavior: /** @type {const} */ ("deny"), message: String(q.problem) };
-        stopTicker();
-        await keyboardBack();
-        questionOpen++;
-        try {
-          const answer = (await askAtTerminal(q, (t) => cancellablePrompt(t, cancel), signal)) ?? "";
+        return withQuestion(async () => {
+          // Withdrawn while it is on the screen (the engine took the call back): the question closes, never left
+          // holding the questions behind it (Codex).
+          const withdrawn = () => {
+            for (const f of [...cancel.onAsk]) f();
+          };
+          signal?.addEventListener("abort", withdrawn, { once: true });
+          const answer = await askAtTerminal(q, (t) => (signal?.aborted ? Promise.resolve(null) : cancellablePrompt(t, cancel)), signal).finally(() => signal?.removeEventListener("abort", withdrawn)) ?? "";
           if (cancel.asked || signal?.aborted) return { behavior: /** @type {const} */ ("deny"), message: "the person stopped the turn", interrupt: true };
           return { behavior: /** @type {const} */ ("allow"), updatedInput: { question: q.question, options: q.options, answer: answer ?? "", answeredBy: ASK_MARK } };
-        } finally {
-          questionOpen--;
-          keyboardOn();
-          flushNotices();
-          if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
-        }
+        });
       }
       // The web (FOL-383): search and fetch only read, and a cloud browser holds nothing of the person's, so they run
       // unasked by default (owner, 26 Nov 2026); /permissions web ask asks for each. A browse on this computer acts as
@@ -20190,10 +20696,7 @@ async function codeLocalTurn(s, text) {
             : "This turn runs from a script with no one to ask: reading, commands inside the sandbox and (with --yes) file changes inside the folder are what it may do. Do the work without this, or say what the person should run.",
         };
       }
-      stopTicker();
-      await keyboardBack();
-      questionOpen++;
-      try {
+      return withQuestion(async () => {
         if (child) console.log(`    ${c.grey(`the sub-agent ${plainText(child)} asks:`)}`);
         if (file !== undefined && !inside) console.log(`    ${c.amber(`outside this folder: ${clipCells(plainText(String(file)), (process.stdout.columns || 80) - 26)}`)}`);
         if (outsideLive && !outside) console.log(`    ${c.amber("a server started outside the sandbox is running — it can run what changes here as you, so this is asked")}`);
@@ -20426,12 +20929,7 @@ async function codeLocalTurn(s, text) {
         // More than a no: what they wrote is what the model hears (Codex).
         if (!/^(n|no|)$/.test(answer)) return { behavior: /** @type {const} */ ("deny"), message: `The person said no to this, and said: ${JSON.stringify(words.slice(0, 2_000))}. Do what they said; do not try the same thing another way.` };
         return { behavior: /** @type {const} */ ("deny"), message: "The person said no to this. Do not try it another way; say what you wanted to do and why." };
-      } finally {
-        questionOpen--;
-        keyboardOn();
-        flushNotices();
-        if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
-      }
+      });
     };
     // This conversation's /rewind journal; a turn's number is one past the last recorded.
     const rewindJournal = rewindOf(s);
@@ -20573,24 +21071,7 @@ async function codeLocalTurn(s, text) {
         },
         approveUpload: (pack, dest) => {
           // Its preview and question own the screen: the ticker stops for them, background lines wait (FOL-382).
-          const next = gate.then(async () => {
-            stopTicker();
-            questionOpen++;
-            try {
-              return await agreeToUpload(s, pack, dest, async (q) => {
-                await keyboardBack();
-                try {
-                  return await cancellablePrompt(q, cancel);
-                } finally {
-                  keyboardOn();
-                }
-              }, () => cancel.asked);
-            } finally {
-              questionOpen--;
-              flushNotices();
-              if (!cancel.asked && !turnOver && !questionOpen) stopTicker = startTicker(started, typedNow, inputHint, { input: Boolean(process.stdin.isTTY) });
-            }
-          });
+          const next = gate.then(() => withQuestion(() => agreeToUpload(s, pack, dest, (q) => cancellablePrompt(q, cancel), () => cancel.asked)));
           gate = next.then(() => undefined, () => undefined);
           return next;
         },
@@ -21530,10 +22011,7 @@ async function codeLocalTurn(s, text) {
     // what was sent and not taken (the turn ended first, or failed): not
     // lost — it starts the next message, before what was typed after it.
     // The same handing back a prompt may be waiting on (Codex): whichever took the text, it is counted once.
-    // Awaited first: a prompt's keyboardBack may fill the draft while this waits (Codex).
-    const last = await typeAhead.stop(true);
-    const typed = `${draft}${last}`.trim();
-    draft = "";
+    const typed = (await typeAhead.stop(true)).trim();
     if (pending.some((e) => e.sent)) console.log(`  ${c.dim("the agent did not get to your message: it is on the next line, to send")}`);
     s.typeAhead = [s.typeAhead, ...pending.splice(0).map((e) => e.t), typed].filter(Boolean).join(" ");
     process.off("SIGINT", onInt);
@@ -22195,6 +22673,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     return code;
   }
   codeInteractive = true;
+  // One reader of the keyboard for the whole session (FOL-434); a restart's child takes the terminal after it.
+  keyboard.start();
+  SESSION_END.add(() => keyboard.stop());
   const host = (() => {
     try {
       return new URL(url).host;
@@ -22363,9 +22844,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       current?.stop();
     };
     process.on("SIGINT", onStop);
-    process.stdin.resume();
-    process.stdin.on("data", onStop);
-    process.stdin.on("end", onStop);
+    const keys = keysFor({ label: "wait" });
+    keys.resume();
+    keys.on("data", onStop);
+    keys.on("end", onStop);
     /** Wait until a moment, or until stopped. */
     const hold = async (/** @type {number} */ until, /** @type {((left: number) => void) | undefined} */ tick) => {
       if (stopped) return;
@@ -22412,9 +22894,10 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       return null;
     } finally {
       process.off("SIGINT", onStop);
-      process.stdin.off("data", onStop);
-      process.stdin.off("end", onStop);
-      process.stdin.pause();
+      keys.off("data", onStop);
+      keys.off("end", onStop);
+      keys.pause();
+      keys.release?.();
     }
   };
   const runTurnOnce = async (/** @type {"local" | "cloud"} */ where, /** @type {string} */ said, /** @type {string} */ typed = said) => {
@@ -24381,6 +24864,9 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
     return undefined;
     };
     // A /command typed with Enter while a turn runs (FOL-380): run now beside it, or held in the queue for after.
+    // The / list and @files under the input line while a turn runs: the prompt's own (FOL-434).
+    turnSlash = () => prompt.slash;
+    turnFiles = () => prompt.files;
     turnCommand = (t) => {
       const how = commandDuringTurn(t, (n) => prompt.slash.some((x) => x.name === n)) === "beside" ? "beside" : "after";
       if (how === "beside") {
@@ -24455,21 +24941,26 @@ function keyboardThrough() {
   /** @type {(data: Buffer, write: (d: string | Buffer) => void) => void} */
   let route = (d, w) => w(d);
   const onData = (/** @type {Buffer} */ d) => route(d, write);
+  // The prompt is the session's input line (FOL-434): its keys from the one reader, which keeps raw mode itself.
+  const keys = keysFor({ typing: true, label: "prompt" });
   through.isTTY = true;
   through.setRawMode = (/** @type {boolean} */ on) => {
-    process.stdin.setRawMode?.(on);
+    keys.setRawMode?.(on);
     return through;
   };
   through.route = (/** @type {typeof route} */ fn) => (route = fn);
   through.detach = () => {
-    process.stdin.off("data", onData);
-    process.stdin.setRawMode?.(false);
-    process.stdin.pause();
+    keys.off("data", onData);
+    keys.setRawMode?.(false);
+    keys.pause();
+    keys.release?.();
   };
-  process.stdin.on("data", onData);
+  keys.on("data", onData);
+  // The terminal's input ended: readline's ends too, so the prompt sees it (Codex).
+  keys.once("end", () => through.end());
   // A stream paused on purpose (detach, an earlier prompt) does not flow
   // again because a listener is added: the next prompt saw no keys at all.
-  process.stdin.resume();
+  keys.resume();
   return through;
 }
 
@@ -24633,6 +25124,46 @@ function historySearch(rl, history, ask) {
   };
 }
 
+/** How many of a / list are shown at once, under the prompt and under the input line during a turn. */
+const LIST_ROWS = 8;
+
+/**
+ * How many rows of a list fit under the working rows during a turn: the screen's height less the rows drawn
+ * (blank, working, blank, input) and the job rows, one kept spare. Under 2, no list — nor its keys (Codex).
+ */
+function listFit() {
+  // Counted as if the job rows were on (no file read per key): at worst a row spare.
+  const jobs = liveJobs().length;
+  const jobRows = Math.min(jobs, JOB_ROWS_MAX) + (jobs > JOB_ROWS_MAX ? 1 : 0);
+  return Math.min(LIST_ROWS, (process.stdout.rows || 24) - (4 + jobRows) - 2);
+}
+
+/** The first of a list shown, moved only as far as keeps the chosen one in view. */
+const listTop = (/** @type {number} */ at, /** @type {number} */ top) => (at < top ? at : at >= top + LIST_ROWS ? at - LIST_ROWS + 1 : top);
+
+/**
+ * The rows of a / list (or an @file list) as the prompt draws them: the chosen one marked, each clipped to
+ * `cols`, and a last row counting the rest when they do not all fit. One drawing for the idle prompt and for
+ * the input line while a turn runs (FOL-434).
+ * @param {Array<{ name: string, hint?: string, desc: string }>} hits
+ * @param {number} at @param {number} top @param {number} cols
+ */
+function listRows(hits, at, top, cols, n = LIST_ROWS) {
+  const view = hits.slice(top, top + n);
+  // Every row inside the width it is given, the mark included: a row that wrapped would put the cursor a row off.
+  const w = Math.max(1, Math.min(26, cols - 2, Math.max(...view.map((x) => displayWidth(`${x.name}${x.hint ? ` ${x.hint}` : ""}`)))));
+  const rows = view.map((x, i) => {
+    const on = top + i === at;
+    // Padded by cells, not code units: a wide character takes two (Codex).
+    const cut = clipCells(`${x.name}${x.hint ? ` ${x.hint}` : ""}`, w);
+    const label = `${cut}${" ".repeat(Math.max(0, w - displayWidth(cut)))}`;
+    const desc = clipCells(x.desc, Math.max(0, cols - w - 6));
+    return `${on ? c.violet("❯") : " "} ${on ? c.bold(c.cyan(label)) : c.cyan(label)}${desc ? `  ${on ? c.white(desc) : c.grey(desc)}` : ""}`;
+  });
+  if (hits.length > view.length) rows.push(c.grey(clipCells(`  ${top + n < hits.length ? "↓" : " "}${top > 0 ? "↑" : " "} ${hits.length} ${hits.some((x) => x.name.startsWith("@")) ? "files" : "commands"} — keep typing to narrow`, Math.max(1, cols))));
+  return rows;
+}
+
 /**
  * The list under the prompt while a /command is being typed (24 Nov 2026,
  * owner: "the / commands show suggestions"): every command that matches,
@@ -24644,7 +25175,6 @@ function historySearch(rl, history, ask) {
  * @param {() => number} promptCells the cells the prompt takes on the row
  */
 function slashMenu(rl, all, promptCells, status = () => /** @type {string[]} */ ([]), searching = () => false) {
-  const ROWS = 8;
   let shown = 0; // rows on screen now
   let listing = false; // the rows shown are the list (else the status line, FOL-269)
   let held = false; // Enter was pressed: no status line again under this prompt
@@ -24682,18 +25212,8 @@ function slashMenu(rl, all, promptCells, status = () => /** @type {string[]} */ 
     const col = promptCells() + displayWidth(line.slice(0, rl.cursor));
     // One row only: a line that wraps has no fixed place to come back to.
     if (!hits.length || promptCells() + displayWidth(line) >= cols) return erase();
-    if (at < top) top = at;
-    if (at >= top + ROWS) top = at - ROWS + 1;
-    const view = hits.slice(top, top + ROWS);
-    const w = Math.min(26, Math.max(...view.map((x) => displayWidth(`${x.name}${x.hint ? ` ${x.hint}` : ""}`))));
-    const rows = view.map((x, i) => {
-      const on = top + i === at;
-      const label = clipCells(`${x.name}${x.hint ? ` ${x.hint}` : ""}`, w).padEnd(w);
-      const desc = clipCells(x.desc, Math.max(0, cols - w - 6));
-      return `${on ? c.violet("❯") : " "} ${on ? c.bold(c.cyan(label)) : c.cyan(label)}  ${on ? c.white(desc) : c.grey(desc)}`;
-    });
-    const more = hits.length - view.length;
-    if (more > 0) rows.push(c.grey(`  ${top + ROWS < hits.length ? "↓" : " "}${top > 0 ? "↑" : " "} ${hits.length} commands — keep typing to narrow`));
+    top = listTop(at, top);
+    const rows = listRows(hits, at, top, cols);
     erase();
     // Down a row for each (the screen scrolls when the prompt is at its
     // foot), then back up to the line and across to the cursor.
@@ -24985,7 +25505,8 @@ async function readCodeMessage(state, completer, s) {
     };
     const offBracketed = () => {
       input.off("keypress", onKey);
-      if (bracketed) writeControl("\x1b[?2004l");
+      // The session's reader keeps paste marks on from its start to its end (FOL-434).
+      if (bracketed && !keyboard.on) writeControl("\x1b[?2004l");
       process.off("exit", offBracketed);
       process.off("SIGTERM", onTerm);
     };
@@ -25101,6 +25622,12 @@ const SESSION_END = new Set();
  * @returns {Promise<{ output: string, code: number, error: string | null }>}
  */
 function runShellLive(dir, command) {
+  // The person's own command reads the terminal as it is used to: cooked, no paste marks (FOL-434).
+  return keyboard.lend(() => runShellLiveNow(dir, command));
+}
+
+/** @param {string} dir @param {string} command @returns {Promise<{ output: string, code: number, error: string | null }>} */
+function runShellLiveNow(dir, command) {
   return new Promise((resolve) => {
     let output = "";
     const keep = (/** @type {Buffer} */ b) => {

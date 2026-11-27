@@ -125,7 +125,7 @@ export const CODE_TIPS = [
   "\\ at the end of a line goes on to the next; a paste of many lines is one message",
   "↑ ↓         what you typed before, in this folder and others",
   "Ctrl-R      search what you typed before (Ctrl-R again: older; Enter: put it on the line)",
-  "typing while a turn runs: the line under \"working\" shows it; Enter or Tab queues it to be sent when the turn has finished (/queue); a /command is never sent: it runs beside the turn (/status, /help …), or after it when it changes the session",
+  "typing while a turn runs: the line under \"working\" shows it; Enter or Tab queues it to be sent when the turn has finished (/queue); a /command is never sent: it runs beside the turn (/status, /help …), or after it when it changes the session; / and @ open the same lists as the prompt",
 ];
 
 /**
@@ -415,7 +415,7 @@ export const MENU_COMMANDS = ["/where", "/model", "/permissions", "/setup", "/un
 export function helpText({ steers = false, extra = [] } = {}) {
   const own = extra.map((x) => [`${x.name}${x.hint ? ` ${x.hint}` : ""}`, x.desc]);
   const w = Math.min(30, Math.max(...[...CODE_COMMANDS, ...own].map(([c]) => c.length)));
-  const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now; Tab queues it as a message of its own for after the turn (/queue); a /command is never sent: it runs beside the turn (/status, /help …), or after it when it changes the session" : t)) : CODE_TIPS;
+  const tips = steers ? CODE_TIPS.map((t) => (t.startsWith("typing while a turn runs") ? "typing while a turn runs: Enter sends it into the turn — the agent reads it after what it is doing now; Tab queues it as a message of its own for after the turn (/queue); a /command is never sent: it runs beside the turn (/status, /help …), or after it when it changes the session; / and @ open the same lists as the prompt" : t)) : CODE_TIPS;
   const rows = (/** @type {string[][]} */ list) => list.map(([c, d]) => `${c.padEnd(w)}  ${d}`);
   const mark = (/** @type {string} */ c) => (MENU_COMMANDS.includes(String(c).split(" ")[0] ?? "") ? `▸ ${c}` : `  ${c}`);
   // In groups, by what the person is doing (FOL-263).

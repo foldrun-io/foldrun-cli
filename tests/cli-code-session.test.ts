@@ -278,7 +278,7 @@ test("/permissions steps (owner, 27 Nov 2026): no limit by default; a number is 
   }
 });
 
-test("a bracketed paste is one message however slowly it arrives; Enter after it sends it; the terminal's paste mode is off again after", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+test("a bracketed paste is one message however slowly it arrives; Enter after it sends it; the terminal's paste mode stays on for the session and is off again when it ends (FOL-434)", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const s = await platform();
@@ -298,11 +298,13 @@ test("a bracketed paste is one message however slowly it arrives; Enter after it
     const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
     assert.equal(posts.length, 1);
     assert.match(JSON.parse(posts[0]!.body).task as string, /add b\nand keep it short$/);
-    assert.match(t.out(), /\x1b\[\?2004l[\s\S]*apply it to/, "paste mode off before the turn");
+    // One reader for the whole session (FOL-434): paste marks stay on through the turn and its questions.
+    assert.doesNotMatch(t.out(), /\x1b\[\?2004l/, "paste mode never turned off during the session");
     t.send("n\r");
     at = await t.until(/\w ❯ /, at);
     t.send("/quit\r");
     await t.done;
+    assert.match(t.out().slice(at), /\x1b\[\?2004l/, "paste mode off when the session ends");
   } finally {
     t.child.kill();
     s.close();

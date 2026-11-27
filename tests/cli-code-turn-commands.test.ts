@@ -184,3 +184,261 @@ test("a /command typed with Enter during a turn is never sent to the agent: /sta
   assert.match(last, /follow up/);
   assert.doesNotMatch(last, /\/todos|later/);
 });
+
+test("typing / during a turn opens the prompt's / list under the input line: /per shows /permissions, ↓ moves, Tab completes, Esc closes it and the turn goes on, a paste stays text (FOL-434)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  fs.mkdirSync(path.join(d, "src"));
+  fs.writeFileSync(path.join(d, "src", "deep.ts"), "x\n");
+  execFileSync("git", ["-C", d, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"]);
+  execFileSync("git", ["-C", d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "more"]);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "b1", name: "Bash", input: { command: "sleep 12; echo slept" } }]),
+    () => sse([{ type: "text", text: "Finished." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-tl/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--context", "code-tl", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", COLUMNS: "120" });
+  const pause = (ms = 200) => new Promise((r) => setTimeout(r, ms));
+  /** The last whole frame drawn so far whose input line shows `typed` and nothing after it on the row. */
+  const frameWith = (typed: string) => t.out().split("\x1b[?2026h").filter((f) => f.includes("\x1b[?2026l") && new RegExp(`❯ ${typed.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(?:\\x1b\\[K|\\s*$)`, "m").test(f)).at(-1) ?? "";
+  /** The keys, then a moment: each key read on its own (a key with text reads as a paste). */
+  const key = async (k: string) => {
+    t.send(k);
+    await pause();
+  };
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/sleep 12; echo slept[\s\S]*\[y\]es/, at, 30_000);
+    t.send("y\r");
+    at = await t.until(/Enter: tell the agent now/, at, 5_000);
+    await pause(300);
+    // /per: the list under the line, /permissions in it and chosen, as at the prompt.
+    await key("/per");
+    at = await t.until(/❯ \/permissions/, at, 5_000);
+    let frame = frameWith("/per");
+    assert.ok(frame, "a frame shows /per on the input line");
+    assert.match(frame, /❯ \/permissions \[strict/, "the list is drawn under the input line");
+    assert.match(frame, /\x1b\[\d+A\r/, "the cursor goes back up to the input line");
+    // Esc: the list away, the turn still running, nothing sent.
+    await key("\x1b");
+    await pause(200);
+    frame = frameWith("/per");
+    assert.ok(frame && !/\/permissions/.test(frame), "Esc took the list away (a frame of /per with no list)");
+    assert.equal(asked.length, 1, "Esc did not stop or touch the turn");
+    // Enter with the list closed: the line as typed, a command the session does not have (said back, not sent).
+    await key("\r");
+    at = await t.until(/\/per is not a command — did you mean \/permissions/, at, 5_000);
+    // /s: ↓ ↓ ↑ chooses the second, Tab puts it on the line (and a space when it takes more).
+    const { CODE_COMMANDS } = await import("../src/code-session.mjs");
+    const { slashMatches } = await import("../src/code-context.mjs");
+    const second = slashMatches("/s", CODE_COMMANDS.map(([n, desc]) => ({ name: String(n).split(" ")[0], hint: String(n).split(" ").slice(1).join(" "), desc: String(desc) })))[1];
+    assert.ok(second, "/s has two commands to choose from");
+    await key("/s");
+    at = await t.until(/❯ \/s/, at, 5_000);
+    await key("\x1b[B");
+    await key("\x1b[B");
+    await key("\x1b[A");
+    assert.match(frameWith("/s"), new RegExp(`❯ ${second.name}`), "↓ ↓ ↑ chose the second");
+    await key("\t");
+    const line = `${second.name}${second.hint ? " " : ""}`;
+    assert.ok(frameWith(line), `Tab put ${line} on the line`);
+    await key("\x7f".repeat(line.length));
+    // /sta, Tab: the line is /status, never queued; Enter runs it beside the turn.
+    await key("/sta");
+    at = await t.until(/❯ \/status/, at, 5_000);
+    await key("\t");
+    assert.doesNotMatch(t.out().slice(at), /queued for after this turn|runs after this turn/, "Tab completed, it did not queue");
+    assert.ok(frameWith("/status ") || frameWith("/status"), "Tab put /status on the line");
+    await key("\r");
+    at = await t.until(/\/status · runs now, beside the turn/, at, 5_000);
+    // @path: the folder's files under the line, Tab walks into a folder then takes the file.
+    await key("see @sr");
+    at = await t.until(/❯ @src\//, at, 5_000);
+    await key("\t");
+    at = await t.until(/❯ @src\/deep\.ts/, at, 5_000);
+    await key("\t");
+    assert.ok(frameWith("see @src/deep.ts "), "Tab took the file");
+    // Clear the line: Backspace for each character.
+    await key("\x7f".repeat("see @src/deep.ts ".length));
+    // A paste that starts with /: text, no list, Enter sends it as typed — never swapped for a command.
+    await key("\x1b[200~/sta\x1b[201~");
+    frame = frameWith("/sta");
+    assert.ok(frame && !/❯ \/status/.test(frame), "no list on a paste");
+    await key("\r");
+    at = await t.until(/\/sta is not a command/, at, 5_000);
+    assert.equal(asked.length, 1, "the turn was still on its command throughout");
+    at = await t.until(/Finished\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.ended(), 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(asked.length, 2, "no turn was started by the keys");
+  assert.doesNotMatch(JSON.stringify(asked.map((a) => a.messages)), /\/per|\/sta|deep\.ts/);
+});
+
+// Whether this machine can put the walls up at all (CI runners have no bubblewrap), asked in a process of its own.
+const canSandbox = (() => {
+  if (!hasPty) return false;
+  const probe = `const m = await import("@foldrun/core/local-sandbox"); const w = await m.openLocalSandbox({ cwd: process.env.PROBE_DIR, sites: [] }); if (m.isRefusal(w)) process.exit(3); await w.close(); process.exit(0);`;
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-probe-")));
+  try {
+    execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: path.join(import.meta.dirname, ".."), env: { ...process.env, PROBE_DIR: dir }, stdio: "ignore", timeout: 60_000 });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+test("two tool calls at once, one asked (bash_outside) and one not (Bash in the sandbox): the y typed answers the question, the asked call runs, and the input line is drawn only while a reader reads it (FOL-434)", { skip: canSandbox ? false : "no local sandbox on this machine", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([
+      { type: "tool_use", id: "o1", name: "bash_outside", input: { command: `echo outside-ran > ${path.join(d, "outside.txt")}`, reason: "needs the network as you" } },
+      { type: "tool_use", id: "b1", name: "Bash", input: { command: "sleep 1; echo inside-ran" } },
+    ]),
+    () => sse([{ type: "text", text: "Both done." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-pa/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-pa", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", COLUMNS: "160", FOLDRUN_CODE_SANDBOX: "" });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/allow\? \[y\]es · \[n\]o/, at, 60_000);
+    const asking = at;
+    await new Promise((r) => setTimeout(r, 2_500));
+    // While the question is on the screen, no working rows are drawn under it: nobody reads keys for them.
+    assert.doesNotMatch(t.out().slice(asking), /working/, "no ticker under the question");
+    t.send("y");
+    await new Promise((r) => setTimeout(r, 80));
+    t.send("\r");
+    at = await t.until(/Both done\./, at, 30_000);
+    assert.equal(fs.readFileSync(path.join(d, "outside.txt"), "utf8"), "outside-ran\n");
+    // Every frame that draws the input line while it is empty shows the hint: a reader is reading it.
+    const frames = t.out().split("\x1b[?2026h").filter((f) => f.includes("\x1b[?2026l") && /working/.test(f) && /❯ (?:\x1b\[K|\s*$)/m.test(f));
+    const bad = frames.filter((f) => !/Enter: tell the agent now/.test(f));
+    assert.deepEqual(bad.length, 0, `an input line drawn with no reader: ${JSON.stringify(bad.slice(0, 3))}`);
+    at = await t.until(/\w ❯ /, at);
+    t.send("/quit\r");
+    assert.equal(await t.ended(), 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("a question over the input line (FOL-434): it waits for a pause in the typing, a paste never answers it, two come one after the other, and what was typed is still there after", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const turns = [
+    () => sse([{ type: "tool_use", id: "r1", name: "Read", input: { file_path: path.join(d, "a.txt") } }]),
+    // The asked calls come while the person is typing.
+    () => new Promise((r) => setTimeout(r, 1_500)).then(() => sse([
+      { type: "tool_use", id: "b1", name: "Bash", input: { command: "echo first > f1.txt" } },
+      { type: "tool_use", id: "b2", name: "Bash", input: { command: "echo second > f2.txt" } },
+    ])),
+    () => sse([{ type: "text", text: "All done." }]),
+  ];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-qv/messages`]: () => ({ messages: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return (turns[asked.length - 1] ?? (() => sse([{ type: "text", text: "(no more)" }])))();
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--no-sandbox", "--to", "desk", "--context", "code-qv", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", COLUMNS: "160" });
+  const pause = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("one\r");
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/Enter: tell the agent now/, at, 10_000);
+    // Typing, a key every 250 ms for about 3 s: the question that comes meanwhile waits for a pause.
+    const typing = "keep this text";
+    let lastKey = 0;
+    for (const ch of typing) {
+      t.send(ch);
+      lastKey = Date.now();
+      await pause(250);
+    }
+    assert.doesNotMatch(t.out().slice(at), /allow\? \[y\]es/, "no question while the person typed");
+    at = await t.until(/echo first > f1\.txt[\s\S]*allow\? \[y\]es/, at, 15_000);
+    assert.ok(Date.now() - lastKey >= 900, `shown a second after the last key, not ${Date.now() - lastKey} ms`);
+    // A paste is text, never the answer: a pasted "y" and line break leave the question open.
+    t.send("\x1b[200~y\r\x1b[201~");
+    await pause(700);
+    assert.ok(!fs.existsSync(path.join(d, "f1.txt")), "a paste did not answer");
+    assert.doesNotMatch(t.out().slice(at), /echo second/, "the second question waits for the first");
+    // Ctrl-U clears it, then a typed y and Enter answer.
+    t.send("\x15");
+    await pause();
+    t.send("y");
+    await pause(80);
+    t.send("\r");
+    at = await t.until(/echo second > f2\.txt[\s\S]*allow\? \[y\]es/, at, 15_000);
+    t.send("y");
+    await pause(80);
+    t.send("\r");
+    at = await t.until(/All done\./, at, 30_000);
+    // What was typed while the questions came is on the next prompt's line, as typed.
+    at = await t.until(/❯ (?:\x1b\[\d+G)?keep this text/, at, 10_000);
+    t.send("\x15");
+    await pause();
+    t.send("/quit\r");
+    assert.equal(await t.ended(), 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+  assert.equal(fs.readFileSync(path.join(d, "f1.txt"), "utf8"), "first\n");
+  assert.equal(fs.readFileSync(path.join(d, "f2.txt"), "utf8"), "second\n");
+  assert.doesNotMatch(JSON.stringify(asked.map((a) => a.messages)), /keep this text/, "the typed text was never sent");
+});
