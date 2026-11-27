@@ -471,7 +471,8 @@ test("billing plans / plan / cancel / resume / pay-as-you-go / top-up / card —
   const plans = await at(s.url, "billing", "plans");
   const pipe = await at(s.url, "billing", "plan", "max");
   const up = await at(s.url, "billing", "plan", "max", "--yes");
-  const old = await at(s.url, "billing", "plan", "starter", "--yes");
+  // An old platform plan (Starter is a size of the subscription since 27 Nov 2026).
+  const old = await at(s.url, "billing", "plan", "scale", "--yes");
   const cancel = await at(s.url, "billing", "plan", "cancel", "--yes");
   const resume = await at(s.url, "billing", "plan", "resume", "--yes");
   const asked = await at(s.url, "billing", "pay-as-you-go", "on");
@@ -496,7 +497,7 @@ test("billing plans / plan / cancel / resume / pay-as-you-go / top-up / card —
   for (const r of [up, cancel, resume, on, nolimit, off, top]) assert.equal(r.code, 0, r.out);
   assert.match(up.out, /on Max — \$53\.33 from your balance/);
   assert.equal(old.code, 1);
-  assert.match(old.out, /not sold any more[\s\S]*foldrun billing plan pro/);
+  assert.match(old.out, /not sold any more[\s\S]*foldrun billing plan starter[\s\S]*plan pro/);
   assert.match(cancel.out, /stops on 2026-12-20/);
   assert.match(on.out, /pay as you go on, up to \$30\.00 a period/);
   assert.match(nolimit.out, /no limit beyond the balance/);
