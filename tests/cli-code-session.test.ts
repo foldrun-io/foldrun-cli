@@ -5787,7 +5787,7 @@ test("/where web here (FOL-383): search and fetch run from this computer under t
   }
 });
 
-test("no web for an agent its file does not grant it (FOL-383): no browse tool, no search or fetch, in the cloud or here", async () => {
+test("the web for an agent whose file names no tools: [web] (FOL-383, FOL-412): on by default, in the cloud or here", async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -5822,7 +5822,8 @@ test("no web for an agent its file does not grant it (FOL-383): no browse tool, 
     await t.until(/Answer 2\./, at, 30_000);
     for (const req of asked) {
       const names = (req.tools ?? []).map((x: any) => x.name);
-      for (const n of ["web", "web_search", "web_fetch"]) assert.ok(!names.includes(n), `${n} not offered without tools: [web]`);
+      // FOL-412: every web tool foldrun offers is on by default, tools: [web] or not; with /where web here, search and fetch run here.
+      assert.ok(names.includes("web") || names.some((n: string) => /search|fetch/.test(n)), `the web is offered without tools: [web] (${names.join(", ")})`);
     }
     t.send("/quit\r");
     await t.done;

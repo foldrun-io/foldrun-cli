@@ -90,7 +90,7 @@ const coreServerTools = typeof ((await import("@foldrun/core/engine-common")) as
 const skip = !coreServerTools ? "needs a core with the engine's serverTools (FOL-304)" : !hasPty ? "needs python3's pty" : false;
 
 /** One session: two messages, with /where web typed after each. `models` answers GET /v1/models, call by call. */
-async function session(agentMd: string, models: (n: number) => unknown) {
+async function session(agentMd: string, models: (n: number) => unknown, files: { project?: string; account?: string } = {}) {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   const asked: any[] = [];
@@ -99,8 +99,8 @@ async function session(agentMd: string, models: (n: number) => unknown) {
     [`GET ${WS}`]: () => ({ name: "desk" }),
     [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
     [`GET ${WS}/sessions/code-w332/messages`]: () => ({ messages: [] }),
-    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: agentMd } : { content: "" }),
-    "GET /v1/account/agents-md": () => ({ content: "" }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: agentMd } : q.get("path") === "AGENTS.md" ? { content: files.project ?? "" } : { content: "" }),
+    "GET /v1/account/agents-md": () => ({ content: files.account ?? "" }),
     "GET /v1/me": () => ({ account: "acme" }),
     "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
     "GET /v1/models": () => models(++modelsCalls),
@@ -132,14 +132,50 @@ async function session(agentMd: string, models: (n: number) => unknown) {
 }
 const announces = () => raw("{}", "application/json", { "foldrun-server-tools": ANNOUNCED });
 
-test("/where web names why search and fetch were not offered: the platform's copy of the agent has no web (FOL-332)", { skip, timeout: 120_000 }, async () => {
+test("an agent with no tools: [web] is offered search and fetch all the same: every tool the API runs is on by default (FOL-412)", { skip, timeout: 120_000 }, async () => {
   const x = await session("---\nname: coder\ntools: [write, code]\n---\nYou code.\n", announces);
+  try {
+    let at = await x.t.until(/\w ❯ /);
+    at = await x.send("hello", 1, at);
+    assert.ok(x.types(0).length > 0, "search and fetch offered");
+    await x.close();
+  } finally {
+    x.stop();
+  }
+});
+
+test("the project's or account's AGENTS.md narrows the web for every agent: disallowedTools turns it off, web.actions keeps only what it lists (FOL-412, Codex)", { skip, timeout: 120_000 }, async () => {
+  const plain = "---\nname: coder\n---\nYou code.\n";
+  for (const files of [{ project: "---\ndisallowedTools: [web]\n---\n" }, { account: "---\ndisallowedTools: [web]\n---\n" }]) {
+    const x = await session(plain, announces, files);
+    try {
+      let at = await x.t.until(/\w ❯ /);
+      at = await x.send("hello", 1, at);
+      assert.deepEqual(x.types(0), [], JSON.stringify(files));
+      await x.close();
+    } finally {
+      x.stop();
+    }
+  }
+  const x = await session(plain, announces, { account: "---\nweb:\n  actions: [search]\n---\n" });
+  try {
+    let at = await x.t.until(/\w ❯ /);
+    at = await x.send("hello", 1, at);
+    assert.deepEqual(x.types(0), ["web_search"]);
+    await x.close();
+  } finally {
+    x.stop();
+  }
+});
+
+test("/where web names why search and fetch were not offered: the platform's copy of the agent turns the web off (FOL-332, FOL-412)", { skip, timeout: 120_000 }, async () => {
+  const x = await session("---\nname: coder\ntools: [write, code]\ndisallowedTools: [web]\n---\nYou code.\n", announces);
   try {
     let at = await x.t.until(/\w ❯ /);
     at = await x.send("hello", 1, at);
     assert.deepEqual(x.types(0), []);
     x.t.send("/where web\r");
-    await x.t.until(/last turn offered no search or fetch — agents\/coder\/agent\.md in the project desk on the platform[^\n]*does not name web in its settings — it needs tools: \[web\]/, at);
+    await x.t.until(/last turn offered no search or fetch — agents\/coder\/agent\.md in the project desk on the platform[^\n]*turns the web off: disallowedTools: \[web\]/, at);
     await x.close();
   } finally {
     x.stop();

@@ -10186,41 +10186,98 @@ function webAsks(s) {
 }
 
 /**
- * Which web actions the session's agent may use, as its file grants them (tools: [web], web.actions), or null when
- * it has no web. A provider or settings chosen for an action (exclude_engines, a vendor) is not something the
+ * Which web actions the session's agent may use, or null when it has none. Every tool foldrun's API offers is on by
+ * default (owner, 27 Nov 2026, FOL-412: "all tools we offer on foldrun api endpoint"): no tools: [web] is needed. Only
+ * the agent's file narrows it — disallowedTools naming web (or web_search, web_fetch, web_browse), or web.actions. A provider or settings chosen for an action (exclude_engines, a vendor) is not something the
  * door takes: that action is not offered rather than run without them (Codex) — unless `settings` is true, as for
  * browse, whose web.browse block the browse code reads and applies or names.
  * Why there is none is put in `why` (FOL-332: a grant that was not there said nothing): the file it reads is the
  * platform's copy of the project's agent, which a folder's own edit does not reach until it is deployed.
  * @param {any} s @param {string[]} [why] @returns {Promise<((action: string, settings?: boolean) => boolean) | null>}
  */
+/**
+ * Whether the agent's file, the project's AGENTS.md or the account's says anything that could narrow the web
+ * (a web: block, disallowedTools), read as raw text. Fresh for 30 s per sign-in, platform and project. A read that
+ * fails says yes, so the full read decides (and names what failed).
+ * @param {any} s @param {string} file @returns {Promise<boolean>}
+ */
+async function webMayBeNarrowed(s, file) {
+  const key = `${readerOf(s)}\n${s.url}\n${s.ws}\n${file}`;
+  const held = s.webNarrowed;
+  if (held && held.key === key && Date.now() - held.at < 30_000) return held.yes;
+  // The whole text, not only what looks like its frontmatter: a reader accepts more openings (a BOM, `---yaml`) than
+  // a pattern sees, so any mention at all sends it to the full read (Codex).
+  const says = (/** @type {string | null | undefined} */ text) => /web|disallowedtools/i.test(text ?? "");
+  const startedAt = Date.now();
+  let yes;
+  try {
+    const [agent, project] = await Promise.all([readSourceAt(s, file), readSourceAt(s, "AGENTS.md")]);
+    let account = null;
+    try {
+      account = (await remoteCall(s.url, s.flags, "/v1/account/agents-md"))?.content ?? null;
+    } catch (err) {
+      if (!(err instanceof HttpError && err.status === 404)) throw err;
+    }
+    yes = says(agent.content) || says(project.content) || says(account);
+  } catch {
+    yes = true;
+  }
+  // Fresh from when the read began, so a slow read never stretches the 30 s (Codex).
+  s.webNarrowed = { key, at: startedAt, yes };
+  return yes;
+}
+
+/**
+ * The tools the agent's file, the project's or the account's AGENTS.md turn off by name (disallowedTools), for the
+ * API's own tools beyond the web (FOL-412). Read only when one of them mentions disallowedTools at all.
+ * @param {any} s @returns {Promise<Set<string>>}
+ */
+async function otherToolsOff(s) {
+  const out = new Set();
+  try {
+    const file = `agents/${s.agent}/agent.md`;
+    if (!(await webMayBeNarrowed(s, file))) return out;
+    for (const front of [await projectFront(s, file), await projectFront(s, "AGENTS.md"), await accountFront(s, [])]) {
+      for (const t of Array.isArray(front?.disallowedTools) ? front.disallowedTools : []) out.add(String(t));
+    }
+  } catch {
+    // Not known whether they are off: none is offered (fail closed).
+    out.add("*");
+  }
+  return out;
+}
+
 async function webGrant(s, why = []) {
   let agent;
   let project;
+  let account;
+  let projectOwn;
   const file = `agents/${s.agent}/agent.md`;
   const there = `${file} in the project ${s.ws} on the platform (the platform's copy: a change in this folder reaches it with foldrun deploy)`;
   try {
-    // A file whose settings never say "web" grants none: answered without loading the frontmatter reader, so a turn
-    // of an agent with no web stays light (FOL-265).
-    const key = `${readerOf(s)}\n${s.url}\n${s.ws}\n${file}`;
-    if (!s.fronts?.[key]) {
-      const { content } = await readSourceAt(s, file);
-      const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content ?? "")?.[1] ?? "";
-      if (!/\bweb\b/.test(head)) {
-        why.push(content === null ? `there is no ${there}` : `${there} does not name web in its settings — it needs tools: [web]`);
-        return null;
-      }
-    }
+    // The project's and account's settings may narrow it too (a web: block in AGENTS.md), so all three count. When
+    // none of the three says anything about the web, every action is on, answered without loading the frontmatter
+    // reader so a turn stays light (FOL-265); a file that does is read in full below.
+    if (!(await webMayBeNarrowed(s, file))) return () => true;
     agent = await projectFront(s, file);
-    project = { ...(await accountFront(s, [])), ...(await projectFront(s, "AGENTS.md")) };
+    account = await accountFront(s, []);
+    projectOwn = await projectFront(s, "AGENTS.md");
+    project = { ...account, ...projectOwn };
   } catch (err) {
-    why.push(`${there} could not be read: ${plainText(explain(err)).split("\n")[0]}`);
+    why.push(`${there} could not be read, so what it allows is not known: ${plainText(explain(err)).split("\n")[0]}`);
     return null;
   }
-  const tools = Array.isArray(agent?.tools) ? agent.tools.map(String) : [];
-  if (!tools.includes("web")) {
-    why.push(`${there} has tools: [${tools.join(", ")}] — web is not in it`);
-    return null;
+  // Turned off anywhere — the agent's file, the project's AGENTS.md or the account's — is off (Codex).
+  const layers = [[there, agent], [`the project's AGENTS.md`, projectOwn], [`the account's AGENTS.md`, account]];
+  /** @type {string[]} */
+  const off = [];
+  for (const [where, front] of layers) {
+    const named = (Array.isArray(front?.disallowedTools) ? front.disallowedTools.map(String) : []).filter((/** @type {string} */ t) => /^web(_search|_fetch|_browse)?$/.test(t));
+    if (named.includes("web")) {
+      why.push(`${where} turns the web off: disallowedTools: [web]`);
+      return null;
+    }
+    off.push(...named);
   }
   const P = /** @type {any} */ (await import("@foldrun/core/providers"));
   const web = P.webConfig(agent, project);
@@ -10229,8 +10286,19 @@ async function webGrant(s, why = []) {
     why.push(`its web: block does not read — ${web.problems.join(" ")}`);
     return null;
   }
-  const actions = web.actions;
-  return (/** @type {string} */ a, settings = false) => (!Array.isArray(actions) || actions.includes(a)) && (settings || web.raw?.[a] === undefined || web.raw?.[a] === null);
+  // web.actions narrows from every layer: an action is offered only where each layer that lists actions lists it (Codex).
+  /** @type {string[][]} */
+  const lists = Array.isArray(web.actions) ? [web.actions] : [];
+  for (const [where, front] of layers.slice(1)) {
+    if (!front?.web) continue;
+    const own = P.webConfig(front, {});
+    if (Array.isArray(own.problems) && own.problems.length) {
+      why.push(`the web: block in ${where} does not read — ${own.problems.join(" ")}`);
+      return null;
+    }
+    if (Array.isArray(own.actions)) lists.push(own.actions);
+  }
+  return (/** @type {string} */ a, settings = false) => !off.includes(`web_${a}`) && lists.every((l) => l.includes(a)) && (settings || web.raw?.[a] === undefined || web.raw?.[a] === null);
 }
 
 /**
@@ -10294,6 +10362,15 @@ async function serverToolsFor(s, gateway, why) {
   const fetchType = s.gatewayRuns.find((/** @type {string} */ t) => /^web_fetch_\d{8}$/.test(t));
   if (search && may("search")) out.push({ type: search, name: "web_search" });
   if (fetchType && may("fetch")) out.push({ type: fetchType, name: "web_fetch" });
+  // Every other tool the API runs itself (FOL-412: extract, generate, docs … as each ships) is offered too, by its
+  // own name, unless the agent's files turn it off (disallowedTools: [<name>]). Browse is not here: the session's own
+  // web tool browses through the API's browse door. The engine drops a type it does not know, so nothing unknown is sent.
+  const offOther = await otherToolsOff(s);
+  for (const t of s.gatewayRuns) {
+    const m = /^foldrun_([a-z_]+)_\d{8}$/.exec(t);
+    if (!m || m[1] === "web_browse" || offOther.has("*") || offOther.has(m[1]) || offOther.has(`foldrun_${m[1]}`)) continue;
+    out.push({ type: t, name: `foldrun_${m[1]}` });
+  }
   if (!out.length) why.push(`the gateway runs ${s.gatewayRuns.join(", ") || "nothing"}; the agent's web: block ${search || fetchType ? "leaves out search and fetch (web.actions) or names a provider for them" : "has nothing to offer there"}`);
   return out;
 }
@@ -20540,7 +20617,7 @@ async function codeLocalTurn(s, text) {
               } }]),
               ...(here && webMay?.("search") ? [{ name: SEARCH_HERE, description: here.SEARCH_HERE_DEFINITION.description, input_schema: here.SEARCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => here.searchHere(input, { signal: ctx.signal }) }] : []),
               ...(here && webMay?.("fetch") ? [{ name: FETCH_HERE, description: here.FETCH_HERE_DEFINITION.description, input_schema: here.FETCH_HERE_DEFINITION.input_schema, readOnly: true, run: (/** @type {any} */ input, /** @type {{ signal: AbortSignal }} */ ctx) => here.fetchHere(input, { signal: ctx.signal, userAgent: USER_AGENT }) }] : []),
-              // Browse only for an agent whose file grants it (tools: [web], web.actions), in either place (Codex).
+              // Browse as the agent's file allows it (on unless disallowedTools or web.actions say not, FOL-412), in either place (Codex).
               ...(!webMay?.("browse", true) ? [] : webCloud
                 ? [{
                     name: "web", description: CLOUD_WEB_DEFINITION.description, input_schema: CLOUD_WEB_DEFINITION.input_schema, readOnly: false,
