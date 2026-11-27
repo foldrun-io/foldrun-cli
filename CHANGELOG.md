@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.6.0] — 2026-11-27
+
+- feat(routes): production's Iran front approved for api.foldrun.io (FOL-402) ([87dccb2](https://github.com/foldrun-io/foldrun-cli/commit/87dccb2))
+
 ## [34.5.0] — 2026-11-27
 
 - feat(billing): foldrun billing plan starter|pro|max — Starter listed, bought, a move down at the renewal (FOL-413) ([ac3c2ff](https://github.com/foldrun-io/foldrun-cli/commit/ac3c2ff))
