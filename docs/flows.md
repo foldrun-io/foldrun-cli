@@ -301,7 +301,26 @@ The command sees what the step's scripts saw — its secrets, `FOLDRUN_RUN_ID`,
 `FOLDRUN_AGENT`, `FOLDRUN_WORKSPACE`, `FOLDRUN_DATE`, `TZ`, and `FOLDRUN_API_URL` (this install's own API, when it has a public address) — so a marker a step leaves on disk can
 be checked to name *this* run. That matters: a run's copy-back never
 propagates a deletion, so a marker from an earlier run rides into every later
-sandbox. `judge:` is a toolless fast-tier grading call; the other four cost
+sandbox.
+
+The same holds inside one run: a file a failed attempt or an earlier step left
+is still there when a retry is checked. `FOLDRUN_STEP_ATTEMPT_ID` tells them
+apart. It is new each time a step's work starts over (a `retry:`, an
+`on-fail:` rescue, a `loop:` cycle, a re-run the platform makes in a fresh
+sandbox), different for every step, and the same for the step's scripts, its
+shell and its `verify:`. A secret cannot take its name. Have the step stamp
+its proof with it, and check the stamp (the `test -n` keeps a missing id from
+passing as equal to a missing file):
+
+```markdown
+2. [[publisher]] — Publish the draft, then write $FOLDRUN_STEP_ATTEMPT_ID to workspace/storage/draft/published.attempt
+   retry: 1
+   verify: test -n "$FOLDRUN_STEP_ATTEMPT_ID" && test "$(cat workspace/storage/draft/published.attempt)" = "$FOLDRUN_STEP_ATTEMPT_ID"
+```
+
+A run's record shows each step's last one as `attemptId`.
+
+`judge:` is a toolless fast-tier grading call; the other four cost
 nothing.
 
 ### Delegation
