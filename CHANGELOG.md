@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [35.0.1] — 2026-11-27
+
+### docs
+
+- sync from foldrun-docs (FOL-444 debate and review in cloud steps) ([0227a85](https://github.com/foldrun-io/foldrun-cli/commit/0227a85))
+
 ## [35.0.0] — 2026-11-27
 
 ### Breaking changes
