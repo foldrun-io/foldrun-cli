@@ -1280,6 +1280,14 @@ async function checkProblems(workspace, flags = {}) {
     const unopened = unopenedFrontmatter && fs.existsSync(agentFile) ? unopenedFrontmatter(fs.readFileSync(agentFile, "utf8")) : null;
     if (unopened) note("error", `agents/${a.name}/agent.md`, unopened, 1);
     if (!a.description) note("warn", `agents/${a.name}`, "no description — other agents and people read it");
+    // tools: [debate, review] and second_model: (FOL-418): the same warnings the deploy and the dashboard's Checks give.
+    {
+      const names = /** @type {any} */ (await import("@foldrun/core/tool-names").catch(() => null));
+      if (typeof names?.secondModelProblems === "function" && fs.existsSync(agentFile)) {
+        const front = /** @type {any} */ (await core()).readFrontmatter(agentFile) ?? {};
+        for (const w of names.secondModelProblems(front)) note("warn", `agents/${a.name}`, w);
+      }
+    }
 
     // A timezone nobody can read. The deploy already refuses it; check has to
     // refuse it here, or the first anyone hears of it is a push that bounces.
