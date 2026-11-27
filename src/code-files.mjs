@@ -169,6 +169,58 @@ export function fileTextBlock(name, kind, text, o = {}) {
 }
 
 /**
+ * The ways this computer can hand over an image on the clipboard as PNG bytes (FOL-349), tried in order:
+ * FOLDRUN_CODE_CLIPBOARD_IMAGE first (a command run by the shell, for tests), then what the system has —
+ * pngpaste or osascript on macOS, wl-paste or xclip on Linux, PowerShell's Get-Clipboard on Windows.
+ * `decode` turns what the command printed into the bytes. Exported for tests.
+ * @param {string} platform @param {Record<string, string | undefined>} env
+ * @returns {Array<{ cmd: string, args: string[], shell?: boolean, decode: (out: Buffer) => Buffer }>}
+ */
+export function clipboardImageCommands(platform = process.platform, env = process.env) {
+  const as = (/** @type {Buffer} */ out) => out;
+  if (env.FOLDRUN_CODE_CLIPBOARD_IMAGE) return [{ cmd: env.FOLDRUN_CODE_CLIPBOARD_IMAGE, args: [], shell: true, decode: as }];
+  if (platform === "darwin") {
+    return [
+      { cmd: "pngpaste", args: ["-"], decode: as },
+      // «data PNGf89504E47…»: the bytes as hex.
+      { cmd: "osascript", args: ["-e", "the clipboard as «class PNGf»"], decode: (out) => Buffer.from(/«data PNGf([0-9A-Fa-f]*)»/.exec(out.toString("utf8"))?.[1] ?? "", "hex") },
+    ];
+  }
+  if (platform === "win32") {
+    const ps = "$i = Get-Clipboard -Format Image; if ($i) { $m = New-Object System.IO.MemoryStream; $i.Save($m, [System.Drawing.Imaging.ImageFormat]::Png); [Console]::Out.Write([Convert]::ToBase64String($m.ToArray())) }";
+    return [{ cmd: "powershell", args: ["-NoProfile", "-NonInteractive", "-Command", ps], decode: (out) => Buffer.from(out.toString("latin1").trim(), "base64") }];
+  }
+  const wl = { cmd: "wl-paste", args: ["--no-newline", "--type", "image/png"], decode: as };
+  const x = { cmd: "xclip", args: ["-selection", "clipboard", "-t", "image/png", "-o"], decode: as };
+  return env.WAYLAND_DISPLAY ? [wl, x] : [x, wl];
+}
+
+/**
+ * The image on the clipboard as PNG bytes, or null: no image there, no tool to read it, or it took too long.
+ * Never throws — Ctrl-V without an image does what it did before (FOL-349).
+ * @param {(cmd: string, args: string[], o: object) => { status: number | null, stdout: Buffer | null, error?: Error }} run spawnSync
+ */
+export function readClipboardImage(run, platform = process.platform, env = process.env) {
+  for (const way of clipboardImageCommands(platform, env)) {
+    let got;
+    try {
+      got = run(way.cmd, way.args, { shell: way.shell === true, timeout: 5_000, maxBuffer: FILE_BYTES_MAX * 2 + 1024, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    } catch {
+      continue;
+    }
+    if (got.error || got.status !== 0 || !got.stdout?.length) continue;
+    let bytes;
+    try {
+      bytes = way.decode(got.stdout);
+    } catch {
+      continue;
+    }
+    if (bytes.length && bytes.length <= FILE_BYTES_MAX && imageType(bytes) === "image/png") return bytes;
+  }
+  return null;
+}
+
+/**
  * The bytes of the file the person chose, read without following a link at its last step and checked to be
  * the same file (device and inode) — a file swapped while the list was open is refused (Codex).
  * @param {FoundFile} f @returns {Buffer}

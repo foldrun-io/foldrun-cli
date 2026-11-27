@@ -844,6 +844,16 @@ export function clipCells(/** @type {string} */ t, /** @type {number} */ n) {
   return `${out}…`;
 }
 
+/**
+ * The row under the prompt naming what the line attaches (FOL-349): "📎 shot-1.png 84 KB · deck.pdf 2.1 MB",
+ * at most `width` cells; "" when nothing is attached. Plain text — the caller dims it.
+ * @param {Array<{ name: string, bytes: number }>} files @param {number} width
+ */
+export function attachmentRow(files, width) {
+  if (!files.length || width < 4) return "";
+  return clipCells(`📎 ${files.map((f) => `${f.name}${f.bytes > 0 ? ` ${formatBytes(f.bytes)}` : ""}`).join(" · ")}`, width);
+}
+
 /** At most n cells of a text, its END kept (what is being typed), … where cut. */
 export function clipCellsEnd(/** @type {string} */ t, /** @type {number} */ n) {
   if (n <= 0) return "";

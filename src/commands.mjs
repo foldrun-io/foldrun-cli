@@ -13,8 +13,8 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles, hasCurrentAgentRules, agentRulesBlock, codingAgent, docsDir, docPages, docPage, withAgentRules } from "./guide.mjs";
 import { browserCmd, localBrowserReady, localWebDefinition, localWebArgv, runLocalWeb, localBrowseBlock, shapeOutput as browseOutput } from "./browser.mjs";
 import { CLOUD_WEB_DEFINITION, cloudBrowse, cloudBrowseBlock, cloudBrowseBody } from "./browse-cloud.mjs";
-import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu, commandDuringTurn, COMMAND_LINE } from "./code-session.mjs";
-import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL } from "./code-files.mjs";
+import { readCodePrefs, writeCodePrefs, thinkingLines, marginLines, commandMenu, commandDuringTurn, COMMAND_LINE, attachmentRow } from "./code-session.mjs";
+import { filesIn, fileTextBlock, chosenBytes, imageType, imageTokens, FILE_BYTES_MAX, IMAGE_BYTES_MAX, FILE_CHOICES, KIND_PLURAL, readClipboardImage } from "./code-files.mjs";
 import { patchSections, joinSections, partNote, patchText, patchBytes } from "./code-patch.mjs";
 import { waitLeft, waitAnswer, waitUntil, RESUME_PROMPT } from "./code-wait.mjs";
 import { foldrunDirs, xdgDirs, kindOf } from "./dirs.mjs";
@@ -23808,6 +23808,49 @@ function watchMessages(s, say) {
   };
 }
 
+/**
+ * What a line would attach, by filesForTurn's own rules (filesIn; an empty or too-large file stays a path), for the
+ * row under the prompt (FOL-349): a file inside the folder by its path there, one outside by its name.
+ * @param {string} line @param {string} dir @returns {Array<{ name: string, bytes: number }>}
+ */
+function lineAttachments(line, dir) {
+  if (!line.trim() || !dir) return [];
+  let root = dir;
+  try {
+    root = fs.realpathSync(dir);
+  } catch {
+    /* as given */
+  }
+  return filesIn(line, dir)
+    .filter((f) => f.bytes > 0 && f.bytes <= FILE_BYTES_MAX)
+    .map((f) => ({ name: noBidi(plainText(f.inside ? path.relative(root, f.real).split(path.sep).join("/") : path.basename(f.file))), bytes: f.bytes }));
+}
+
+/**
+ * Ctrl-V with an image on the clipboard (FOL-349): saved as a PNG in this session's own folder under the system's
+ * temp folder — never in the person's project — and the `@path` to put on the line, which filesForTurn then attaches
+ * as any @path. Null when the clipboard holds no image or nothing here can read it: the key does what it did before.
+ * @param {any} s @returns {string | null}
+ */
+function pasteClipboardImage(s) {
+  const png = readClipboardImage(spawnSync);
+  if (!png) return null;
+  try {
+    // Made once a session, by mkdtemp: 0700 and a name no one else could have taken first.
+    if (!s.attachDir || !fs.existsSync(s.attachDir)) s.attachDir = fs.mkdtempSync(path.join(os.tmpdir(), `foldrun-code-${String(s.context ?? "session").replace(/[^A-Za-z0-9._-]/g, "").slice(0, 40)}-`));
+    let n = 1;
+    while (fs.existsSync(path.join(s.attachDir, `shot-${n}.png`))) n += 1;
+    const file = path.join(s.attachDir, `shot-${n}.png`);
+    fs.writeFileSync(file, png, { mode: 0o600, flag: "wx" });
+    const home = os.homedir();
+    const shown = process.platform !== "win32" && home && file.startsWith(`${home}${path.sep}`) ? `~/${path.relative(home, file)}` : file;
+    // Quoted only when it has a space, as filesIn reads @"…" and @'…'.
+    return /\s/.test(shown) ? (shown.includes('"') ? `@'${shown}'` : `@"${shown}"`) : `@${shown}`;
+  } catch {
+    return null;
+  }
+}
+
 async function readCodeMessage(state, completer, s) {
   const { createInterface } = await import("node:readline");
   // The project's name, then a chevron (owner, 19 Nov 2026): where you are
@@ -23844,7 +23887,10 @@ async function readCodeMessage(state, completer, s) {
     // Rows that fit the screen as it is, after their indent; none on a screen too narrow for them (Codex).
     const statusRows = () => {
       const w = (process.stdout.columns || 80) - 3;
-      return lineOn && s && w >= 20 ? wrapFields(statusFields(s, { ttlMs: ttl, model: (m) => shortModel(plainText(m)), cost: formatCost }), w).map((r) => (r.startsWith(BYPASS_FIELD) ? `  ${c.red(BYPASS_FIELD)}${c.grey(r.slice(BYPASS_FIELD.length))}` : `  ${c.grey(r)}`)) : [];
+      // What the line attaches (FOL-349), first and whether or not the status line is on: it is about this message.
+      const files = attachmentRow(s?.dir ? lineAttachments(rl.line, s.dir) : [], w);
+      const attached = files ? [`  ${c.dim(files)}`] : [];
+      return [...attached, ...(lineOn && s && w >= 20 ? wrapFields(statusFields(s, { ttlMs: ttl, model: (m) => shortModel(plainText(m)), cost: formatCost }), w).map((r) => (r.startsWith(BYPASS_FIELD) ? `  ${c.red(BYPASS_FIELD)}${c.grey(r.slice(BYPASS_FIELD.length))}` : `  ${c.grey(r)}`)) : [])];
     };
     const menu = tty && process.stdout.isTTY && process.env.TERM !== "dumb" && Array.isArray(state.slash) ? slashMenu(rl, () => state.slash, () => displayWidth(`${promptLead(s)} ❯ `), statusRows, () => search?.searching === true) : null;
     // The cache's minutes stay true while the prompt waits (Codex): redrawn once a minute.
@@ -23861,6 +23907,17 @@ async function readCodeMessage(state, completer, s) {
     };
     const watching = s ? watchMessages(s, above) : undefined;
     if (tty && search) /** @type {any} */ (input).route((/** @type {Buffer} */ data, /** @type {(t: string) => void} */ write) => {
+      // Ctrl-V pressed alone (never a byte inside a paste) with an image on the clipboard: its @path on the line
+      // (FOL-349). No image, or nothing to read one: readline has the key, as before.
+      if (data.length === 1 && data[0] === 0x16 && !search.searching && !pasting && s) {
+        const at = pasteClipboardImage(s);
+        if (at) {
+          const before = rl.line.slice(0, rl.cursor);
+          rl.write(`${before && !/\s$/.test(before) ? " " : ""}${at} `);
+          if (menu) setImmediate(() => !settled && menu.refresh());
+          return;
+        }
+      }
       if (menu?.key(data, write)) return;
       search.feed(data, write);
     });

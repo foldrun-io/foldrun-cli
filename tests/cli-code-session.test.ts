@@ -12,8 +12,9 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { serve, raw } from "./fake-platform.ts";
 import {
   codeCompleter, joinMessage, shellNote, withNotes, colorPatch, helpText, readHistory, appendHistory, lastSession, rememberSession,
-  friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, homeTilde,
+  friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, homeTilde, attachmentRow, displayWidth,
 } from "../src/code-session.mjs";
+import { clipboardImageCommands, readClipboardImage } from "../src/code-files.mjs";
 
 const WS = "/v1/workspaces/desk";
 const ID = "c".repeat(64);
@@ -4339,6 +4340,106 @@ test("an image sent to the model as it is: the token estimate shown, the image b
     t.child.kill();
     s.close();
   }
+});
+
+test("Ctrl-V with an image on the clipboard puts its @path on the line, the row under the prompt names it, and Enter sends it; with no image Ctrl-V adds nothing (FOL-349)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+  const d = repo();
+  const ihdr = Buffer.alloc(16);
+  ihdr.writeUInt32BE(13, 0);
+  ihdr.write("IHDR", 4, "latin1");
+  ihdr.writeUInt32BE(640, 8);
+  ihdr.writeUInt32BE(480, 12);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ihdr, Buffer.alloc(64, 7)]);
+  // The fake clipboard: text first (no image), a PNG later.
+  const clip = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-clip-")), "clipboard");
+  fs.writeFileSync(clip, "just some text");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const asked: any[] = [];
+  const s = await serve({
+    [`GET ${WS}`]: () => ({ name: "desk" }),
+    [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+    [`GET ${WS}/sessions/code-i349/messages`]: () => ({ messages: [] }),
+    [`GET ${WS}/source`]: (_b, q) => (q.get("path") === "agents/coder/agent.md" ? { content: "---\nname: coder\nmedia: as-is\n---\nYou code.\n", sha256: "x" } : { files: [] }),
+    "GET /v1/me": () => ({ account: "acme" }),
+    "POST /v1/extract": () => ({ text: "never" }),
+    "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    "POST /v1/keys": (b) => {
+      const body = JSON.parse(String(b));
+      return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
+    },
+    "POST /v1/messages": (b) => {
+      asked.push(JSON.parse(String(b)));
+      return sse([{ type: "text", text: "The button is cut off." }]);
+    },
+  });
+  const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-i349", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1", COLUMNS: "200", NO_COLOR: "1", FOLDRUN_CODE_CLIPBOARD_IMAGE: `cat '${clip}'` });
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("look");
+    await new Promise((r) => setTimeout(r, 200));
+    // No image on the clipboard: nothing is put on the line, nothing is said.
+    t.send("\x16");
+    await new Promise((r) => setTimeout(r, 800));
+    assert.doesNotMatch(t.out().slice(at), /📎|shot-\d\.png|✗/, `no image, nothing added: ${JSON.stringify(t.out().slice(at))}`);
+    fs.writeFileSync(clip, png);
+    t.send("\x16");
+    at = await t.until(/ @\S*shot-1\.png /, at);
+    at = await t.until(/📎 shot-1\.png 88 B/, at);
+    t.send("what is wrong?\r");
+    at = await t.until(/shot-1\.png — image[\s\S]*Send it to the model as it is/, at);
+    t.send("\r");
+    at = await t.until(/✓ shot-1\.png goes to the model as it is/, at, 30_000);
+    at = await t.until(/make it\? \[y\/N\]/, at);
+    t.send("y\r");
+    at = await t.until(/The button is cut off\./, at, 30_000);
+    at = await t.until(/\w ❯ /, at);
+    const user = (asked[0]?.messages ?? []).filter((m: any) => m.role === "user").at(-1);
+    const blocks = Array.isArray(user?.content) ? user.content : [];
+    assert.ok(blocks.some((b: any) => b.type === "image" && b.source?.media_type === "image/png" && b.source?.data === png.toString("base64")), JSON.stringify(blocks).slice(0, 300));
+    const said = JSON.stringify(blocks.filter((b: any) => b.type === "text"));
+    const typed = /look @(\S*shot-1\.png) what is wrong\?/.exec(said);
+    assert.ok(typed, `the message as typed, the pasted path in it once and nothing else: ${said.slice(0, 400)}`);
+    // Saved in the session's own temp folder, never in the person's project.
+    const saved = (typed[1] as string).replace(/^~\//, `${os.homedir()}/`);
+    assert.equal(fs.readFileSync(saved).toString("base64"), png.toString("base64"));
+    assert.match(path.basename(path.dirname(saved)), /^foldrun-code-code-i349-/);
+    assert.ok(!saved.startsWith(fs.realpathSync(d)) && !saved.startsWith(d), saved);
+    assert.equal(execFileSync("git", ["-C", d, "status", "--porcelain"], { encoding: "utf8" }), "", "nothing new in the project");
+    t.send("/quit\r");
+    assert.equal(await t.ended(), 0);
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
+test("the attachment row (FOL-349): names and sizes, nothing when nothing is attached, never wider than it is given", () => {
+  assert.equal(attachmentRow([], 80), "");
+  assert.equal(attachmentRow([{ name: "shot-1.png", bytes: 84 * 1024 }, { name: "docs/plan.pdf", bytes: 3 * 1024 * 1024 }], 80), "📎 shot-1.png 84 KB · docs/plan.pdf 3.0 MB");
+  for (const w of [4, 10, 17, 30]) {
+    const row = attachmentRow([{ name: "a-very-long-screenshot-name.png", bytes: 5000 }, { name: "b.pdf", bytes: 10 }], w);
+    assert.ok(displayWidth(row) <= w, `${row} fits ${w}`);
+    assert.ok(row.startsWith("📎"));
+  }
+  assert.equal(attachmentRow([{ name: "x.png", bytes: 1 }], 3), "");
+});
+
+test("the clipboard's image (FOL-349): the test command first, then each system's own; only PNG bytes count; a missing tool or no image is null", () => {
+  assert.deepEqual(clipboardImageCommands("darwin", {}).map((x) => x.cmd), ["pngpaste", "osascript"]);
+  assert.deepEqual(clipboardImageCommands("linux", { WAYLAND_DISPLAY: "wayland-0" }).map((x) => x.cmd), ["wl-paste", "xclip"]);
+  assert.deepEqual(clipboardImageCommands("linux", {}).map((x) => x.cmd), ["xclip", "wl-paste"]);
+  assert.deepEqual(clipboardImageCommands("win32", {}).map((x) => x.cmd), ["powershell"]);
+  assert.deepEqual(clipboardImageCommands("darwin", { FOLDRUN_CODE_CLIPBOARD_IMAGE: "cat x" }).map((x) => [x.cmd, x.shell]), [["cat x", true]]);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(20, 1)]);
+  // osascript prints the bytes as hex.
+  const mac = (cmd: string) => (cmd === "pngpaste" ? { status: null, stdout: null, error: new Error("ENOENT") } : { status: 0, stdout: Buffer.from(`«data PNGf${png.toString("hex").toUpperCase()}»\n`) });
+  assert.deepEqual(readClipboardImage(mac as any, "darwin", {}), png);
+  // Text on the clipboard, or a tool that fails: null, never a throw.
+  assert.equal(readClipboardImage((() => ({ status: 0, stdout: Buffer.from("hello") })) as any, "linux", {}), null);
+  assert.equal(readClipboardImage((() => ({ status: 1, stdout: Buffer.alloc(0) })) as any, "linux", {}), null);
+  assert.equal(readClipboardImage((() => { throw new Error("no"); }) as any, "win32", {}), null);
+  assert.deepEqual(readClipboardImage(((cmd: string) => (cmd === "xclip" ? { status: 1, stdout: null } : { status: 0, stdout: png })) as any, "linux", {}), png);
+  assert.deepEqual(readClipboardImage((() => ({ status: 0, stdout: Buffer.from(png.toString("base64")) })) as any, "win32", {}), png);
 });
 
 test("the local agent browses on this computer with the cloud's web tool, asked first; a call that needs the cloud is refused by name (FOL-267)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
