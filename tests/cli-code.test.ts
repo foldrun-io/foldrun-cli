@@ -212,6 +212,36 @@ test("code: a coder agent written while foldrun code waited is used, not overwri
   assert.ok(s.seen.some((x) => x.url.endsWith("/agents/coder/run")), "the turn ran on the agent that won");
 });
 
+test("code: the coder carries koder's mark; one still as foldrun code made it before is brought up to date, an edited one is left alone (FOL-415)", async (t) => {
+  const { CODER_AGENT, CODER_AGENTS_BEFORE } = await import("../src/commands.mjs");
+  const { KODER_TRAILER, KODER_SIGNATURE } = await import("../src/code-session.mjs");
+  assert.ok(CODER_AGENT.includes(KODER_TRAILER) && CODER_AGENT.includes(KODER_SIGNATURE), "the cloud coder is told what the local one is");
+  const mark = CODER_AGENT.slice(CODER_AGENT.indexOf("- A commit message you write"), CODER_AGENT.indexOf("- End with a short summary"));
+  assert.ok(mark.length > 100);
+  assert.doesNotMatch(mark, /claude|anthropic/i, "never another product in koder's mark (CLAUDE.md elsewhere is a file to read)");
+  // What released foldrun code wrote, copied from git history (Codex): not derived from the list under test.
+  const written = (day: string) => fs.readFileSync(new URL(`./fixtures/coder-agent-${day}.md`, import.meta.url), "utf8");
+  assert.equal(CODER_AGENTS_BEFORE.length, 2);
+  for (const [stored, wants] of [[written("2026-11-24"), true], [written("2026-11-27"), true], [`${written("2026-11-27")}\n- My own rule.\n`, false]] as const) {
+    const d = repo(BASE);
+    const puts: string[] = [];
+    const s = await serve({
+      [`GET ${WS}`]: () => ({ name: "desk" }),
+      [`GET ${WS}/agents`]: () => ({ agents: [{ name: "coder" }] }),
+      [`GET ${WS}/source`]: () => ({ path: "agents/coder/agent.md", content: stored, sha256: "s".repeat(64) }),
+      [`PUT ${WS}/source`]: (b) => { const put = JSON.parse(String(b)); assert.equal(put.ifMatch, "s".repeat(64), "only over the file it read: an edit meanwhile is not overwritten"); puts.push(put.content); return { ok: true }; },
+      [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "x", reused: false }),
+      [`POST ${WS}/agents/coder/run`]: () => ({ ok: true, runId: RUN_ID }),
+      [`GET ${WS}/runs/${RUN_ID}`]: () => record("completed"),
+      [`GET ${WS}/runs/${RUN_ID}/archive`]: (_b, q) => (q.get("path") === "snapshot.json" ? raw(JSON.stringify({ status: "unchanged" }), "application/json") : raw("", "text/x-diff")),
+    });
+    t.after(() => s.close());
+    const r = await at(s.url, "code", d, "--to", "desk", "--task", "x", "--yes");
+    assert.equal(r.code, 0, r.out);
+    assert.deepEqual(puts, wants ? [CODER_AGENT] : [], wants ? "brought up to date" : "the person's edits are theirs");
+  }
+});
+
 test("code --to a missing project with --agent other than coder: refused, nothing made", async () => {
   const d = repo(BASE);
   const s = await platform({ missing: true });

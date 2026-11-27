@@ -741,9 +741,12 @@ their results go with your next message. Each job has its own row under the
 working line while it runs (`/status jobs off` hides them).
 
 **koder's mark** (FOL-415). What koder writes for git and GitHub on this
-computer (its turns and sub-agents) carries its name, as other coding agents
-carry theirs; cloud turns and cloud jobs get it from the platform's agent,
-next. A commit message it writes ends
+computer (its turns and sub-agents) and in the cloud carries its name, as
+other coding agents carry theirs. In the cloud the instruction is in the
+project's `agents/coder/agent.md`, which `foldrun code` writes: a coder still
+exactly as an earlier `foldrun code` wrote it is brought up to date at the
+next turn, and one you edited is left as it is (take the lines out of the
+file to leave the mark off there). A commit message it writes ends
 with the trailer `Co-Authored-By: koder <noreply@foldrun.io>`, and a pull
 request or issue body ends with foldrun's logo and "Generated with
 [koder](https://foldrun.io) from foldrun.io" (the logo is
