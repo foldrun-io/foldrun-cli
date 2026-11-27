@@ -413,6 +413,15 @@ What holds:
   not started. Give the sub-agent its own `budget:` and leave the flow's off,
   or expect the job to be refused. The parent's step ends only when its jobs have. A stopped run
   stops them.
+- **Out of memory or disk.** A job whose sandbox the platform ends for want
+  of memory or disk comes back as failed, and its reply says so first: the
+  size it ran at, and that anything it had already done outside still
+  stands. It is not run again by itself, because its tools may already have
+  acted. When the parent hands the same sub-agent a job again in that step,
+  the job asks for one [size](#where-it-runs) class up (small to large, large
+  to heavy), as do the jobs after it in that step; the job's record says so,
+  and the account's limits still decide. That is a rescue, not a setting:
+  give the sub-agent the `size:` or `resources:` it needs in its own file.
 - **Needs a run.** On the platform each job starts a sandbox of its own.
   With `foldrun run` on your machine no step has a sandbox, so a job runs in
   the same process: its own context, tools and secrets, but the same files
