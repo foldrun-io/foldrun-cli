@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.4.1] — 2026-11-27
+
+### docs
+
+- sync api-usage (foldrun_debate server tool, FOL-416) ([7daab52](https://github.com/foldrun-io/foldrun-cli/commit/7daab52))
+
 ## [34.4.0] — 2026-11-27
 
 - feat(cli): doctor's road test, route fallback to approved fronts, Claude Code address move (FOL-402) ([6e8c626](https://github.com/foldrun-io/foldrun-cli/commit/6e8c626))
