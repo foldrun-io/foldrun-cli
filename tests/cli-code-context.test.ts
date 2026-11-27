@@ -854,11 +854,11 @@ test("marginLines: a deep indent stays inside the row, and a long run of combini
 });
 
 test("a turn that did not finish always says why (FOL-426): the engine's own error, else what its ending means", async () => {
-  const { turnEndReason, LOCAL_TURN_STEPS } = await import("../src/commands.mjs");
+  const { turnEndReason } = await import("../src/commands.mjs");
   assert.equal(turnEndReason({ subtype: "error_max_output", errors: ["the reply was cut off"] }), "the reply was cut off");
   // 27 Nov 2026: a turn stopped at the step limit printed a bare "✗ not finished".
-  assert.equal(turnEndReason({ subtype: "error_max_turns" }), `it used the ${LOCAL_TURN_STEPS} model steps one turn may take`);
-  assert.equal(turnEndReason({ subtype: "error_max_turns", errors: [""] }), `it used the ${LOCAL_TURN_STEPS} model steps one turn may take`);
+  assert.match(turnEndReason({ subtype: "error_max_turns" }, 120), /used the 120 model steps you allow one turn \(\/permissions steps changes it\)/);
+  assert.match(turnEndReason({ subtype: "error_max_turns", errors: [""] }, 120), /120 model steps/);
   assert.match(turnEndReason({ subtype: "error_something_new" }), /error_something_new/);
   assert.match(turnEndReason(undefined), /no result/);
 });

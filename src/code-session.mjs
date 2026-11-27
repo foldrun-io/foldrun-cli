@@ -271,6 +271,8 @@ export function commandMenu(name, st) {
           st.cloudAsk === true
             ? { v: "/permissions cloud bypass", name: "Cloud jobs without asking", note: "they start unasked (the default); a job's changes are still asked" }
             : { v: "/permissions cloud ask", name: "Ask before cloud jobs", note: "each call is asked first; a job's changes are asked either way" },
+          // Model steps per turn (owner, 27 Nov 2026): no limit by default, set here. Last, as cloud's was.
+          { v: "/permissions steps ", name: "Steps per turn…", note: st.turnSteps ? `a turn stops after ${st.turnSteps}; off takes it away` : "no limit (the default); a number stops a turn there", ask: "a number of steps, or off" },
         ],
         tick: st.bypass === true ? "/permissions bypass" : st.strict === true ? "/permissions strict" : "/permissions relaxed",
         start: "/permissions ",
@@ -1492,7 +1494,7 @@ function filesPref(v) {
 export function readCodePrefs() {
   try {
     const doc = JSON.parse(fs.readFileSync(prefsFile(), "utf8"));
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(doc.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...(doc.permissions === "bypass" || doc.permissions === "strict" ? { permissions: doc.permissions } : {}), ...filesPref(doc.files) } : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? { ...(doc.thinking === true ? { thinking: true } : {}), ...(doc.tips === false ? { tips: false } : {}), ...(doc.statusLine === false ? { statusLine: false } : {}), ...(doc.jobs === false ? { jobs: false } : {}), ...(doc.webAsk === true ? { webAsk: true } : {}), ...(doc.cloudAsk === true ? { cloudAsk: true } : {}), ...(Number.isInteger(doc.turnSteps) && doc.turnSteps >= 5 && doc.turnSteps <= 99999 ? { turnSteps: doc.turnSteps } : {}), ...(typeof doc.resources === "string" && /^[\w=.,\s]{1,60}$/.test(doc.resources) ? { resources: doc.resources } : {}), ...(doc.permissions === "bypass" || doc.permissions === "strict" ? { permissions: doc.permissions } : {}), ...filesPref(doc.files) } : {};
   } catch {
     return {};
   }
@@ -1502,7 +1504,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...(prefs.permissions === "bypass" || prefs.permissions === "strict" ? { permissions: prefs.permissions } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(Number.isInteger(prefs.turnSteps) && prefs.turnSteps >= 5 && prefs.turnSteps <= 99999 ? { turnSteps: prefs.turnSteps } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...(prefs.permissions === "bypass" || prefs.permissions === "strict" ? { permissions: prefs.permissions } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;

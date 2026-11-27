@@ -251,6 +251,33 @@ test("/permissions cloud ask|bypass (FOL-382): starting cloud jobs is unasked un
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")).cloudAsk, undefined, "bypass again: nothing kept (the default)");
 });
 
+test("/permissions steps (owner, 27 Nov 2026): no limit by default; a number is kept for the person, off takes it away", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+  const d = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+  const s = await platform();
+  const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-st", "--url", s.url, "--token", "k"], home, { TERM: "xterm-256color", FOLDRUN_NO_TICKER: "1", NO_COLOR: "1", COLUMNS: "200" });
+  const prefs = () => { try { return JSON.parse(fs.readFileSync(path.join(home, "code-prefs.json"), "utf8")); } catch { return {}; } };
+  try {
+    let at = await t.until(/\w ❯ /);
+    t.send("/permissions steps\r");
+    at = await t.until(/no limit: a turn goes on until the model is done/, at);
+    t.send("/permissions steps 3\r");
+    at = await t.until(/at least 5 steps/, at);
+    assert.equal(prefs().turnSteps, undefined, "a refused number is not kept");
+    t.send("/permissions steps 200\r");
+    at = await t.until(/a turn stops after 200 model steps and asks to go on · kept for you, every session/, at);
+    assert.equal(prefs().turnSteps, 200);
+    t.send("/permissions steps off\r");
+    at = await t.until(/no limit: a turn goes on until the model is done .* · kept for you/, at);
+    assert.equal(prefs().turnSteps, undefined, "off is the default: nothing kept");
+    t.send("/quit\r");
+    await t.done;
+  } finally {
+    t.child.kill();
+    s.close();
+  }
+});
+
 test("a bracketed paste is one message however slowly it arrives; Enter after it sends it; the terminal's paste mode is off again after", { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));

@@ -10286,6 +10286,16 @@ function webAskSaid(s) {
     : "web calls are asked first — each search, fetch and browse on this computer";
 }
 
+/**
+ * How many model steps one turn on this computer may take before it stops and asks to go on (/permissions steps;
+ * owner, 27 Nov 2026: no limit by default, the person sets one). This session's word, else the kept one; null: none.
+ * @param {any} s @returns {number | null}
+ */
+function turnSteps(s) {
+  const v = s.turnSteps !== undefined ? s.turnSteps : readCodePrefs().turnSteps;
+  return Number.isInteger(v) && v > 0 ? v : null;
+}
+
 /** Whether starting cloud jobs is asked first (/permissions cloud ask, FOL-382): this session's word, else the kept one. @param {any} s */
 function cloudAsks(s) {
   return typeof s.cloudAsk === "boolean" ? s.cloudAsk : readCodePrefs().cloudAsk === true;
@@ -21008,7 +21018,8 @@ async function codeLocalTurn(s, text) {
               if (ok && !bothInside(s.dir, f)) s.privateSeen = true;
               return ok;
             },
-            maxTurns: LOCAL_TURN_STEPS,
+            // No limit unless the person set one (/permissions steps): the engine stops only when the model is done.
+            ...(turnSteps(s) ? { maxTurns: turnSteps(s) } : {}),
             history,
             canUseTool,
             abortController: abort,
@@ -21149,7 +21160,7 @@ async function codeLocalTurn(s, text) {
       const failed = !done && !cancel.asked && !!result && result.subtype !== "success";
       const partial = failed && typeof result.result === "string" ? result.result.trim() : "";
       if (failed && typeof result.result === "string") reply = partial;
-      const reason = failed ? turnEndReason(result) : "";
+      const reason = failed ? turnEndReason(result, turnSteps(s)) : "";
       // Said on screen with the end line, never a bare "not finished" (owner, 27 Nov 2026; FOL-426).
       s.turnWhy = reason || (!done && !cancel.asked && !result ? "the model's reply ended without a result (the connection may have been cut)" : undefined);
       const ending = `(this turn did not finish${reason ? `: ${reason}` : ""})`;
@@ -21281,18 +21292,15 @@ async function codeLocalTurn(s, text) {
   console.log();
 }
 
-/** The steps one turn on this computer may take before it stops and asks to go on. */
-export const LOCAL_TURN_STEPS = 80;
-
 /**
  * Why a turn on this computer did not finish, in words (FOL-426): the engine's
  * own error when it sent one, else what its ending means — never empty.
- * @param {any} result the engine's result message
+ * @param {any} result the engine's result message @param {number | null} [steps] the limit in force
  */
-export function turnEndReason(result) {
+export function turnEndReason(result, steps = null) {
   if (Array.isArray(result?.errors) && typeof result.errors[0] === "string" && result.errors[0].trim()) return result.errors[0];
   switch (result?.subtype) {
-    case "error_max_turns": return `it used the ${LOCAL_TURN_STEPS} model steps one turn may take`;
+    case "error_max_turns": return `it used the ${steps ?? "set number of"} model steps you allow one turn (/permissions steps changes it)`;
     case "error_max_output": return "the reply was cut off at the output limit";
     case "error_refusal": return "the model declined to answer";
     case "error_context_full": return "the conversation filled the model's context window";
@@ -22497,7 +22505,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         const rows = m ? (await m.look().catch(() => ({ rows: [] }))).rows : [];
         return { mcp: rows.map((/** @type {any} */ r) => ({ name: String(r.name), state: String(r.state), source: String(r.source ?? "") })) };
       }
-      return { localOnly: s.localOnly === true, mode: s.mode, web: webPlace(s), webAsk: webAsks(s), cloudAsk: cloudAsks(s), sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
+      return { localOnly: s.localOnly === true, mode: s.mode, web: webPlace(s), webAsk: webAsks(s), cloudAsk: cloudAsks(s), turnSteps: turnSteps(s), sandboxOff: s.sandboxOff === true, strict: s.strict === true, bypass: s.bypass === true, tips: readCodePrefs().tips !== false, repo: inGitRepo(dir) };
     };
     // Another sign-in under this session's profile name: stop, never go on as a different account showing the old one (Codex).
     {
@@ -23769,6 +23777,25 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
         say(`${webAskSaid(s)}${kept ? " · kept for you, every session" : " · this session only: it could not be saved"}`);
         continue;
       }
+      // How many model steps one turn may take (owner, 27 Nov 2026): no limit by default; a number stops a
+      // turn there and asks to go on. Kept for the person, every session.
+      const sp = /^steps(?:\s+(\d{1,5}|off|none))?$/i.exec(rest);
+      if (sp) {
+        const said = () => turnSteps(s) ? `a turn stops after ${turnSteps(s)} model steps and asks to go on` : "no limit: a turn goes on until the model is done (Esc or Ctrl-C stops it)";
+        if (!sp[1]) {
+          say(`${said()} — /permissions steps <n> sets one · steps off takes it away`);
+          continue;
+        }
+        const n = /^\d+$/.test(sp[1]) ? Number(sp[1]) : null;
+        if (n !== null && n < 5) {
+          say(c.yellow("at least 5 steps — a turn needs a few to read, change and check"));
+          continue;
+        }
+        s.turnSteps = n;
+        const kept = writeCodePrefs({ ...readCodePrefs(), turnSteps: n });
+        say(`${said()}${kept ? " · kept for you, every session" : " · this session only: it could not be saved"}`);
+        continue;
+      }
       // Whether starting cloud jobs is asked (FOL-382; owner, 26 Nov 2026): unasked by default, "ask" asks once per call.
       const ca = /^cloud(?:\s+(ask|bypass))?$/i.exec(rest);
       if (ca) {
@@ -23806,6 +23833,7 @@ async function codeCmdInner(/** @type {string[]} */ positional, /** @type {Recor
       }
       if (s.bypass === true) console.log(`  ${c.red("!")} ${c.white(`bypass: nothing is asked, outside the sandbox too${keptMode() === "bypass" ? " — kept for your next sessions" : ""}`)} ${c.dim("— /permissions relaxed turns it off")}`);
       console.log(cloudAsks(s) ? `  ${c.dim("·")} ${c.white("cloud jobs are asked about before they start")} ${c.dim("— /permissions cloud bypass starts them unasked")}` : `  ${c.green("✓")} ${c.white("cloud jobs start without a question")} ${c.dim("— a job's changes are still asked before they go into the folder; /permissions cloud ask asks first")}`);
+      console.log(turnSteps(s) ? `  ${c.dim("·")} ${c.white(`a turn stops after ${turnSteps(s)} model steps`)} ${c.dim("— /permissions steps off takes the limit away")}` : `  ${c.green("✓")} ${c.white("no step limit: a turn goes on until the model is done")} ${c.dim("— /permissions steps <n> sets one")}`);
       if (s.strict !== true) console.log(`  ${c.green("✓")} ${c.white(`commands that only look: ${READ_ONLY_SAID}`)} ${c.dim("— plain forms, inside this folder; /permissions strict asks for these too")}`);
       const rows = [];
       for (const k of s.localAllow?.kinds ?? []) rows.push(k === "changes" ? "file changes inside this folder" : k === "cloud" ? "starting cloud jobs" : k === "cloud-changes" ? "putting a cloud job's changes into this folder" : String(k));
