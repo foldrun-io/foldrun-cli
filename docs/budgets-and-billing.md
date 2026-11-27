@@ -287,7 +287,7 @@ more credits.
 
 | plan | a month | credits a month | storage included | compute at once | one step, at most | projects | queue lane |
 |---|---|---|---|---|---|---|---|
-| **Free** | $0 | 300 | 2 GB | 2 vCPU · 4 GiB · 20 GiB disk | 2 vCPU · 4 GiB · 10 GiB disk | 2 | normal |
+| **Free** | $0 | 0 | 2 GB | 2 vCPU · 4 GiB · 20 GiB disk | 2 vCPU · 4 GiB · 10 GiB disk | 2 | normal |
 | **Starter** | $29 | 3,000 | 10 GB | 4 vCPU · 8 GiB · 40 GiB disk | 4 vCPU · 8 GiB · 20 GiB disk | 5 | normal |
 | **Pro** | $99 | 11,000 | 100 GB | 16 vCPU · 32 GiB · 160 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
 | **Scale** | $499 | 60,000 | 1 TB | 64 vCPU · 128 GiB · 640 GiB disk | 8 vCPU · 16 GiB · 40 GiB disk | unlimited | fast |
@@ -314,24 +314,23 @@ step at the default size on foldrun.io (3 vCPU · 6 GiB) is bigger than
 that, so on Free give each agent `size: small` (or `resources:` within the
 figures); a paid plan runs the default size.
 
-**Two kinds of credit, kept apart.** One balance, two pots:
+**One wallet** (27 Nov 2026, switched on by the operator with
+`billing.one_wallet`). One balance pays for everything: tokens on
+foldrun's models, compute, storage and network.
 
-- **Plan credits** are the plan's monthly grant. They pay for compute,
-  storage and network, and **never for tokens on foldrun's models**.
+- **Plan credits** are the plan's monthly grant, and are spent **first**,
+  on anything.
 - **Bought credits** (a top-up by card, or in Toman on foldrun.ir) pay for
-  anything, tokens on foldrun's models included.
+  the rest. A coding subscription's own fee is paid from bought credits
+  only, so a plan's grant never pays for the next plan.
 
-Compute, storage and network draw on plan credits first, then bought
-credits. Tokens on foldrun's models draw on bought credits only, so an
-account that wants them buys credits. The Usage page and
-`GET /v1/account/usage` show the two pots separately.
+The Usage page and `GET /v1/account/usage` still show the two parts
+separately: what is left of the plan's grant, and what you bought.
 
-**Free: 300 credits every month.** Free credits are plan credits, so they
-never pay for tokens on foldrun's models. They **do not roll over**: a month after
-the last grant, what is unused is lost and a new 300 land, so an account
-cannot stockpile them. A month the account did not use renews the same way,
-and an account that was idle for months gets one new month, not the ones it
-missed. An account whose paid plan ends goes back to Free's month.
+**No free credits.** A new account is given no credits on confirming, and
+there is no free monthly grant: a plan pays for runs.
+Free credits granted before 27 Nov 2026 still run to the end of their month,
+then what is unused expires and nothing new lands.
 
 **How long a credit lasts.** On a paid plan, credits land when the invoice is
 paid, and what is unused **rolls over** into the next cycle up to **twice** the
@@ -445,11 +444,10 @@ Settings → Models shows the list as you pay it, and so does
 - **A daily cap** per account (UTC), in what you pay. Before each call the
   gateway reserves its estimate against the cap, so twenty calls at once
   cannot all pass it; one past it is refused until the next day.
-- **Bought credits pay for it, and only bought credits.** A call starts only
-  while the account has bought credit above zero; plan credits, a Free
-  grant included, are not spent on tokens.
+- **The wallet pays for it.** A call starts only while the account's
+  balance is above zero; plan credits are spent first, then bought credits.
 - **A run that has started finishes.** A run already using foldrun's models
-  may go a little past zero bought credit to end (up to
+  may go a little past a zero balance to end (up to
   `models.supply.finish_grace_usd`, $1 a run by default); a new run, or a new
   call from an account not already in one, is refused at zero.
 - **Your own key costs no credits.** The Usage page's Tokens tab lists those
