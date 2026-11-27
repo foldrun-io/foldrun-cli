@@ -10516,24 +10516,40 @@ async function askGateway(s, gateway, why) {
  * @returns {Promise<{ type: string, name: string, model: string }[]>}
  */
 async function secondToolsFor(s, gateway, why) {
+  /** @type {("debate" | "review")[]} */
+  let want;
   /** @type {Record<string, any>} */
   let front;
-  const denied = new Set();
   try {
-    // This turn's read of the file, not the 30 s copy: a grant taken away (/model second none) holds from the next message.
-    const read = await readSourceAt(s, `agents/${s.agent}/agent.md`);
-    front = read.content !== null ? await frontOfText(read.content) : {};
-    for (const f of [front, await projectFront(s, "AGENTS.md"), await accountFront(s, [])]) for (const t of await bareTools(f?.disallowedTools)) denied.add(t);
+    // This turn's reads, not the 30 s copies: a grant taken away (/model second none, a disallowedTools: added at
+    // any level) holds from the next message (Codex).
+    const fresh = async (/** @type {string} */ file) => {
+      const read = await readSourceAt(s, file);
+      return read.content !== null ? await frontOfText(read.content) : {};
+    };
+    front = await fresh(`agents/${s.agent}/agent.md`);
+    const tools = await bareTools(front.tools, { grant: true });
+    want = /** @type {("debate" | "review")[]} */ (["debate", "review"].filter((t) => tools.includes(t)));
+    if (!want.length) return [];
+    if (s.accountFront && Date.now() - s.accountFront.at > 10_000) s.accountFront = null;
+    const denied = new Set();
+    for (const f of [front, await fresh("AGENTS.md"), await accountFront(s, [])]) for (const t of await bareTools(f?.disallowedTools)) denied.add(t);
+    want = want.filter((t) => !denied.has("*") && !denied.has(t) && !denied.has(`foldrun_${t}`));
   } catch {
     // Not known what the file grants or takes away: none is offered (fail closed).
     return [];
   }
-  const tools = await bareTools(front.tools);
-  const want = /** @type {("debate" | "review")[]} */ (["debate", "review"].filter((t) => tools.includes(t) && !denied.has("*") && !denied.has(t) && !denied.has(`foldrun_${t}`)));
   if (!want.length) return [];
   const model = typeof front?.second_model === "string" ? front.second_model.trim() : "";
   if (!SECOND_MODEL.test(model)) {
     why.push(`tools: [${want.join(", ")}] needs second_model: (provider/model of another provider) — pick one with /model second`);
+    return [];
+  }
+  // Not to the provider this session's model is on: the gateway would refuse it after a paid round.
+  const { providerOfName } = /** @type {any} */ (await import("@foldrun/core/model-names"));
+  const first = typeof s.model === "string" && s.model ? (providerOfName(s.model) ?? (/^claude/i.test(s.model) ? "anthropic" : null)) : null;
+  if (first && (providerOfName(model) ?? model.split("/")[0]) === first) {
+    why.push(`second_model: ${model} is the provider this session's model is on — a second opinion comes from another; not offered`);
     return [];
   }
   await askGateway(s, gateway, why);
@@ -10550,11 +10566,12 @@ async function secondToolsFor(s, gateway, why) {
 /**
  * A tools:/disallowedTools: value as the runtime reads it (core's reader: a list, one name, a comma string, the map
  * form); a `[[link]]` (the author's own tool) is not the built-in of that name. `linked`: those links instead.
- * @param {unknown} v @param {boolean} [linked] @returns {Promise<string[]>}
+ * @param {unknown} v @param {{ linked?: boolean, grant?: boolean }} [o] @returns {Promise<string[]>}
  */
-async function bareTools(v, linked = false) {
+async function bareTools(v, { linked = false, grant = false } = {}) {
   const names = /** @type {any} */ (await import("@foldrun/core/tool-names"));
-  return linked ? names.linkedToolNames(v) : names.builtinToolNames(v);
+  // `grant`: `{review: ask}` asks before each use, which a server tool cannot: not a grant (core's runner skips it too).
+  return linked ? names.linkedToolNames(v) : names.builtinToolNames(v, grant);
 }
 
 /** @param {any} s @param {{ url: string, key: string } | null} gateway @param {string[]} why @returns {Promise<{ type: string, name: string }[]>} */
@@ -18441,23 +18458,27 @@ async function codeSecond(url, flags, ws, agent, want, s) {
   }
   const raw = String(cur.content ?? "");
   // The list and scalar editors know a block opened by `---` alone: any other opening (`---yaml`) is left to the person.
-  if (/^---[^\S\r\n]*\S/.test(raw)) throw new Error(`${file} opens its frontmatter with something beside --- — edit tools: and second_model: in the file by hand`);
+  if (/^\uFEFF|^---[^\S\r\n]*\S/.test(raw)) throw new Error(`${file} opens its frontmatter with something beside --- — edit tools: and second_model: in the file by hand`);
   const parsed = await frontOfText(raw);
   const nowModel = typeof parsed.second_model === "string" && parsed.second_model.trim() ? parsed.second_model.trim() : null;
   const { setFrontmatterScalar, editFrontmatterList, frontmatterList } = /** @type {any} */ (await patterns());
   const bare = await bareTools(parsed.tools);
-  const granted = /** @type {("debate" | "review")[]} */ (bare.filter((t) => t === "debate" || t === "review"));
+  const granted = /** @type {("debate" | "review")[]} */ ((await bareTools(parsed.tools, { grant: true })).filter((t) => t === "debate" || t === "review"));
   // A [[debate]] or [[review]] in the list is the author's own tool of that name: the list editor would take it for
   // the built-in, so the file is left for the person to edit. Also a list the editor reads differently from the
   // runtime (a comma string, the map form).
-  const linked = (await bareTools(parsed.tools, true)).filter((t) => t === "debate" || t === "review");
+  const linked = (await bareTools(parsed.tools, { linked: true })).filter((t) => t === "debate" || t === "review");
+  // The list editor and the runtime must read the list alike, entry for entry (not a comma string, not the map form).
   const listed = /** @type {string[]} */ (frontmatterList(raw, "tools"));
-  const readsAlike = bare.filter((t) => t === "debate" || t === "review").length === listed.filter((t) => t === "debate" || t === "review").length - linked.length;
+  const readsAlike = [...listed].sort().join("\n") === [...bare, ...(await bareTools(parsed.tools, { linked: true }))].sort().join("\n");
   const hasTools = Object.prototype.hasOwnProperty.call(parsed, "tools");
   const cat = await proxyCatalog(url, flags, s?.mode, Boolean(s?.onPlan)).catch(() => null);
   const firstModel = frontmatterModel(raw) ?? "default";
+  const { providerOfName } = /** @type {any} */ (await import("@foldrun/core/model-names"));
   const firstEntry = cat?.tiers?.[firstModel] ?? cat?.catalog.find((m) => m.id === firstModel || m.model === firstModel);
-  const firstProvider = firstEntry?.provider ?? (firstModel.includes("/") ? firstModel.split("/")[0] : null);
+  // A tier the list does not map (a local session off a plan): the model the last message ran on.
+  const served = typeof s?.model === "string" && s.model ? (providerOfName(s.model) ?? (/^claude/i.test(s.model) ? "anthropic" : null)) : null;
+  const firstProvider = firstEntry?.provider ?? providerOfName(firstModel) ?? (firstModel.includes("/") ? firstModel.split("/")[0] : served);
   /** @type {string | null} */
   let model = null;
   /** @type {("debate" | "review")[]} */
@@ -18512,7 +18533,7 @@ async function codeSecond(url, flags, ws, agent, want, s) {
     console.log(`  ${c.dim(nowModel ? `second model ${plainText(nowModel)} · ${granted.length ? `tools: [${granted.join(", ")}]` : "neither debate nor review is granted"} · /model second none takes it away` : "no second model · /model second <provider/model> sets one: another provider's model that debates and reviews code")}\n`);
     return false;
   }
-  const secondProvider = model ? (cat?.catalog.find((m) => m.id === model)?.provider ?? model.split("/")[0]) : null;
+  const secondProvider = model ? (cat?.catalog.find((m) => m.id === model)?.provider ?? providerOfName(model) ?? model.split("/")[0]) : null;
   if (model && firstProvider && secondProvider === firstProvider) throw new Error(`${plainText(model)} is the same provider as this agent's model — a second opinion comes from another provider`);
   if (model && !hasTools) throw new Error(`${file} has no tools: list, so adding debate or review would change what else it may use — add tools: to it first`);
   if (linked.length) throw new Error(`${file} lists its own tool [[${linked[0]}]], not the built-in — edit tools: and second_model: in the file by hand`);
@@ -18524,6 +18545,15 @@ async function codeSecond(url, flags, ws, agent, want, s) {
   if (next === raw) {
     console.log(`  ${c.dim(model ? `already ${plainText(model)}` : "no second model was set")}\n`);
     return false;
+  }
+  // Read back as the runtime will: every other field as it was, tools: only debate and review changed (Codex).
+  {
+    const after = await frontOfText(next);
+    const rest = (/** @type {Record<string, any>} */ f) => JSON.stringify(Object.entries(f).filter(([k]) => k !== "second_model" && k !== "tools").sort(([a], [b]) => a.localeCompare(b)));
+    const others = (/** @type {string[]} */ l) => JSON.stringify(l.filter((t) => t !== "debate" && t !== "review"));
+    const afterTools = await bareTools(after.tools);
+    const ok = rest(after) === rest(parsed) && others(afterTools) === others(bare) && (model ? after.second_model === model : after.second_model === undefined) && ["debate", "review"].every((t) => afterTools.includes(t) === tools.includes(/** @type {"debate" | "review"} */ (t)));
+    if (!ok) throw new Error(`${file} would not read back as intended after the edit — nothing was written; edit tools: and second_model: in the file by hand`);
   }
   try {
     await remoteCall(url, flags, at, {

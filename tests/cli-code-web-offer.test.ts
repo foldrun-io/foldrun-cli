@@ -231,6 +231,7 @@ test("debate and review: announced by the gateway but not offered until the agen
   assert.deepEqual(await offered("---\nname: coder\ntools: review\nsecond_model: openai/gpt-x\n---\nYou code.\n"), ["foldrun_review:openai/gpt-x"], "one name, not a list, grants it");
   assert.deepEqual(await offered("---\nname: coder\ntools: read, review\nsecond_model: openai/gpt-x\ndisallowedTools: Bash, review\n---\nYou code.\n"), [], "Claude Code's comma string, both ways");
   assert.deepEqual(await offered("---\nname: coder\ntools: [read, review]\nsecond_model: openai/gpt-x\ndisallowedTools: [\"*\"]\n---\nYou code.\n"), [], "* takes everything away");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [read, {review: ask}]\nsecond_model: openai/gpt-x\n---\nYou code.\n"), [], "ask before each use is not a grant: a server tool cannot ask");
 });
 
 test("debate and review: a project's AGENTS.md takes them away; /model second none holds from the very next message", { skip, timeout: 180_000 }, async () => {

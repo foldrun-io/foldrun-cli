@@ -165,3 +165,16 @@ test("priceOf finds a second model by its provider/model name (FOL-418)", () => 
   assert.equal(priceOf(rates, "gpt-x")?.model, "gpt-x");
   assert.equal(priceOf(rates, "deepseek/gpt-x"), null);
 });
+
+test("a second opinion's result counted as its block arrives: a stream cut before the answer's end still has it, and it is not counted twice (FOL-418)", () => {
+  const block = { type: "foldrun_debate_tool_result", tool_use_id: "s1", content: { type: "foldrun_debate_result", model: "openai/gpt-x", text: "no", usage: { input_tokens: 300, output_tokens: 30 } } };
+  const cut = meter();
+  cut.note({ type: "stream_event", event: { type: "message_start", message: { model: "claude-x", usage: { input_tokens: 100 } } } });
+  cut.note({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: block } });
+  cut.close();
+  assert.deepEqual(meteredRows(cut, { kind: "local", turn: 1, paidBy: "p" }).map((r) => [r.model, r.read, r.output]), [["openai/gpt-x", 300, 30], ["claude-x", 100, 0]]);
+  const whole = meter();
+  whole.note({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: block } });
+  whole.note({ type: "assistant", message: { model: "claude-x", usage: { input_tokens: 100, output_tokens: 5 }, content: [block] } });
+  assert.deepEqual(meteredRows(whole, { kind: "local", turn: 1, paidBy: "p" }).map((r) => [r.model, r.calls]), [["openai/gpt-x", 1], ["claude-x", 1]]);
+});

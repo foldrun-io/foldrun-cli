@@ -633,6 +633,14 @@ test("/model second (FOL-418): another provider's model for tools: [debate, revi
     file = "---\nname: coder\nmodel: anthropic/claude-x\ntools: [read, review, [[review]]]\nsecond_model: openai/gpt-x\n---\n\nYou code.\n";
     t.send("/model second none\r");
     at = await t.until(/lists its own tool \[\[review\]\]/, at);
+    // A quoted comma string: the list editor would make it one item, so it is left alone.
+    file = "---\nname: coder\nmodel: anthropic/claude-x\ntools: \"read, write\"\n---\n\nYou code.\n";
+    t.send("/model second openai/gpt-x\r");
+    at = await t.until(/writes tools: in a form this command does not edit/, at);
+    // A byte-order mark before the opening: not edited.
+    file = "\uFEFF---\nname: coder\ntools: [read]\n---\n\nYou code.\n";
+    t.send("/model second openai/gpt-x\r");
+    at = await t.until(/opens its frontmatter with something beside ---/, at);
     // A ---yaml opening: not edited.
     file = "---yaml\nname: coder\ntools: [read]\n---\n\nYou code.\n";
     t.send("/model second openai/gpt-x\r");
