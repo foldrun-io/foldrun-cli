@@ -226,8 +226,10 @@ of 2 GB on Starter, 5 GB on Pro and 25 GB on Max; beyond what a plan includes,
 storage is charged by the GB-month. There is no separate cap on what the
 models cost foldrun: the allowance is the limit. A move up starts at once, for the
 difference over the days left; a move down starts at the renewal. Without a
-subscription, new work is refused before anything is held or charged; the
-balance, the billing pages, buying a plan and the history keep working. The
+subscription, new work is refused before anything is held or charged —
+unless the account pays as it goes from its wallet
+([below](#pay-as-you-go-with-no-plan)); the balance, the billing pages,
+buying a plan and the history keep working. The
 old platform plans (Free, Starter $29, Pro $99, Scale $499) are no longer
 sold; an account that has paid for one is honoured until its paid-through
 date.
@@ -242,6 +244,36 @@ is paid from the balance at the listed price, up to an optional **limit** for
 the plan period (`--limit <usd>`; `--no-limit` removes it). Extra usage is off
 by default. Calls and runs check what is spent and held against the limit
 together, so work started at once cannot pass it between them.
+
+### Pay as you go with no plan
+
+Where the operator offers it, a plan is not required: an account that has
+**paid money into its wallet** (a card top-up, `foldrun billing top-up <usd>`,
+or a Toman one on foldrun.ir) may run agents, flows and foldrun code and call
+foldrun's models with no plan at all, paying as it goes at the same list
+prices for models, compute and tools. A plan is the better deal, because its
+allowance is worth more than its price; the wallet alone is for whoever wants
+no subscription.
+
+- **Pay as you go is on** for such an account, with a **monthly limit** for
+  the calendar month (UTC) that starts at the operator's default and is
+  yours to change: `foldrun billing pay-as-you-go on --limit <usd>`,
+  `--no-limit` for none beyond the balance, `off` to stop new work (Billing →
+  Plans shows the same switch and limit). An account that had a plan keeps
+  the choice it made there, so a plan ending never turns spending on by
+  itself.
+- **Prepaid only.** Work is admitted only while the wallet holds enough for
+  it beside everything already running; it never runs on credit. A run the
+  wallet already paid for may finish on the small finishing allowance every
+  run has.
+- **Only money paid counts.** Credit the operator adds, or a payment that was
+  refunded or lost to a dispute, does not open the wallet-only door.
+- New accounts with no plan work at the base limits (2 vCPU and 4 GiB at
+  once, five runs at a time) until they choose a plan.
+
+Refusals carry `pay_as_you_go_off` (402: switch it on, or choose a plan),
+`extra_usage_unfunded` (402: top up) and `extra_usage_cap` (402: this
+month's limit is reached).
 
 ### Platform tools
 
