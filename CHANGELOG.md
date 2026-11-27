@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.2.1] — 2026-11-27
+
+- test(code): the stub's unanswered cloud call waits 2 s, not 30 s — the file went past its 180 s cap on dev's gate ([0a2d0e5](https://github.com/foldrun-io/foldrun-cli/commit/0a2d0e5))
+
+### deps
+
+- @foldrun/core 29.7.1 ([0a8b4ec](https://github.com/foldrun-io/foldrun-cli/commit/0a8b4ec))
+
 ## [34.2.0] — 2026-11-26
 
 - chore(hooks): hooks synced from foldrun-infra — CircleCI removed (FOL-404) ([3d24d17](https://github.com/foldrun-io/foldrun-cli/commit/3d24d17))
