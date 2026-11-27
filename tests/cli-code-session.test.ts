@@ -629,6 +629,15 @@ test("/model second (FOL-418): another provider's model for tools: [debate, revi
     t.send("/model second openai/gpt-x\r");
     at = await t.until(/lists its own tool \[\[review\]\], not the built-in/, at);
     assert.equal(puts.length, 2);
+    // Both spellings in one list: the link is still the author's.
+    file = "---\nname: coder\nmodel: anthropic/claude-x\ntools: [read, review, [[review]]]\nsecond_model: openai/gpt-x\n---\n\nYou code.\n";
+    t.send("/model second none\r");
+    at = await t.until(/lists its own tool \[\[review\]\]/, at);
+    // A ---yaml opening: not edited.
+    file = "---yaml\nname: coder\ntools: [read]\n---\n\nYou code.\n";
+    t.send("/model second openai/gpt-x\r");
+    at = await t.until(/opens its frontmatter with something beside ---/, at);
+    assert.equal(puts.length, 2);
     t.send("/quit\r");
     await t.done;
   } finally {

@@ -352,7 +352,8 @@ export const rowsOf = (/** @type {string} */ key) => (KEY.test(key) ? readLedger
 export function priceOf(/** @type {any} */ rates, /** @type {string | undefined} */ model) {
   const list = rates?.catalogue?.models?.prices;
   if (!Array.isArray(list) || !model) return null;
-  const m = list.find((/** @type {any} */ p) => p && p.model === model && typeof p.inputPerMTok === "number" && typeof p.outputPerMTok === "number");
+  // A second model's result names it `provider/model` (FOL-418); the list keeps the provider beside the model.
+  const m = list.find((/** @type {any} */ p) => p && (p.model === model || (typeof p.provider === "string" && `${p.provider}/${p.model}` === model)) && typeof p.inputPerMTok === "number" && typeof p.outputPerMTok === "number");
   return m ?? null;
 }
 

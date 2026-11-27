@@ -229,6 +229,8 @@ test("debate and review: announced by the gateway but not offered until the agen
   assert.deepEqual(await offered("---\nname: coder\ntools: [write, code, review]\nsecond_model: openai/gpt-x\ndisallowedTools: review\n---\nYou code.\n"), [], "one name, not a list, takes it away too");
   assert.deepEqual(await offered("---\nname: coder\ntools: [write, [[review]]]\nsecond_model: openai/gpt-x\n---\nYou code.\n"), [], "[[review]] is the author's own tool, not the built-in");
   assert.deepEqual(await offered("---\nname: coder\ntools: review\nsecond_model: openai/gpt-x\n---\nYou code.\n"), ["foldrun_review:openai/gpt-x"], "one name, not a list, grants it");
+  assert.deepEqual(await offered("---\nname: coder\ntools: read, review\nsecond_model: openai/gpt-x\ndisallowedTools: Bash, review\n---\nYou code.\n"), [], "Claude Code's comma string, both ways");
+  assert.deepEqual(await offered("---\nname: coder\ntools: [read, review]\nsecond_model: openai/gpt-x\ndisallowedTools: [\"*\"]\n---\nYou code.\n"), [], "* takes everything away");
 });
 
 test("debate and review: a project's AGENTS.md takes them away; /model second none holds from the very next message", { skip, timeout: 180_000 }, async () => {

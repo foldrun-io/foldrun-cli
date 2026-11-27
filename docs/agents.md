@@ -72,7 +72,7 @@ refused. See [The four jobs](four-jobs).
 | `model` | `fast` \| `default` \| `max`, an alias (`opus`), or a full id | a **tier**, so agents don't rot when models are renamed. Synonyms land on their tier: `small`/`cheap` → fast, `large`/`best` → max |
 | `effort` | `low` \| `medium` \| `high` \| `xhigh` \| `max` | how long it thinks before answering. Unset leaves the model's own default. In a `foldrun code` session, `/model effort` changes it; the same line runs on this computer and in the cloud |
 | `max_output_tokens` | a whole number, 1 to 1048576 | the longest one model reply may be, in tokens — on every provider, each under its own name. Lower keeps replies short, cheap and quick; higher lets an agent that writes long documents finish one in a reply. A flow or a step may set its own. On [foldrun's models](providers#foldruns-models) the price list's ceiling for the model applies too (the lower wins; above it is a [check warning](checks#config-output-fitted)); unset there is the ceiling, and elsewhere the runtime's default |
-| `second_model` | `provider/model` of another provider than `model:` — `openai/gpt-5.5` | the model that answers the `debate` and `review` tools ([below](#a-second-opinion-debate-and-review)). Only with one of them in `tools:`; on [foldrun's models](providers#foldruns-models) only. In a `foldrun code` session, `/model second` sets it and the tools in one save |
+| `second_model` | `provider/model` of another provider than `model:` — `openai/gpt-5.5` | the model that answers the `debate` and `review` tools ([below](#a-second-opinion-debate-and-review)). Only with one of them in `tools:`; in `foldrun code` on [foldrun's models](providers#foldruns-models) (a cloud step does not offer them yet). In a `foldrun code` session, `/model second` sets it and the tools in one save |
 | `budget` | a number in USD | the most this agent may spend in **one run**, across every step it takes in it. Its step stops mid-turn at what is left; a later step of its own in the same run is refused before it starts. Unset is no limit. Per run only — a cap over a day, week or month belongs in `AGENTS.md` |
 
 The two are orthogonal — the model is which brain, effort is how long it
@@ -150,14 +150,14 @@ second_model: openai/gpt-5.5
 - **What it costs.** That model's tokens, at its listed price, on the same
   meter as every model call: your plan's allowance, then the wallet. No
   separate charge.
-- **Where it works.** On [foldrun's models](providers#foldruns-models), in
-  the cloud and in `foldrun code` on your computer alike. In a cloud step
-  the gateway offers the tools from the step's grant, and the step's record
-  shows the call and the answer as text. On your own model
-  key there is no second opinion and `foldrun check` says so.
-- **What is checked.** The step may ask only for the tools its file grants,
-  answered only by that model: a call naming another model is refused before
-  anything is sent. `second_model:` of the same provider as `model:`, or one
+- **Where it works.** In `foldrun code` on your computer, on
+  [foldrun's models](providers#foldruns-models). A cloud step does not offer
+  them yet: it runs, and its record says so. On your own model key there is
+  no second opinion.
+- **What is checked.** `foldrun code` offers only the tools the file grants
+  (`disallowedTools:` in the agent, its project's or the account's
+  `AGENTS.md` takes one away), answered only by `second_model:`. A missing or
+  malformed `second_model:`, one of the same provider as `model:`, or one
   with neither tool, is a [check warning](checks).
 - `[[review]]` is still your own tool named `review`, if you have one; the
   bare word is the built-in. `disallowedTools: [review]` takes it away.

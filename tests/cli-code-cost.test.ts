@@ -158,3 +158,10 @@ test("a second opinion in an answer (FOL-418): the second model's tokens counted
   const rows = meteredRows(m, { kind: "local", turn: 1, paidBy: "p" });
   assert.deepEqual(rows.map((r) => [r.model, r.calls, r.read, r.output]), [["claude-x", 1, 100, 10], ["openai/gpt-x", 1, 400, 40]]);
 });
+
+test("priceOf finds a second model by its provider/model name (FOL-418)", () => {
+  const rates = { catalogue: { models: { prices: [{ provider: "openai", model: "gpt-x", inputPerMTok: 1, outputPerMTok: 2 }] } } };
+  assert.equal(priceOf(rates, "openai/gpt-x")?.model, "gpt-x");
+  assert.equal(priceOf(rates, "gpt-x")?.model, "gpt-x");
+  assert.equal(priceOf(rates, "deepseek/gpt-x"), null);
+});
