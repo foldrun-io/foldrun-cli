@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.0] — 2026-11-27
+
+- feat(browser): name the driver in the window's badge (FOL-451) ([ecdf2a9](https://github.com/foldrun-io/foldrun-cli/commit/ecdf2a9))
+
 ## [36.0.3] — 2026-11-27
 
 ### docs
