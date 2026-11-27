@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.10.1] — 2026-11-27
+
+### docs
+
+- sync agents.md (FOL-438) ([e8e17b6](https://github.com/foldrun-io/foldrun-cli/commit/e8e17b6))
+
 ## [34.10.0] — 2026-11-27
 
 - test(code): koder's mark test in its own file — cli-code-session.test.ts went past the 180 s per-file limit on CI (FOL-415) ([b952dbc](https://github.com/foldrun-io/foldrun-cli/commit/b952dbc))
