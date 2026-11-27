@@ -220,7 +220,7 @@ test("one session, two places: each side is told once what the other did; the ne
   assert.doesNotMatch(cut, /The person: old/);
   assert.match(exportTranscript(t, { ws: "desk", context: "code-1", dir: "~/x" }), /## 2\. You \(in the cloud\)\n\nadd docstrings\n\n### foldrun code\n\nadded two docstrings/);
   // koder's mark at the end (FOL-415), gone when the person turned it off.
-  assert.match(exportTranscript(t, { ws: "desk", context: "code-1", dir: "~/x" }), /---\n\nExported from ◆ \[koder\]\(https:\/\/foldrun\.io\) from foldrun\.io\n$/);
+  assert.match(exportTranscript(t, { ws: "desk", context: "code-1", dir: "~/x" }), /---\n\nExported from <img src="https:\/\/foldrun\.io\/favicon\.svg" width="16" height="16" alt="koder"> \[koder\]\(https:\/\/foldrun\.io\) from foldrun\.io\n$/);
   assert.doesNotMatch(exportTranscript(t, { ws: "desk", context: "code-1", dir: "~/x", attribution: false }), /koder/);
 });
 

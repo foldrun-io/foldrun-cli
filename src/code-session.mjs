@@ -1370,7 +1370,9 @@ export function localModelOf(/** @type {string | null} */ v) {
 /** What the agent is told when it works in the person's own folder. */
 /** koder's own mark (FOL-415, owner 27 Nov 2026: "everywhere claude sends its name we need to send our name with logo"). */
 export const KODER_TRAILER = "Co-Authored-By: koder <noreply@foldrun.io>";
-export const KODER_SIGNATURE = "◆ Generated with [koder](https://foldrun.io) from foldrun.io";
+/** foldrun's mark, as foldrun.io serves it (the brand's mark, monochrome since 7 Nov 2026): a picture GitHub draws, 16 px. */
+export const KODER_LOGO = '<img src="https://foldrun.io/favicon.svg" width="16" height="16" alt="koder">';
+export const KODER_SIGNATURE = `${KODER_LOGO} Generated with [koder](https://foldrun.io) from foldrun.io`;
 /** What the agent is told about its mark on what it writes for git and GitHub; "" when the person turned it off (/status attribution off). */
 export function attributionNote(/** @type {boolean} */ on = true) {
   if (!on) return "";
