@@ -3302,7 +3302,7 @@ async function remoteCall(url, flags, apiPath, init = {}, { seconds, sent } = {}
 export function billingRefusalHint(body) {
   const code = typeof body?.code === "string" ? body.code : typeof body?.error?.code === "string" ? body.error.code : "";
   const hints = {
-    subscription_required: "start one: `foldrun billing plan pro` (or `plan max`); your balance and billing pages still work",
+    subscription_required: "start one: `foldrun billing plan pro` (or `plan starter`, `plan max`; `foldrun billing plans` shows the prices); your balance and billing pages still work",
     allowance_used: "wait for the reset (`foldrun billing plans` shows when), or `foldrun billing extra-usage on --limit <usd>` to carry on from your balance",
     extra_usage_cap: "raise it with `foldrun billing extra-usage on --limit <usd>` (or `--no-limit`), or wait for the period to renew",
     extra_usage_unfunded: "add credit with `foldrun billing top-up <usd>`; extra usage is paid from your balance",
@@ -9066,7 +9066,7 @@ async function billingCmd(flags) {
     const p = sub?.plan && sub.plan.status === "active" ? sub.plan : null;
     const e = sub?.entitlement;
     if (p) {
-      console.log(`  ${c.green("●")} foldrun ${p.plan === "max" ? "Max" : "Pro"}  ${c.dim(`${p.renew ? "renews" : "ends"} ${String(p.periodEnd).slice(0, 10)}`)}`);
+      console.log(`  ${c.green("●")} foldrun ${p.plan === "max" ? "Max" : p.plan === "starter" ? "Starter" : "Pro"}  ${c.dim(`${p.renew ? "renews" : "ends"} ${String(p.periodEnd).slice(0, 10)}`)}`);
       for (const w of (sub.allowance?.windows ?? []).filter((/** @type {any} */ w) => w.usedPct != null)) {
         console.log(`    ${w.name === "month" ? "this month" : "this week"} ${w.usedPct}% of the allowance used ${c.dim(`· resets ${String(w.resetsAt).slice(0, 10)}`)}`);
       }
@@ -27101,7 +27101,7 @@ async function secretOfKind(kind, flags) {
 }
 
 /**
- * `foldrun billing plans | plan pro|max|cancel|resume | extra-usage (alias pay-as-you-go) on|off [--limit <usd>|--no-limit] | top-up <usd> | card` —
+ * `foldrun billing plans | plan starter|pro|max|cancel|resume | extra-usage (alias pay-as-you-go) on|off [--limit <usd>|--no-limit] | top-up <usd> | card` —
  * the Plans and Payment pages. Anything that takes a card answers with
  * Stripe's own page to open; nothing here touches card data.
  */
@@ -27130,11 +27130,14 @@ async function billingPlansCmd(verb, arg, flags) {
     console.log(`\n  ${opened ? `Opened Stripe's page for ${what}.` : `Open Stripe's page for ${what}:`}\n\n    ${link}\n\n  ${c.dim("the link lasts minutes; the balance moves when Stripe confirms the payment, not before")}\n`);
     return 0;
   };
-  // The foldrun subscription (owner, 23 Nov 2026): Pro or Max, one for
-  // every hosted account, paid from the wallet — the Billing page's card.
+  // The foldrun subscription (owner, 23 Nov 2026; sizes 27 Nov): Starter,
+  // Pro or Max, one for every hosted account, paid from the wallet — the
+  // Billing page's card. Prices are the console's, read from the platform.
   // A platform plan bought before (Starter / Pro / Scale at Stripe) is
   // honoured to its paid-through date and no longer sold.
-  const name = (/** @type {unknown} */ x) => (x === "max" ? "Max" : "Pro");
+  const SIZES = ["starter", "pro", "max"];
+  const name = (/** @type {unknown} */ x) => (x === "max" ? "Max" : x === "starter" ? "Starter" : "Pro");
+  const rank = (/** @type {unknown} */ x) => SIZES.indexOf(String(x));
   const readSub = () =>
     remoteCall(url, flags, "/v1/billing/coding-plan").catch((err) => {
       if (err instanceof HttpError && (err.status === 404 || err.status === 501)) return null;
@@ -27151,11 +27154,13 @@ async function billingPlansCmd(verb, arg, flags) {
     if (!sub) throw new Error("this platform sells no subscription (no billing here) — `foldrun billing` shows what it charges");
     const mine = sub.plan && sub.plan.status === "active" ? sub.plan : null;
     console.log(`\n  ${c.bold("foldrun subscription")}  ${c.dim(`one for model calls, foldrun code and the cloud's compute · paid from your balance (${usd(sub.balanceUsd)})`)}`);
-    for (const id of ["pro", "max"]) {
+    for (const id of SIZES) {
+      // A platform from before Starter reports no price for it: not listed.
+      if (!(id in (sub.prices ?? {}))) continue;
       const price = sub.prices?.[id];
       const mark = mine?.plan === id ? c.green("●") : c.dim("○");
-      const note = price == null ? c.dim("not for sale here") : c.dim(id === "max" ? "five times Pro's allowance" : "the allowance for one person");
-      console.log(`  ${mark} ${c.bold(pad(name(id), 6))} ${pad(price == null ? "—" : `$${Number(price).toFixed(0)}/30 days`, 15)} ${note}`);
+      const note = price == null ? c.dim("not for sale here") : c.dim(id === "max" ? "five times Pro's allowance" : id === "starter" ? "0.4 of Pro's allowance" : "the allowance for one person");
+      console.log(`  ${mark} ${c.bold(pad(name(id), 8))} ${pad(price == null ? "—" : `${usd(price).replace(/\.00$/, "")}/30 days`, 15)} ${note}`);
     }
     if (mine) {
       const next = mine.nextPlan && mine.nextPlan !== mine.plan ? `, then ${name(mine.nextPlan)}` : "";
@@ -27176,11 +27181,11 @@ async function billingPlansCmd(verb, arg, flags) {
     } else {
       console.log(`\n  ${c.amber("no active subscription")} ${c.dim("— new work needs one")}`);
     }
-    console.log(`\n  ${c.dim("foldrun billing plan pro|max · plan cancel · plan resume · extra-usage on|off [--limit <usd>] · top-up <usd>")}\n`);
+    console.log(`\n  ${c.dim("foldrun billing plan starter|pro|max · plan cancel · plan resume · extra-usage on|off [--limit <usd>] · top-up <usd>")}\n`);
     return 0;
   }
   if (verb === "plan") {
-    if (!arg) throw new Error("`foldrun billing plan pro|max`, `plan cancel` or `plan resume` — `billing plans` shows them");
+    if (!arg) throw new Error("`foldrun billing plan starter|pro|max`, `plan cancel` or `plan resume` — `billing plans` shows them");
     const sub = await readSub();
     if (!sub) throw new Error("this platform sells no subscription (no billing here)");
     const mine = sub.plan && sub.plan.status === "active" ? sub.plan : null;
@@ -27209,8 +27214,8 @@ async function billingPlansCmd(verb, arg, flags) {
     }
     const want = arg === "resume" ? mine?.plan : arg;
     if (arg === "resume" && !want) throw new Error("this account has no subscription to resume — `foldrun billing plan pro` starts one");
-    if (want !== "pro" && want !== "max") {
-      throw new Error(`"${arg}" is not sold any more — foldrun is one subscription since 23 Nov 2026: \`foldrun billing plan pro\` or \`plan max\``);
+    if (!SIZES.includes(String(want))) {
+      throw new Error(`"${arg}" is not sold any more — foldrun is one subscription in three sizes: \`foldrun billing plan starter\`, \`plan pro\` or \`plan max\``);
     }
     const price = sub.prices?.[want];
     if (price == null) throw new Error(`${name(want)} is not for sale here right now`);
@@ -27219,8 +27224,8 @@ async function billingPlansCmd(verb, arg, flags) {
     const keepsDown = mine?.plan === want && mine.nextPlan && mine.nextPlan !== want ? `, and drop the move to ${name(mine.nextPlan)} at the renewal` : "";
     const ask = arg === "resume" ? `Keep ${name(want)} renewing${keepsDown}? [y/N] `
       : mine?.plan === want ? `Already on ${name(want)} — keep it renewing${keepsDown}? [y/N] `
-      : mine && want === "pro" ? `Move down to Pro at the renewal (${String(mine.periodEnd).slice(0, 10)})? [y/N] `
-      : mine ? `Move up to Max now? The difference for the rest of the period is taken from your balance (${usd(sub.balanceUsd)}). [y/N] `
+      : mine && rank(want) < rank(mine.plan) ? `Move down to ${name(want)} at the renewal (${String(mine.periodEnd).slice(0, 10)})? [y/N] `
+      : mine ? `Move up to ${name(want)} now? The difference for the rest of the period is taken from your balance (${usd(sub.balanceUsd)}). [y/N] `
       : `Start ${name(want)} for ${usd(price)} from your balance (${usd(sub.balanceUsd)}), renewed every 30 days? [y/N] `;
     if (!(await confirmed(flags, "billing plan", ask))) {
       console.log(`\n  ${c.dim("nothing changed")}\n`);

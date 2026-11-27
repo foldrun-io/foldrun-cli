@@ -211,12 +211,18 @@ accounts by rank (`rank="1"` … `"5"`) and never by name.
 
 ## The foldrun subscription
 
-Every hosted account works under one subscription, **Pro** or **Max**, paid from
-the balance for thirty days at a time and renewed from it (Billing → Plans,
-`foldrun billing plan pro|max`). Without one, new work is refused before
-anything is held or charged; the balance, the billing pages, buying a plan and
-the history keep working. Starter, Pro (the old one) and Scale are no longer
-sold; an account that has paid for one is honoured until its paid-through date.
+Every hosted account works under one subscription in three sizes, **Starter**,
+**Pro** or **Max**, paid from the balance for thirty days at a time and renewed
+from it (Billing → Plans, `foldrun billing plan starter|pro|max`). Prices are
+set by the operator and shown on Billing → Plans, `foldrun billing plans` and
+foldrun.io/pricing; a size with no price is not on sale. Starter's allowance
+is 0.4 of Pro's, Max's five times Pro's. A move up starts at once, for the
+difference over the days left; a move down starts at the renewal. Without a
+subscription, new work is refused before anything is held or charged; the
+balance, the billing pages, buying a plan and the history keep working. The
+old platform plans (Free, Starter $29, Pro $99, Scale $499) are no longer
+sold; an account that has paid for one is honoured until its paid-through
+date.
 The platform's own accounts, accounts the operator fully waives and
 self-hosted installs are not charged.
 
@@ -233,7 +239,7 @@ When work is refused, the answer carries a code:
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `subscription_required` | no plan | `foldrun billing plan pro` or `max` |
+| `subscription_required` | no plan | `foldrun billing plan starter`, `pro` or `max` |
 | `allowance_used` | the plan's share is used, extra usage is off | wait for the reset, or turn extra usage on |
 | `extra_usage_cap` | this period's limit is reached | raise the limit, or wait for the period to renew |
 | `extra_usage_unfunded` | extra usage is on but the balance cannot cover it | top up |

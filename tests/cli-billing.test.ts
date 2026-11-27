@@ -178,3 +178,38 @@ test("each billing refusal code says what to do next (FOL-235)", async () => {
     assert.match(r.out, want, code);
   }
 });
+
+test("Starter is the third size (27 Nov 2026): listed with its price, bought, and Pro → Starter is a move down at the renewal", async () => {
+  const entitlement = { kind: "active", plan: "pro", source: "subscription", renews: true };
+  const base = { prices: { starter: 10, pro: 25, max: 120 }, available: { starter: true, pro: true, max: true }, balanceUsd: 40, extraUsage: { on: false, capUsd: null } };
+  const s = await serve({
+    "GET /v1/billing/coding-plan": () => ({ ...base, plan: null, entitlement: { kind: "none" } }),
+    "POST /v1/billing/coding-plan": () => ({ plan: { ...plan, plan: "starter", priceUsd: 10 } }),
+  });
+  const l = await at(s.url, "billing", "plans");
+  assert.equal(l.code, 0, l.out);
+  assert.match(l.out, /Starter\s+\$10\/30 days\s+0\.4 of Pro's allowance/);
+  assert.match(l.out, /Pro\s+\$25\/30 days/);
+  assert.match(l.out, /Max\s+\$120\/30 days/);
+  const b = await at(s.url, "billing", "plan", "starter", "--yes");
+  const post = s.seen.find((x) => x.method === "POST");
+  s.close();
+  assert.equal(b.code, 0, b.out);
+  assert.deepEqual(JSON.parse(post!.body), { plan: "starter", maxUsd: 10 });
+  // On Pro, Starter is a move down at the renewal, bound to the period shown.
+  const d = await serve({
+    "GET /v1/billing/coding-plan": () => ({ ...base, plan, entitlement }),
+    "POST /v1/billing/coding-plan": () => ({ plan: { ...plan, nextPlan: "starter" } }),
+  });
+  const r = await at(d.url, "billing", "plan", "starter", "--yes");
+  const down = d.seen.find((x) => x.method === "POST");
+  d.close();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(down!.body), { plan: "starter", maxUsd: 10, period: plan.periodEnd });
+  assert.match(r.out, /Pro until 2026-12-01, then Starter/);
+  // A platform from before Starter reports no price for it: not listed.
+  const old = await serve({ "GET /v1/billing/coding-plan": () => ({ prices: { pro: 20, max: 100 }, available: { pro: true, max: true }, balanceUsd: 1, plan: null, entitlement: { kind: "none" } }) });
+  const o = await at(old.url, "billing", "plans");
+  old.close();
+  assert.doesNotMatch(o.out, /Starter/);
+});
