@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.4.0] — 2026-11-27
+
+- feat(cli): doctor's road test, route fallback to approved fronts, Claude Code address move (FOL-402) ([6e8c626](https://github.com/foldrun-io/foldrun-cli/commit/6e8c626))
+
 ## [34.3.0] — 2026-11-27
 
 - feat(code): every tool foldrun's API runs is on by default — search, fetch and browse without tools: [web], and extract, generate, docs as the API offers them (FOL-412) ([47b6ec3](https://github.com/foldrun-io/foldrun-cli/commit/47b6ec3))
