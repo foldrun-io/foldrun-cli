@@ -116,8 +116,10 @@ test("a session on a terminal: /help, !command sent with the next message, a pas
     assert.match(t.out(), /hello-from-shell/);
     at = await t.until(/\w ❯ /, at);
 
-    // Two lines in one write: a paste — one message, one turn.
+    // Two lines in one write: a paste — one message, one turn, sent by Enter (FOL-423).
     t.send("add b\rand keep it short\r");
+    await t.until(/ … /);
+    t.send("\r");
     at = await t.until(/send it\? \[y\]es/, at);
     t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
     at = await t.until(/apply it to/, at);
@@ -279,6 +281,39 @@ test("a bracketed paste is one message however slowly it arrives; Enter after it
     s.close();
   }
 });
+
+for (const [how, env, paste] of [
+  ["with the terminal's paste marks", { TERM: "xterm-256color" }, "\x1b[200~fix the bug\rin src/a.ts\r\x1b[201~"],
+  ["without them (lines arriving together)", { TERM: "dumb" }, "fix the bug\rin src/a.ts\r"],
+] as const) {
+  test(`a paste never sends, ${how}: it waits on the line and Enter sends it (owner, 27 Nov 2026)`, { skip: hasPty ? false : "needs python3's pty", timeout: 60_000 }, async () => {
+    const d = repo();
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
+    const s = await platform();
+    const t = onTerminal(["code", d, "--cloud", "--to", "desk", "--context", "code-pz", "--url", s.url, "--token", "k"], home, { ...env, FOLDRUN_NO_TICKER: "1", NO_COLOR: "1" });
+    try {
+      let at = await t.until(/\w ❯ /);
+      t.send(paste);
+      at = await t.until(/ … /, at);
+      await new Promise((r) => setTimeout(r, 400)); // far past the 30 ms grouping
+      assert.equal(s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run")).length, 0, "a paste ending on a line break is not sent");
+      t.send("\r");
+      at = await t.until(/send it\? \[y\]es/, at);
+      t.send("y\r");
+      at = await t.until(/apply it to/, at);
+      const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
+      assert.equal(posts.length, 1);
+      assert.match(JSON.parse(posts[0]!.body).task as string, /^fix the bug\nin src\/a\.ts$/);
+      t.send("n\r");
+      at = await t.until(/\w ❯ /, at);
+      t.send("/quit\r");
+      await t.done;
+    } finally {
+      t.child.kill();
+      s.close();
+    }
+  });
+}
 
 test("completion: /commands at the start, @paths anywhere, a folder at a time", () => {
   const complete = codeCompleter(() => ["src/a.ts", "src/b/c.ts", "README.md"]);

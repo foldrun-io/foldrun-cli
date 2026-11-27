@@ -24457,9 +24457,11 @@ async function readCodeMessage(state, completer, s) {
       }
       else if (key?.name === "paste-end") {
         pasting = false;
-        // A paste that ended on a newline is a whole message; one that did
-        // not waits on the line for more, and Enter sends it all.
-        if (lines.length && !rl.line) schedule();
+        // A paste never sends (owner, 27 Nov 2026: pasting submitted without
+        // Enter). One that ended on a newline waits on a "…" line; Enter
+        // there sends it all, and a line typed there goes with it.
+        burst = 0;
+        if (lines.length && !rl.line) awaitEnter();
       }
     };
     const offBracketed = () => {
@@ -24495,16 +24497,21 @@ async function readCodeMessage(state, completer, s) {
       state.echoRows = v !== null && tty ? echoRows : 0;
       resolve(v);
     };
+    // Lines that arrived together since the last pause: more than one is a
+    // paste (a terminal without paste marks), which waits for Enter too.
+    let burst = 0;
+    const awaitEnter = () => {
+      rl.setPrompt(c.dim("    … "));
+      rl.prompt();
+      prompted = true;
+    };
     const schedule = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
+        const together = burst;
+        burst = 0;
         const msg = joinMessage(lines);
-        if (msg === null) {
-          rl.setPrompt(c.dim("    … "));
-          rl.prompt();
-          prompted = true;
-          return;
-        }
+        if (msg === null || together > 1) return awaitEnter();
         finish(msg);
       }, PASTE_GAP_MS);
     };
@@ -24516,6 +24523,7 @@ async function readCodeMessage(state, completer, s) {
       echoRows += Math.floor(((prompted ? displayWidth(plainText(rl.getPrompt())) : 0) + displayWidth(l.replace(/\t/g, "        "))) / cols) + 1;
       prompted = false;
       clearTimeout(timer);
+      burst += 1;
       if (!pasting) schedule();
     });
     rl.on("SIGINT", () => {
@@ -24524,6 +24532,7 @@ async function readCodeMessage(state, completer, s) {
       if (rl.line || lines.length) {
         clearTimeout(timer);
         pasting = false;
+        burst = 0;
         lines.length = 0;
         rl.write(null, { ctrl: true, name: "u" });
         process.stdout.write("\n");
