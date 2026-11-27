@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.10.0] — 2026-11-27
+
+- test(code): koder's mark test in its own file — cli-code-session.test.ts went past the 180 s per-file limit on CI (FOL-415) ([b952dbc](https://github.com/foldrun-io/foldrun-cli/commit/b952dbc))
+- test(code): the table timing bound fits a CI runner (1262 ms there; main red since 66ec8e1) ([392993f](https://github.com/foldrun-io/foldrun-cli/commit/392993f))
+- fix(code): koder's User-Agent on the library, version, usage and transcribe requests (FOL-415, Codex) ([43b22cc](https://github.com/foldrun-io/foldrun-cli/commit/43b22cc))
+- fix(code): koder's mark stays out of a cloud task (the person's words, shown as the run's task); MCP sessions and sign-in carry koder's names (FOL-415, Codex) ([c4ed202](https://github.com/foldrun-io/foldrun-cli/commit/c4ed202))
+- feat(code): koder's mark on commits, pull requests, issues, exports, User-Agent and MCP (FOL-415) ([e297fb8](https://github.com/foldrun-io/foldrun-cli/commit/e297fb8))
+
 ## [34.9.0] — 2026-11-27
 
 - feat(code): trusted sessions — messages into a running turn, the answer sent back (FOL-345) ([66ec8e1](https://github.com/foldrun-io/foldrun-cli/commit/66ec8e1))
