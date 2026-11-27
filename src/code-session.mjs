@@ -1473,7 +1473,7 @@ export function insideFolder(/** @type {string} */ dir, /** @type {unknown} */ p
 
 const prefsFile = () => path.join(configDir(), "code-prefs.json");
 
-/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, cloudAsk?: boolean, resources?: string, permissions?: "bypass" | "strict", files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
+/** @typedef {{ thinking?: boolean, tips?: boolean, statusLine?: boolean, jobs?: boolean, webAsk?: boolean, cloudAsk?: boolean, turnSteps?: number | null, resources?: string, permissions?: "bypass" | "strict", files?: Partial<Record<"image" | "audio" | "video" | "document", "text" | "only" | "show">> }} CodePrefs */
 
 /** Only the kinds and choices foldrun knows, from a file a person may have edited. @param {unknown} v */
 function filesPref(v) {
@@ -1504,7 +1504,7 @@ export function readCodePrefs() {
 export function writeCodePrefs(prefs) {
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(Number.isInteger(prefs.turnSteps) && prefs.turnSteps >= 5 && prefs.turnSteps <= 99999 ? { turnSteps: prefs.turnSteps } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...(prefs.permissions === "bypass" || prefs.permissions === "strict" ? { permissions: prefs.permissions } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(prefsFile(), `${JSON.stringify({ ...(prefs.thinking === true ? { thinking: true } : {}), ...(prefs.tips === false ? { tips: false } : {}), ...(prefs.statusLine === false ? { statusLine: false } : {}), ...(prefs.jobs === false ? { jobs: false } : {}), ...(prefs.webAsk === true ? { webAsk: true } : {}), ...(prefs.cloudAsk === true ? { cloudAsk: true } : {}), ...(typeof prefs.turnSteps === "number" && Number.isInteger(prefs.turnSteps) && prefs.turnSteps >= 5 && prefs.turnSteps <= 99999 ? { turnSteps: prefs.turnSteps } : {}), ...(typeof prefs.resources === "string" ? { resources: prefs.resources } : {}), ...(prefs.permissions === "bypass" || prefs.permissions === "strict" ? { permissions: prefs.permissions } : {}), ...filesPref(prefs.files) }, null, 2)}\n`, { mode: 0o600 });
     return true;
   } catch {
     return false;
