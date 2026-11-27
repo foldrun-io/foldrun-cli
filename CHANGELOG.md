@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.12.0] — 2026-11-27
+
+- test(code): the coder upgrade against the templates releases wrote, and only over the file it read (FOL-415, Codex) ([6a95e9e](https://github.com/foldrun-io/foldrun-cli/commit/6a95e9e))
+- feat(code): the cloud coder carries koder's mark; an unedited coder from an earlier foldrun code is brought up to date (FOL-415) ([0b73886](https://github.com/foldrun-io/foldrun-cli/commit/0b73886))
+
 ## [34.11.0] — 2026-11-27
 
 - feat(code): koder's mark carries foldrun's logo on pull requests, issues and exports (FOL-415) ([0bd5b21](https://github.com/foldrun-io/foldrun-cli/commit/0bd5b21))
