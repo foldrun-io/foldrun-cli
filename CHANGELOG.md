@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.3.0] — 2026-11-27
+
+- feat(code): every tool foldrun's API runs is on by default — search, fetch and browse without tools: [web], and extract, generate, docs as the API offers them (FOL-412) ([47b6ec3](https://github.com/foldrun-io/foldrun-cli/commit/47b6ec3))
+
 ## [34.2.1] — 2026-11-27
 
 - test(code): the stub's unanswered cloud call waits 2 s, not 30 s — the file went past its 180 s cap on dev's gate ([0a2d0e5](https://github.com/foldrun-io/foldrun-cli/commit/0a2d0e5))
