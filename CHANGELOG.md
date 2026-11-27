@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [34.5.0] — 2026-11-27
+
+- feat(billing): foldrun billing plan starter|pro|max — Starter listed, bought, a move down at the renewal (FOL-413) ([ac3c2ff](https://github.com/foldrun-io/foldrun-cli/commit/ac3c2ff))
+
+### test
+
+- the old-plan refusal is shown with scale; starter is a size now (FOL-413) ([ebfca1e](https://github.com/foldrun-io/foldrun-cli/commit/ebfca1e))
+
 ## [34.4.1] — 2026-11-27
 
 ### docs
