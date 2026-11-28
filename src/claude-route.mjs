@@ -30,7 +30,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { approved, askVersion, groupOf, originOf, hostOf } from "./routes.mjs";
+import { approved, askVersion, groupOf, originOf, hostOf, apiOf } from "./routes.mjs";
 
 export const CHECK_MS = 10 * 60_000;
 export const RETRY_MS = 60_000;
@@ -87,7 +87,7 @@ export function ownedBy(/** @type {string} */ dir, /** @type {string} */ file, /
   const r = readOwnership(dir);
   if (r && r.settings === path.resolve(file) && r.baseUrl === base && r.key === keyHash(key)) return "record";
   if (r && r.settings === path.resolve(file)) return null; // a record for this file that does not match: someone changed it
-  if (settings?.statusLine?.command === STATUS_LINE_COMMAND && groupOf(base) && GATEWAY_KEY.test(key) && !("ANTHROPIC_API_KEY" in env)) return "legacy";
+  if (settings?.statusLine?.command === STATUS_LINE_COMMAND && groupOf(apiOf(base)) && GATEWAY_KEY.test(key) && !("ANTHROPIC_API_KEY" in env)) return "legacy";
   return null;
 }
 
@@ -153,7 +153,7 @@ export function takeLock(/** @type {string} */ file, now = Date.now()) {
 export async function checkClaudeRoute(o) {
   const now = o.now ?? Date.now();
   const handed = originOf(o.env.ANTHROPIC_BASE_URL);
-  if (!handed || !groupOf(handed)) return { said: "" };
+  if (!handed || !groupOf(apiOf(handed))) return { said: "" };
   // What Claude Code runs with must be the file's alone: a token or key from
   // the shell (or managed settings) would follow the address elsewhere.
   const handedKey = o.env.ANTHROPIC_AUTH_TOKEN;
@@ -168,8 +168,10 @@ export async function checkClaudeRoute(o) {
     }
   };
   const doFetch = o.fetchImpl ?? fetch;
-  const g = groupOf(handed);
-  const answer = /** @type {any} */ ((await askVersion(doFetch, handed, 3)) ?? (g && g.main !== handed ? await askVersion(doFetch, g.main, 3) : null));
+  const g = groupOf(apiOf(handed));
+  // A dashboard address is asked of its API first: the dashboard is not a gateway (Codex review).
+  const first = apiOf(handed);
+  const answer = /** @type {any} */ ((await askVersion(doFetch, first, 3)) ?? (first !== handed ? await askVersion(doFetch, handed, 3) : null) ?? (g && g.main !== first ? await askVersion(doFetch, g.main, 3) : null));
   if (!answer) {
     note({ ok: false, from: handed });
     return { said: pending };

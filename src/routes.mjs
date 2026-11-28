@@ -29,6 +29,22 @@ export const FRONTS = Object.freeze({
   "https://api.foldrun.io": Object.freeze(["https://d3c69doqudkyqv.cloudfront.net"]),
 });
 
+/** A dashboard's own origin → the API it belongs to. A profile signed in at
+ *  the dashboard (as the foldrun.ir setup does) has the API's fronts too, and
+ *  is never itself handed to Claude Code as a gateway: the dashboard answers
+ *  404 to /v1/messages (28 Nov 2026, a tester in Iran). */
+export const DASHBOARDS = Object.freeze({
+  "https://dash.foldrun.dev": "https://api.foldrun.dev",
+  "https://dash.foldrun.io": "https://api.foldrun.io",
+});
+
+/** The API origin for `origin`: its API when it is a dashboard, else itself. */
+export function apiOf(origin) {
+  const o = originOf(origin);
+  if (!o) return origin;
+  return Object.hasOwn(DASHBOARDS, o) ? DASHBOARDS[o] : o;
+}
+
 /** How long an API's naming of a front holds without being asked again. */
 export const NAMED_TTL_MS = 7 * 86_400_000;
 /** How long a switch to a front holds before the main name is tried again. */
@@ -82,7 +98,7 @@ export function groupOf(origin, list = frontList()) {
 
 /** Is `to` an address this CLI may send a credential meant for `from`? */
 export function approved(from, to, list = frontList()) {
-  const g = groupOf(from, list);
+  const g = groupOf(apiOf(from), list);
   const t = originOf(to);
   return !!g && !!t && g.members.includes(t);
 }

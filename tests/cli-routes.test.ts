@@ -254,3 +254,24 @@ test("Claude Code: a failed check is retried after a minute, not ten", async () 
   await cc.checkClaudeRoute({ dir, file, env: { ANTHROPIC_BASE_URL: MAIN }, fetchImpl: down, managed: [], now: t + cc.RETRY_MS + 1 });
   assert.ok(asked > first);
 });
+
+test("a profile signed in at the dashboard has its API's fronts, and the dashboard is never a gateway (28 Nov 2026)", async () => {
+  const DASH = "https://dash.foldrun.dev";
+  assert.equal(routes.apiOf(DASH), MAIN);
+  assert.equal(routes.apiOf(`${DASH}/`), MAIN);
+  assert.equal(routes.apiOf("https://example.com"), "https://example.com");
+  assert.equal(routes.approved(DASH, FRONT), true, "the setup signs in at the dashboard: the API's front is approved for it");
+  assert.equal(routes.approved(DASH, "https://evil.cloudfront.net"), false);
+  assert.equal(routes.approved("https://dash.foldrun.io", FRONT), false, "dev's front is not prod's");
+  // Claude Code settings a CLI wrote with the dashboard as the gateway move to what the API names.
+  const { dir, file } = claudeHome({ ...ours, env: { ANTHROPIC_BASE_URL: DASH, ANTHROPIC_AUTH_TOKEN: KEY } });
+  cc.writeOwnership(dir, { file, baseUrl: DASH, key: KEY });
+  const r = await cc.checkClaudeRoute({ dir, file, env: { ANTHROPIC_BASE_URL: DASH }, fetchImpl: named, managed: [] });
+  assert.equal(r.moved, FRONT);
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).env.ANTHROPIC_BASE_URL, FRONT);
+  // Outside Iran the API names itself: the dashboard address moves to the API.
+  const home = claudeHome({ ...ours, env: { ANTHROPIC_BASE_URL: DASH, ANTHROPIC_AUTH_TOKEN: KEY } });
+  cc.writeOwnership(home.dir, { file: home.file, baseUrl: DASH, key: KEY });
+  const plain = (async () => json({ urls: { api: MAIN, gateway: MAIN } })) as typeof fetch;
+  assert.equal((await cc.checkClaudeRoute({ dir: home.dir, file: home.file, env: { ANTHROPIC_BASE_URL: DASH }, fetchImpl: plain, managed: [] })).moved, MAIN);
+});
