@@ -45,6 +45,48 @@ export function apiOf(origin) {
   return Object.hasOwn(DASHBOARDS, o) ? DASHBOARDS[o] : o;
 }
 
+/** A CloudFront name: what a front looks like, approved or not. */
+export function isFrontHost(/** @type {string} */ u) {
+  try {
+    return /\.cloudfront\.net\.?$/i.test(new URL(u).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The model address a key may be used at, from the one the platform named
+ * (FOL-402): a front only when the CLI's own list approves it for the
+ * profile's API; any other front, or one of another API's, is replaced by
+ * the profile's own address. On foldrun's own platforms only the API and
+ * its listed fronts are ever used; elsewhere (self-hosted) an address that
+ * is no front stays the platform's choice.
+ * @param {string} profileUrl @param {string} named
+ */
+export function modelOrigin(profileUrl, named) {
+  // A dashboard profile's model calls belong to its API, never the dashboard itself.
+  const p = apiOf(originOf(profileUrl) ?? profileUrl);
+  const n0 = originOf(named);
+  const n = n0 ? apiOf(n0) : n0;
+  // foldrun's own platforms (dev, production) only ever name their API or one of
+  // its listed fronts: anything else a server names — another host, a non-https
+  // address, another platform — is refused for their credential, which goes to
+  // the API instead (Codex review, 28 Nov 2026).
+  const own = groupOf(p);
+  if (own) return n && own.members.includes(n) ? n : own.main;
+  // A server that names a dashboard as the gateway: its API instead (Codex review).
+  if (n0 && n !== n0) return n;
+  // Not an https (or loopback) origin: a front could hide in it, so the profile's own.
+  if (!n) return isFrontHost(named) ? (groupOf(p)?.main ?? p) : named;
+  if (n === p) return n;
+  const ng = groupOf(n);
+  if (ng || isFrontHost(n)) {
+    if (approved(p, n)) return n;
+    return groupOf(p)?.main ?? p;
+  }
+  return named.replace(/\/+$/, "");
+}
+
 /** How long an API's naming of a front holds without being asked again. */
 export const NAMED_TTL_MS = 7 * 86_400_000;
 /** How long a switch to a front holds before the main name is tried again. */

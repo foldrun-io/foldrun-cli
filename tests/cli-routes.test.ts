@@ -275,3 +275,21 @@ test("a profile signed in at the dashboard has its API's fronts, and the dashboa
   const plain = (async () => json({ urls: { api: MAIN, gateway: MAIN } })) as typeof fetch;
   assert.equal((await cc.checkClaudeRoute({ dir: home.dir, file: home.file, env: { ANTHROPIC_BASE_URL: DASH }, fetchImpl: plain, managed: [] })).moved, MAIN);
 });
+
+test("foldrun's own platforms use only their API or its listed fronts as the model address (28 Nov 2026)", () => {
+  const PROD = "https://api.foldrun.io", PFRONT = "https://d3c69doqudkyqv.cloudfront.net";
+  for (const profile of [PROD, "https://dash.foldrun.io"]) {
+    assert.equal(routes.modelOrigin(profile, PFRONT), PFRONT, "the listed front");
+    assert.equal(routes.modelOrigin(profile, PROD), PROD);
+    assert.equal(routes.modelOrigin(profile, `${PROD}/`), PROD);
+    assert.equal(routes.modelOrigin(profile, "https://dash.foldrun.io"), PROD, "never the dashboard");
+    assert.equal(routes.modelOrigin(profile, "https://evil.example"), PROD, "another host the server names is refused");
+    assert.equal(routes.modelOrigin(profile, "http://evil.example"), PROD, "not https");
+    assert.equal(routes.modelOrigin(profile, "https://other.cloudfront.net"), PROD, "an unlisted front");
+    assert.equal(routes.modelOrigin(profile, FRONT), PROD, "dev's front is not prod's");
+    assert.equal(routes.modelOrigin(profile, "https://api.foldrun.dev"), PROD, "another platform");
+  }
+  // Self-hosted: the platform's own choice, but never an unlisted front.
+  assert.equal(routes.modelOrigin("https://foldrun.acme.test", "https://models.acme.test/"), "https://models.acme.test");
+  assert.equal(routes.modelOrigin("https://foldrun.acme.test", "https://x.cloudfront.net"), "https://foldrun.acme.test");
+});

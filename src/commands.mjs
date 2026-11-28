@@ -28,7 +28,7 @@ import { folderRules, addFolderRule, removeFolderRule, commandParts, prefixFor, 
 import { helpText, whereChoices, readHistory, appendHistory, folderFiles, codeCompleter, joinMessage, PASTE_GAP_MS, shellNote, withNotes, lastSession, rememberSession, readSessions, friendlyTool, friendlyError, folderRelative, displayWidth, cellsOf, clipCells, clipCellsEnd, formatAnswer, sentBlock, gutterPatch, gutterRows, withoutSaid, replyPaths, folderChoice, projectNameFor, localModelOf, readLocalKey, saveLocalKey, trimConversation, nextConversation, validConversation, writePrivate, localPrompt, localCallSummary, insideFolder, formatSecs, formatBytes, formatCost, shortModel, formatTokens, homeTilde, isLeave, CODE_COMMANDS, INIT_PROMPT, REVIEW_PROMPT, attributionNote, KODER_TRAILER } from "./code-session.mjs";
 import { folderInstructions, folderSkills, folderCommands, readBody, expandCommand, skillMessage, skillsNote, foldrunKnowledge, cloudBrief, cloudPlaceNote, carryNote, exportTranscript, slashMatches, hasControl, readOnlyCommand, READ_ONLY_SAID, gitOnlyItself } from "./code-context.mjs";
 import { koderLine } from "./koder-path.mjs";
-import { routeFor, groupOf, noteWorked, switchAfterStall, roadFailure, hostOf, approved as frontApproved, originOf as originOfUrl, apiOf as apiOfOrigin } from "./routes.mjs";
+import { routeFor, groupOf, noteWorked, switchAfterStall, roadFailure, hostOf, originOf as originOfUrl, modelOrigin, isFrontHost } from "./routes.mjs";
 import { checkClaudeRoute, writeOwnership, noticeWords, takeLock as takeClaudeLock, claudeSettingsFile as claudeSettingsPath, STATUS_LINE_COMMAND, REFRESH_SECONDS } from "./claude-route.mjs";
 import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
@@ -19208,40 +19208,6 @@ async function engineRoute(s, engineKey) {
   }
 }
 
-/** A CloudFront name: what a front looks like, approved or not. */
-function isFrontHost(/** @type {string} */ u) {
-  try {
-    return /\.cloudfront\.net\.?$/i.test(new URL(u).hostname);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The model address a key may be used at, from the one the platform named
- * (FOL-402): a front only when the CLI's own list approves it for the
- * profile's API; any other front, or one of another API's, is replaced by
- * the profile's own address. An address that is no front stays the
- * platform's choice, as before.
- * @param {string} profileUrl @param {string} named
- */
-function modelOrigin(profileUrl, named) {
-  // A dashboard profile's model calls belong to its API, never the dashboard itself.
-  const p = apiOfOrigin(originOfUrl(profileUrl) ?? profileUrl);
-  const n0 = originOfUrl(named);
-  const n = n0 ? apiOfOrigin(n0) : n0;
-  // A server that names a dashboard as the gateway: its API instead (Codex review).
-  if (n0 && n !== n0) return n;
-  // Not an https (or loopback) origin: a front could hide in it, so the profile's own.
-  if (!n) return isFrontHost(named) ? (groupOf(p)?.main ?? p) : named;
-  if (n === p) return n;
-  const ng = groupOf(n);
-  if (ng || isFrontHost(n)) {
-    if (frontApproved(p, n)) return n;
-    return groupOf(p)?.main ?? p;
-  }
-  return named.replace(/\/+$/, "");
-}
 
 function engineModelError(/** @type {unknown} */ err, s) {
   // A call the relay gave up on (FOL-402): it may have been done; the next one goes elsewhere.
