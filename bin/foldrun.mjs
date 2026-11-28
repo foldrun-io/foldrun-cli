@@ -638,9 +638,13 @@ Platform options (deploy, invoke, secrets, logs, keys)
 Nothing here needs an account. Set ANTHROPIC_API_KEY to run; init and check
 work without one. \`foldrun login\` is for the hosted platform, or your own.`;
 
+/** Print, then exit once stdout has taken all of it: the help is larger than
+ *  a pipe's 64 KiB, and process.exit() right after console.log cut
+ *  `foldrun --help | less` (and the test reading it) at 65536 bytes. */
+const printAndExit = (/** @type {string} */ text) => new Promise(() => process.stdout.write(text + "\n", () => process.exit(0)));
+
 if (!command || command === "--help" || command === "-h") {
-  console.log(HELP);
-  process.exit(0);
+  await printAndExit(HELP);
 }
 
 // Flags first, so the workspace is known before anything loads the core:
@@ -696,8 +700,7 @@ for (let i = 0; i < rest.length; i++) {
 // lines and exits 0 — no platform is contacted, no file is touched.
 if (flags.help === true || rest.includes("-h") || command === "help") {
   const which = command === "help" ? positional[0] : command;
-  console.log(helpFor(which));
-  process.exit(0);
+  await printAndExit(helpFor(which));
 }
 
 /** The lines of HELP about one command: its `foldrun <command>` usage lines
