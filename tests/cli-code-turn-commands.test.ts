@@ -126,8 +126,7 @@ test("a /command typed with Enter during a turn is never sent to the agent: /sta
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/sleep 5; echo slept[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/Enter: tell the agent now/, at, 5_000);
@@ -224,8 +223,7 @@ test("typing / during a turn opens the prompt's / list under the input line: /pe
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/sleep 12; echo slept[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/Enter: tell the agent now/, at, 5_000);
@@ -340,8 +338,7 @@ test("two tool calls at once, one asked (bash_outside) and one not (Bash in the 
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/allow\? \[y\]es · \[n\]o/, at, 60_000);
     const asking = at;
     await new Promise((r) => setTimeout(r, 2_500));
@@ -398,8 +395,7 @@ test("a question over the input line (FOL-434): it waits for a pause in the typi
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Enter: tell the agent now/, at, 10_000);
     // Typing, a key every 250 ms for about 3 s: the question that comes meanwhile waits for a pause.
     const typing = "keep this text";

@@ -424,12 +424,12 @@ Signing in
   foldrun keys create <label> --a2a --to <ws> --flows a,b  a key for an OUTSIDE agent: it opens /a2a for those published flows and no platform route (--max-tasks N open at once, default 10; --expires); shown once
   foldrun keys set <id> --sonnet openai/gpt-6   which model a gateway key runs each Claude Code tier on (--opus, --haiku; - clears one, --clear all)
   foldrun keys set <id> --customer required|optional  whether every run (API key) or gateway call (gateway key) with it must name an end customer — create one that requires it with keys create … --require-customer
-  foldrun keys create <label> --gateway --cap <usd> [--daily <usd>]  a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — it spends the account's credits on foldrun's models through the gateway, up to its own limits, and opens no platform route; an admin of every project; shown once
-  foldrun keys create laptop --gateway --cap 20 --claude-code   the same, and Claude Code is set up on this machine: the URL and key go into its settings, and its status line shows the key's spend
-  foldrun keys create laptop --gateway --account --daily 50 [--wallet 20]   a key the foldrun plan pays for first; bought credits only up to --wallet (0, the default: the plan alone)
+  foldrun keys create <label> --gateway   a key for a CODING agent (Claude Code: ANTHROPIC_BASE_URL + this key) — paid by your foldrun plan, then your account's own terms (the next plan, or the wallet); opens no platform route; an admin of every project; shown once
+  foldrun keys create laptop --gateway --claude-code   the same, and Claude Code is set up on this machine: the URL and key go into its settings, and its status line shows the key's spend
+  foldrun keys create laptop --gateway --cap 20 [--daily 5] [--account --wallet 20]   a key held tighter than the account: limits of its own, bought credits only up to --wallet
   foldrun keys set <id> --wallet <usd>          an account key's wallet budget: the most bought credits may pay for its calls (0: the plan only)
   foldrun keys set <id> --media text|as-is      text: images and PDFs in its model calls are read into text by foldrun first (no image tokens); as-is (default) sends them on
-  foldrun keys create ci --model-access --daily 50 [--cap <usd>] [--wallet 5]   ONE key for the platform API and foldrun's models (/v1/messages, foldrun code with FOLDRUN_TOKEN): its role and projects as any API key, model calls within these limits, the plan first; an admin of every project
+  foldrun keys create ci --model-access [--daily 50] [--cap <usd>] [--wallet 5]   ONE key for the platform API and foldrun's models (/v1/messages, foldrun code with FOLDRUN_TOKEN): its role and projects as any API key, model calls paid by the plan, then the account's own terms (or the limits given); an admin of every project
   foldrun gateway status-line   one line for Claude Code's status line: what the gateway key in ANTHROPIC_AUTH_TOKEN has spent, of its limits (asks the gateway; kept 10 s, --cache <s>)
   foldrun text <file>       a local file as text: uploads it to the platform, which reads it — a PDF or scan (OCR in Persian or English), a Word, sheet or slide file, a recording — and prints the text (--lang fa|en|auto, --ocr auto|always|never, --engine docling, --out <path> or -o <path>, --json, --wait <s>); a long job is polled until it ends
   foldrun talk              speak a prompt: records the microphone until you stop talking, foldrun's own Whisper turns it into text (Persian with the Persian model), prints the words — Claude Code's /talk runs it (--lang auto|fa|en…, --max <s> up to 120, --silence <s>, --file <audio or video> instead of the mic, --mic <name>, --plain, --json; the gateway key from ANTHROPIC_AUTH_TOKEN or --url/--key)
@@ -598,10 +598,10 @@ Options
   --expires <span>          keys create: when it stops working — 30d, 90d (default, as in the dashboard), 365d or never; --forever is never
   --grace <span>            keys rotate: keep the old key working for 1h or 24h while you swap the new one in (default 0: revoked now)
   --a2a                     keys create: an A2A key for an outside agent — with --to <workspace> and --flows a,b; --max-tasks <n> caps its open tasks (1–100, default 10)
-  --gateway                 keys create: a gateway key for Claude Code — with --cap <usd> (in all) and/or --daily <usd> (per UTC day)
-  --cap <usd>, --daily <usd>  keys create --gateway: the key's own spending limits, $0.01–$100000
-  --account, --wallet <usd>   keys create --gateway: the plan pays first, bought credits up to --wallet ($0–$100000, default 0)
-  --model-access            keys create: an API key that may also call foldrun's models — with --daily <usd> and/or --cap <usd>, and --wallet <usd> (default 0: the plan only)
+  --gateway                 keys create: a gateway key for Claude Code, paid by the plan, then the account's own terms
+  --cap <usd>, --daily <usd>  keys create --gateway / --model-access: optional limits of the key's own, $0.01–$100000
+  --account, --wallet <usd>   keys create --gateway: bought credits up to --wallet once the plan is used ($0–$100000; unsaid: the account's own terms)
+  --model-access            keys create: an API key that may also call foldrun's models — paid by the plan, then the account's own terms
   --login                   keys create --gateway: on the operator's Claude login instead (the operator's own accounts; not metered, no limits)
   --claude-code             keys create --gateway: also write the gateway URL and the key into Claude Code's settings (~/.claude/settings.json, or $CLAUDE_CONFIG_DIR) — nothing to copy
   --opus, --sonnet, --haiku <model>  keys set <id>: which model that Claude Code tier runs on with a gateway key (e.g. openai/gpt-6; - clears it)

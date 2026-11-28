@@ -24,18 +24,24 @@ test("keys create --gateway posts { purpose: gateway, capUsd, dailyUsd } and pri
   assert.match(r.out, /opens the gateway only/);
 });
 
-test("keys create --gateway refuses, before any request, with no limit, a bad limit, or a role", async () => {
+test("keys create --gateway refuses, before any request, a bad limit or a role; no limit is the plan's key", async () => {
   const s = await serve({ "POST /v1/keys": () => ({ ok: true }) });
-  const none = await at(s.url, "keys", "create", "x", "--gateway");
   const bad = await at(s.url, "keys", "create", "x", "--gateway", "--cap", "-3");
   const role = await at(s.url, "keys", "create", "x", "--gateway", "--cap", "5", "--role", "admin");
   const both = await at(s.url, "keys", "create", "x", "--gateway", "--a2a", "--cap", "5");
   const bare = await at(s.url, "keys", "create", "x", "--gateway", "--daily", "5", "--expires");
   s.close();
-  for (const r of [none, bad, role, both, bare]) assert.equal(r.code, 1, r.out);
+  for (const r of [bad, role, both, bare]) assert.equal(r.code, 1, r.out);
   assert.match(bare.out, /--expires needs a span/, "a bare --expires is not read as 90 days (Codex review)");
-  assert.match(none.out, /needs a limit of its own/);
   assert.match(bad.out, /--cap takes a number of dollars/);
+  assert.equal(s.seen.length, 0, "refused before any request");
+  // No limit (28 Nov 2026): a plan-first key, no amounts sent — the platform's billing decides.
+  const p = await serve({ "POST /v1/keys": () => ({ ok: true, key: "fr_gw_plan", id: "g1", purpose: "gateway", credential: "account", walletUsd: null, capUsd: null, dailyUsd: null, gatewayUrl: "https://gw.example.test" }) });
+  const plain = await at(p.url, "keys", "create", "x", "--gateway");
+  p.close();
+  assert.equal(plain.code, 0, plain.out);
+  assert.deepEqual(JSON.parse(p.seen[0].body), { label: "x", purpose: "gateway", credential: "account", expires: "90d" });
+  assert.match(plain.out, /your plan, then your account's terms/);
   assert.match(role.out, /not --role/);
   assert.match(both.out, /--a2a or --gateway, not both/);
   assert.equal(s.seen.length, 0);
@@ -333,7 +339,7 @@ test("gateway with no subcommand says what it does", async () => {
   assert.match(r.out, /gateway status-line/);
 });
 
-test("keys create --gateway --account posts credential account with its wallet budget (0 when not given) and says plan first", async () => {
+test("keys create --gateway --account posts credential account with its wallet budget (none sent when not given: the account's terms) and says plan first", async () => {
   const s = await serve({
     "POST /v1/keys": (body: string) => {
       const b = JSON.parse(body);
@@ -346,8 +352,8 @@ test("keys create --gateway --account posts credential account with its wallet b
   assert.equal(withWallet.code, 0, withWallet.out);
   assert.deepEqual(JSON.parse(s.seen[0].body), { label: "laptop", purpose: "gateway", credential: "account", walletUsd: 15, dailyUsd: 50, expires: "90d" });
   assert.match(withWallet.out, /plan first · credits \$0\.00 of \$15\.00/);
-  assert.equal(JSON.parse(s.seen[1].body).walletUsd, 0, "no --wallet: the plan only, never bought credits by default");
-  assert.match(planOnly.out, /plan only/);
+  assert.equal(JSON.parse(s.seen[1].body).walletUsd, undefined, "no --wallet: no amount sent — the platform's billing decides (28 Nov 2026)");
+  assert.match(planOnly.out, /your plan, then your account's terms/);
 });
 
 test("--wallet goes with --account; --account and --login are refused together; a bad --wallet is refused — all before any request", async () => {
@@ -420,30 +426,6 @@ test("keys set --wallet succeeds only when the platform confirms the budget (an 
   assert.match(zero.out, /the plan alone pays/);
 });
 
-test("keys create --gateway --account: a key back with other limits than asked is revoked too", async () => {
-  const s = await serve({
-    "POST /v1/keys": () => ({ ok: true, key: "fr_gw_x", id: "p2", purpose: "gateway", credential: "account", walletUsd: 5, capUsd: null, dailyUsd: null, gatewayUrl: "https://gateway.example.test" }),
-    "DELETE /v1/keys": () => ({ ok: true }),
-  });
-  const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
-  s.close();
-  assert.equal(r.code, 1, r.out);
-  assert.doesNotMatch(r.out, /fr_gw_x/);
-  assert.deepEqual(JSON.parse(s.seen.find((x) => x.method === "DELETE")!.body), { id: "p2" });
-});
-
-test("keys create --gateway --account: the right kind at other limits is revoked and said so (not taken for an older platform)", async () => {
-  const s = await serve({
-    "POST /v1/keys": () => ({ ok: true, key: "fr_gw_y", id: "p3", purpose: "gateway", credential: "account", walletUsd: 1, capUsd: null, dailyUsd: 50, gatewayUrl: "https://gateway.example.test" }),
-    "DELETE /v1/keys": () => ({ ok: true }),
-  });
-  const r = await at(s.url, "keys", "create", "x", "--gateway", "--account", "--daily", "50", "--wallet", "5");
-  s.close();
-  assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /other limits than asked/);
-  assert.doesNotMatch(r.out, /fr_gw_y/);
-});
-
 // One key (22 Nov 2026): an API key that may also call foldrun's models.
 test("keys create --model-access posts modelAccess on an API key, prints its limits, and revokes a key a platform made without it", async () => {
   const s = await serve({
@@ -465,12 +447,10 @@ test("keys create --model-access posts modelAccess on an API key, prints its lim
   assert.deepEqual(JSON.parse(old.seen[1].body), { id: "a2" });
 
   const z = await serve({ "POST /v1/keys": () => ({ ok: true }) });
-  const none = await at(z.url, "keys", "create", "x", "--model-access");
   const stray = await at(z.url, "keys", "create", "x", "--daily", "5");
   const mixed = await at(z.url, "keys", "create", "x", "--model-access", "--gateway", "--daily", "5");
   z.close();
-  for (const x of [none, stray, mixed]) assert.equal(x.code, 1, x.out);
-  assert.match(none.out, /needs a limit of its own/);
+  for (const x of [stray, mixed]) assert.equal(x.code, 1, x.out);
   assert.match(stray.out, /add --model-access/);
   assert.match(mixed.out, /goes on an API key/);
   assert.equal(z.seen.length, 0, "refused before any request");

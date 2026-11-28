@@ -124,8 +124,7 @@ async function session(agentMd: string, models: (n: number) => unknown, files: {
   const send = async (msg: string, n: number, at: number) => {
     t.send(`${msg}\r`);
     if (n === 1) {
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
     }
     at = await t.until(new RegExp(`Answer ${n}\\.`), at, 30_000);
     return t.until(/\w ❯ /, at, 30_000);

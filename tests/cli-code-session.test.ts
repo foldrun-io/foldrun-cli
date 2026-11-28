@@ -769,8 +769,7 @@ test("token hints (FOL-262): a new model, a break past the cache's life — each
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Done\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     // Warm: the next message says nothing.
@@ -1575,8 +1574,7 @@ test("/status explain ranks what used the model, its figures add up, and foldrun
     t.send("/status explain\r");
     at = await t.until(/nothing has used the model yet/, at);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/answer 1/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     t.send("two\r");
@@ -1663,8 +1661,7 @@ test("a background job (FOL-293): started as a command is, its input asked every
   try {
     let at = await t.until(/\w ❯ /);
     t.send("start the reader\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/allow\? \[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/typed into the background job b1[\s\S]*> hi[\s\S]*allow\? \[y\]es · \[n\]o/, at, 30_000);
@@ -1713,8 +1710,7 @@ test("/resume find finds a conversation by a line only a tool printed and goes b
     t.send("/resume find\r");
     at = await t.until(/\/resume find <words> — every word on one line/, at);
     t.send("run it\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/allow\? \[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/it printed a code/, at, 30_000);
@@ -1925,11 +1921,11 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
       keysMade++;
       const body = JSON.parse(String(b));
       assert.equal(body.purpose, "gateway");
-      // FOL-208: an account key — the plan first, bought credits only up
-      // to its wallet budget, and a daily limit on every call.
+      // An account key, plan first, with no amounts of its own (28 Nov 2026): the platform's billing decides.
       assert.equal(body.credential, "account");
-      assert.ok(body.dailyUsd > 0, "a key with a limit");
-      assert.ok(body.walletUsd > 0 && body.walletUsd <= 20, "a wallet budget");
+      assert.equal(body.dailyUsd, undefined, "no daily amount from the CLI");
+      assert.equal(body.walletUsd, undefined, "no wallet amount from the CLI");
+      assert.equal(body.capUsd, undefined);
       return { id: "key-1", key: "fr_gw_test", gatewayUrl: s.url, credential: "account", dailyUsd: body.dailyUsd, walletUsd: body.walletUsd };
     },
     "POST /v1/messages": (b) => {
@@ -1950,8 +1946,7 @@ test("--local: foldrun's own agent; a key for this computer after a yes; reads r
       // Answered the moment each question shows: the prompt listens before
       // it prints, so an instant reply is the question's.
       const answer = async (k: string) => t.send(k);
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      await answer("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/Read a\.txt/, at);
       at = await t.until(/Write b\.txt[\s\S]*a new file · 1 line[\s\S]*allow\?/, at);
       assert.doesNotMatch(t.out().slice(0, at), /Read a\.txt[\s\S]*allow\?[\s\S]*Write/, "a read in the folder is not asked");
@@ -2042,8 +2037,7 @@ test("--local, cloud_jobs with /permissions cloud ask: starting is asked (no sen
     try {
       let at = await t.until(/\w ❯ /);
       t.send("use the cloud\r");
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/1 cloud job: sends a copy of this folder to desk[^\n]*no cloud job has finished[\s\S]*1\. add b[\s\S]*\/permissions cloud ask is on[\s\S]*\[a\]lways for cloud jobs this session[\s\S]*allow\?|allow\?[\s\S]*cloud jobs this session/, at);
       t.send("n\r");
       at = await t.until(/Fine, not then\./, at);
@@ -2133,8 +2127,7 @@ test("--local, cloud_jobs in a folder of repositories (FOL-351): no path is refu
     try {
       let at = await t.until(/\w ❯ /);
       t.send("use the cloud on repo-b\r");
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/send it\? \[y\]es/, at);
       t.send("d\r"); // every path that goes: repo-b's, and nothing of repo-a
       at = await t.until(/send it\? \[y\]es/, at);
@@ -2207,8 +2200,7 @@ test("--local: a reply cut off at the output limit says so, is shown, and the ne
     try {
       let at = await t.until(/\w ❯ /);
       t.send("plan it\r");
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/cut off at the output limit[\s\S]*Here is the first half of the pla[\s\S]*✗ not finished/, at);
       assert.doesNotMatch(t.out().slice(0, at), /✓ done/, "a cut-off reply is not a finished one");
       at = await t.until(/\w ❯ /, at);
@@ -2255,8 +2247,7 @@ test("--local, cloud_jobs: Ctrl-C while they work stops every run on the platfor
     try {
       let at = await t.until(/\w ❯ /);
       t.send("go\r");
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       // Not asked by default (FOL-382): only what leaves is shown, once.
       at = await t.until(/send it\? \[y\]es/, at);
       t.send("y\r"); // the upload preview (FOL-212): nothing leaves before this yes
@@ -2324,8 +2315,7 @@ test("--local, cloud_jobs (FOL-382): one call starts many jobs without the folde
     try {
       let at = await t.until(/\w ❯ /);
       t.send("launch as many agents as you can in the cloud\r");
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       // Unasked, still shown before anything goes: how many, where, each task whole.
       at = await t.until(/5 cloud jobs, side by side in desk on [^\n]* as its agent researcher[\s\S]*1\. one[\s\S]*5\. five[\s\S]*started without a question — \/permissions cloud ask asks first/, at);
       at = await t.until(/cloud job #5 · run-p-5/, at);
@@ -2406,8 +2396,7 @@ test("--local on a foldrun Pro plan with room: no bought credit needed, and the 
     try {
       let at = await t.until(/\w ❯ /);
       t.send("hi\r");
-      at = await t.until(/paid by your foldrun plan[\s\S]*make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/Hello\.[\s\S]*on foldrun Pro plan/, at);
       at = await t.until(/\w ❯ /, at);
       t.send("/quit\r");

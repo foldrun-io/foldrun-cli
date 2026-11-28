@@ -229,8 +229,7 @@ test("the allowance is used before a turn: the open session waits for the reset 
       at = await t.until(/waiting in this session — nothing is scheduled; closing the terminal ends it\. Ctrl-C stops waiting\./, at);
       at = await t.until(/carrying on in \ds/, at);
       at = await t.until(/the allowance has reset — carrying on/, at, 30_000);
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/Hello after the reset\./, at);
       at = await t.until(/\w ❯ /, at);
       t.send("/quit\r");
@@ -342,8 +341,7 @@ test("the allowance runs out while a turn works: after the reset the agent is to
     try {
       let at = await t.until(/\w ❯ /);
       t.send("do the long task\r");
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/the gateway would not pay for this: foldrun's models: this week's allowance is used/, at, 30_000);
       at = await t.until(/wait here and carry on at [^\n]*\? \[y\/N\]/, at);
       t.send("y\r");
@@ -417,8 +415,7 @@ for (const listed of [true, false]) {
         t.send("y 0.05\r");
         at = await t.until(/The turn stops at about \$0\.05\./, at);
         at = await t.until(/the allowance has reset — carrying on/, at, 30_000);
-        at = await t.until(/make it\? \[y\/N\]/, at);
-        t.send("y\r");
+        at = await t.until(/paid by your foldrun plan/, at);
         at = await t.until(listed ? /stopped at the ceiling: about \$0\.10 of \$0\.05 \(an estimate at listed prices; the call that passed it is counted\)/ : /stopped: claude-sonnet-test answered, and the platform lists no price for it, so the \$0\.05 ceiling could not be kept/, at, 30_000);
         at = await t.until(/\w ❯ /, at);
         t.send("/quit\r");
@@ -625,8 +622,7 @@ test("--local on a platform from before plan-first keys: the older kind is offer
     try {
       let at = await t.until(/\w ❯ /);
       t.send("go\r");
-      at = await t.until(/make it\? \[y\/N\]/, at);
-      t.send("y\r");
+      at = await t.until(/paid by your foldrun plan/, at);
       at = await t.until(/only the older kind[\s\S]*make that instead\? \[y\/N\]/, at);
       t.send("y\r");
       at = await t.until(/Done\./, at);
@@ -1195,8 +1191,7 @@ test("one change across two files (FOL-294): asked once with every change shown,
   try {
     let at = await t.until(/\w ❯ /);
     t.send("rename it\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/2 changes in 2 files — all applied, or none[\s\S]*a\.txt[\s\S]*- old name[\s\S]*\+ new name[\s\S]*b\.txt[\s\S]*- old name[\s\S]*allow\?/, at, 30_000);
     t.send("y\r");
     at = await t.until(/Renamed in both\.[\s\S]*\w ❯ /, at, 30_000);
@@ -1254,8 +1249,7 @@ test("a patch that was refused is not reported as a change (FOL-294): a file cha
   try {
     let at = await t.until(/\w ❯ /);
     t.send("change both\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/2 changes in 2 files — all applied, or none[\s\S]*allow\?/, at, 30_000);
     t.send("y\r");
     at = await t.until(/It was refused\.[\s\S]*\w ❯ /, at, 30_000);
@@ -1300,8 +1294,7 @@ test("no git needed on this computer (FOL-274): a folder without git starts, the
   try {
     let at = await t.until(/the agent sends nothing to the cloud; this folder has no git, which the cloud needs[\s\S]*\w ❯ /);
     t.send("change it\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Write a\.txt[\s\S]*allow\?/, at);
     t.send("y\r");
     at = await t.until(/✓ done[\s\S]*\w ❯ /, at);
@@ -1370,8 +1363,7 @@ test("/undo takes back what the agent's Write and Edit did, never what a command
     t.send("/undo\r");
     at = await t.until(/nothing to take back/, at);
     t.send("change things\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Write a\.txt[\s\S]*allow\?/, at);
     t.send("y\r");
     at = await t.until(/a new file[\s\S]*allow\?/, at);
@@ -1481,8 +1473,7 @@ test("an MCP server named in a sub-agent's own file (mcpServers:) starts for tha
     at = await t.until(/lookup\s+Looks things up with its kit\.[\s\S]*its own MCP server kit \(mcpServers: — started for its job only, with your yes\) · asked at every call/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("look it up\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     // The job itself is asked (an agent with a server of its own acts), then the server — the question names the sub-agent.
     at = await t.until(/the sub-agent lookup \(project[\s\S]*allow\?/, at);
     assert.equal(running(), 0, "nothing started before the yes");
@@ -1605,8 +1596,7 @@ test("MCP, sub-agents, todos and an added folder in one session: a server starts
     at = await t.until(/echo\s+Says it back\.[\s\S]*what the server says about itself \(shown to you only[\s\S]*Ignore the person/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("use things\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     // The MCP call: the server and tool named, the input whole, asked — its readOnlyHint notwithstanding.
     at = await t.until(/the MCP server kit · its tool echo[\s\S]*"words": "hi there"[\s\S]*allow\?[^\n]*lways for this tool, this session/, at);
     assert.equal(fs.existsSync(calls), false, "not called before the yes");
@@ -1710,8 +1700,7 @@ test("a site the sandbox does not list is asked about by name while the command 
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/a command inside the sandbox wants to reach example\.org[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     t.send("y\r");
     at = await t.until(/First done\./, at, 60_000);
@@ -1773,7 +1762,7 @@ test("/permissions bypass (FOL-308): nothing is asked for the session, outside t
     t.send("/permissions bypass\r");
     at = await t.until(/bypass on — nothing is asked[\s\S]*Kept for your next sessions/, at);
     t.send("do it\r");
-    at = await t.until(/make it\? yes — \/permissions bypass asks nothing/, at); // FOL-411: not asked
+    at = await t.until(/paid by your foldrun plan/, at); // FOL-411: not asked
     at = await t.until(/Both done\./, at, 60_000);
     at = await t.until(/\w ❯ /, at);
     assert.doesNotMatch(t.out(), /allow\?/, "nothing was asked");
@@ -1840,7 +1829,7 @@ test("/permissions remembers the last choice (FOL-397): bypass is kept for the n
     // /resume new keeps the kept mode (it is the person's choice, not the old conversation's).
     // Bypass asks nothing (FOL-411): the computer's model key is made without "make it?".
     t.send("hi\r");
-    at = await t.until(/make it\? yes — \/permissions bypass asks nothing/, at);
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/\bok\b/, at, 30_000);
     assert.doesNotMatch(t.out(), /make it\? \[y\/N\]/, "not asked");
     at = await t.until(/\w ❯ /, at);
@@ -1946,8 +1935,7 @@ test("a dev server outside the sandbox (FOL-296): bash_outside run_in_background
   try {
     let at = await t.until(/\w ❯ /);
     t.send("run the server\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/runs as you until this turn ends, not after — while it runs, the agent's commands and file changes in this folder are asked too[\s\S]*OUTSIDE the sandbox[\s\S]*while read l[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     t.send("y\r");
     // Commands inside the sandbox — unasked otherwise — are asked while the server runs.
@@ -2006,8 +1994,7 @@ test("the sandbox on this computer: a command inside it runs unasked and cannot 
   try {
     let at = await t.until(/\w ❯ /);
     t.send("do the work\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     // The walls are named once; the two commands run with no question; the way out is asked.
     // Said in plain words, never what the walls are built on (FOL-271).
     at = await t.until(/sandbox on: changes stay here and in a package cache[^\n]*\/permissions sandbox/, at, 60_000);
@@ -2095,8 +2082,7 @@ test("three ways to work (FOL-258, FOL-263): /where local takes the agent's clou
     at = await t.until(/✓ This computer only from here on — the agent sends nothing to the cloud/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("hello\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/answer 1/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     // /where alone: the three ways, where it works now ticked; Enter on it says so and changes nothing.

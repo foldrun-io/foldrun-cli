@@ -6107,16 +6107,17 @@ function noticeLine(/** @type {any} */ n) {
  *   keys delete <id>                 revoked (if live) and gone from the list
  *   keys create <label> --expires 90d  it stops working in 90 days (30d, 365d, never)
  *   keys create <label> --a2a --to <ws> --flows a,b [--max-tasks N]  a key for an outside agent: /a2a only
- *   keys create <label> --gateway --cap <usd> [--daily <usd>]  a coding agent's key (Claude Code): the gateway only
- *   keys create <label> --gateway --account --daily <usd> [--wallet <usd>]  the foldrun plan first, then bought credits up to --wallet (0, the default: the plan only)
+ *   keys create <label> --gateway   a coding agent's key (Claude Code): the gateway only, paid by the foldrun plan, then the account's own terms
+ *   keys create <label> --gateway --cap <usd> [--daily <usd>]  …held to limits of its own
+ *   keys create <label> --gateway --account --wallet <usd>   …bought credits up to --wallet once the plan is used
  *   keys set <id> --wallet <usd>     an account key's wallet budget (or an API key's, with model access)
  *   keys set <id> --media text|as-is  text: images and PDFs in its model calls read into text first (FOL-268)
- *   keys create <label> --model-access --daily <usd> [--cap <usd>] [--wallet <usd>]  one API key for the platform AND
+ *   keys create <label> --model-access [--daily <usd>] [--cap <usd>] [--wallet <usd>]  one API key for the platform AND
  *                                    foldrun's models (CI, `foldrun code` with FOLDRUN_TOKEN): the plan first, then
  *                                    bought credits up to --wallet (0, the default); admin of every project only
  *   keys create <label> --gateway --login   on the account's plan (where it has one): not billed per call
  *   keys create <label> --gateway --login --plan max   five times a pro key's usage limits (pro is the default)
- *   keys create <label> --gateway --cap <usd> --claude-code   …and write it into Claude Code's settings (its status line too)
+ *   keys create <label> --gateway --claude-code   …and write it into Claude Code's settings (its status line too)
  *   keys set <id> --opus|--sonnet|--haiku <provider/model>  which model each Claude Code tier runs on (a gateway key; `-` clears one, --clear all)
  *   keys rotate <id> [--grace 1h]      a new key, same label/role/scope; the old
  *                                      one ends now, or when the grace runs out.
@@ -6204,8 +6205,8 @@ async function keysCmd(positional, flags) {
     if (flags["model-access"] === true) {
       const dailyUsd = usdFlag(flags.daily, "--daily");
       const capUsd = usdFlag(flags.cap, "--cap");
-      if (dailyUsd === undefined && capUsd === undefined) throw new Error("model access needs a limit of its own: --daily <usd> per UTC day, or --cap <usd> in all (or both)");
-      body.modelAccess = { ...(dailyUsd !== undefined ? { dailyUsd } : {}), ...(capUsd !== undefined ? { capUsd } : {}), walletUsd: flags.wallet === undefined ? 0 : walletFlag(flags.wallet) };
+      // No amount is the normal grant (28 Nov 2026): the plan, then the account's own terms.
+      body.modelAccess = { ...(dailyUsd !== undefined ? { dailyUsd } : {}), ...(capUsd !== undefined ? { capUsd } : {}), ...(flags.wallet !== undefined ? { walletUsd: walletFlag(flags.wallet) } : {}) };
     }
     const made = await remoteCall(url, flags, "/v1/keys", { method: "POST", body: JSON.stringify(body) });
     // Asked for model access, told nothing of it: a platform from before
@@ -6383,7 +6384,7 @@ function gatewayLine(g) {
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
   const parts = ["gateway · Claude Code"];
   // An account key: the plan first, then bought credits up to its budget.
-  if (g?.credential === "account") parts.push(g.walletUsd ? `plan first · credits ${usd(g.walletSpentUsd)} of ${usd(g.walletUsd)}` : "plan only");
+  if (g?.credential === "account") parts.push(g.walletUsd === null || g.walletUsd === undefined || g.walletUsd >= 100000 ? "your plan, then your account's terms" : g.walletUsd ? `plan first · credits ${usd(g.walletSpentUsd)} of ${usd(g.walletUsd)}` : "plan only");
   if (g?.capUsd != null) parts.push(`${usd(g.spentUsd)} of ${usd(g.capUsd)}`);
   else if (g?.spentUsd != null) parts.push(`${usd(g.spentUsd)} spent`);
   if (g?.dailyUsd != null) parts.push(`${usd(g.todayUsd)} of ${usd(g.dailyUsd)} today`);
@@ -6393,7 +6394,7 @@ function gatewayLine(g) {
 /** An API key's model access, in a few words: its limits, the plan first. */
 function modelAccessLine(m) {
   const usd = (n) => `$${Number(n ?? 0).toFixed(2)}`;
-  const parts = [m.walletUsd ? `plan first, then up to ${usd(m.walletUsd)} of credits` : "plan only"];
+  const parts = [m.walletUsd === null || m.walletUsd === undefined || m.walletUsd >= 100000 ? "your plan, then your account's terms" : m.walletUsd ? `plan first, then up to ${usd(m.walletUsd)} of credits` : "plan only"];
   if (m.dailyUsd != null) parts.push(`${usd(m.dailyUsd)} a day`);
   if (m.capUsd != null) parts.push(`${usd(m.capUsd)} in all`);
   return parts.join(" · ");
@@ -6433,7 +6434,9 @@ async function keysCreateGateway(url, label, flags) {
   if (flags.wallet !== undefined && flags.account !== true) throw new Error("--wallet goes with --account: the most bought credits may pay for that key's calls");
   const capUsd = flags.login === true ? undefined : usdFlag(flags.cap, "--cap");
   const dailyUsd = flags.login === true ? undefined : usdFlag(flags.daily, "--daily");
-  if (flags.login !== true && capUsd === undefined && dailyUsd === undefined) throw new Error("a gateway key needs a limit of its own: --cap <usd> in all, or --daily <usd> per UTC day (or both) — or --login, on an account that has a plan");
+  // No limit is the normal key (owner, 28 Nov 2026): the foldrun plan pays, then the account's own terms
+  // (the next plan, or the wallet) — the platform's to decide. --cap and --daily stay for a tighter key.
+  const plain = flags.login !== true && capUsd === undefined && dailyUsd === undefined;
   // --claude-code: read Claude Code's settings BEFORE minting, so a file we
   // could not safely rewrite stops here with nothing made.
   const claude = flags["claude-code"] === true ? preflightClaudeSettings() : null;
@@ -6443,9 +6446,9 @@ async function keysCreateGateway(url, label, flags) {
   if (flags.login === true) body.credential = "login";
   // --account (FOL-208): the foldrun plan pays first; bought credits only
   // up to --wallet (0 when not given: the plan alone).
-  if (flags.account === true) {
+  if (flags.account === true || plain) {
     body.credential = "account";
-    body.walletUsd = flags.wallet === undefined ? 0 : walletFlag(flags.wallet);
+    if (flags.wallet !== undefined) body.walletUsd = walletFlag(flags.wallet);
   }
   if (flags.login === true && flags.plan !== undefined) body.plan = flags.plan;
   // --require-customer (FOL-168): every call must send x-foldrun-customer.
@@ -6458,7 +6461,7 @@ async function keysCreateGateway(url, label, flags) {
   body.expires = flags.forever === true ? "never" : typeof flags.expires === "string" ? flags.expires : "90d";
   const made = await remoteCall(url, flags, "/v1/keys", { method: "POST", body: JSON.stringify(body) });
   // Asked for an account key: never show or install one of another kind.
-  if (body.credential === "account" && (await checkAccountKey(url, flags, made, { walletUsd: body.walletUsd, dailyUsd: body.dailyUsd, capUsd: body.capUsd })) === "revoked") throw new Error(OTHER_KIND);
+  if (body.credential === "account" && (await checkAccountKey(url, flags, made)) === "revoked") throw new Error(OTHER_KIND);
   console.log(`\n  ${c.green("✓")} ${c.bold(label)}  ${c.dim(made.id)}  ${c.dim(gatewayLine({ capUsd: made.capUsd ?? null, dailyUsd: made.dailyUsd ?? null, spentUsd: 0, todayUsd: 0, credential: made.credential, plan: made.plan, walletUsd: made.walletUsd, walletSpentUsd: 0 }))}${made.expiresAt ? c.dim(`  expires ${made.expiresAt.slice(0, 10)}`) : ""}\n`);
   if (made.key == null) return lostSecret(made.id);
   console.log(`  ${made.key}\n`);
@@ -6734,10 +6737,10 @@ export function talkEndpoint(env = process.env, flags = {}, settingsFile = path.
   const pick = (...vals) => vals.map((v) => (typeof v === "string" ? v.trim() : "")).find(Boolean) ?? "";
   const base = pick(flags.url, env.FOLDRUN_GATEWAY_URL, env.ANTHROPIC_BASE_URL, settings.ANTHROPIC_BASE_URL).replace(/\/+$/, "");
   const key = pick(flags.key, env.FOLDRUN_GATEWAY_KEY, env.ANTHROPIC_AUTH_TOKEN, env.ANTHROPIC_API_KEY, settings.ANTHROPIC_AUTH_TOKEN, settings.ANTHROPIC_API_KEY);
-  if (!base) throw new Error("no foldrun gateway set — make a key with `foldrun keys create <label> --gateway --cap <usd> --claude-code`, or pass --url and --key");
+  if (!base) throw new Error("no foldrun gateway set — make a key with `foldrun keys create <label> --gateway --claude-code`, or pass --url and --key");
   if (!/^https?:\/\//.test(base)) throw new Error(`the gateway URL must start with https:// (got ${base})`);
   if (/(^|\.)anthropic\.com$/.test(new URL(base).hostname)) throw new Error("ANTHROPIC_BASE_URL points at Anthropic, not a foldrun gateway — /talk sends recordings to foldrun");
-  if (!key) throw new Error("no gateway key set (ANTHROPIC_AUTH_TOKEN) — `foldrun keys create <label> --gateway --cap <usd> --claude-code` makes one");
+  if (!key) throw new Error("no gateway key set (ANTHROPIC_AUTH_TOKEN) — `foldrun keys create <label> --gateway --claude-code` makes one");
   return { base, key };
 }
 
@@ -18755,8 +18758,6 @@ const ENGINE_TOOLS_LOCAL = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
 /** A key made for one computer (FOL-208: an account key): its daily limit
  *  on every call, and what bought credits may pay in all — the plan pays
  *  first. `foldrun keys set <id> --wallet <usd>` changes the second. */
-const LOCAL_KEY_DAILY_USD = 100;
-const LOCAL_KEY_WALLET_USD = 20;
 /** What makeLocalKey answers when the platform cannot make an account key. */
 const OLDER_PLATFORM = Symbol("older platform");
 /** The older kind's limit, on a platform from before plan-first keys. */
@@ -18839,7 +18840,7 @@ async function localKeyFor(s, cancel) {
     // A key kept before CLI 27.3: $20 in all, its wallet budget not settable.
     // It keeps working; the person is asked once whether to swap it (Codex).
     console.log(`  ${c.violet("◆")} ${c.bold("This computer's model key is the older kind: $20 in all, whoever pays")}`);
-    console.log(`    ${c.grey(`a new one is paid by the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all); the old one is revoked`)}`);
+    console.log(`    ${c.grey(`a new one is paid by your foldrun plan, on your account's own terms; the old one is revoked`)}`);
     const swap = bypassYes(s, "swap it?") ? "y" : ((await cancellablePrompt(`    swap it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
     if (cancel.asked) return null;
     const yes = swap === "y" || swap === "yes";
@@ -18872,15 +18873,10 @@ async function localKeyFor(s, cancel) {
       return made;
     });
   }
-  console.log(`  ${c.violet("◆")} ${c.bold("The agent's model calls are paid by your foldrun plan or credits")}`);
-  sayUnder("    ", `with a key made for this computer — the plan first, then at most $${LOCAL_KEY_WALLET_USD} of credits (and $${LOCAL_KEY_DAILY_USD} a day in all), kept only here; foldrun keys ls shows what it spent`, c.grey);
-  const yes = bypassYes(s, "make it?") ? "y" : ((await cancellablePrompt(`    make it? [y/N] `, cancel)) ?? "").trim().toLowerCase();
-  if (cancel.asked) return null;
-  if (yes !== "y" && yes !== "yes") {
-    sayUnder("  ", "nothing made — the agent needs it to work on this computer; foldrun code --cloud works without one, and `foldrun login` (an admin, with model access ticked) makes your sign-in the model key too", c.dim);
-    console.log();
-    return null;
-  }
+  // Made from the subscription, without asking (owner, 28 Nov 2026: "no account management on coding and
+  // cli side, all should be on platform side"): the key carries no amounts; the platform's billing decides
+  // what pays — the plan, then the next plan or the wallet, as the account's own terms say.
+  console.log(`  ${c.violet("◆")} ${c.dim("model calls here are paid by your foldrun plan")}`);
   // Another session may have made one while this one asked.
   const made = await withLocalKeyLock(file, cancel, async () => readLocalKey(file, s.keySlot) ?? makeLocalKey(s, file));
   if (made !== OLDER_PLATFORM) return made;
@@ -19135,13 +19131,10 @@ async function refuseUnusable(url, flags, made) {
  *  budget and limits asked for: any other is revoked before it is shown,
  *  used or kept (Codex). "ok" — it is the one asked for; "revoked" — it was
  *  not, and is gone. Throws, naming the key, when it could not be revoked. */
-async function checkAccountKey(url, flags, made, want) {
-  const same = (a, b) => (a ?? null) === (b ?? null);
-  if (made?.credential === "account" && made?.walletUsd === want.walletUsd && same(made?.dailyUsd, want.dailyUsd) && same(made?.capUsd, want.capUsd)) return "ok";
+async function checkAccountKey(url, flags, made) {
+  // Plan-first is all the CLI asks for: what the key may spend is the platform's to say (28 Nov 2026).
+  if (made?.credential === "account") return "ok";
   const id = made?.id ? String(made.id) : "";
-  // The kind is made, at other limits: revoked, and said so — not taken for
-  // a platform from before plan-first keys (Codex).
-  const otherLimits = made?.credential === "account";
   // No id to revoke: nothing is claimed as cleaned up (Codex).
   if (!id) throw new Error("this platform made another kind of key (not plan-first, or not at the limits asked) and did not say which — check foldrun keys ls and remove it there");
   try {
@@ -19149,7 +19142,6 @@ async function checkAccountKey(url, flags, made, want) {
   } catch {
     throw new Error(`this platform made another kind of key (not plan-first, or not at the limits asked), and revoking it failed — remove it yourself: foldrun keys rm ${id}`);
   }
-  if (otherLimits) throw new Error(`the platform made the key at other limits than asked (wallet $${want.walletUsd}, daily ${want.dailyUsd ?? "none"}, total ${want.capUsd ?? "none"}) — it was revoked, nothing else changed`);
   return "revoked";
 }
 const OTHER_KIND = "this platform does not make plan-first keys at those limits — the key it made instead was revoked, nothing else changed";
@@ -19159,7 +19151,7 @@ async function makeLocalKey(s, file) {
   const label = localKeyLabel();
   let made;
   try {
-    made = await remoteCall(s.url, s.flags, "/v1/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", credential: "account", dailyUsd: LOCAL_KEY_DAILY_USD, walletUsd: LOCAL_KEY_WALLET_USD, expires: "365d" }) });
+    made = await remoteCall(s.url, s.flags, "/v1/keys", { method: "POST", body: JSON.stringify({ label, purpose: "gateway", credential: "account", expires: "365d" }) });
   } catch (err) {
     if (err instanceof HttpError && err.status === 403) throw new Error("only an admin of every project may make a model key — ask one, or use foldrun code --cloud");
     // A platform from before plan-first keys refuses the kind: the older one
@@ -19171,7 +19163,7 @@ async function makeLocalKey(s, file) {
   }
   if (typeof made?.key !== "string" || typeof made?.gatewayUrl !== "string") await refuseUnusable(s.url, s.flags, made);
   // Only the key that was agreed to: the plan first and at most the credits promised.
-  if ((await checkAccountKey(s.url, s.flags, made, { walletUsd: LOCAL_KEY_WALLET_USD, dailyUsd: LOCAL_KEY_DAILY_USD, capUsd: null })) === "revoked") {
+  if ((await checkAccountKey(s.url, s.flags, made)) === "revoked") {
     // A platform that ignores the kind is one from before it: the older
     // key is offered the same way as when it refuses the kind (Codex).
     return OLDER_PLATFORM;

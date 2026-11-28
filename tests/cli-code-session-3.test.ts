@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {execFileSync, spawn, spawnSync} from "node:child_process";
-import {serve, raw} from "./fake-platform.ts";
+import {serve, raw, failing} from "./fake-platform.ts";
 
 
 
@@ -208,8 +208,7 @@ test("a message queued with Tab while a turn runs is sent when that turn has fin
   try {
     let at = await t.until(/\w ❯ /);
     t.send("first\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/sleep 3[\s\S]*allow\? \[y\]es/, at, 30_000);
     t.send("y\r");
     await new Promise((r) => setTimeout(r, 400));
@@ -309,8 +308,7 @@ test("on a turn on this computer what is typed shows on the working line — aft
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/sleep 4; echo slept[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     // The command runs: the input line is there before a key is pressed,
@@ -334,7 +332,7 @@ test("on a turn on this computer what is typed shows on the working line — aft
   assert.match(JSON.stringify(asked[1]?.messages ?? []), /also check the readme/);
 });
 
-test("a line typed while the turn looks up the plan never answers the key question that follows (FOL-306, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
+test("a line typed while the turn looks up the plan answers nothing: the computer's key is made without a question (FOL-306; 28 Nov 2026)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
   const d = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "foldrun-home-"));
   let keys = 0;
@@ -351,20 +349,16 @@ test("a line typed while the turn looks up the plan never answers the key questi
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
     await new Promise((r) => setTimeout(r, 1500));
-    // Typed before any question is on the screen.
+    // Typed while the plan is looked up.
     t.send("y\r");
-    at = await t.until(/make it\? \[y\/N\]/, at, 10_000);
+    at = await t.until(/paid by your foldrun plan/, at, 10_000);
     await new Promise((r) => setTimeout(r, 800));
-    assert.equal(keys, 0, "the early y did not answer it");
-    t.send("n\r");
-    at = await t.until(/nothing made/, at, 10_000);
-    // What was typed early is kept: it starts the next message, to send or clear.
-    at = await t.until(/\w ❯ y/, at);
+    assert.doesNotMatch(t.out(), /make it\?|\[y\/N\]/, "no question about the key");
   } finally {
     t.child.kill();
     s.close();
   }
-  assert.equal(keys, 0);
+  assert.equal(keys, 1, "made once, unasked");
 });
 
 test("a line being typed when a permission prompt comes is drawn again after it, not hidden till the turn ends (FOL-306, Codex)", { skip: hasPty ? false : "needs python3's pty", timeout: 120_000 }, async () => {
@@ -395,8 +389,7 @@ test("a line being typed when a permission prompt comes is drawn again after it,
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/sleep 2; echo first[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     await new Promise((r) => setTimeout(r, 500));
@@ -451,8 +444,7 @@ test("a named file is read into text on foldrun's servers: into text for the age
     at = await t.until(/note\.m4a — audio[\s\S]*Into text for the agent[\s\S]*Just the text/, at);
     t.send("\r");
     at = await t.until(/✓ note\.m4a read into text \(4 s · 23 characters\) — the agent is given the text, not the file/, at, 30_000);
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Friday at nine\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     const sent = JSON.stringify(asked[0]?.messages ?? []);
@@ -524,8 +516,7 @@ test("an image sent to the model as it is: the token estimate shown, the image b
     at = await t.until(/shot\.png — image[\s\S]*❯ 3\. Send it to the model as it is\s+about 410 input tokens/, at);
     t.send("\r");
     at = await t.until(/✓ shot\.png goes to the model as it is — about 410 input tokens/, at, 30_000);
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/The button is cut off\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     const user = (asked[0]?.messages ?? []).filter((m: any) => m.role === "user").at(-1);
@@ -589,8 +580,7 @@ test("the local agent browses on this computer with the cloud's web tool, asked 
     t.send("/where web here\r");
     at = await t.until(/The web on this computer/, at);
     t.send("read example.com\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Web[\s\S]*browse https:\/\/example\.com[\s\S]*outside the sandbox[\s\S]*"mode": "aria"[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/"proxy": "MY_PROXY"[\s\S]*\[y\]es/, at, 30_000);
@@ -654,8 +644,7 @@ test("the agent's web.browse block holds on this computer as in the cloud: its d
     t.send("/where web here\r");
     at = await t.until(/The web on this computer/, at);
     t.send("browse\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Web[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/Done browsing\./, at, 30_000);
@@ -699,8 +688,7 @@ test("a message the agent sends shows in this session's transcript as a line of 
   try {
     let at = await t.until(/\w ❯ /);
     t.send("ask the api session\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/a message to the session code-api[\s\S]*\[y\]es/, at, 30_000);
     t.send("y\r");
     at = await t.until(/→ you to code-api · \d\d:\d\d · waiting for code-api\r?\n\s+Which routes moved\?/, at, 30_000);
@@ -781,8 +769,7 @@ test("a message from another session shows at an idle prompt with no key pressed
     t.send("\r");
     at = await t.until(/1 message from other sessions[\s\S]*Line one of the note\.\r?\n\s*\n\s+Please check the build\.[\s\S]*take it into a turn now\? \[y\/N\]/, at, 10_000);
     t.send("y\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Checked it\./, at, 30_000);
     assert.doesNotMatch(t.out().slice(at - 4000), /include it in this turn\?/, "not asked a second time");
     at = await t.until(/\w ❯ /, at);
@@ -913,8 +900,7 @@ for (const cols of [200, 80]) test(`the transcript reads as separate blocks with
     t.send("one\r");
     at = await t.until(/in this turn\? \[y\/N\]/, at, 30_000);
     t.send("y\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/✓ done/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     const screen = t.out().slice(from).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split(/\r?\n/).map((l) => l.split("\r").pop() ?? "");
@@ -977,8 +963,7 @@ test("/model thinking on shows the model's summary of its thinking above the rep
     t.send("/model thinking\r");
     at = await t.until(/thinking is not shown · \/model thinking on/, at);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/plain answer/, at, 30_000);
     at = await t.until(/\w ❯ /, at);
     assert.equal("thinking" in asked[0], false, "off by default: the request is as it was");
@@ -1063,8 +1048,7 @@ test("f at a command's question keeps a rule for the folder: later sessions run 
   try {
     let at = await t.until(/\w ❯ /);
     t.send("one\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/touch made-one\.txt[\s\S]*allow\? \[y\]es · \[a\]lways for this command · \[f\] always in this folder · \[n\]o/, at, 30_000);
     t.send("f\r");
     at = await t.until(/\[e\] exactly this command · \[p\] every command that starts with touch · \[n\]either/, at);
@@ -1197,6 +1181,8 @@ test("a turn on this computer that never reached the model holds nothing, and of
     },
     "GET /v1/me": () => ({ account: "acme" }),
     "GET /v1/account/usage": () => ({ credits: { pots: { planUsd: 1, boughtUsd: 5 }, plan: { id: "pro", name: "Pro", paysForTokens: false }, usdPerCredit: 0.01 } }),
+    // No key for this computer: the platform refuses it, so nothing reaches a model.
+    "POST /v1/keys": () => failing(403, { error: "only an admin of every workspace may mint one" }),
   });
   const t = onTerminal(["code", d, "--local", "--to", "desk", "--context", "code-fr", "--url", s.url, "--token", "k"], home, { TERM: "dumb", COLUMNS: "200" });
   try {
@@ -1204,17 +1190,13 @@ test("a turn on this computer that never reached the model holds nothing, and of
     t.send("go\r");
     at = await t.until(/include it in this turn\? \[y\/N\]/, at);
     t.send("y\r");
-    // The key for this computer: declined, so nothing reaches a model.
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("n\r");
+    at = await t.until(/only an admin of every project may make a model key/, at);
     at = await t.until(/\w ❯ /, at);
     await new Promise((r) => setTimeout(r, 300));
-    // Held only once the turn is about to be sent, after the key prompt: declined there, nothing was held (Codex round 11).
-    assert.deepEqual(calls, [], "never held — the turn stopped at the key prompt");
+    // Held only once the turn is about to be sent, after the key: refused there, nothing was held (Codex round 11).
+    assert.deepEqual(calls, [], "never held — the turn stopped at the key");
     t.send("again\r");
     at = await t.until(/include it in this turn\? \[y\/N\]/, at);
-    t.send("n\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
     t.send("n\r");
     at = await t.until(/\w ❯ /, at);
     assert.equal(calls.length, 0, "declined: nothing held");
@@ -1372,8 +1354,7 @@ test("ask_person in a local turn (FOL-314): a list of choices, an answer of one'
   try {
     let at = await t.until(/\w ❯ /);
     t.send("style the button\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/the agent asks you:[\s\S]*Which colour for the button\?[\s\S]*1\. red[\s\S]*2\. green[\s\S]*3\. type my own answer/, at, 30_000);
     t.send("2");
     at = await t.until(/answered: green[\s\S]*And the border\?[\s\S]*type my own answer/, at, 30_000);
@@ -1450,8 +1431,7 @@ process.stdin.on("data", (d) => {
   try {
     let at = await t.until(/\w ❯ /);
     t.send("where is add defined\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Found it\./, at, 60_000);
     assert.doesNotMatch(t.out().slice(at), /allow\?/, "not asked");
     assert.ok((asked[0].tools ?? []).some((x: any) => x.name === "Symbols"), "offered inside the walls");
@@ -1665,8 +1645,7 @@ test("the web in the cloud by default (FOL-383, FOL-267): the web tool browses t
     let at = await t.until(/\w ❯ /);
     // No /where: the web is in the cloud unless the person says here.
     t.send("read the shop\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     // A cloud browse is not asked by default (owner, 26 Nov 2026: /permissions web ask turns asking on).
     await t.until(/Read the page\./, at, 30_000);
     assert.doesNotMatch(t.out().slice(at), /\[y\]es/, "nothing asked before the cloud browse");
@@ -1714,8 +1693,7 @@ test("search and fetch on foldrun's servers in a local turn (FOL-304): offered o
   try {
     let at = await t.until(/\w ❯ /);
     t.send("hello\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/First answer\./, at, 30_000);
     at = await t.until(/\w ❯ /, at, 30_000);
     t.send("again\r");
@@ -1768,8 +1746,7 @@ test("/where web here (FOL-383): search and fetch run from this computer under t
     t.send("/where web here\r");
     at = await t.until(/The web on this computer/, at);
     t.send("fetch it\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Fetched\./, at, 30_000);
     const names = (n: number) => (asked[n].tools ?? []).map((x: any) => (x.type ? `${x.type}:${x.name}` : x.name));
     assert.ok(names(0).includes("web_search") && names(0).includes("web_fetch"), "search and fetch offered as this computer's own tools");
@@ -1818,8 +1795,7 @@ test("the web for an agent whose file names no tools: [web] (FOL-383, FOL-412): 
   try {
     let at = await t.until(/\w ❯ /);
     t.send("hello\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/Answer 1\./, at, 30_000);
     at = await t.until(/\w ❯ /, at, 30_000);
     t.send("/where web here\r");
@@ -1897,8 +1873,7 @@ test("a trusted session's message reaches a running turn with no key pressed, is
     at = await t.until(/code-other is trusted in this conversation \(as the sign-in key:k-bo\)/, at);
     at = await t.until(/\w ❯ /, at);
     t.send("look at a.txt\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/✉ a message from code-other — Please check the build script\.[\s\S]*from a session you trust: the agent reads it after what it is doing now/, at, 30_000);
     at = await t.until(/the message from code-other goes to the agent now/, at, 30_000);
     at = await t.until(/The build script is fine\./, at, 30_000);
@@ -1941,8 +1916,7 @@ test("a message from a session not trusted is only said during a turn: not held,
   try {
     let at = await t.until(/\w ❯ /);
     t.send("look at a.txt\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/✉ a message from code-other — Please check the build script\.[\s\S]*after this turn, Enter on an empty line takes it in \(you are asked first\)/, at, 30_000);
     at = await t.until(/Read it\./, at, 30_000);
     at = await t.until(/\w ❯ /, at);
@@ -1978,8 +1952,7 @@ test("a trusted session's message at an empty prompt starts a turn by itself, an
     at = await t.until(/\w ❯ /, at);
     p.state.arrived = true;
     at = await t.until(/✉ a message from code-other \(a session you trust\) — a turn starts for it/, at, 10_000);
-    at = await t.until(/make it\? \[y\/N\]/, at, 30_000);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at, 30_000);
     at = await t.until(/Checked: it builds\./, at, 30_000);
     at = await t.until(/↩ the answer went back to code-other/, at, 30_000);
     assert.doesNotMatch(t.out(), /take it into a turn now\?|include it in this turn\?/, "nobody was asked about the message");
@@ -2016,8 +1989,7 @@ test("the answer is not sent back a second time when the agent answered the send
     at = await t.until(/\w ❯ /, at);
     p.state.arrived = true;
     at = await t.until(/a turn starts for it/, at, 10_000);
-    at = await t.until(/make it\? \[y\/N\]/, at, 30_000);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at, 30_000);
     // The agent's own message is asked about, as every session_send is.
     at = await t.until(/a message to the session code-other[\s\S]*allow\? \[y\]es/, at, 30_000);
     t.send("y\r");

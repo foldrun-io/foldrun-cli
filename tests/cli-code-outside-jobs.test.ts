@@ -126,8 +126,7 @@ test("a server started outside the sandbox says it lasts the turn, is gone when 
   try {
     let at = await t.until(/\w ❯ /);
     t.send("start the server\r");
-    at = await t.until(/make it\? \[y\/N\]/, at);
-    t.send("y\r");
+    at = await t.until(/paid by your foldrun plan/, at);
     at = await t.until(/runs as you until this turn ends, not after[\s\S]*OUTSIDE the sandbox[\s\S]*allow\? \[y\]es · \[n\]o/, at, 60_000);
     assert.doesNotMatch(t.out(), /left running as you/, "it does not promise what the loop's clean-up does not keep");
     t.send("y\r");
