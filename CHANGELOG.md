@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.7] — 2026-11-28
+
+- fix(ci): the pinned npm in a folder of the run's own, its bytes pinned ([439c2bc](https://github.com/foldrun-io/foldrun-cli/commit/439c2bc))
+
 ## [36.1.6] — 2026-11-28
 
 ### deps
