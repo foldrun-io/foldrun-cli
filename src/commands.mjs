@@ -29234,7 +29234,7 @@ async function teamInviteCmd(positional, flags) {
   if (r.sent === true) console.log(`  ${c.dim("mailed to")} ${r.email}`);
   else if (r.sent === false) console.log(`  ${c.yellow("not mailed")} ${c.dim(r.sendError ?? "")}`);
   console.log(`\n  ${link}`);
-  console.log(`  ${c.dim("works once, for seven days, and is shown only now · foldrun team invites revoke " + r.id + " takes it back")}\n`);
+  console.log(`  ${c.dim("works once, for seven days · foldrun team invites link " + r.id + " prints it again, revoke takes it back")}\n`);
   return 0;
 }
 
@@ -29341,13 +29341,64 @@ async function meCmd(positional, flags) {
 
 /**
  * `foldrun team invites [--all] [--json]` — the account's invites (GET
- * /v1/team/invites): pending ones, or every one with --all. Never a link:
- * that is shown once, to the person who made it. `foldrun team invites
- * revoke <id>` takes one back (DELETE /v1/team/invites/<id>) — its link
- * stops working at once. Settings → Team does the same.
+ * /v1/team/invites): pending ones, or every one with --all. `foldrun team
+ * invites revoke <id>` takes one back (DELETE /v1/team/invites/<id>) — its
+ * link stops working at once; `resend <id>` mails it again and `link <id>`
+ * prints its copy link (POST …/resend, …/link). The invited side: `mine`
+ * lists the invites waiting on you (GET /v1/me/invites), `join <id>` and
+ * `decline <id>` answer one (POST /v1/me/invites/<id>). Settings → Team and
+ * the inbox do the same.
  */
 async function teamInvitesCmd(positional, flags) {
   const url = platformFor(flags, "team invites");
+  const verb = positional[0];
+  if (verb === "resend" || verb === "link") {
+    const id = positional[1];
+    if (!id) throw new Error(`which invite? \`foldrun team invites ${verb} <id>\` — \`foldrun team invites\` lists them`);
+    const r = verb === "link"
+      ? await remoteCall(url, flags, `/v1/team/invites/${enc(id)}/link`, { method: "POST" })
+      : await remoteCall(url, flags, `/v1/team/invites/${enc(id)}/resend`, { method: "POST" });
+    if (flags.json === true) {
+      console.log(JSON.stringify(r, null, 2));
+      return 0;
+    }
+    if (verb === "link") {
+      console.log(`\n  ${r.url}`);
+      console.log(`  ${c.dim(`the copy link of invite ${id}: whoever holds it and the invited address can join, once · until ${String(r.expires).slice(0, 10)}`)}\n`);
+      return 0;
+    }
+    console.log(r.sent ? `\n  ${c.green("sent again")} ${c.dim(`(${id})`)}\n` : `\n  ${c.yellow("not mailed")} ${c.dim(r.sendError ?? "")} ${c.dim(`· foldrun team invites link ${id} prints the link to hand over yourself`)}\n`);
+    return r.sent ? 0 : 1;
+  }
+  if (verb === "mine") {
+    const { invites = [] } = await remoteCall(url, flags, "/v1/me/invites");
+    if (flags.json === true) {
+      console.log(JSON.stringify(invites, null, 2));
+      return 0;
+    }
+    if (!invites.length) {
+      console.log(`\n  ${c.dim("no invites are waiting on you")}\n`);
+      return 0;
+    }
+    const w = Math.max(...invites.map((i) => i.account.length));
+    console.log();
+    for (const i of invites) console.log(`  ${c.bold(pad(i.account, w))}  ${pad(i.role, 6)} ${c.dim(`by ${i.invitedBy} · expires ${when(i.expiresAt)}`)}  ${c.dim(i.id)}`);
+    console.log(`\n  ${c.dim("foldrun team invites join <id> | decline <id>")}\n`);
+    return 0;
+  }
+  if (verb === "join" || verb === "decline") {
+    const id = positional[1];
+    if (!id) throw new Error(`which invite? \`foldrun team invites ${verb} <id>\` — \`foldrun team invites mine\` lists the ones waiting on you`);
+    const r = await remoteCall(url, flags, `/v1/me/invites/${enc(id)}`, { method: "POST", body: JSON.stringify({ action: verb }) });
+    if (flags.json === true) {
+      console.log(JSON.stringify(r, null, 2));
+      return 0;
+    }
+    console.log(verb === "join"
+      ? `\n  ${c.green("joined")} ${c.bold(r.account)} as ${r.role} ${c.dim("· this machine is still signed in to the account it was in: `foldrun login` picks another")}\n`
+      : `\n  ${c.dim(`declined the invite to ${r.account}; the person who sent it is told`)}\n`);
+    return 0;
+  }
   if (positional[0] === "revoke") {
     const id = positional[1];
     if (!id) throw new Error("which invite? `foldrun team invites revoke <id>` — `foldrun team invites` lists them");
@@ -29362,7 +29413,7 @@ async function teamInvitesCmd(positional, flags) {
       : `\n  ${c.dim(`the invite for ${who} (${id}) was already ${r.invite?.status ?? "revoked"} — nothing changed`)}\n`);
     return 0;
   }
-  if (positional[0]) throw new Error(`\`foldrun team invites\` lists the invites; \`foldrun team invites revoke <id>\` takes one back — not "${positional[0]}"`);
+  if (positional[0]) throw new Error(`\`foldrun team invites\` lists the invites; \`revoke <id>\`, \`resend <id>\` and \`link <id>\` act on one; \`mine\`, \`join <id>\` and \`decline <id>\` are the invites waiting on you — not "${positional[0]}"`);
   const { invites = [] } = await remoteCall(url, flags, `/v1/team/invites${flags.all === true ? "?all=1" : ""}`);
   if (flags.json === true) {
     console.log(JSON.stringify(invites, null, 2));
@@ -29380,7 +29431,7 @@ async function teamInvitesCmd(positional, flags) {
     const state = i.status === "pending" ? `expires ${when(i.expiresAt)}` : i.status;
     console.log(`  ${c.bold(pad(label(i), w))}  ${pad(i.role, 6)} ${c.dim(scope)}  ${c.dim(`by ${i.invitedBy} · ${state}`)}  ${c.dim(i.id)}`);
   }
-  console.log(`\n  ${c.dim(`${invites.length} invite${invites.length === 1 ? "" : "s"} · each works once · foldrun team invites revoke <id> takes one back`)}\n`);
+  console.log(`\n  ${c.dim(`${invites.length} invite${invites.length === 1 ? "" : "s"} · each works once · foldrun team invites revoke | resend | link <id>`)}\n`);
   return 0;
 }
 

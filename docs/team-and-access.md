@@ -62,15 +62,40 @@ is bound to — only that address can accept it. It is sent through the
 account's email connection, or returned as a link to pass on yourself; an
 invite with no address is a link for one person, whoever opens it first.
 
-- **It works once.** The first signup on it uses it up, in the same step that
+- **It works once.** Joining on it uses it up, in the same step that
   creates the member; a second person, or the same person again, is refused.
   It lasts seven days.
-- **Pending invites are listed.** Settings → Team shows the links still out —
-  the address or "anyone with the link", role, projects, who made it, when
-  it expires — with **Revoke** on each. The same list is
-  `GET /v1/team/invites` (`?all=1` adds accepted, revoked and expired ones)
-  and `foldrun team invites`. The link itself is never listed: it is shown
-  once, to the person who made it.
+- **One login, several accounts.** Someone who already has a login does not
+  make a second one: they sign in and join, keeping their own account, and
+  move between accounts from the account menu. Only an address with no login
+  signs up. The form answers the same either way, so an inviter never learns
+  whether an address is a customer; the one thing it says is "already a
+  member of this account".
+- **Two links, one invite.** The link in the mail proves the address (it
+  reached that inbox): a sign-up through it starts with the address
+  confirmed, and it sends a person who has a login straight to sign in. The
+  copy link, which the inviter may hand over another way, proves nothing:
+  it shows every address the same page, and a sign-up through it confirms
+  the address the usual way. Using, declining or revoking the invite ends
+  both.
+- **The invited person can say no.** An invite also shows in their inbox
+  and account menu when they are signed in, with **Join** and **Decline**
+  (`GET /v1/me/invites`, `POST /v1/me/invites/<id>`, `foldrun team invites
+  mine | join <id> | decline <id>`). The one who made the invite is mailed
+  when it is accepted, declined, or runs out unused.
+- **Pending invites are listed.** Settings → Team shows the invites still
+  out — the address or "anyone with the link", role, projects, who made it,
+  when it expires — with **Send again**, **Copy link** and **Revoke** on
+  each. The same list is `GET /v1/team/invites` (`?all=1` adds accepted,
+  declined, revoked and expired ones) and `foldrun team invites`.
+- **Send again, copy the link.** `POST /v1/team/invites/<id>/resend`
+  (`foldrun team invites resend <id>`) mails it again, at most once in ten
+  minutes; `POST /v1/team/invites/<id>/link` (`foldrun team invites link
+  <id>`) gives the copy link. Both are for a person who could make that
+  invite, not a key made by hand, and both are audited.
+- **Limits per day.** One address is mailed at most 3 invites a day across
+  all accounts, one person makes at most 30 and one account 100; past that
+  the answer is `429` until the day turns.
 - **Revoke one** with that button, `DELETE /v1/team/invites/<id>` or
   `foldrun team invites revoke <id>`; its link stops working at once. An
   admin invite is the owner's to revoke, and a member scoped to some
@@ -88,7 +113,9 @@ invite with no address is a link for one person, whoever opens it first.
 
 Each revocation is in the audit log as `member.invite_revoked`;
 `member.removed` lists `invitesRevoked`, and `member.joined` names the
-`inviteId`.
+`inviteId`. A decline is `member.invite_declined`, an invite that ran out
+unused `member.invite_expired`, a resend `member.invite_resent` and a copied
+link `member.invite_link_copied`.
 
 ## API keys
 

@@ -409,6 +409,9 @@ Signing in
   foldrun team remove <email|id>   remove a member — asks first (--yes with no terminal); their keys and pending invites stop. Transfer stays in Settings → Team
   foldrun team invites      the account's pending invites — address or "anyone with the link", role, projects, who made it, when it expires, its id (--all for accepted, revoked and expired too; --json). Never the link: each works once, shown only to its maker
   foldrun team invites revoke <id>   take an invite back: its link stops working at once (an admin's; a key may)
+  foldrun team invites resend <id>   mail a pending invite again (once in ten minutes)
+  foldrun team invites link <id>     print a pending invite's copy link, to hand over yourself
+  foldrun team invites mine          the invites waiting on you; join <id> or decline <id> answers one
   foldrun onboarding        the account's getting-started steps, done or not, the next one first; --to <workspace> adds that project's checklist (--json)
   foldrun preferences       your own settings on the platform — the theme; set theme system|light|dark (a key acts for whoever minted it)
   foldrun doctor            check the path to the platform: node, CLI, where its files are kept, model credential, account, DNS, a timed /v1/healthz, and the road test (small and 64 KiB calls at every address the API names)

@@ -303,7 +303,7 @@ test("team invites lists GET /v1/team/invites (--all asks for every one) and rev
   const again = await at(s.url, "team", "invites", "revoke", "b".repeat(32));
   const used = await at(s.url, "team", "invites", "revoke", "d".repeat(32));
   const none = await at(s.url, "team", "invites", "revoke");
-  const odd = await at(s.url, "team", "invites", "resend");
+  const odd = await at(s.url, "team", "invites", "promote");
   s.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /new@x\.com\s+editor\s+blog-desk\s+by owner@x\.com · expires/);
@@ -323,7 +323,40 @@ test("team invites lists GET /v1/team/invites (--all asks for every one) and rev
   assert.equal(none.code, 1);
   assert.match(none.out, /which invite\?/);
   assert.equal(odd.code, 1);
-  assert.match(odd.out, /not "resend"/);
+  assert.match(odd.out, /not "promote"/);
+});
+
+test("team invites resend and link act on one invite; mine, join and decline are the invited side (FOL-464)", async () => {
+  const id = "a".repeat(32);
+  const mine = [{ id, account: "acme", role: "editor", workspaces: null, invitedBy: "owner@x.com", createdAt: "2026-11-28T00:00:00Z", expiresAt: "2026-12-05T00:00:00Z", path: "/signup?invite=x" }];
+  const s = await serve({
+    [`POST /v1/team/invites/${id}/resend`]: () => ({ ok: true, id, sent: true, sendError: null }),
+    [`POST /v1/team/invites/${id}/link`]: () => ({ ok: true, id, path: "/signup?invite=inv4.x", url: "https://dash.example/signup?invite=inv4.x", expires: "2026-12-05T00:00:00Z" }),
+    "/v1/me/invites": () => ({ invites: mine }),
+    [`POST /v1/me/invites/${id}`]: (b) => (JSON.parse(b).action === "join" ? { ok: true, joined: true, account: "acme", role: "editor", workspaces: null } : { ok: true, declined: true, account: "acme" }),
+  });
+  const resend = await at(s.url, "team", "invites", "resend", id);
+  const link = await at(s.url, "team", "invites", "link", id);
+  const list = await at(s.url, "team", "invites", "mine");
+  const join = await at(s.url, "team", "invites", "join", id);
+  const decline = await at(s.url, "team", "invites", "decline", id);
+  const none = await at(s.url, "team", "invites", "join");
+  s.close();
+  assert.equal(resend.code, 0, resend.out);
+  assert.match(resend.out, /sent again/);
+  assert.equal(link.code, 0, link.out);
+  assert.match(link.out, /https:\/\/dash\.example\/signup\?invite=inv4\.x/);
+  assert.match(list.out, /acme\s+editor\s+by owner@x\.com · expires/);
+  assert.match(join.out, /joined acme as editor/);
+  assert.match(decline.out, /declined the invite to acme/);
+  assert.deepEqual(writes(s).map((w) => [w.method, w.url, w.body?.action ?? null]), [
+    ["POST", `/v1/team/invites/${id}/resend`, null],
+    ["POST", `/v1/team/invites/${id}/link`, null],
+    ["POST", `/v1/me/invites/${id}`, "join"],
+    ["POST", `/v1/me/invites/${id}`, "decline"],
+  ]);
+  assert.equal(none.code, 1);
+  assert.match(none.out, /which invite\?/);
 });
 
 // ------------------------------------------------------------ runs, billing, windows
