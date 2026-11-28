@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.5] — 2026-11-28
+
+### deps
+
+- @foldrun/core 32.1.1 ([56f15a5](https://github.com/foldrun-io/foldrun-cli/commit/56f15a5))
+
 ## [36.1.4] — 2026-11-28
 
 - ci(security): ask the registry again on any answer that is not a verdict ([1b316e6](https://github.com/foldrun-io/foldrun-cli/commit/1b316e6))
