@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.3] — 2026-11-28
+
+### docs
+
+- sync api.md (the session moves between a login's accounts, FOL-464) ([740e4f0](https://github.com/foldrun-io/foldrun-cli/commit/740e4f0))
+
 ## [36.1.2] — 2026-11-28
 
 - test(code): compare the message as typed, past the folder note a first cloud turn carries (FOL-462) ([ef41179](https://github.com/foldrun-io/foldrun-cli/commit/ef41179))
