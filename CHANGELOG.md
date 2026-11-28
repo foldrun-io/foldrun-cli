@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.8] — 2026-11-28
+
+- fix(ci): the signature check keeps no shared cache, and says what a wrong registry answer is ([6951c0d](https://github.com/foldrun-io/foldrun-cli/commit/6951c0d))
+
+### deps
+
+- @foldrun/core 32.1.3 ([6f727c1](https://github.com/foldrun-io/foldrun-cli/commit/6f727c1))
+
 ## [36.1.7] — 2026-11-28
 
 - fix(ci): the pinned npm in a folder of the run's own, its bytes pinned ([439c2bc](https://github.com/foldrun-io/foldrun-cli/commit/439c2bc))
