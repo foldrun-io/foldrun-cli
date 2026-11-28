@@ -12,6 +12,12 @@ edited by a person.
 
 <!-- releases -->
 
+## [37.0.1] — 2026-11-28
+
+### docs
+
+- sync api-usage.md and cli.md from foldrun-docs (FOL-477's busy-at-the-door docs) ([7b91da1](https://github.com/foldrun-io/foldrun-cli/commit/7b91da1))
+
 ## [37.0.0] — 2026-11-28
 
 ### Breaking changes
