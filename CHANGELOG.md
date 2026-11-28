@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.9] — 2026-11-28
+
+- fix(ci): a wrong attestations answer at registry.npmjs.org is checked through registry.npmjs.com ([9295023](https://github.com/foldrun-io/foldrun-cli/commit/9295023))
+
+### deps
+
+- @foldrun/core 32.1.4 ([d65d6e4](https://github.com/foldrun-io/foldrun-cli/commit/d65d6e4))
+
 ## [36.1.8] — 2026-11-28
 
 - fix(ci): the signature check keeps no shared cache, and says what a wrong registry answer is ([6951c0d](https://github.com/foldrun-io/foldrun-cli/commit/6951c0d))
