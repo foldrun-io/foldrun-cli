@@ -199,7 +199,8 @@ body whatever version is sent.
 | 409 | `invalid_request_error` | conflict — a run already live (`overlap: skip`), a file changed under `ifMatch`, an idempotent request still in flight, or the account already has its most runs waiting for their turn (`code: "waiting_cap"`, with `limit` and `waiting` — [how many runs may wait](budgets-and-billing#how-many-runs-may-wait); a webhook or inbound email gets this as a `503` with `Retry-After`) |
 | 413 | `request_too_large` | body over 10 MB |
 | 422 | `invalid_request_error` | a refusal to read: a deploy with issues, an Idempotency-Key reused with a different body |
-| 429 | `rate_limit_error` | rate limited — wait `Retry-After` |
+| 429 | `rate_limit_error` | rate limited — wait `Retry-After`; or, with `code: "busy_account"`, the account already has its limit of deploys, run starts or uploads in progress ([busy at the door](#busy-at-the-door)) |
+| 503 | `api_error` | with `code: "busy_install"`, the whole install is at its cap for deploys, run starts and uploads ([busy at the door](#busy-at-the-door)); wait `Retry-After` |
 | 5xx | `api_error` | our fault; the detail is in our logs, not the response. Safe to retry with the same Idempotency-Key |
 
 ## One address
@@ -499,3 +500,20 @@ and take `limit` (`/v1/workspaces/<ws>/runs?limit=`, default 50, at most
 500). Everything else (flows, agents, keys,
 secrets, projects) comes whole. A cursor, when one is added, will be a new
 optional parameter and will not move the API version.
+
+## Busy at the door
+
+Deploys, run starts (flow and agent runs, reruns, A2A messages) and file
+uploads each take a permit before they touch the database. One account's burst
+fills that account's own permits, never another's, and answers, approvals,
+stops and a worker finishing a step never need a permit.
+
+- The account is at its limit: `429` with `code: "busy_account"`.
+- The whole install is at its cap: `503` with `code: "busy_install"`.
+- Both carry `Retry-After` (and `retry_after` in the body, seconds), and **nothing
+  was started**, so the same request can be sent again as it was. The
+  [CLI](cli), koder and the dashboard do this by themselves: the CLI waits up to
+  `FOLDRUN_BUSY_WAIT` seconds (90; `0` asks once), says so, and reuses the same
+  Idempotency-Key; the dashboard shows "busy, trying again".
+- The limits are the `admission.*` [settings](environment): two deploys and two
+  run starts at once and four uploads per account by default.

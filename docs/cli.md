@@ -365,6 +365,7 @@ claude.ai or Claude Code there, nor any MCP configuration on disk.
 | `--event <json\|@file>` | `hook test`: the event the hook reads on stdin (default: a sample for its `on:`) |
 | `--path <p>` | `tool test`: the path an http tool should probe, appended to its `base:` — a path that escapes the base is refused, the same confinement the agent gets |
 | `--timeout <s>` | how many seconds one request to the platform may take — or `FOLDRUN_TIMEOUT`. Default 30, and 300 for `tool test`, where the tool itself is the thing being waited on |
+| `FOLDRUN_BUSY_WAIT=<s>` | how many seconds in all the CLI waits when the platform answers that a deploy, a run start or an upload is **busy** (`429`/`503`, nothing started — [busy at the door](api-usage#busy-at-the-door)), sending the same request again each time `Retry-After` says. Default 90; `0` asks once |
 | `--local` | `deploy`, `secrets`, `logs`: the installation on this machine, even when signed in |
 | `--quiet` | leave out the dim "acting as …" line a platform command prints on stderr |
 | `--dry-run` | `extract`: list what would move, change nothing. `flow add`, `flow rm-step`, `flow dup-step`, `flow set`, `flow trigger`, `flow move-step`, `flow paste`, `flow draft`, `assistant`, `history restore`, `agent link`/`unlink`, `agent network`, `a2a publish`/`unpublish`: show the diff, write nothing. `restore`: the diff only, restore nothing. A bulk `stop`/`rerun`: list what matches, touch nothing |
