@@ -12,6 +12,11 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.2] — 2026-11-28
+
+- test(code): compare the message as typed, past the folder note a first cloud turn carries (FOL-462) ([ef41179](https://github.com/foldrun-io/foldrun-cli/commit/ef41179))
+- fix(code): a cloud turn under bypass lists the folder once, and knows where the folder is on the computer (FOL-462) ([75c115b](https://github.com/foldrun-io/foldrun-cli/commit/75c115b))
+
 ## [36.1.1] — 2026-11-27
 
 ### deps
