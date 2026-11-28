@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.2.2] — 2026-11-28
+
+- fix(cli): print all of --help before exiting ([61e7c5d](https://github.com/foldrun-io/foldrun-cli/commit/61e7c5d))
+
 ## [36.2.1] — 2026-11-28
 
 - fix(gateway): on foldrun's own platforms a credential goes only to the API or its listed fronts ([65ec9ce](https://github.com/foldrun-io/foldrun-cli/commit/65ec9ce))
