@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.2.1] — 2026-11-28
+
+- fix(gateway): on foldrun's own platforms a credential goes only to the API or its listed fronts ([65ec9ce](https://github.com/foldrun-io/foldrun-cli/commit/65ec9ce))
+
 ## [36.2.0] — 2026-11-28
 
 ### New in the public API
