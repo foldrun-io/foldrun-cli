@@ -13,6 +13,10 @@ import http from "node:http";
 import { execFileSync, spawn } from "node:child_process";
 import { serve, at, raw, failing } from "./fake-platform.ts";
 
+/** The message as the person typed it: a session's first cloud turn is told where its folder is on the computer first (FOL-462). */
+const typed = (task: string) => task.replace(/^You are working in the cloud[\s\S]*?reaches it\.\n\n/, "");
+
+
 const ID = "b".repeat(64);
 const WS = "/v1/workspaces/desk";
 const RUN_ID = "run-code-1";
@@ -90,7 +94,7 @@ test("code --task: the folder goes as a snapshot, the agent runs on it in a conv
   assert.equal(r.code, 0, r.out);
   const run = s.seen.find((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"))!;
   const body = JSON.parse(run.body);
-  assert.equal(body.task, "greet the world");
+  assert.equal(typed(body.task), "greet the world");
   assert.equal(body.snapshot, ID);
   assert.match(body.context, /^code-[0-9a-f]{16}$/, "each session is a conversation");
   assert.ok(s.seen.some((x) => x.method === "POST" && x.url === `${WS}/snapshots`), "the folder was sent");

@@ -13,6 +13,10 @@ import {serve, raw} from "./fake-platform.ts";
 import {codeCompleter, joinMessage, shellNote, withNotes, colorPatch, helpText, readHistory, appendHistory, lastSession, rememberSession, friendlyTool, friendlyError, folderRelative, formatSecs, formatBytes, formatCost, shortModel, homeTilde} from "../src/code-session.mjs";
 import {folderChoice, localPrompt, projectNameFor, localModelOf, localCallSummary, insideFolder} from "../src/code-session.mjs";
 
+/** The message as the person typed it: a session's first cloud turn is told where its folder is on the computer first (FOL-462). */
+const typed = (task: string) => task.replace(/^You are working in the cloud[\s\S]*?reaches it\.\n\n/, "");
+
+
 const WS = "/v1/workspaces/desk";
 const ID = "c".repeat(64);
 const RUN = "run-sess-1";
@@ -371,7 +375,7 @@ for (const [how, env, paste] of [
       at = await t.until(/apply it to/, at);
       const posts = s.seen.filter((x) => x.method === "POST" && x.url.endsWith("/agents/coder/run"));
       assert.equal(posts.length, 1);
-      assert.match(JSON.parse(posts[0]!.body).task as string, /^fix the bug\nin src\/a\.ts$/);
+      assert.match(typed(JSON.parse(posts[0]!.body).task as string), /^fix the bug\nin src\/a\.ts$/);
       t.send("n\r");
       at = await t.until(/\w ❯ /, at);
       t.send("/quit\r");
@@ -1101,7 +1105,7 @@ test("typing during a turn: kept for the next message, never answers 'apply it?'
       if (u === `${WS}/snapshots`) return json({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false });
       if (u === `${WS}/sessions/code-me/messages`) return json({ messages: [] });
       if (u === `${WS}/agents/coder/run`) {
-        posts.push(JSON.parse(body).task);
+        posts.push(typed(JSON.parse(body).task));
         runs++;
         done = false;
         return json({ ok: true, runId: `run-ta-${runs}`, snapshot: ID, context: "code-me" });
@@ -1216,7 +1220,7 @@ test("typing during a turn: ←/→, Home/End, Ctrl-A/Ctrl-E, Backspace and Dele
       if (u === `${WS}/snapshots`) return json({ snapshotId: ID, files: 1, bytes: 2, compressedBytes: 90, expiresAt: "x", reused: false });
       if (u === `${WS}/sessions/code-me/messages`) return json({ messages: [] });
       if (u === `${WS}/agents/coder/run`) {
-        posts.push(JSON.parse(body).task);
+        posts.push(typed(JSON.parse(body).task));
         runs++;
         done = false;
         return json({ ok: true, runId: `run-ed-${runs}`, snapshot: ID, context: "code-me" });

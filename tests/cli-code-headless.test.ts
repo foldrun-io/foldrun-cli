@@ -14,6 +14,10 @@ import { execFileSync, spawn } from "node:child_process";
 import { serve, raw } from "./fake-platform.ts";
 import { streamEvent } from "../src/commands.mjs";
 
+/** The message as the person typed it: a session's first cloud turn is told where its folder is on the computer first (FOL-462). */
+const typed = (task: string) => task.replace(/^You are working in the cloud[\s\S]*?reaches it\.\n\n/, "");
+
+
 const ID = "c".repeat(64);
 const WS = "/v1/workspaces/desk";
 const CLI = path.join(import.meta.dirname, "..", "bin", "foldrun.mjs");
@@ -58,7 +62,7 @@ async function platform() {
     [`PUT ${WS}/source`]: () => ({ ok: true }),
     [`POST ${WS}/snapshots`]: () => ({ snapshotId: ID, files: 1, bytes: 6, compressedBytes: 100, expiresAt: "2026-12-01T00:00:00.000Z", reused: false }),
     [`POST ${WS}/agents/coder/run`]: (b) => {
-      tasks.push(JSON.parse(String(b)).task);
+      tasks.push(typed(JSON.parse(String(b)).task));
       const id = `run-h-${runs.length + 1}`;
       runs.push(id);
       return { ok: true, runId: id, test: false, snapshot: ID };
