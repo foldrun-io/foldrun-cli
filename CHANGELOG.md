@@ -12,6 +12,14 @@ edited by a person.
 
 <!-- releases -->
 
+## [37.0.0] — 2026-11-28
+
+### Breaking changes
+
+- needs a platform from 29 Nov 2026 (one that mints a key (9e88761)
+
+- feat(keys)!: koder and keys create send no dollar amounts; the platform's billing decides ([9e88761](https://github.com/foldrun-io/foldrun-cli/commit/9e88761))
+
 ## [36.2.2] — 2026-11-28
 
 - fix(cli): print all of --help before exiting ([61e7c5d](https://github.com/foldrun-io/foldrun-cli/commit/61e7c5d))
