@@ -12,6 +12,16 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.2.0] — 2026-11-28
+
+### New in the public API
+
+- `foldrun team invites resend`
+- `foldrun team invites link`
+- `foldrun team invites mine`
+
+- feat(team): invites resend | link | mine | join | decline (FOL-464) ([acb9788](https://github.com/foldrun-io/foldrun-cli/commit/acb9788))
+
 ## [36.1.10] — 2026-11-28
 
 - fix(gateway): a dashboard sign-in gets its API's fronts, never the dashboard as Claude Code's gateway ([5a2453a](https://github.com/foldrun-io/foldrun-cli/commit/5a2453a))
