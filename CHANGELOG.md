@@ -12,6 +12,10 @@ edited by a person.
 
 <!-- releases -->
 
+## [36.1.10] — 2026-11-28
+
+- fix(gateway): a dashboard sign-in gets its API's fronts, never the dashboard as Claude Code's gateway ([5a2453a](https://github.com/foldrun-io/foldrun-cli/commit/5a2453a))
+
 ## [36.1.9] — 2026-11-28
 
 - fix(ci): a wrong attestations answer at registry.npmjs.org is checked through registry.npmjs.com ([9295023](https://github.com/foldrun-io/foldrun-cli/commit/9295023))
